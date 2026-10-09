@@ -24,6 +24,7 @@ export const env: Command = {
     const shown = { ...ctx.env };
     for (const a of assignments) { const eq = a.indexOf('='); shown[a.slice(0, eq)] = a.slice(eq + 1); }
     const lines = Object.entries(shown)
+      .filter(([k]) => !k.startsWith('__')) // the shell's own (__PIPE_STDIN)
       .map(([k, v]) => {
         if (SECRET_PATTERNS.test(k) && v && v.length >= 8) {
           return `${k}=${v.slice(0, 4)}${'*'.repeat(Math.min(v.length - 4, 20))}`;

@@ -36,6 +36,22 @@ normal `npm run test:shiro` keeps them fixed.
   failures. Find new ones with `SPEC_PROGRESS=/tmp/p.txt`, which logs each
   case before it runs. `SPEC_FILES=a,b` and `SPEC_CASES=3,4` narrow a run.
 
+## Shell: smoosh POSIX tests (`smoosh-posix.conf.ts`)
+
+- Cases: `smoosh/shell/*.test`, vendored from
+  [smoosh](https://github.com/mgree/smoosh) `tests/shell` (MIT, commit
+  cc67dbe), with the expected `NAME.out` and `NAME.ec` (default 0).
+- Each case runs in a fresh `Shell` as `sh /smoosh/shell/NAME.test` in an
+  empty directory with `$TEST_SHELL=sh`, as smoosh's `shell_tests.sh` does.
+  `$TEST_UTIL`'s C helpers (`argv`, `getenv`, `readdir`) are shell scripts;
+  cases that use `fds` (open fds via fcntl) are not scored.
+- Judged on stdout and exit status. stderr isn't compared (the expected
+  messages carry each shell's own prefix).
+- Only cases host dash or `bash --posix` passes are scored
+  (`smoosh/baseline.json`, from `scripts/conformance/smoosh-baseline.mjs`).
+  A few kill/sleep timing cases can flip between baseline runs.
+  `SMOOSH_CASES=a,b` narrows a run (written to `results/detail/`, not scored).
+
 ## Utilities: busybox testsuite (`utils-busybox.conf.ts`)
 
 - Not vendored (GPL-2.0): `scripts/conformance/fetch.sh` clones busybox's

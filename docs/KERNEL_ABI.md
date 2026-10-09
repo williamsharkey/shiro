@@ -4,6 +4,16 @@
 
 All changes so far are additive; nothing below renames or removes an earlier name.
 
+- **2026-10-09 (unix/gui)** — behavior fix, additive.
+  - `/dev/tty` (registered by `attachKernelTty`) also resolves to the pty a
+    session leader acquired after spawn, by opening its slave without
+    `O_NOCTTY` or with `TIOCSCTTY` (`controllingTtys`), not only to
+    `proc.ctty` from `spawn`. xterm's child (setsid, open the slave, open
+    `/dev/tty`) failed with ENXIO.
+  - New user of AF_UNIX: `Xshiro :N` (src/x11/display.ts) listens in the
+    kernel's NetStack on `/tmp/.X11-unix/XN` and `\0/tmp/.X11-unix/XN`
+    as a kernel process.
+
 - **2026-10-09 (unix/desktop)** (additive)
   - `FileSystem.addVirtualProvider(vp)`; `VirtualFSProvider.mountPoint`
     names a top-level directory `ls /` shows. `makeStat` is exported.
@@ -29,6 +39,23 @@ All changes so far are additive; nothing below renames or removes an earlier nam
     conversation with its peer over pipes (`git clone --upload-pack='…; git-upload-pack'`).
   - `CommandContext` gained optional `liveStdin`, `streamStdout`,
     `streamStderr` (src/commands/index.ts).
+
+- **2026-10-09 (unix/perf-kernel): named pipes**
+  - **New syscalls:** `mknod` (133) / `mknodat` (259): `S_IFIFO` creates a
+    named pipe (`FileSystem.mkfifo`), `S_IFREG`/0 an empty file, device
+    types -EPERM. Args: (dirfd,) pathLen, mode.
+  - `kernel.open` of a FIFO (`openFifo`): every open of the same path shares
+    one `Pipe` (registry per FileSystem path, dropped when the last end
+    closes or the path is unlinked). A reader blocks until a writer has it
+    open and a writer until a reader does; O_NONBLOCK readers open at once
+    (read gives EOF with no writer), O_NONBLOCK writers without a reader get
+    -ENXIO; O_RDWR (`FifoRdWr`) never blocks; a signal ends a blocked open
+    with -EINTR. stat/fstat report `S_IFIFO`.
+  - `FSNode.special = 'fifo'` marks the node (other FileSystem users see an
+    empty file); `StatResult.isFIFO()`. `Pipe.openWaiters`/`noteOpen`/
+    `onIdle` are new.
+  - The shell (`src/shell-fifo.ts`) routes `< fifo`, `> fifo` and
+    `exec N>fifo` through the kernel; `mkfifo` is a builtin.
 
 - **2026-10-08 (unix/perf-kernel)** — all additive; old guests keep working.
   - **Channel transport:** the kernel serves Worker channels with
@@ -358,6 +385,7 @@ offset 0. Lengths are bytes, without a trailing NUL.
 | access / faccessat | (dirfd,) pathLen, mode | path | 0 |
 | newfstatat | dirfd, pathLen (0 + AT_EMPTY_PATH = the fd), flags | path → struct stat | 0 |
 | mkdirat | dirfd, pathLen, mode | path | 0 |
+| mknod / mknodat | (dirfd,) pathLen, mode | path | 0 (S_IFIFO or regular; devices -EPERM) |
 | unlinkat | dirfd, pathLen, flags (AT_REMOVEDIR) | path | 0 |
 | renameat / renameat2 | olddirfd, oldLen, newdirfd, newLen (, flags) | old, new | 0 |
 | symlink / symlinkat | targetLen, (dirfd,) linkLen | target, linkpath | 0 |

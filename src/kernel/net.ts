@@ -106,6 +106,12 @@ export interface NetConfig {
   httpBridgeTimeoutMs: number;
   /** Send loopback connects with no kernel listener to the relay (tests, dev relays that allow 127.0.0.1). */
   relayLoopback: boolean;
+  /**
+   * Send the saved sign-in (src/net-signin.ts) with token requests and ask for
+   * one on 401. Only for this site's own relay: a relay the user chose
+   * ("Use my own connection") must never receive their GitHub token.
+   */
+  credentials: boolean;
 }
 
 function defaultConfig(): NetConfig {
@@ -119,6 +125,7 @@ function defaultConfig(): NetConfig {
     ackEvery: 64 * 1024,
     httpBridgeTimeoutMs: 30_000,
     relayLoopback: false,
+    credentials: true,
   };
 }
 
@@ -1120,15 +1127,16 @@ export class NetStack {
       method: 'POST', credentials: 'same-origin' as RequestCredentials,
       ...(cred ? { headers: { Authorization: `Bearer ${cred}` } } : {}),
     });
-    let res = await post(networkCredential());
-    if (res.status === 401) {
+    const own = this.config.credentials;
+    let res = await post(own ? networkCredential() : null);
+    if (res.status === 401 && own) {
       // The relay wants a signed-in user: ask once (src/net-signin.ts), then retry
       const cred = await requireNetworkSignIn({ reason: 'A program wants to connect to the internet' });
       if (!cred) { setNetworkStatus('needs-sign-in'); throw new Error('token 401: sign-in required'); }
       res = await post(cred);
     }
     if (!res.ok) throw new Error(`token ${res.status}`);
-    setNetworkStatus(networkCredential() ? 'signed-in' : 'online');
+    setNetworkStatus(own && networkCredential() ? 'signed-in' : 'online');
     this.token = await res.json();
     return this.token!.token;
   }

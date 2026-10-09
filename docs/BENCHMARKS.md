@@ -159,6 +159,108 @@ untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
 
+### unix/desktop 3 — the terminal's first layout: system font lookups
+
+perf-fs-shell's cold-boot profile showed `new ShiroTerminal` dominated by
+xterm's first forced layout. A trace of that layout (`devtools.timeline` +
+`fonts` categories, from `shiro:terminal:start` to `shiro:terminal:ready`)
+shows it is not box layout: 17 `FontCache::GetFontPlatformData` calls, 12 of
+them blocking `MatchFamilyName` IPCs to the browser's font service, for every
+family in the desktop's font stacks that isn't installed (`ui-sans-serif`,
+`Cascadia Code`, `Menlo`, `Consolas`, `ui-monospace`, …), about 1 ms each. The
+terminal UI's first layout does 5. Containment (`contain: strict` on the
+window/pane), hiding the wallpaper, title bar or wordmark, and dropping the
+`@font-face` rules changed nothing measurable.
+
+Change: the font stacks are the web font plus its generic family
+(`'Inter', sans-serif`, `"JetBrains Mono", monospace`, in the CSS, xterm and
+the icon glyphs), and the wallpaper wordmark joins the page with the menu bar
+and dock, after the terminal exists. First layout: 12 → 7 font lookups, ~14 →
+~10 ms (4 traced boots each; the terminal UI's is ~4 ms).
+
+`node bench/ab.mjs origin/unix/integration --quick --suites boot --rounds 5`
+(79594fd vs this): no significant change end to end — cold first prompt
+213 → 202 ms (p = 0.97), warm 130 → 114 ms (−10%, lower in all 5 rounds,
+p = 0.15), first command and long tasks unchanged. A 3-round run of the same
+pair showed cold first prompt +9.5% (p = 0.09) and first command +3 ms
+(p = 0.003); the 5-round run didn't reproduce either, so both are read as noise.
+
+### unix/desktop 2 — fewer requests and DOM nodes at first prompt
+
+Integration 1d9582a counted 15 boot requests and 414 DOM nodes (68dbbbc: 10
+and 353). What the page loaded before the first prompt, by source:
+
+- desktop: the chunk's CSS file (since the chunk split), 3 `data:` SVGs (the
+  traffic-light glyphs), and icon tiles built from SVG gradients (106 of the
+  dock's 132 nodes were `<defs>`, gradients, stops and frame rects);
+- unix/gui: `gui/desktop-apps` (dock icons for Debian GUI apps), `x11/display`;
+- unix/debian: `debian/rootfs`.
+
+Changes: the desktop CSS is inlined into its chunk (`?inline`, injected at
+boot); the traffic-light glyphs are text; a tile's gradient, shine and border
+are CSS (`.sd-tile`) so the SVG holds only the glyph; the GUI apps register on
+idle (`requestIdleCallback`) instead of before the first prompt. `x11/display`
+and `debian/rootfs` are unchanged (the X socket and the Debian PATH set-up
+belong at boot).
+
+Quick suite `--suites boot`, integration c14344d vs. this change, two rounds
+alternated on one machine, medians of 6:
+
+| metric | before | after |
+|---|---:|---:|
+| boot.cold.requests (until TTI) | 15 | 11 |
+| boot.settled.requests | 16 | 12 |
+| boot.mem.dom_nodes (at TTI) | 414 | 349 |
+| boot.cold.first_prompt | 210 ms | 212 ms |
+| boot.warm.first_prompt | 158 ms | 122 ms |
+| boot.cold.transfer | 1575 KiB | 1574 KiB |
+| boot.mem.renderer_rss | 232 MiB | 229 MiB |
+
+At the first prompt itself (CDP, before idle work): 14 → 9 requests and 241 →
+177 DOM nodes; the bench's TTI is a second later and includes the GUI apps.
+### unix/gui — X11 server in the page, Debian GUI apps on first use
+
+New: `Xshiro :0` (a kernel process listening on `/tmp/.X11-unix/X0`, ~1 KB in
+the main bundle; the server, RENDER and fonts are a 180 KB gzip chunk loaded
+on the first X client), dock entries for four GUI apps, and `gui`
+(docs/GUI.md). Boot cost, `--quick --suites boot --runs 5 --modes isolated`,
+base 4970079 (unix/integration) vs. this branch, two rounds alternated on one
+machine, medians of all samples:
+
+| metric | base | unix/gui |
+|---|---:|---:|
+| boot.cold.first_prompt | 305 ms | 307 ms |
+| boot.warm.first_prompt | 199 ms | 163 ms (noise) |
+| boot.cold.long_tasks | 2 | 2 |
+| boot.cold.requests | 12 | 12 |
+| boot.cold.transfer | 1550 KiB | 1554 KiB |
+| boot.mem.js_heap | 3.8 MiB | 3.9 MiB |
+| boot.mem.renderer_rss | 230 MiB | 231 MiB |
+| boot.mem.dom_nodes | 355 | 387 (+4 dock icons) |
+
+The first version loaded the display listener and the dock list as two lazy
+chunks: +2 requests on every boot. Both are static imports now.
+
+GUI apps in headless Chromium (`scripts/gui/shoot.mjs`, local server with
+network to deb.debian.org), from `gui APP` to the first drawn frame; install
+is download + unpack + triggers:
+
+| app | download | install | first frame | warm start |
+|---|---:|---:|---:|---:|
+| xeyes (Xt, SHAPE) | 7.5 MB | 1.9 s | 0.9–1.3 s | 0.5 s |
+| xterm (Xaw, pty) | 9.3 MB | 2.1 s | 2.5–2.7 s | 1.6–1.9 s |
+| GPicView (GTK 2) | 26.8 MB | 4.8–7.6 s | 6.9–9.7 s | 6.7 s |
+| FeatherPad (Qt 5) | 35.0 MB | 6.1–7.8 s | 10.5–16 s | 8.9–14.7 s |
+| L3afpad (GTK 3) | 33.1 MB | 10.3–12.2 s | 12.9 s | — |
+| Ristretto (GTK 3) | 35.1 MB | 10.9 s | 14.4–15.5 s | 13.1 s |
+| GIMP 2.10 (GTK 2) | 53.2 MB | 19 s | 290 s (main window) | 84 s |
+
+Reinstalling from the browser's Cache Storage (by sha256, no network): xeyes
+1.4 s, xterm 1.7 s, GPicView 7.2 s, FeatherPad 7.0–8.2 s — unpacking (JS xz)
+and writing files dominates. Start-up is Blink loading ~70–100 shared
+libraries and toolkit init, so a warm start is barely faster than the first.
+GTK 3 needed Blink patch 0029 (it spun in cairo/pixman SSE compares).
+
 ### unix/desktop — the desktop shell (menu bar, dock, windows) on the boot path
 
 The Unix edition boots to the desktop (docs/DESKTOP.md); shiro.computer keeps
@@ -204,6 +306,43 @@ composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts,
 a few MiB each. The terminal UI's +19 KiB is /dom, the sign-in hook and the
 other integration changes since db9f698, not desktop code.
 
+### unix/shell-stdio 4 — job control in a kernel sh; kernel background jobs
+
+`node bench/ab.mjs HEAD~1 HEAD --suites shell,kernel --quick` (e03bde3 →
+3acd170, 3 rounds × 5 runs, alpha 0.01): no regression. 23 metrics
+unchanged; kernel.spawn_wait.wasm moved +28% but not in every round
+(inconsistent; the change doesn't touch WASM spawning).
+
+### unix/shell-stdio 3 — fd copies keep their stream; programs inherit fds 3-9
+
+`node bench/ab.mjs origin/unix/integration HEAD --suites shell,kernel --quick`
+(b8834c7 → 501fe88, 3 rounds × 5 runs, alpha 0.01): no regression. 22
+metrics unchanged; shell.echo improved (0.12 → 0.074 ms, every round);
+shell.redirect_append_100 moved −29% but not in every round (inconsistent).
+
+### unix/shell-stdio 2 — POSIX shell fixes (smoosh suite)
+
+Signals to the shell, $$/$PPID/$!, exported vs unexported variables,
+subshell EXIT traps, set -u, bracket expressions and the other fixes found by
+the smoosh POSIX suite (docs/CONFORMANCE.md). Quick shell suite, isolated,
+base unix/integration c14344d vs. 3107d0c, three runs of each alternating
+(medians per run, ms):
+
+| metric | base | new |
+|---|---|---|
+| shell.true | 0.075 / 0.080 / 0.080 | 0.068 / 0.090 / 0.072 |
+| shell.cmd_subst | 0.268 / 0.205 / 0.170 | 0.205 / 0.194 / 0.223 |
+| shell.loop_1000 | 86.7 / 96.3 / 93.7 | 110.2 / 86.7 / 98.2 |
+| shell.for_seq_1000 | 36.5 / 35.8 / 39.1 | 36.3 / 38.6 / 38.2 |
+| shell.pipeline_seq_grep_wc | 31.7 / 33.4 / 38.1 | 54.3 / 41.3 / 38.0 |
+| shell.redirect_append_100 | 6.26 / 6.46 / 7.65 | 6.92 / 7.41 / 7.42 |
+
+compare.mjs flagged loop_1000, pipeline_seq_grep_wc and redirect_append_100
+on the first pair; the runs overlap after that. A CPU profile of
+pipeline_seq_grep_wc on both builds has the same top functions (seq's number
+formatting, wc's count, grep), none of them changed here, so the difference
+is taken as noise. Worth re-measuring on a quieter host.
+
 ### unix/shell-stdio — a shell run as a kernel process uses its fds
 
 `sh -c SCRIPT` spawned by a program (and scripts run through `runViaShell`)
@@ -234,6 +373,30 @@ proc/s within one run); two further 15-run passes on the new code gave
 medians 1240 and 1215 proc/s, base 1200. One of those passes stalled at
 ≈10 proc/s for its last 11 samples and did not recur in two more; worth
 watching if it shows up on other branches.
+
+### unix/perf-blink 4 — page-straddling instructions, rep movs/stos by page
+
+Profiling Vim's startup (~2.2 s in Shiro against 41 ms native) found the
+wasm JIT refusing instructions that cross a 4 KB page: the region before
+one ended there and the interpreter ran up to the next taken branch, every
+time (218k times in one hot Vim function). Patch 0041 decodes such an
+instruction from both pages when both are read-only code, and runs
+`rep movs`/`rep stos` of words, dwords and qwords (musl's memcpy and
+memset) a page at a time instead of an element (and a page lookup) at a
+time. New metric `x86.blink.vim_startup` (`vim --not-a-term -c qa x.c`,
+static Vim 9.2 from `public/pkg`).
+
+`node bench/ab.mjs 956abe1 e4c26e0 --suites x86 --only
+'vim_startup|gh_version|go_hello|hello_glibc' --gh --rounds 3 --runs 5`
+(isolated, medians of 15 runs, alpha 0.01):
+
+| metric (isolated) | base 956abe1 | new e4c26e0 | shift | p | verdict |
+|---|---:|---:|---:|---:|---|
+| x86.blink.vim_startup | 1659 ms | 1514 ms | -9.8% | 0.0014 | improved (all 3 rounds) |
+| x86.blink.gh_version | 2277 ms | 2132 ms | -2.6% | 0.49 | same |
+| x86.blink.go_hello | 168.1 ms | 166.2 ms | -0.2% | 1 | same |
+| x86.blink.hello_glibc | 119.4 ms | 111.5 ms | -5.2% | 0.41 | same |
+| x86.blink.peak_rss.gh_version | 159.1 MiB | 160.3 MiB | -0.9% | 0.59 | same |
 
 ### unix/perf-blink 3 — mul/div/bit ops inline, decode cache, a fusion fix
 
@@ -743,6 +906,223 @@ and re-run 3× alternating (7 runs each): `kernel.pipe_throughput*`,
 `kernel.syscall_inpage`, `kernel.spawn_throughput.*` (isolated),
 `shell.pipeline_seq_grep_wc`, `wasm.startup.*`: overlapping ranges, noise.
 `boot.settled.time` 6.3 s on the other host is 3.9 s here on both.
+
+### A/B tooling: `bench/ab.mjs` (no product change)
+
+`node bench/ab.mjs <base> [<new>]` builds each ref once in its own worktree,
+interleaves base/new runs over several rounds and flags a metric only when a
+Mann–Whitney test, a minimum shift and every round's direction agree (see
+bench/README.md "A/B"). First use: the suspected 68dbbbc → 1d9582a
+regression (`--suites shell,wasm --only 'shell.loop_1000|wasm.startup|wasm.peak_rss'`,
+3 rounds × 7 runs, isolated). All 15 metrics: **same**. `peak_rss.quickjs_ng`
+2.06 → 1.74 MiB, p = 0.90, rounds `-+-`; `shell.loop_1000` 95 → 99 ms,
+p = 0.60, rounds `++-`; `startup.lua` 7.6 → 6.6 ms, `startup.sqlite3`
+9.8 → 8.6 ms (both p > 0.01, split rounds).
+
+### Cold boot to first prompt: where the time goes (investigation, no product change)
+
+Integration 045feaa (desktop UI, isolated, this container; cold first prompt
+~255–275 ms here). Timeline from a CPU profile plus `performance.mark`s in
+`main()`, in ms from navigation:
+
+| step | ms |
+|---|---:|
+| entry `index-*.js` requested (HTML parse and the harness's request routing) | 79 |
+| entry downloaded | 104 |
+| `main()` starts: entry compile and top-level evaluation (27 ms, of which xterm's module wrapper is 14.5 ms) | 177 |
+| `fs.init` (IndexedDB open) | 178–189 |
+| desktop built | 197–205 |
+| `new ShiroTerminal`: xterm `open()`, whose first forced layouts are `_measure` 42 ms and Viewport `_innerRefresh` 25 ms in the profile | 205–260 |
+| `terminal.start()`, first prompt in the buffer | 261–300 |
+
+Moving the Debian rootfs boot / PATH shims, X display :0 and the Blink
+loader behind the first prompt (they are fire-and-forget imports that load
+at 194–211 ms) made no measurable difference:
+`ab.mjs HEAD --suites boot`, 4 rounds × 5 runs: cold first prompt
+270.8 → 275.5 ms, p = 0.97, so it was not committed. Loading
+`pkg-index.json` as text instead of JSON saves only a ~1 ms
+`JSON.parse` (Vite already emits large JSON as `JSON.parse`) and adds
+22 KiB, also not committed. The remaining levers are the entry's size
+(compile) and the cost of the desktop's first layout, which xterm forces.
+
+### unix/perf-fs-shell 6 — npm, upload/download/shiro, hc, remote, cw and the template palette load on first use
+
+Entry chunk 1405 → 1291 KB. `ab.mjs HEAD --suites boot`, 6 rounds × 5 runs,
+isolated, against integration 045feaa:
+
+| metric | base | new | |
+|---|---:|---:|---|
+| boot.cold.transfer | 1576 KiB | 1464 KiB | −7.1% (exact) |
+| boot.mem.uasm | 6.83 MiB | 6.51 MiB | −4.7%, p = 3e-11, all rounds |
+| boot.mem.js_heap | 3.9 MiB | 3.8 MiB | −2.6%, p = 7e-12 (under the 3% bar) |
+| boot.cold.first_prompt | 270.6 ms | 262.0 ms | −3.6%, p = 0.15: not significant |
+| boot.settled.requests | 12 | 13 | the split-out chunk fetched once used |
+
+The remote-session auto-reconnect reads its localStorage key directly and
+loads `commands/remote` only when there is a session to resume.
+
+### unix/perf-kernel, round 7: named pipes (cost check)
+
+Named pipes added a FIFO check to every shell file redirection. The first
+version did an async `stat` plus a dynamic import per redirect:
+`shell.redirect_append_100` went 7.2 → 16.4 ms in an A/B against the commit
+before. The check now answers from `FileSystem.lookupCached` (async stat
+only on a cache miss) with a static import. A/B, 3 runs each against the
+commit before: no shell metric is outside noise (`redirect_append_100`
+within 8%; `pipeline_seq_grep_wc` 41 → 32 ms and `ls_la_1000` 4.0 → 4.8 ms
+have overlapping runs).
+
+### unix/perf-kernel, round 8: Blink memory (big binaries, teardown)
+
+Where a big Blink process's memory goes (`gh --version`, a 50 MB Go binary;
+the renderer idles at ~350 MiB):
+
+- wasm memory peaks at 117 MiB (vim: 64 MiB). Most of it is the mapped
+  binary plus the Go heap.
+- SHIROFS (host.mjs) loaded the whole file into a JS array on open. MEMFS
+  `mmap` then copied the mapped ranges into wasm memory, so the binary was
+  held twice at the peak.
+- The main thread holds the file once: the FileSystem cache and the kernel
+  inode share one buffer, so the VFS doesn't double it.
+- After exit, the Worker tree lingered 4–8 s. Chromium takes 2 s to
+  terminate a Worker blocked in a wait or a loop, while one idle in its event
+  loop goes in ~13 ms. host.mjs parked in `Atomics.wait` after exit_group,
+  and Blink's pthread Workers (the guest's threads, parked in futex waits) are
+  only terminated once their parent is gone. That is 2 s, then another 2 s.
+
+Changes, all in public/engines/blink/host.mjs:
+
+- SHIROFS reads and maps files of 1 MiB or more through `pread64`. A mapping
+  gets a fresh MEMFS block filled straight from the kernel, and peeking reads
+  (ELF headers) go to the kernel too. A stream that has read 1 MiB gets the
+  file loaded as before, and writes, truncation and `msync` load it first.
+  A test reads, maps and writes a 3 MiB file every way from a static C
+  program.
+- After exit_group, host.mjs `throw 'unwind'`s back to its event loop
+  (messages are ignored from then on) instead of parking.
+- Not done: terminating the pthread Workers from host.mjs at exit. It left
+  zombie Workers and about 100 MiB per run. Blink waking its own threads at
+  exit would cut the remaining 2 s; that is with perf-blink. Read-only file
+  mappings can't be shared across processes: each Blink process has its own
+  wasm memory.
+
+New bench metrics: `x86.blink.release_ms.gh_version` (time after exit until
+the renderer has given back 3/4 of the peak) and
+`x86.blink.peak_rss.vim_startup`.
+
+Interleaved A/B on the same build, host.mjs swapped (three suite passes,
+5 runs each; files `perf-kernel-r8-base.json` / `perf-kernel-r8.json` are
+the third pass):
+
+| metric | before | after |
+|---|---|---|
+| `peak_rss.gh_version` | 219 / 217 / 201 MiB | 175 / 165 / 176 MiB |
+| `release_ms.gh_version` | 4093 / 4092 / 4095 ms | 2077 / 2077 / 2075 ms |
+| `peak_rss.vim_startup` | 42 / 32 / 41 MiB | 24 / 17 / 30 MiB |
+| `gh_version` | 5027 / 5950 / 5253 ms | 5068 / 5339 / 5116 ms |
+| `vim_startup` | 1352 / 1529 / 1487 ms | 1613 / 1767 / 1442 ms |
+| `go_hello` | 165 / 204 / 184 ms | 166 / 168 / 151 ms |
+
+The vim_startup outliers in the first two passes did not reproduce: alone,
+10 runs, twice, base 1399 / 1462 ms and new 1364 / 1391 ms.
+
+Other measurements:
+
+- Five `gh --version` runs back to back: steady renderer RSS 723 → ~500 MiB,
+  and the Worker count stays at 4 (both variants free everything within
+  6 s).
+- `bench/.cache/mem.mjs` probe, renderer RSS: gh peak +238 → +190 MiB;
+  vim +91 → +93 MiB (its binary is small).
+- `codex --version` not measured: running that downloaded binary is not
+  cleared in this session.
+
+### unix/perf-fs-shell 7 — 1d9582a → bb39a38 regressions: shell-stdio's per-command pass; ab.mjs decides on rounds
+
+The coordinator's `ab.mjs 1d9582a bb39a38 --suites boot,kernel,shell,wasm
+--rounds 3` flagged `wasm.startup.sqlite3` +31% (p = 0.0002),
+`wasm.startup.coreutils` +14% and `shell.echo` +26%, each consistent over all
+3 rounds. Re-checked here:
+
+- The same pair, shell+wasm, 5 rounds × 5 runs: none of the three moved
+  (sqlite3 9.23 → 9.02 ms, coreutils 13.3 → 12.9, echo 0.083 → 0.078;
+  quickjs and ripgrep startup *improved* 14–20%). The coordinator's exact
+  command (3 rounds) flagged a different set: `shell.echo`,
+  `shell.for_seq_1000`, `wasm.startup.quickjs`. An A/A run (bb39a38 in a
+  worktree vs the same commit built in place) flagged nothing, so the build
+  location isn't biased; the pooled Mann–Whitney p was overstating
+  significance (samples within a run are not independent). `ab.mjs` now
+  decides on a round-level hierarchical bootstrap interval of the median
+  shift; with it the coordinator's configuration reports no regressions,
+  only the boot improvements (transfer −6%, 5 fewer requests, 65 fewer DOM
+  nodes).
+- The one real effect is small: unix/shell-stdio (merge b8834c7, commit
+  de6165f "ordered prefix assignments") runs `expandPrefixAssignments` on
+  every single-segment command: a full `splitAssignWords` tokenizer pass plus
+  an await, for `a=1 b=$a cmd`. Node microbenchmark (`createTestShell`, 7×
+  medians, alternated), dcdab97 → b8834c7: `true` 0.027 → 0.030 ms,
+  `x=$(echo hi)` 0.093 → 0.105 ms, `loop_1000` 72–76 → 79–81 ms. A regex
+  pre-check (the line starts with `NAME=` and has another `NAME=` later; a
+  superset, so a false hit just takes the full pass) skips it otherwise:
+
+| Node microbench, merged integration ecd719e | without fix (2 runs) | with fix (2 runs) |
+|---|---:|---:|
+| `while` loop 1000 | 77.3 / 75.9 ms | 73.9 / 71.0 ms |
+| `for i in $(seq 1000)` | 31.5 / 32.1 ms | 28.8 / 25.8 ms |
+| `true` | 0.033 / 0.033 ms | 0.030 / 0.026 ms |
+| `x=$(echo hi)` | 0.121 / 0.119 ms | 0.114 / 0.095 ms |
+
+Browser A/B (`ab.mjs origin/unix/integration --suites shell`, 5 rounds × 7):
+`shell.echo` 0.066 → 0.054 ms (all 5 rounds faster), `loop_1000` 96.8 →
+94.5 ms, others within noise; none significant at the bootstrap level, as
+expected for a shift this size. Full suite and conformance (shell-spec,
+busybox) green.
+
+### unix/perf-fs-shell 8 — apt: native `store` method (index decompression)
+
+Where apt's time goes in Chromium (integration ecd719e, per-process timeline
+from temporary kernel instrumentation; the main thread is >90% idle, so the
+cost is CPU inside the x86 engine, not Shiro's kernel or IndexedDB):
+
+| `apt-get update` (72 s) | s |
+|---|---:|
+| fetch + InRelease signature checks (`methods/sqv`, `sqv`) | ~9 |
+| `methods/store`: xz-decode trixie's 9.7 MB `Packages.xz` to 56 MB and hash it | 33 |
+| "Reading package lists": pkgcache.bin + srcpkgcache.bin build (apt CPU) | 28 |
+
+| `apt-get install -y hello` (49 s) | s |
+|---|---:|
+| apt cache load + resolve | 14 |
+| `dpkg-preconfigure --apt` (apt-utils' debconf hook: Perl + apt-extracttemplates) | 20 |
+| dpkg unpack | 4 |
+| configure + apt's post-run cache reads | 7 |
+
+Filesystem syscalls (openat/newfstatat/read/fsync) total under 1 s per
+install; dpkg's 24 fsyncs cost 15 ms, so batching dpkg's writes would not
+help. Asking apt for uncompressed indexes doesn't work either
+(`Acquire::CompressionTypes::Order` with `uncompressed` first, even after
+`#clear`: apt still fetches `Packages.xz` by hash).
+
+Change: `/usr/lib/apt/methods/store` is diverted (overlay policy, like the
+http method) to `shiro-apt-store` (`src/debian/apt-store.ts`), which speaks
+apt's method protocol and decodes with Shiro's xz/gz/bz2/zstd codecs and
+`crypto.subtle` hashes in the page; apt still checks size and hashes against
+the signed Release. Lists are byte-identical. `apt-store.test.ts` covers
+the protocol (gz, xz, plain, GzipIndexes-style copy, missing file).
+
+`bench/run.mjs --suites debian --modes isolated`, one sample each
+(`integration-ecd719e-debian-local.json` → `perf-fs-shell-8-debian.json`):
+
+| metric | before | after |
+|---|---:|---:|
+| debian.apt.update | 82.5 s | 45.6 s (1.8×) |
+| debian.apt.install.hello | 58.7 s | 48.7 s |
+| debian.apt.install.jq | 60.2 s | 52.9 s |
+| debian.apt.install.python3-minimal | 161.3 s | 152.8 s |
+
+The rest is not Shiro-side I/O: the package cache build and dependency
+resolution are apt's own CPU under Blink (perf-blink), and `dpkg-preconfigure`
+(20 s per install, a no-op under `DEBIAN_FRONTEND=noninteractive`) is a
+Debian-config decision proposed to the debian workstream.
 
 ## Results
 

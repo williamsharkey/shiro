@@ -264,6 +264,19 @@ accepts (checks are cached for 10 minutes); without one it answers
 `401 {"error":"signin_required","provider":"github"}`. When the variable is
 unset, nothing changes.
 
+**Use my own connection.** Settings → Network → Connection switches the
+kernel's sockets from this site's relay to one the user runs: a `ws(s)://`
+relay URL and, if that relay issues tokens, its token URL (any relay speaking
+docs/NETWORKING.md's protocol; `SHIRO_TCP_RELAY=1 node server.mjs` with this
+site in `SHIRO_TCP_ORIGINS`). **Test** checks the relay (the token request,
+then a WebSocket open) before it is saved. The choice lives in localStorage
+`shiro_relay` (`ownRelay`/`setOwnRelay`/`relayNetConfig` in net-signin.ts), and
+the desktop applies it with `netStackOf(kernel).configure(...)` at boot and on
+change. A user's relay gets `credentials: false` (a NetConfig field, default
+true): the saved GitHub token is never sent to it, and a 401 from it doesn't
+open the sign-in sheet. The sheet's "Other ways to connect" links here. The
+classic UI never sets a relay of its own, so shiro.computer is unaffected.
+
 The menu bar's network icon shows `online`, `signed-in`, `needs-sign-in`,
 `offline` or `unavailable` (relay off). Clicking it opens a popover with Sign
 in / Sign out. Settings → Network shows the same, plus a relay check.

@@ -4,7 +4,7 @@
  * a real browser: builds the app, serves it with server.mjs (cross-origin
  * isolated), loads it in the pre-installed Chromium via playwright-core and
  * runs every scored case through the page's own shell (a fresh Shell per
- * case, `sh CASE.sh` in an empty directory, like the vitest harness). Cases
+ * case, `bash CASE.sh` in an empty directory, like the vitest harness). Cases
  * are judged here with the same lib. Results: tests/conformance/results/
  * shell-oils-browser.json (a scoreboard section of its own).
  *

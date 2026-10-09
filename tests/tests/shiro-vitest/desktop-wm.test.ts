@@ -204,3 +204,25 @@ describe('brand (src/brand.json)', () => {
     expect(sub).toBe('<head><title>shiro</title></head>');
   });
 });
+
+describe('"Use my own connection" (net-signin)', () => {
+  it('stores the relay, validates it, and maps it to NetStack settings without credentials', async () => {
+    const ns = await import('@shiro/net-signin');
+    const loc = { protocol: 'https:', host: 'tabcomputer.com' };
+    ns.setOwnRelay(null);
+    expect(ns.relayNetConfig(loc)).toEqual({ relayUrl: 'wss://tabcomputer.com/tcp', tokenUrl: 'https://tabcomputer.com/tcp/token', credentials: true });
+    const seen: unknown[] = [];
+    const off = ns.onOwnRelayChange((r) => seen.push(r));
+    ns.setOwnRelay({ url: 'wss://relay.example.com/tcp' });
+    expect(ns.ownRelay()).toEqual({ url: 'wss://relay.example.com/tcp' });
+    expect(ns.relayNetConfig(loc)).toEqual({ relayUrl: 'wss://relay.example.com/tcp', tokenUrl: null, credentials: false });
+    ns.setOwnRelay({ url: 'ws://10.0.0.2:3000/tcp', tokenUrl: 'http://10.0.0.2:3000/tcp/token' });
+    expect(ns.relayNetConfig(loc).tokenUrl).toBe('http://10.0.0.2:3000/tcp/token');
+    expect(() => ns.setOwnRelay({ url: 'https://not-a-websocket' })).toThrow(/ws:\/\//);
+    expect(() => ns.setOwnRelay({ url: 'wss://r.example', tokenUrl: 'ftp://x' })).toThrow(/http/);
+    ns.setOwnRelay(null);
+    expect(ns.ownRelay()).toBeNull();
+    expect(seen.length).toBe(3);
+    off();
+  });
+});

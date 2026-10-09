@@ -296,14 +296,11 @@ export async function prefetchPaths(fs: FileSystem, paths: string[]): Promise<nu
  */
 export const DEBIAN_ENV: Record<string, string> = {};
 
-/** apt settings that work around engine gaps; rewritten by every install. */
+/**
+ * apt settings that worked around engine gaps, none needed now (Dpkg::Use-Pty
+ * "false" went when the kernel released a dead session leader's tty): an
+ * older install's file is removed.
+ */
 export async function writeEngineWorkarounds(fs: FileSystem): Promise<void> {
-  await fs.mkdir('/etc/apt/apt.conf.d', { recursive: true });
-  await fs.writeFile('/etc/apt/apt.conf.d/91shiro-engine', [
-    '// Written by Shiro (src/debian/rootfs.ts); see docs/DEBIAN.md "Known gaps".',
-    "// apt's pty for dpkg's output: its child's ioctl(TIOCSCTTY) is refused in",
-    '// some runs (not reproduced outside apt yet); dpkg output goes straight through.',
-    'Dpkg::Use-Pty "false";',
-    '',
-  ].join('\n'));
+  await fs.unlink('/etc/apt/apt.conf.d/91shiro-engine').catch(() => {});
 }

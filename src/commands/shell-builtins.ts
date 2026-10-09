@@ -4,7 +4,7 @@
  * cd, export, help, command, sh, bash, and the POSIX [ bracket alias.
  * Also re-exports grep/sed/diff so they override the unix.ts versions.
  */
-import { Command } from './index';
+import { Command, type CommandContext } from './index';
 import { grepCmd, egrepCmd, fgrepCmd } from './grep';
 import { sedCmd } from './sed';
 import { diffCmd } from './diff';
@@ -229,6 +229,12 @@ export const shCmd: Command = {
   name: 'sh',
   description: 'Execute shell commands',
   async exec(ctx) {
+    return runShell(ctx, 'sh');
+  },
+};
+
+async function runShell(ctx: CommandContext, invokedAs: 'sh' | 'bash'): Promise<number> {
+  {
     // Options before the command string / script: -c, -e, -u, -x, -v, -f, -o NAME, and combined (-ec, -lc)
     const shortOpts: Record<string, string> = { e: 'errexit', u: 'nounset', x: 'xtrace', v: 'verbose', n: 'noexec', f: 'noglob' };
     const options: string[] = [];
@@ -291,6 +297,9 @@ export const shCmd: Command = {
     }
 
     const child = ctx.shell.fork();
+    child.startProcess(ctx.shell.execPid, ctx.shell.execPpid);
+    child.invokedAsSh = invokedAs === 'sh';
+    ctx.shell.execPid = ctx.shell.execPpid = undefined;
     child.setPositional(positional, argv0);
     for (const o of options) child.options.add(o);
     for (const [o, on] of shopts) { if (on) child.shoptopts.add(o); else child.shoptopts.delete(o); }
@@ -309,6 +318,22 @@ export const shCmd: Command = {
     let stderr = '';
     const code = await child.runScriptText(script, ctx.terminal, (s) => { stdout += s; }, (s) => { stderr += s; });
     return out(code, stdout, stderr);
+  }
+}
+
+/**
+ * times: user and system time of the shell, then of its children. The page
+ * has no CPU-time accounting: the shell's elapsed time stands in for its user
+ * time, the rest are 0.
+ */
+export const timesCmd: Command = {
+  name: 'times',
+  description: 'Print the accumulated times of the shell and its children',
+  async exec(ctx) {
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const t = (ms: number) => `${Math.floor(ms / 60000)}m${((ms % 60000) / 1000).toFixed(3)}s`;
+    ctx.stdout += `${t(Math.max(0, now - (ctx.shell.startTime ?? now)))} ${t(0)}\n${t(0)} ${t(0)}\n`;
+    return 0;
   },
 };
 
@@ -316,7 +341,7 @@ export const bashCmd: Command = {
   name: 'bash',
   description: 'Execute shell commands',
   async exec(ctx) {
-    return shCmd.exec(ctx);
+    return runShell(ctx, 'bash');
   },
 };
 
@@ -326,7 +351,7 @@ export const bashCmd: Command = {
  */
 export const shellBuiltins: Command[] = [
   cdCmd, exportCmd, helpCmd, commandCmd,
-  shCmd, bashCmd,
+  shCmd, bashCmd, timesCmd,
   // Re-exports that override unix.ts versions:
   grepCmd, egrepCmd, fgrepCmd, sedCmd, diffCmd,
   // POSIX test bracket alias (delegates to test command)

@@ -79,6 +79,13 @@ Debian's apt and dpkg run unmodified. What Shiro provides around them:
   apt still verifies InRelease with sqv and every index and .deb hash, so the
   mirror is untrusted. `Acquire::Shiro::Mirror` (apt.conf) or
   `$SHIRO_DEBIAN_MIRROR` point it elsewhere.
+- **Index decompression.** apt's `store` method (it turns each downloaded
+  `Packages.xz` into `Packages` and hashes it) is diverted the same way to
+  `#!/usr/bin/shiro-apt-store` (`src/debian/apt-store.ts`): the xz/gz/bz2/
+  zstd codecs and hashes run in the page. Under the x86 engine the original
+  spent ~33 s of a ~72 s `apt-get update` decoding trixie's 56 MB index.
+  apt checks the result's hashes against the signed Release file as before;
+  `shiro-alternatives --set /usr/lib/apt/methods/store debian` restores it.
 
 ### Package mirror: what the operator hosts
 
@@ -87,7 +94,12 @@ Debian's apt and dpkg run unmodified. What Shiro provides around them:
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `SHIRO_DEBIAN_MIRRORS` | `deb.debian.org=https://deb.debian.org,security.debian.org=https://security.debian.org` | archive host names apt uses → upstream base URL. Only these hosts and only `…/dists/…` and `…/pool/…` paths are served (not an open proxy). Point a host at a local mirror or `https://snapshot.debian.org/archive/debian/<ts>` to pin. |
-| `SHIRO_DEBIAN_CACHE` | unset (no disk cache) | directory for a disk cache. `pool/` and `by-hash/` files are immutable and kept forever; other index files for `SHIRO_DEBIAN_INDEX_TTL` seconds (600). |
+| `SHIRO_DEBIAN_CACHE` | `$TMPDIR/shiro-debian` | disk cache (`SHIRO_DEB_CACHE` is the old name). `pool/` and `by-hash/` files are immutable and kept forever; other index files for `SHIRO_DEBIAN_INDEX_TTL` seconds (600). |
+| `SHIRO_DEBIAN_SNAPSHOT` | `https://snapshot.debian.org/archive/debian/20260712T000000Z/` | where a `deb.debian.org` pool file the mirror no longer has (removed by a point release) is fetched from instead |
+
+The GUI apps (src/gui/apps.ts, docs/GUI.md) fetch their pinned .debs as
+`/debian/pool/PATH`, which is the same mirror (`/debian/mirror/deb.debian.org/debian/pool/PATH`)
+and the same cache; they check each file's sha256 themselves.
 
 Responses are same-origin, so no CORS or COEP issues. Traffic per user is
 what apt fetches: `apt update` is ≈10 MB (trixie's Packages.xz, plus the
@@ -129,19 +141,11 @@ Debian's.
 
 ## Known gaps
 
-- Blink (wasm build) places `mmap`s directly above the program break and
-  lets `brk` grow over them; glibc's heap then overwrote apt's package cache
-  ("Ran out of allocation pools", or SIGSEGV in
-  `pkgDebianIndexFile::FindInCache`). Until the Blink fix lands (reported to
-  unix/perf-blink with a repro), Debian mode exports
-  `GLIBC_TUNABLES=glibc.malloc.top_pad=268435456` (the heap reserves ahead)
-  and `debian install` writes `/etc/apt/apt.conf.d/91shiro-engine`.
-- `91shiro-engine` also sets `APT::Cache-Start "150000000"` (written when
-  Blink's `mremap` was a stub; patch 0027 implements it, so this can go once
-  measured) and `Dpkg::Use-Pty "false"`: in apt runs, the child's
-  `ioctl(TIOCSCTTY)` on its pty is sometimes refused with EPERM. The same
-  sequence (fork, close master, setsid, open slave, TIOCSCTTY) works
-  standalone, with and without a shared mapping.
+- systemd's postinst (systemd-sysusers, pulled in by cron, udev, logrotate)
+  fails with "Failed to backup /etc/group: Bad address": Blink's `sendfile`
+  rejects a NULL offset (reported to unix/perf-blink).
+- `open(dir, O_TMPFILE)` fails (EISDIR); programs that try it fall back to a
+  named temporary file.
 - One guest thread runs at a time (Blink's GIL); apt and dpkg are
   interpreted/JIT-compiled x86. `apt-get update` takes about 2 minutes
   (parsing trixie's 56 MB index), installing a small package about a minute.

@@ -7,6 +7,7 @@
 import { XServer } from './server';
 import { installRender } from './render';
 import { Rootless } from './rootless';
+import { ClipboardBridge } from './clipboard';
 import { getWindowHost, type WindowHost } from '../gui/window-host';
 
 export interface XSession {
@@ -48,6 +49,16 @@ async function create(display: number): Promise<XSession> {
   server.log = (s) => console.warn('[Xshiro]', s);
   installRender(server);
   const rootless = host ? new Rootless(server, host) : null;
+  if (rootless && typeof navigator !== 'undefined' && navigator.clipboard) {
+    const clip = new ClipboardBridge(server, navigator.clipboard);
+    server.hooks.selectionOwned = (sel, owner) => clip.selectionOwned(sel, owner);
+    rootless.onFocusIn = () => clip.focusIn();
+    // Copies elsewhere in the page, or another app while the tab was in the background
+    const dirty = () => { clip.browserDirty = true; };
+    document.addEventListener('copy', dirty);
+    document.addEventListener('cut', dirty);
+    window.addEventListener('focus', dirty);
+  }
   if (typeof window !== 'undefined') (window as unknown as { __shiroX?: unknown }).__shiroX = { server, rootless };
   return { display, server, rootless, started: Date.now() };
 }

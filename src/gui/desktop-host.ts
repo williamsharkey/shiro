@@ -36,7 +36,7 @@ class DesktopCanvasWindow implements CanvasWindow {
       width: opts.width,
       height: opts.height,
       x: opts.x,
-      y: opts.decorated ? opts.y - TITLE_H : opts.y,
+      y: opts.y === undefined ? undefined : opts.decorated ? opts.y - TITLE_H : opts.y,
       content: { kind: 'surface', scale: 1, autoResize: false, bufferWidth: opts.width, bufferHeight: opts.height },
       override: !!opts.override,
       decorations: opts.decorated || opts.override ? 'server' : 'none',

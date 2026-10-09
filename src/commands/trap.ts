@@ -171,14 +171,23 @@ export const kill: Command = {
     const terminating = sig !== 0 && sig !== sigs.SIGCONT && defaultAction(sig) !== 'stop' && defaultAction(sig) !== 'ign';
     let anyFailed = false;
 
-    const abortInPage = (job: { abortController?: AbortController; status: string; exitCode: number }) => {
+    const abortInPage = (job: { abortController?: AbortController; status: string; exitCode: number; ignoresIntQuit?: boolean }) => {
       if (!terminating) return;
+      if (job.ignoresIntQuit && (sig === sigs.SIGINT || sig === sigs.SIGQUIT)) return;
       if (job.abortController) job.abortController.abort();
       job.status = 'failed';
       job.exitCode = 128 + sig;
+      (job as { signal?: number }).signal = sig;
     };
 
+    const { shellForPid, inPageJobForPid } = await import('../shell');
     for (const t of targets) {
+      // A shell started as its own process (its $$): handled before its next command
+      const target = /^\d+$/.test(t) ? shellForPid(parseInt(t, 10)) : undefined;
+      if (target) {
+        if (sig !== 0) target.queueSignal(sig);
+        continue;
+      }
       if (t.startsWith('%')) {
         const found = resolveJobSpec(shell, t);
         if (!found) {
@@ -189,6 +198,8 @@ export const kill: Command = {
         const [, job] = found;
         if (job.pgid) {
           if (jobControl.kill(-job.pgid, sig) < 0) { ctx.stderr += `kill: ${t}: no such job\n`; anyFailed = true; }
+          // A stopped job only acts on the signal once it runs again (bash continues it)
+          else if (job.status === 'stopped' && terminating && sig !== sigs.SIGKILL) jobControl.kill(-job.pgid, sigs.SIGCONT);
         } else if (job.status === 'running') {
           abortInPage(job);
         } else {
@@ -224,8 +235,8 @@ export const kill: Command = {
         continue;
       }
 
-      // Shell background jobs addressed by job number
-      const job = shell.backgroundJobs.get(pid);
+      // Shell background jobs, by $! (or by job number)
+      const job = [...shell.backgroundJobs.values()].find((j) => j.pid === pid) ?? inPageJobForPid(pid) ?? shell.backgroundJobs.get(pid);
       if (job && job.status === 'running' && !job.pgid) {
         abortInPage(job);
         continue;

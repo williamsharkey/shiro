@@ -329,6 +329,41 @@ describe('X11 protocol', () => {
     expect(server.keymap.keysyms(evs.find((e) => e[0] === 2)![1])[0]).toBe(0xe9);
   });
 
+  it('bridges CLIPBOARD with the browser clipboard, both ways', async () => {
+    const { ClipboardBridge } = await import('@shiro/x11/clipboard');
+    const { server, c } = await newServer();
+    let browser = 'from the browser ✓';
+    const bridge = new ClipboardBridge(server, { readText: async () => browser, writeText: async (t) => { browser = t; } });
+    server.hooks.selectionOwned = (sel, owner) => bridge.selectionOwned(sel, owner);
+    const wid = c.id(1);
+    createWindow(c, wid, 0, 0, 10, 10, 0);
+    const atom = async (name: string) => { c.send(16, 0, (w) => w.u16(name.length).u16(0).str(name)); return (await c.reply()).skip(8).u32(); };
+    const CLIPBOARD = await atom('CLIPBOARD'), UTF8 = await atom('UTF8_STRING'), PROP = await atom('MY_PASTE');
+
+    // browser → X: the bridge owns CLIPBOARD after an X window gets focus; the app converts it
+    bridge.focusIn();
+    c.send(24, 0, (w) => w.u32(wid).u32(CLIPBOARD).u32(UTF8).u32(PROP).u32(0));
+    for (let i = 0; i < 20 && !(await c.events(31).then((e) => (c.inbox.push(...e), e.length))); i++) await new Promise((r) => setTimeout(r, 5));
+    c.inbox = [];
+    c.send(20, 0, (w) => w.u32(wid).u32(PROP).u32(0).u32(0).u32(100));
+    const r = await c.reply();
+    r.skip(8); expect(r.u32()).toBe(UTF8); r.skip(4); const n = r.u32(); r.skip(12);
+    expect(new TextDecoder().decode(r.bytes(n))).toBe('from the browser ✓');
+
+    // X → browser: the app copies; it answers the bridge's SelectionRequest like any owner
+    c.send(22, 0, (w) => w.u32(wid).u32(CLIPBOARD).u32(0));
+    const pulled = bridge.pull();
+    let req: Uint8Array | undefined;
+    for (let i = 0; i < 50 && !req; i++) { req = (await c.events(30))[0]; if (!req) await new Promise((res) => setTimeout(res, 5)); }
+    const dv = new DataView(req!.buffer);
+    const requestor = dv.getUint32(12, true), prop = dv.getUint32(24, true);
+    const text = new TextEncoder().encode('copied in an X app');
+    c.send(18, 0, (w) => w.u32(requestor).u32(prop).u32(UTF8).u8(8).zero(3).u32(text.length).bytes(text));
+    c.send(25, 0, (w) => w.u32(requestor).u32(0).u8(31).u8(0).u16(0).u32(0).u32(requestor).u32(CLIPBOARD).u32(UTF8).u32(prop).zero(8));
+    expect(await pulled).toBe('copied in an X app');
+    expect(browser).toBe('copied in an X app');
+  });
+
   it('looks up X color names', () => {
     expect(lookupColor('red')).toBe(0xff0000);
     expect(lookupColor('Light Steel Blue')).toBe(0xb0c4de);

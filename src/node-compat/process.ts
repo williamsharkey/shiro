@@ -54,6 +54,13 @@ export function createFakeProcess(
     }
   }
 
+  // Gemini CLI relaunches itself in a child node to raise V8's heap limit;
+  // scripts here share the page's heap, and the child_process shim can't give
+  // the child the terminal, so it runs in-process.
+  if (scriptPath?.includes('/@google/gemini-cli/') && !('GEMINI_CLI_NO_RELAUNCH' in processEnv)) {
+    processEnv.GEMINI_CLI_NO_RELAUNCH = 'true';
+  }
+
   const fp: any = {
     env: processEnv,
     cwd: () => ctx.shell.cwd,
@@ -136,6 +143,14 @@ export function createFakeProcess(
         _st.deferredExitResolve?.(_st.exitCode);
       }
       return true;
+    },
+    emitWarning: (warning: any, type?: any, code?: any) => {
+      const opts = typeof type === 'object' && type ? type : { type, code };
+      const name = warning instanceof Error ? warning.name : (opts.type || 'Warning');
+      const msg = warning instanceof Error ? warning.message : String(warning);
+      if (name === 'DeprecationWarning' && (fp as any).noDeprecation) return;
+      try { (processEvents['warning'] || []).forEach(fn => fn(Object.assign(new Error(msg), { name, code: opts.code }))); } catch (_) {}
+      stderrBuf.push(`(node:${fp.pid}) ${opts.code ? `[${opts.code}] ` : ''}${name}: ${msg}\n`);
     },
     title: 'node',
     connected: false,

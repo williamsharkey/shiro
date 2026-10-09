@@ -17,14 +17,15 @@ import { packageShadows, pkgOwnShadows, packageArgsForPath, PKG_BIN_DIR } from '
 import * as A from './abi';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
-  RegularFile, DirFile, openInode, openInodeSync, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
-  shareInodeNumber, forgetInodeNumber,
+  RegularFile, DirFile, abortableWait, openInode, openInodeSync, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
+  shareInodeNumber, forgetInodeNumber, linkCount,
 } from './fd';
-import { createPipe, PipeEnd } from './pipe';
+import { createPipe, Pipe, PipeEnd, FifoRdWr } from './pipe';
+import type { PtyFile } from './pty';
 import { LockTable, F_RDLCK, F_WRLCK, F_UNLCK } from './locks';
 import { Process } from './process';
 import { EpollFile, waitReady } from './epoll';
-import { EventFile } from './fd';
+import { EventFile, TimerFile } from './fd';
 
 /** Runs a process to completion; resolves with its exit code (or nothing if it exited through the kernel). */
 export type Runner = (proc: Process, kernel: Kernel) => Promise<number | void>;
@@ -189,7 +190,7 @@ export class Kernel {
     addProcInfoSource((pid) => {
       const p = this.procs.get(pid);
       if (!p || pid === 1) return undefined;
-      const state = p.state === 'zombie' ? 'Z' : p.state === 'stopped' ? 'T' : p.inSyscall > 0 ? 'S' : 'R';
+      const state = p.state === 'zombie' ? 'Z' : p.state === 'stopped' ? 'T' : p.sleeping() ? 'S' : 'R';
       return { pid, ppid: p.ppid, pgid: p.pgid, sid: p.sid, comm: p.comm, state, cmdline: p.argv };
     });
     this.registerDevice('/dev/null', (_p, f) => new DevNull(f));
@@ -307,11 +308,14 @@ export class Kernel {
     let head: string;
     try {
       const st = await fs.stat(abs);
-      if (st.type !== 'file' || st.size < 3) return null;
+      if (st.type !== 'file') return null;
       const raw = await fs.readFile(abs);
       const bytes = typeof raw === 'string' ? enc.encode(raw.slice(0, 256)) : raw.subarray(0, 256);
-      if (bytes[0] !== 0x23 || bytes[1] !== 0x21) return null;
-      head = A.decodeText(bytes);
+      if (bytes[0] === 0x7f && bytes[1] === 0x45 && bytes[2] === 0x4c && bytes[3] === 0x46) return null;
+      // No #! line (an empty file too): ENOEXEC, on which execvp, posix_spawnp,
+      // perl and the shells run the file with /bin/sh. debconf runs a
+      // package's empty config this way, with its stdin a pipe left open.
+      head = bytes[0] === 0x23 && bytes[1] === 0x21 ? A.decodeText(bytes) : '#!/bin/sh';
     } catch {
       return null;
     }
@@ -785,6 +789,7 @@ export class Kernel {
           return new DirFile(fs, p, statusFlags);
         }
         if (mustBeDir) return -A.ENOTDIR;
+        if (st.isFIFO?.()) return await this.openFifo(proc, await fs.realpath(target), flags);
       }
       const real = await fs.realpath(target);
       const file = new RegularFile(await openInode(fs, real), statusFlags);
@@ -793,6 +798,43 @@ export class Kernel {
     } catch (e) {
       return this.pathErrno(p, A.errnoFromError(e));
     }
+  }
+
+  /** Named pipes in use: canonical path → the pipe all opens of it share (until every end closes). */
+  private fifos = new Map<string, Pipe>();
+
+  /**
+   * open() of a named pipe (POSIX): readers and writers of the same path
+   * share one pipe. A reader blocks until a writer has it open, and a writer
+   * until a reader does, unless O_NONBLOCK (a reader then opens at once; a
+   * writer gets ENXIO). O_RDWR never blocks. The data goes when the last
+   * end closes.
+   */
+  async openFifo(proc: Process, path: string, flags: number): Promise<OpenFile | number> {
+    let pipe = this.fifos.get(path);
+    if (!pipe) {
+      const p = new Pipe();
+      p.onIdle = () => { if (this.fifos.get(path) === p) this.fifos.delete(path); };
+      this.fifos.set(path, pipe = p);
+    }
+    const acc = flags & A.O_ACCMODE;
+    const nonblock = flags & A.O_NONBLOCK;
+    if (acc === A.O_RDWR) return new FifoRdWr(pipe, nonblock);
+    if (acc === A.O_WRONLY && nonblock && pipe.readers === 0) {
+      if (pipe.writers === 0 && this.fifos.get(path) === pipe) this.fifos.delete(path);
+      return -A.ENXIO;
+    }
+    const end = new PipeEnd(pipe, acc === A.O_WRONLY ? 'w' : 'r', (acc === A.O_WRONLY ? A.O_WRONLY : A.O_RDONLY) | nonblock);
+    if (nonblock) return end;
+    const sig = proc.syscallSignal;
+    const other = () => (end.end === 'r' ? pipe!.writers : pipe!.readers);
+    while (other() === 0) {
+      if (proc.exiting || !(await abortableWait(pipe.openWaiters, sig))) {
+        await end.close();
+        return -A.EINTR;
+      }
+    }
+    return end;
   }
 
   /** A registered device node, or a directory that holds one (/dev, /dev/pts). */
@@ -819,7 +861,7 @@ export class Kernel {
     const statusFlags = flags & ~(A.O_CREAT | A.O_EXCL | A.O_TRUNC | A.O_CLOEXEC | A.O_NOCTTY | A.O_DIRECTORY | A.O_NOFOLLOW);
     if (hit.node.type === 'dir') return canWrite(flags) ? -A.EISDIR : new DirFile(fs, p, statusFlags);
     if (flags & A.O_DIRECTORY) return -A.ENOTDIR;
-    if (hit.node.type !== 'file' || hit.node.lazy) return undefined; // lazy: open() fetches it
+    if (hit.node.type !== 'file' || hit.node.lazy || hit.node.special) return undefined; // lazy: open() fetches it; FIFOs block
     return new RegularFile(openInodeSync(fs, hit.path, hit.node), statusFlags);
   }
 
@@ -837,9 +879,9 @@ export class Kernel {
     const open = n.type === 'file' ? inodeStat(fs, hit.path) : undefined;
     // The inode belongs to the resolved path: /bin and /usr/bin (a link to it) are one directory
     if (open) { A.encodeStat({ ...open, ino: inodeNumber(hit.path) }, data); return 0; }
-    const type = n.type === 'dir' ? A.S_IFDIR : n.type === 'symlink' ? A.S_IFLNK : A.S_IFREG;
+    const type = n.type === 'dir' ? A.S_IFDIR : n.type === 'symlink' ? A.S_IFLNK : n.special === 'fifo' ? A.S_IFIFO : A.S_IFREG;
     A.encodeStat({
-      dev: 1, ino: inodeNumber(hit.path), mode: type | (n.mode & 0o7777), nlink: n.type === 'dir' ? 2 : 1,
+      dev: 1, ino: inodeNumber(hit.path), mode: type | (n.mode & 0o7777), nlink: n.type === 'dir' ? 2 : linkCount(hit.path),
       uid: 1000, gid: 1000, rdev: 0, size: n.size, blksize: 4096, blocks: Math.ceil(n.size / 512),
       atimeMs: n.atime ?? n.mtime, mtimeMs: n.mtime, ctimeMs: n.ctime,
       atimeNs: n.atime === undefined ? n.mtimeNs : n.atimeNs, mtimeNs: n.mtimeNs,
@@ -887,7 +929,7 @@ export class Kernel {
     if (!fs) return -A.ENOSYS;
     try {
       const st = follow ? await fs.stat(p) : await fs.lstat(p);
-      let type = st.isDirectory() ? A.S_IFDIR : st.isSymbolicLink() ? A.S_IFLNK : A.S_IFREG;
+      let type = st.isDirectory() ? A.S_IFDIR : st.isSymbolicLink() ? A.S_IFLNK : st.isFIFO?.() ? A.S_IFIFO : A.S_IFREG;
       // The same file or directory through a symlink is the same inode (/bin is /usr/bin)
       const slash = p.lastIndexOf('/');
       const real = follow ? await fs.realpath(p).catch(() => p)
@@ -897,7 +939,7 @@ export class Kernel {
       const open = type === A.S_IFREG && hasOpenInodes(fs) ? inodeStat(fs, real) : undefined;
       if (open) return { ...open, ino: inodeNumber(real) };
       return {
-        dev: 1, ino: inodeNumber(real), mode: type | (st.mode & 0o7777), nlink: st.isDirectory() ? 2 : 1,
+        dev: 1, ino: inodeNumber(real), mode: type | (st.mode & 0o7777), nlink: st.isDirectory() ? 2 : linkCount(real),
         uid: 1000, gid: 1000, rdev: 0, size: st.size, blksize: 4096, blocks: Math.ceil(st.size / 512),
         atimeMs: st.atimeMs ?? st.mtime.getTime(), mtimeMs: st.mtime.getTime(), ctimeMs: st.ctime.getTime(),
         atimeNs: st.atimeNs, mtimeNs: st.mtimeNs,
@@ -956,6 +998,7 @@ export class Kernel {
     if (SHELL_NAMES.has(cmd.name) || SHELL_NAMES.has(proc.argv[0]?.slice(proc.argv[0].lastIndexOf('/') + 1))) {
       stdio = new KernelStdio(this, proc);
       shell.kernelStdio = stdio;
+      stdio.adoptFds(shell);
       shell.kernelStdinLive = true;
     }
     const lazy = !stdio;
@@ -1025,6 +1068,7 @@ export class Kernel {
     }
     const stdio = new KernelStdio(this, proc);
     shell.kernelStdio = stdio;
+    stdio.adoptFds(shell);
     // A script read from stdin has none left
     let live = true;
     if (script === undefined) {
@@ -1067,6 +1111,13 @@ export class Kernel {
     const out = (fd: number) => (s: string) => {
       chain = chain.then(async () => { if (!proc.exiting) await this.writeAll(proc, fd, enc.encode(s.replace(/\r\n/g, '\n'))); });
     };
+    // Jobs get process groups of their own and the terminal while they run (Ctrl-Z, fg, bg, jobs)
+    const f0 = proc.fds.get(0);
+    if (f0?.kind === 'pty') {
+      const { ProcessTty } = await import('./pty');
+      shell.kernelTty = { tty: new ProcessTty(proc, (f0 as PtyFile).pty), writeOutput: out(2) };
+      shell.options.add('monitor');
+    }
     const prompt = () => {
       const home = shell.env.HOME || '/home/user';
       const cwd = shell.cwd === home ? '~' : shell.cwd.startsWith(home + '/') ? '~' + shell.cwd.slice(home.length) : shell.cwd;
@@ -1106,6 +1157,7 @@ export class Kernel {
     // The shell uses this process's fds as its stdio (src/shell-stdio.ts)
     const stdio = new KernelStdio(this, proc);
     shell.kernelStdio = stdio;
+    stdio.adoptFds(shell);
     shell.kernelStdinLive = true;
     const code = await shell.execute(line, stdio.out, stdio.err, false, undefined, true);
     await stdio.flush();
@@ -1117,8 +1169,15 @@ export class Kernel {
     if (!base) throw new Error('kernel has no shell attached');
     const shell = base.fork();
     shell.cwd = proc.cwd;
-    shell.env = { ...proc.env, PWD: proc.cwd };
+    shell.env = { ...proc.env, PWD: proc.cwd, 0: proc.argv[0] ?? proc.path };
+    shell.localVars = new Set(['0']); // $0 is not exported
+    // $$, $PPID and $BASHPID are the process's
+    shell.shellPid = shell.bashPid = proc.pid;
+    shell.parentPid = proc.ppid;
     shell.uid = proc.uid;
+    // Its fds are the process's (KernelStdio, adoptFds), not whatever exec did in the page's shell
+    shell.userFds = new Map();
+    shell.fileDescriptors = new Map();
     proc.onTerminate(() => shell.abortController?.abort());
     return shell;
   }
@@ -1238,7 +1297,7 @@ export class Kernel {
     const t0 = Date.now();
     proc.syscalls++;
     // While in a syscall the process counts as sleeping (S in /proc/PID/stat)
-    proc.inSyscall++;
+    if (proc.inSyscall++ === 0) proc.syscallSince = t0;
     const done = () => { proc.inSyscall--; proc.kernelMs += Date.now() - t0; };
     // The caller awaits the call itself: the bookkeeping adds no await hop to it
     const p = this.syscallImpl(proc, nr, args, data);
@@ -1437,6 +1496,39 @@ export class Kernel {
           if (flags & ~(A.O_NONBLOCK | A.O_CLOEXEC | A.EFD_SEMAPHORE)) return -A.EINVAL;
           return fds.alloc(new EventFile(args[0], A.O_RDWR | (flags & A.O_NONBLOCK), !!(flags & A.EFD_SEMAPHORE)), 0, !!(flags & A.O_CLOEXEC));
         }
+        case A.SYS_timerfd_create: {
+          const clock = args[0], flags = args[1];
+          if (![0, 1, 7, 8, 9].includes(clock)) return -A.EINVAL;  // REALTIME, MONOTONIC, BOOTTIME (+_ALARM)
+          if (flags & ~(A.O_NONBLOCK | A.O_CLOEXEC)) return -A.EINVAL;
+          return fds.alloc(new TimerFile(clock, A.O_RDONLY | (flags & A.O_NONBLOCK)), 0, !!(flags & A.O_CLOEXEC));
+        }
+        case A.SYS_timerfd_settime:
+        case A.SYS_timerfd_gettime: {
+          const f = fds.get(args[0]);
+          if (!f) return -A.EBADF;
+          if (!(f instanceof TimerFile)) return -A.EINVAL;
+          if (data.length < 32) return -A.EFAULT;
+          const dv = new DataView(data.buffer, data.byteOffset, 32);
+          if (nr === A.SYS_timerfd_gettime) {
+            const [v, i] = f.get();
+            dv.setFloat64(0, v, true);
+            dv.setFloat64(8, i, true);
+            return 0;
+          }
+          if (args[1] & ~A.TFD_TIMER_ABSTIME) return -A.EINVAL;
+          let value = dv.getFloat64(0, true);
+          const interval = dv.getFloat64(8, true);
+          if (!(value >= 0) || !(interval >= 0)) return -A.EINVAL;
+          if (value > 0 && args[1] & A.TFD_TIMER_ABSTIME) {
+            // absolute on the timer's clock; at or before now expires at once
+            const now = dv.getFloat64(f.clockid === 0 || f.clockid === 8 ? 16 : 24, true);
+            value = Math.max(value - now, 1e-6);
+          }
+          const [ov, oi] = f.set(value, interval);
+          dv.setFloat64(0, ov, true);
+          dv.setFloat64(8, oi, true);
+          return 0;
+        }
         case A.SYS_close_range: {
           const first = args[0] >>> 0;
           const last = Math.min(args[1] >>> 0, A.OPEN_MAX - 1);
@@ -1448,8 +1540,12 @@ export class Kernel {
           }
           return 0;
         }
-        case A.SYS_shiro_vfork:
-          return this.vfork(proc).pid;
+        case A.SYS_shiro_vfork: {
+          // the child is running code (its engine's), not idle like a builtin that makes no syscalls
+          const child = this.vfork(proc);
+          child.syscalls = 1;
+          return child.pid;
+        }
         case A.SYS_shiro_execve:
           return await this.sysExecve(proc, JSON.parse(str(0, args[0])), data);
         case A.SYS_alarm: {
@@ -1672,6 +1768,19 @@ export class Kernel {
           if (this.socketPaths?.delete(from)) this.socketPaths.add(to);
           return 0;
         }
+        case A.SYS_mknod:
+        case A.SYS_mknodat: {
+          const [dirfd, len, mode] = nr === A.SYS_mknod ? [A.AT_FDCWD, args[0], args[1]] : [args[0], args[1], args[2]];
+          const p = at(dirfd, 0, len);
+          if (typeof p === 'number') return p;
+          const type = mode & A.S_IFMT;
+          if (type !== A.S_IFIFO && type !== A.S_IFREG && type !== 0) return -A.EPERM; // device nodes need privileges
+          if (await fs().exists(p)) return -A.EEXIST;
+          const perm = mode & ~proc.umask & 0o7777;
+          if (type === A.S_IFIFO) await fs().mkfifo(p, perm);
+          else await fs().writeFile(p, new Uint8Array(0), { mode: perm });
+          return 0;
+        }
         case A.SYS_mkdir:
         case A.SYS_mkdirat: {
           const [dirfd, len, mode] = nr === A.SYS_mkdir ? [A.AT_FDCWD, args[0], args[1]] : [args[0], args[1], args[2]];
@@ -1701,7 +1810,7 @@ export class Kernel {
             return typeof t !== 'number' && (t.mode & A.S_IFMT) === A.S_IFDIR ? -A.EISDIR : -A.ENOTDIR;
           }
           if (isDir) await fs().rmdir(p);
-          else { await unlinkInode(fs(), p); await fs().unlink(p); forgetInodeNumber(p); this.socketPaths?.delete(p); }
+          else { await unlinkInode(fs(), p); await fs().unlink(p); forgetInodeNumber(p); this.socketPaths?.delete(p); this.fifos.delete(p); }
           return 0;
         }
         case A.SYS_symlink:
@@ -1781,9 +1890,26 @@ export class Kernel {
             p = f.path;
             mode = args[1];
           } else if (nr === A.SYS_chmod) { p = at(A.AT_FDCWD, 0, args[0]); mode = args[1]; }
-          else { p = at(args[0], 0, args[1]); mode = args[2]; }
+          else if (args[1] === 0 && args[0] >= 0) {
+            // fchmodat2(fd, "", mode, AT_EMPTY_PATH) (Blink passes it without
+            // the flags): systemd's fchmod_opath on an O_PATH descriptor
+            const f = file(args[0]);
+            if (!f) return -A.EBADF;
+            if (!f.path) return -A.EINVAL;
+            p = f.path;
+            mode = args[2];
+          } else { p = at(args[0], 0, args[1]); mode = args[2]; }
           if (typeof p === 'number') return p;
-          const real = await fs().realpath(p);
+          // chmod("/proc/self/fd/N"): the file the descriptor has open (glibc's
+          // and systemd's fallback for O_PATH descriptors)
+          let path: string = p;
+          for (let hops = 0; hops < 8 && (path.startsWith('/proc/') || path.startsWith('/dev/fd/')); hops++) {
+            const fdm = /^\/dev\/fd\/(\d+)$/.exec(path);
+            const link: string | undefined = fdm ? proc.fds.get(Number(fdm[1]))?.path : this.procfs.linkTarget(proc, path);
+            if (!link || link === path) break;
+            path = link;
+          }
+          const real = await fs().realpath(path);
           await flushInode(fs(), real);
           await fs().chmod(real, mode & 0o7777);
           setInodeMode(fs(), real, mode);
@@ -1851,6 +1977,9 @@ export class Kernel {
           return await this.getdents(proc, args[0], data.subarray(0, Math.min(args[1] >>> 0, data.length)));
         case A.SYS_spawn:
           return await this.sysSpawn(proc, JSON.parse(str(0, args[0])));
+        case A.SYS_shiro_sleeping:
+          proc.engineSleeps = Math.max(0, proc.engineSleeps + (args[0] | 0));
+          return 0;
         case A.SYS_getenv: {
           const b = enc.encode(JSON.stringify({ argv: proc.argv, env: proc.env, cwd: proc.cwd, pid: proc.pid }));
           if (b.length > data.length) return -A.E2BIG;
