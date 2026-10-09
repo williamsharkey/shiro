@@ -423,6 +423,11 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    child too (it was Blink's own). Kernel side: a syscall shows S once it
    has lasted 2 ms (a quick `sigaction` is R, as on Linux) and a fork child
    counts as running from the start. Test: `fixtures/x86/futexintr.c`.
+37. More `prctl`: `PR_SET/GET_KEEPCAPS` (iputils' ping died with EINVAL),
+   `PDEATHSIG`, `DUMPABLE`, `CHILD_SUBREAPER`, `NO_NEW_PRIVS` and
+   `CAP_AMBIENT` are recorded and reported back, not enforced;
+   `PR_CAPBSET_DROP` is accepted under emscripten. Test:
+   `fixtures/x86/prctlcap.c`.
 
 Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.

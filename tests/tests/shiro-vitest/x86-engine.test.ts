@@ -543,14 +543,16 @@ describe('Blink engine: CPU and syscall fixes', () => {
       'stat(missing, NULL)=-1 No such file or directory\nlstat(file, NULL)=-1 Bad address\nnewfstatat(file, NULL)=-1 Bad address\n');
   }, 60_000);
 
-  // perl's $0 = ... (Debian's addgroup); libcap's cap_get_proc (ping)
+  // perl's $0 = ... (Debian's addgroup); libcap's cap_get_proc and iputils' PR_SET_KEEPCAPS (ping)
   it.skipIf(!havePrctlcap)('prctl PR_SET_NAME/PR_GET_NAME/PR_CAPBSET_READ, capget/capset', async () => {
     const { shell } = await setup(readFileSync(prctlcapBin));
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe(
       'default name prog\nset 0 name renamed-thread-\ncapbset_read(0)=1 capbset_read(40)=1\n' +
       'capbset_read(64)=-1 Invalid argument\ncapget(version 0)=0 , version 0x20080522\n' +
-      'capget=0 full=0\ncapset=0\n');
+      'capget=0 full=0\ncapset=0\n' +
+      'keepcaps 0 set=0 now 1, set(2)=-1 Invalid argument\npdeathsig set=0 now 15\ndumpable 1 set=0\n' +
+      'subreaper set=0 now 1\nno_new_privs 0 set=0 now 1\nambient is_set=0\n');
     expect(r.exitCode).toBe(0);
   }, 60_000);
 
