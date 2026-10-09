@@ -3712,7 +3712,9 @@ export class Shell {
           stderr: '',
           shell: this,
           terminal: terminalOverride || this.terminal,
-          stdoutIsTTY: i === pipeline.length - 1 && !redirects.some(r => r.type === '>' || r.type === '>>'),
+          // (not when the caller collects stdout: $(...), a builtin's own sink)
+          stdoutIsTTY: i === pipeline.length - 1 && !redirects.some(r => r.type === '>' || r.type === '>>') &&
+            !(terminalOverride || this.terminal)?.captureStdout,
         };
 
         // Check shell functions first
