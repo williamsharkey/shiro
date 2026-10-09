@@ -33,9 +33,8 @@ All changes so far are additive; nothing below renames or removes an earlier nam
     gives one; "after token refresh" when the retry failed too), relay
     `op:error` replies (code and message), and the relay closing before
     replying.
-  - Blink: `syslog(2)` needs patch 0055 (sent to unix/x86-engine; not yet in
-    blink.wasm), until then Blink answers ENOSYS and util-linux `dmesg -S`
-    fails. Plain `dmesg` reads /dev/kmsg and works.
+  - Blink forwards `syslog(2)` to the kernel (patch 0055), so util-linux
+    `dmesg -S` works as well as plain `dmesg` (which reads /dev/kmsg).
 
 - **2026-10-09 (unix/gui)** — behavior fix, additive.
   - `/dev/tty` (registered by `attachKernelTty`) also resolves to the pty a
