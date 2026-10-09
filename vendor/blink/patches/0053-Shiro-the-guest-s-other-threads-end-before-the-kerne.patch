@@ -1,0 +1,211 @@
+From dda2be84497a5bac271afa8b9dd7bd8826fc5026 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 14:27:50 +0000
+Subject: [PATCH 53/53] Shiro: the guest's other threads end before the kernel
+ hears exit_group; sleeps in slices
+
+Chromium takes 2 s or more to terminate a Worker whose threads are parked
+in a wait, against ~15 ms when they are back in their event loops (gh's
+worker: ~2 s after it exited). exit_group now kills the sibling threads,
+wakes the futex waiters, has host.mjs answer the kernel calls in flight
+with EINTR (shiroDying), and waits (up to 0.5 s) for the threads to end.
+
+emscripten's nanosleep is a wait nothing interrupts, so nanosleep,
+clock_nanosleep and pause sleep in slices of at most 10-20 ms, looking for
+the guest's signals (LTP nanosleep02: a signal ends the sleep, with rem)
+and for the process ending between them.
+---
+ blink/blink.c   |  9 ++++++++
+ blink/shiro.inc | 38 +++++++++++++++++++++++++++++++
+ blink/syscall.c | 60 +++++++++++++++++++++++++++++++++++++++++++++++--
+ 3 files changed, 105 insertions(+), 2 deletions(-)
+
+diff --git a/blink/blink.c b/blink/blink.c
+index d64bfa1..3897e26 100644
+--- a/blink/blink.c
++++ b/blink/blink.c
+@@ -433,6 +433,8 @@ static void HandleSigs(void) {
+ }
+ 
+ #if defined(__EMSCRIPTEN__)
++#include <emscripten/threading.h>
++extern int g_shiro_pid;
+ void exit(int status) {
+   // main is called multiple times - don't perform cleanup. _exit() from
+   // a PROXY_TO_PTHREAD main thread never tears the runtime down, and the
+@@ -441,6 +443,13 @@ void exit(int status) {
+   // runtime thread), then force the exit through to JavaScript.
+   MAIN_THREAD_ASYNC_EM_ASM({ if (Module['shiroExit']) Module['shiroExit']($0); },
+                            status);
++  // Under Shiro the kernel ends the worker on that exit_group. This thread
++  // goes back to its event loop rather than proxy emscripten's own exit to
++  // the main thread, which has unwound already and never answers: a thread
++  // parked on that call kept Chromium's termination of the worker ~2 s.
++  if (g_shiro_pid && !emscripten_is_main_runtime_thread()) {
++    emscripten_unwind_to_js_event_loop();
++  }
+   emscripten_force_exit(status);
+   _exit(status);
+ }
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 5cde1ff..23657f8 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -114,6 +114,7 @@ static i64 ShiroCall(struct Machine *m, int nr, const int a[12], void *data,
+     if (held) GilAcquire();
+     res = (i64)(u64)(u32)r | (i64)args[0] << 32;
+     if (res == -EINTR_LINUX && intr && !as) {
++      if (m && atomic_load_explicit(&m->killed, memory_order_acquire)) return res;
+       if (CheckInterrupt(m, restart)) return -EINTR_LINUX;
+       continue;
+     }
+@@ -1703,6 +1704,43 @@ static void ShiroKillSiblings(struct Machine *self) {
+     }
+   }
+   UNLOCK(&s->machines_lock);
++  // futex waiters look at `killed` when woken, not only every kPollingMs
++  LOCK(&g_bus->futexes.lock);
++  for (e = dll_first(g_bus->futexes.active); e; e = dll_next(g_bus->futexes.active, e)) {
++    struct Futex *f = FUTEX_CONTAINER(e);
++    LOCK(&f->lock);
++    pthread_cond_broadcast(&f->cond);
++    UNLOCK(&f->lock);
++  }
++  UNLOCK(&g_bus->futexes.lock);
++}
++
++// exit_group of the guest (no hosted children): the other threads end
++// before the kernel hears of it. The kernel then terminates this worker,
++// and Chromium takes 2 s or more to terminate a Worker with threads parked
++// in a wait (one in a proxied kernel call, a futex, a sleep), against
++// ~15 ms when they are back in their event loops. host.mjs answers the
++// calls in flight with EINTR (shiroDying); the killed threads leave at
++// their next instruction or wait (CheckForSignals: SysExit). Bounded:
++// a thread that doesn't go in time is left to the termination.
++void ShiroQuiesce(struct Machine *m) {
++  struct Dll *e;
++  struct System *s = m->system;
++  int i, others;
++  if (!g_shiro_pid) return;
++  ShiroKillSiblings(m);
++  MAIN_THREAD_ASYNC_EM_ASM({ if (Module['shiroDying']) Module['shiroDying'](); });
++  GilRelease();
++  for (i = 0; i < 500; ++i) {
++    others = 0;
++    LOCK(&s->machines_lock);
++    for (e = dll_first(s->machines); e; e = dll_next(s->machines, e)) {
++      if (MACHINE_CONTAINER(e) != m) ++others;
++    }
++    UNLOCK(&s->machines_lock);
++    if (!others) break;
++    usleep(1000);
++  }
+ }
+ 
+ // exit_group of the instance's own process while hosted children run: the
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 7514d87..81611e2 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -395,8 +395,10 @@ _Noreturn void SysExitGroup(struct Machine *m, int rc) {
+       bool ShiroIsInstanceChild(struct Machine *);
+       _Noreturn void ShiroInstanceChildExit(struct Machine *, int);
+       bool ShiroParentExitWithKids(struct Machine *, int);
++      void ShiroQuiesce(struct Machine *);
+       if (ShiroIsInstanceChild(m)) ShiroInstanceChildExit(m, rc);
+       ShiroParentExitWithKids(m, rc);
++      ShiroQuiesce(m);
+     }
+     // The embedder tears down the whole runtime (all pthread workers) on
+     // exit, and pthread_kill() can't interrupt a worker blocked in a proxied
+@@ -4239,8 +4241,21 @@ static int SysNanosleep(struct Machine *m, i64 req, i64 rem) {
+   for (;;) {
+     if (CompareTime(now, deadline) >= 0) break;
+     ts = SubtractTime(deadline, now);
++#ifdef __EMSCRIPTEN__
++    // emscripten's nanosleep is a wait nothing interrupts: sleep in slices,
++    // and between them look for the guest's signals and for its process
++    // ending (exit_group in another thread: ShiroKillSiblings)
++    if (atomic_load_explicit(&m->killed, memory_order_acquire)) {
++      if (sleeping) ShiroSleeping(m, -1);
++      errno = EINTR;
++      return -1;
++    }
++    if (CompareTime(ts, FromMilliseconds(10)) > 0) ts = FromMilliseconds(10);
++    if ((m->signals & ~m->sigmask) || nanosleep(&ts, 0)) {
++#else
+     if (nanosleep(&ts, 0)) {
+       unassert(errno == EINTR);
++#endif
+       // this may run a guest signal handler before returning
+       if (CheckInterrupt(m, false)) {
+         if (sleeping) ShiroSleeping(m, -1);
+@@ -4282,6 +4297,46 @@ static int SysClockNanosleep(struct Machine *m, int clock, int flags,
+   req.tv_sec = Read64(gtimespec.sec);
+   req.tv_nsec = Read64(gtimespec.nsec);
+   ShiroSleeping(m, 1);
++#ifdef __EMSCRIPTEN__
++  // in slices, as SysNanosleep: signals interrupt it (with rem for a
++  // relative sleep), and so does the process ending
++  {
++    struct timespec now, deadline, ts;
++    if (clock_gettime(sysclock, &now)) {
++      ShiroSleeping(m, -1);
++      return -1;
++    }
++    deadline = (flags & TIMER_ABSTIME_LINUX) ? req : AddTime(now, req);
++    for (;;) {
++      unassert(!clock_gettime(sysclock, &now));
++      if (CompareTime(now, deadline) >= 0) {
++        rc = 0;
++        break;
++      }
++      if (atomic_load_explicit(&m->killed, memory_order_acquire)) {
++        errno = EINTR;
++        rc = -1;
++        break;
++      }
++      if ((m->signals & ~m->sigmask) && CheckInterrupt(m, false)) {
++        if (!(flags & TIMER_ABSTIME_LINUX) && remaddr) {
++          rem = SubtractTime(deadline, now);
++          Write64(gtimespec.sec, rem.tv_sec);
++          Write64(gtimespec.nsec, rem.tv_nsec);
++          CopyToUserWrite(m, remaddr, &gtimespec, sizeof(gtimespec));
++        }
++        errno = EINTR;
++        rc = -1;
++        break;
++      }
++      ts = SubtractTime(deadline, now);
++      if (CompareTime(ts, FromMilliseconds(10)) > 0) ts = FromMilliseconds(10);
++      nanosleep(&ts, 0);
++    }
++    ShiroSleeping(m, -1);
++    return rc;
++  }
++#endif
+ TryAgain:
+ #if defined(TIMER_ABSTIME) && !defined(__OpenBSD__)
+   flags = flags & TIMER_ABSTIME_LINUX ? TIMER_ABSTIME : 0;
+@@ -4352,7 +4407,8 @@ static int SigsuspendPolyfill(struct Machine *m, u64 mask) {
+   m->sigmask = mask;
+   nanos = 1;
+   ShiroSleeping(m, 1);
+-  while (!CheckInterrupt(m, false)) {
++  while (!CheckInterrupt(m, false) &&
++         !atomic_load_explicit(&m->killed, memory_order_acquire)) {
+     if (nanos > 256) {
+       if (nanos < 10 * 1000) {
+ #ifdef HAVE_SCHED_YIELD
+@@ -4366,7 +4422,7 @@ static int SigsuspendPolyfill(struct Machine *m, u64 mask) {
+         }
+       }
+     }
+-    if (nanos < 100 * 1000 * 1000) {
++    if (nanos < 20 * 1000 * 1000) {
+       nanos <<= 1;
+     }
+   }
+-- 
+2.43.0
+

@@ -526,6 +526,16 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    the kernel, which resolves symlinks (ld.so's `$ORIGIN`: uv's Python
    venvs, aider); `fallocate` is `EOPNOTSUPP` (Go's linker falls back).
    Test: `fixtures/x86/sockaddrs.c`.
+53. Exit: the guest's other threads end before the kernel hears
+   `exit_group` (killed, futex waiters woken, kernel calls in flight
+   answered `EINTR` by host.mjs's `shiroDying`, up to 0.5 s), and the
+   exiting thread goes back to its event loop rather than proxy
+   emscripten's exit to a main thread that never answers. A Worker with a
+   thread parked in a wait takes Chromium 2 s to terminate: memory after
+   `gh --version` comes back in ~0.1 s instead of ~2.1 s. `nanosleep`,
+   `clock_nanosleep` and `pause` sleep in slices and end on a handled
+   signal (with the time left: LTP nanosleep02). Test:
+   `fixtures/x86/sleepintr.c`.
 
 The guest's kernel calls go over a pool of channels (`src/x86-engine/blink.ts`
 → `public/engines/blink/host.mjs`). It starts at 6, and host.mjs asks the
