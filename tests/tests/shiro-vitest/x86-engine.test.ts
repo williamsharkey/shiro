@@ -69,6 +69,8 @@ const forkSharedBin = join(out, 'forkshared');
 const haveForkShared = tryBuild('gcc', ['-static', '-O1', '-o', forkSharedBin, 'forkshared.c']);
 const mremapBin = join(out, 'mremap');
 const haveMremap = tryBuild('gcc', ['-static', '-O1', '-o', mremapBin, 'mremap.c']);
+const mapsBin = join(out, 'maps');
+const haveMaps = tryBuild('gcc', ['-static', '-O1', '-o', mapsBin, 'maps.c']);
 const mmsgBin = join(out, 'mmsg');
 const haveMmsg = tryBuild('gcc', ['-static', '-O1', '-o', mmsgBin, 'mmsg.c']);
 const sendfileBin = join(out, 'sendfile');
@@ -596,6 +598,14 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const { shell } = await setup(readFileSync(bitscanBin));
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe(NATIVE_BITSCAN);
+  }, 60_000);
+
+  // glibc's pthread_getattr_np reads the main stack from here (glibc Bun: Claude Code, opencode)
+  it.skipIf(!haveMaps)('/proc/self/maps lists the guest mappings', async () => {
+    const { shell } = await setup(readFileSync(mapsBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'lines>4 1 well-formed 1 stack 2 text-x 1 mprotect-split 1 getattr 0 inside 1\n');
   }, 60_000);
 
   // systemd's copy_bytes (sysusers backing up /etc/group): sendfile(out, in, NULL, n)
