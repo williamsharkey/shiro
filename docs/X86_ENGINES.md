@@ -468,6 +468,18 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    sockets, and glibc's resolver, which sends its A and AAAA queries with
    `sendmmsg`, gave up: pip couldn't resolve PyPI). Test:
    `fixtures/x86/mmsg.c` (two DNS queries over the kernel's DoH).
+44. Under Shiro `/proc/self/maps` (and `/proc/thread-self/maps`, and the
+   process's own `/proc/<pid>/maps`) come from the guest page table and
+   Blink's file maps, in Linux's format, through a kernel pipe (up to 64
+   KB): glibc's `pthread_getattr_np` finds the main stack there, and glibc
+   builds of Bun (Claude Code, opencode) aborted without it. Test:
+   `fixtures/x86/maps.c`.
+45. `timerfd_create`/`timerfd_settime`/`timerfd_gettime` (they were ENOSYS;
+   uSockets' timers in glibc Bun builds such as opencode) go to a kernel
+   timerfd (`TimerFile` in `src/kernel/fd.ts`): readable through
+   read/poll/epoll when it expires, counting interval expirations. Blink
+   passes milliseconds and its own realtime/monotonic "now", so absolute
+   times are read on the timer's clock. Test: `fixtures/x86/timerfd.c`.
 
 Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.

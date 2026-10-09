@@ -1,0 +1,85 @@
+From d3a056b2ab1bbef488f6a5026c39db58644be563 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 10:45:51 +0000
+Subject: [PATCH 45/45] Shiro: timerfd_create/settime/gettime go to the kernel
+ (times in ms, absolute ones read on the timer's clock)
+
+---
+ blink/shiro.inc | 54 ++++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 53 insertions(+), 1 deletion(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index ca9d70e..4144f33 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -783,6 +783,55 @@ static i64 ShiroMsg(struct Machine *m, bool send, int fd, i64 msg, int flags) {
+   return r;
+ }
+ 
++// timerfd_settime (flags >= 0) and timerfd_gettime (flags < 0): the
++// kernel keeps the timer in milliseconds (f64; see SYS_timerfd_create in
++// src/kernel/abi.ts) and reads absolute times on the timer's own clock
++// through the realtime and monotonic "now" passed here
++static void ShiroPutF64(u8 *p, double x) {
++  u64 u;
++  memcpy(&u, &x, 8);
++  Write64(p, u);
++}
++static double ShiroGetF64(const u8 *p) {
++  u64 u = Read64(p);
++  double x;
++  memcpy(&x, &u, 8);
++  return x;
++}
++static void ShiroPutTimespecMs(u8 *p, double ms) {
++  i64 ns = (i64)(ms * 1e6 + 0.999);  // rounded up: armed stays nonzero
++  Write64(p, ns / 1000000000);
++  Write64(p + 8, ns % 1000000000);
++}
++static i64 ShiroTimerfd(struct Machine *m, int fd, int flags, i64 newp, i64 oldp) {
++  u8 its[32], *buf = (u8 *)ShiroAlloc(m, 32);
++  struct timespec rt, mt;
++  i64 r, isec, insec, vsec, vnsec;
++  if (flags >= 0) {
++    if (CopyFromUserRead(m, its, newp, 32) == -1) return -EFAULT_LINUX;
++    isec = Read64(its), insec = Read64(its + 8);   // it_interval
++    vsec = Read64(its + 16), vnsec = Read64(its + 24);  // it_value
++    if (isec < 0 || vsec < 0 || insec < 0 || insec >= 1000000000 ||
++        vnsec < 0 || vnsec >= 1000000000) {
++      return -EINVAL_LINUX;
++    }
++    unassert(!clock_gettime(CLOCK_REALTIME, &rt));
++    unassert(!clock_gettime(CLOCK_MONOTONIC, &mt));
++    ShiroPutF64(buf, vsec * 1e3 + vnsec / 1e6);
++    ShiroPutF64(buf + 8, isec * 1e3 + insec / 1e6);
++    ShiroPutF64(buf + 16, rt.tv_sec * 1e3 + rt.tv_nsec / 1e6);
++    ShiroPutF64(buf + 24, mt.tv_sec * 1e3 + mt.tv_nsec / 1e6);
++    r = ShiroCall(m, 286, A12(fd, flags), buf, 32, 32, false, false);
++  } else {
++    r = ShiroCall(m, 287, A12(fd), buf, 0, 32, false, false);
++  }
++  if (r < 0 || !oldp) return r;
++  ShiroPutTimespecMs(its, ShiroGetF64(buf + 8));   // it_interval
++  ShiroPutTimespecMs(its + 16, ShiroGetF64(buf));  // it_value
++  if (CopyToUserWrite(m, oldp, its, 32) == -1) return -EFAULT_LINUX;
++  return 0;
++}
++
+ // sendmmsg/recvmmsg: one ShiroMsg per struct mmsghdr (the msghdr, then
+ // msg_len; 64 bytes). Once a message went through, an error stops the run
+ // and the count is returned, as on Linux; MSG_WAITFORONE makes the receives
+@@ -2012,7 +2061,10 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       if (r == -ENOSYS_LINUX) r = -EPERM_LINUX;  // a kernel without them
+       break;
+     case 0x0FD: case 0x0FE: case 0x0FF: case 0x126: r = -ENOSYS_LINUX; break;  // inotify
+-    case 0x11B: case 0x11D: case 0x11E: case 0x11F: r = -ENOSYS_LINUX; break;  // timerfd, fallocate...
++    case 0x11D: r = -ENOSYS_LINUX; break;                             // fallocate
++    case 0x11B: r = KS(m, 283, A12(a, b)); break;                     // timerfd_create
++    case 0x11E: r = ShiroTimerfd(m, a, b, c, d); break;               // timerfd_settime
++    case 0x11F: r = ShiroTimerfd(m, a, -1, 0, b); break;              // timerfd_gettime
+     case 0x1B2: case 0x1A8: r = -ENOSYS_LINUX; break;                 // pidfd_open, pidfd_send_signal
+     case 0x03D: r = ShiroWait4(m, a, b, c, d); break;                 // wait4
+     case 0x0F7: r = ShiroWaitid(m, a, b, c, d, e); break;             // waitid
+-- 
+2.43.0
+
