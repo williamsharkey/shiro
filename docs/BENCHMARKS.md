@@ -297,6 +297,14 @@ Harness fixes found on the way:
   Blink, not the interpreter: the old build ignores
   `TABCOMPUTER_X86_ENGINE`.
 
+### unix/desktop 7 — Developer and AI agents stacks, Git
+
+`node bench/ab.mjs origin/unix/integration --quick --suites boot --rounds 4`
+(9a5c7bd vs this): no timing metric changed; transfer +9 KiB (the catalog and
+dock code in the desktop chunk; Files' git code, the sheets and the Git app
+are lazy chunks); DOM nodes 366 → 460 (+94): the dock's new tiles, five loose
+(nano, Vim, Code, Git, Claude Code) and two stacks of four mini glyphs each.
+
 ### unix/desktop 6 — dock icon sets
 
 Twelve icon sets plus Classic (docs/DESKTOP.md "Icon sets"), Drafting by

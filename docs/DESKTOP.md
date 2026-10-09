@@ -20,6 +20,9 @@ full-page terminal (the `shiro` profile's UI) is still there with
 
 All changes are additive. Nothing below renames or removes an earlier name.
 
+- **2026-10-09 (unix/desktop), v1.4.** `DockGroup.loose`: members that keep
+  their own dock tile while the rest of the group is stacked (not on a
+  crowded phone dock). Groups `developer` and `agents` (below).
 - **2026-10-09 (unix/desktop), v1.3.** `AppDescriptor.glyph`: the app's
   glyph for the icon sets other than Classic (24-unit SVG path data, round
   strokes; see "Icon sets"). Optional: without it an app gets a built-in
@@ -149,6 +152,59 @@ destroyed), and the next Terminal window adopts it again.
 - **Fonts** are self-hosted: Inter and JetBrains Mono (latin, variable,
   `public/fonts/`, SIL OFL, license files next to them). Only the desktop
   loads them.
+
+## Developer tools
+
+Two dock stacks from the research in `docs/research/DEV-TOOLS.md` (catalog:
+`src/desktop/devtools.ts`):
+
+| stack | loose | stacked |
+|---|---|---|
+| Developer | nano, Vim, Code (the CodeMirror window), Git | Neovim, Emacs, Geany, tmux |
+| AI agents | Claude Code | Gemini CLI, Codex, Grok, Antigravity (`agy`), aider |
+
+A tool that isn't installed has a ↓ badge whose tooltip gives its install
+time. The first click opens its Terminal window, which says what it installs
+and how long that usually takes (`pkg install vim`, about 2 s; Geany and
+aider go through Debian mode and take minutes), runs the install with its
+progress, then starts the program; the tile has a spinning ring until the
+executable appears. Later clicks just run it. The launch script checks PATH
+itself (`command -v`), so a tool installed from the shell counts too. Agents
+say first what they need (an API key or a sign-in); Codex runs with
+`--sandbox danger-full-access` (no bubblewrap here).
+
+## Git
+
+- **Clone…** (Files' toolbar, File → Clone Repository…, the Git app): owner/repo
+  or a GitHub URL into `~/src/OWNER/REPO`, in a Terminal window
+  (`src/desktop/gitsheets.ts`). Signed in to GitHub, real git (installed
+  with `pkg install git` on first use) makes a partial clone
+  (`--filter=blob:none`) over the relay; the sign-in reaches git through the
+  environment (`GIT_CONFIG_*` from `$GITHUB_TOKEN`), never the command line
+  or `.git/config`. Not signed in, the builtin git makes a shallow clone of
+  a public repository.
+- **Branch folders**: New Branch Folder… (Files, inside a repository; the
+  Git app's branch menu) runs `git worktree add ~/src/OWNER/REPO@BRANCH`
+  (`-b` for a new branch; slashes in the name become dashes in the folder),
+  one folder per branch, so parallel agents each get their own.
+- **Badges in Files** (`src/desktop/gitstatus.ts`): inside a repository the
+  toolbar shows the branch and ↑ahead/↓behind its `origin/BRANCH` (click: the
+  Git app); entries get M, A, D or U (untracked), folders M when something
+  inside changed; repository folders in a listing get their branch tag. It
+  reads the repository with isomorphic-git, only for the folder on screen,
+  and recomputes when the filesystem reports a change in the repository
+  (debounced): nothing polls. Branch folders (worktrees) show their branch
+  only.
+- **The Git app** (`src/desktop/apps/git.ts`): staged, changed and untracked
+  files with stage/unstage (one or all), the selected file's diff against the
+  last commit, commit (staged files, or everything with "Stage All &
+  Commit"; the author from git config), branches (switch, new, new branch
+  folder) and the log. Pull and Push open a Terminal running git there. For
+  a branch folder it offers a Terminal and the main folder.
+- `tests/browser/dev-tools.mjs` checks the dock, the first install (Vim),
+  badges, stage and commit, and a branch folder; `--shots` writes
+  docs/screenshots/dev-*.png. Unit tests:
+  `tests/tests/shiro-vitest/desktop-devtools.test.ts`.
 
 ## Accounts
 
