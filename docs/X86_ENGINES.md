@@ -447,6 +447,16 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    them. They run in the interpreter (the wasm JIT calls them). Tests:
    `fixtures/x86/sse4.c` (random operands, every immediate; hashes equal
    to native), a `GOAMD64=v2` Go program.
+41. The wasm JIT compiles instructions that straddle a 4 KB page when
+   both pages are read-only code (it ended the region before one and the
+   interpreter ran up to the next taken branch, every time: 218k times in
+   one Vim function); `rep movs`/`rep stos` of words, dwords and qwords
+   (musl's memcpy and memset) go a page at a time going up. Test:
+   `fixtures/x86/strops.c` (native output).
+42. Under Shiro `sendfile` with a NULL offset reads at the input's file
+   position (it read `*NULL`: EFAULT); systemd-sysusers' backup of
+   `/etc/group` failed with it, and with that the postinst of systemd,
+   cron, udev and logrotate. Test: `fixtures/x86/sendfile.c`.
 
 Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.
