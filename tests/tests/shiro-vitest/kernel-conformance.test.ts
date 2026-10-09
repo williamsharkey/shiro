@@ -8,6 +8,7 @@ import type { FileSystem } from '@shiro/filesystem';
 import { Kernel } from '@shiro/kernel/kernel';
 import type { Process } from '@shiro/kernel/process';
 import * as A from '@shiro/kernel/abi';
+import { NetStack, installNet } from '@shiro/kernel/net';
 
 describe('kernel syscalls found by LTP', () => {
   let fs: FileSystem;
@@ -149,5 +150,66 @@ describe('kernel syscalls found by LTP', () => {
     expect(await kernel.syscall(proc, A.SYS_close, [fa], new Uint8Array(8))).toBe(0);
     expect(await waiting).toBe(0);
     kernel.kill(other.pid, A.SIGKILL);
+  });
+
+  it('socket01/socketpair01/bind01: bad type EINVAL, inet socketpair EOPNOTSUPP after socket checks, AF_UNIX address on inet EAFNOSUPPORT', async () => {
+    const stack = new NetStack();
+    stack.configure({ relayUrl: null, tokenUrl: null, dohUrl: null, portHost: null });
+    const off = installNet(kernel, stack);
+    expect(await call(A.SYS_socket, [A.AF_INET, 75, 0])).toBe(-A.EINVAL);
+    expect(await call(A.SYS_socket, [0, A.SOCK_STREAM, 0])).toBe(-A.EAFNOSUPPORT);
+    expect(await call(A.SYS_socketpair, [A.AF_INET, 75, 0])).toBe(-A.EINVAL);
+    expect(await call(A.SYS_socketpair, [A.AF_UNIX, 75, 0])).toBe(-A.EINVAL);
+    expect(await call(A.SYS_socketpair, [A.AF_INET, 2, 6])).toBe(-A.EPROTONOSUPPORT); // TCP dgram
+    expect(await call(A.SYS_socketpair, [A.AF_INET, 2, 17])).toBe(-A.EOPNOTSUPP); // UDP
+    const s = await call(A.SYS_socket, [A.AF_INET, A.SOCK_STREAM, 0]);
+    expect(s).toBeGreaterThanOrEqual(0);
+    const sun = new Uint8Array(110);
+    sun[0] = A.AF_UNIX;
+    sun.set(enc.encode('.'), 2);
+    expect(await kernel.syscall(proc, A.SYS_bind, [s, 110], sun)).toBe(-A.EAFNOSUPPORT);
+    await call(A.SYS_close, [s]);
+    off();
+  });
+
+  it('waitpid04/alarm02: wait4 rejects unknown options; an alarm past setTimeout\'s range keeps its time', async () => {
+    expect(await call(A.SYS_wait4, [-1, 0xffffffff])).toBe(-A.EINVAL);
+    expect(await call(A.SYS_wait4, [-1, A.WNOHANG])).toBe(-A.ECHILD);
+    expect(await call(A.SYS_alarm, [2147483647])).toBe(0);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(await call(A.SYS_alarm, [0])).toBe(2147483647);
+  });
+
+  it('getcwd03/wait403/waitid10: chdir through a symlink gives the physical cwd; /proc/sys files LTP reads', async () => {
+    await fs.mkdir('/tmp/kc/real', { recursive: true });
+    await fs.symlink('real', '/tmp/kc/lnk');
+    expect(await call(A.SYS_chdir, [L('lnk')], 'lnk')).toBe(0);
+    const data = new Uint8Array(256);
+    const n = await kernel.syscall(proc, A.SYS_getcwd, [256], data);
+    expect(new TextDecoder().decode(data.subarray(0, n - 1))).toBe('/tmp/kc/real');
+    expect(await call(A.SYS_chdir, [L('/tmp/kc')], '/tmp/kc')).toBe(0);
+    for (const p of ['/proc/sys/kernel/tainted', '/proc/sys/kernel/core_pattern', '/proc/sys/fs/pipe-user-pages-soft']) {
+      const fd = await open(p, A.O_RDONLY);
+      expect(fd).toBeGreaterThanOrEqual(0);
+      expect(await kernel.syscall(proc, A.SYS_read, [fd, 64], new Uint8Array(64))).toBeGreaterThan(0);
+      await call(A.SYS_close, [fd]);
+    }
+  });
+
+  it('epoll_wait16: EPOLLEXCLUSIVE wakes one waiter per event; epoll_ctl05-style flag checks', async () => {
+    const [r, w] = await pipe();
+    const eps: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      const ep = await call(A.SYS_epoll_create1, [0]);
+      expect(await call(A.SYS_epoll_ctl, [ep, A.EPOLL_CTL_ADD, r, A.EPOLLIN | A.EPOLLET | A.EPOLLEXCLUSIVE, i, 0])).toBe(0);
+      eps.push(ep);
+    }
+    expect(await call(A.SYS_epoll_ctl, [eps[0], A.EPOLL_CTL_MOD, r, A.EPOLLIN, 0, 0])).toBe(-A.EINVAL);
+    expect(await call(A.SYS_epoll_ctl, [eps[0], A.EPOLL_CTL_ADD, eps[1], A.EPOLLIN | A.EPOLLEXCLUSIVE, 0, 0])).toBe(-A.EINVAL);
+    expect(await call(A.SYS_epoll_ctl, [eps[0], A.EPOLL_CTL_ADD, w, A.EPOLLOUT | A.EPOLLONESHOT | A.EPOLLEXCLUSIVE, 0, 0])).toBe(-A.EINVAL);
+    const waits = eps.map((ep) => kernel.syscall(proc, A.SYS_epoll_wait, [ep, 1, 300], new Uint8Array(A.EPOLL_EVENT_SIZE)));
+    await new Promise((res) => setTimeout(res, 10));
+    await kernel.syscall(proc, A.SYS_write, [w, 1], new Uint8Array([1]));
+    expect((await Promise.all(waits)).sort()).toEqual([0, 0, 1]);
   });
 });

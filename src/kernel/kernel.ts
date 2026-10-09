@@ -509,8 +509,10 @@ export class Kernel {
     }
     const timer: { handle?: ReturnType<typeof setTimeout>; deadline: number; interval: number } = { deadline: Date.now() + valueMs, interval: intervalMs > 0 ? intervalMs : 0 };
     const arm = (ms: number) => {
+      // setTimeout holds at most 2^31-1 ms (~24.8 days); a longer alarm waits in steps
       timer.handle = setTimeout(() => {
         if (proc.exiting || proc.data.realTimer !== timer) return;
+        if (timer.deadline - Date.now() > 0 && ms > 0x7fffffff) { arm(timer.deadline - Date.now()); return; }
         if (timer.interval > 0) {
           timer.deadline = Date.now() + timer.interval;
           arm(timer.interval);
@@ -518,7 +520,7 @@ export class Kernel {
           delete proc.data.realTimer;
         }
         this.deliver(proc, A.SIGALRM);
-      }, Math.max(0, ms));
+      }, Math.min(0x7fffffff, Math.max(0, ms)));
       (timer.handle as any)?.unref?.();
     };
     proc.data.realTimer = timer;
@@ -1605,6 +1607,8 @@ export class Kernel {
           await this.exit(proc, A.W_EXITCODE(args[0]));
           return 0;
         case A.SYS_wait4: {
+          // WNOHANG, WUNTRACED, WCONTINUED, WNOWAIT (waitid comes through here), __WNOTHREAD/__WALL/__WCLONE
+          if ((args[1] >>> 0) & ~(A.WNOHANG | A.WUNTRACED | A.WCONTINUED | A.WNOWAIT | 0xe0000000)) return -A.EINVAL;
           const r = await this.waitpid(args[0], args[1], proc, sig);
           if (r.pid > 0) new DataView(data.buffer, data.byteOffset, 4).setInt32(0, r.status, true);
           return r.pid;
@@ -1728,6 +1732,8 @@ export class Kernel {
           const st = await this.statPath(proc, p);
           if (typeof st === 'number') return st;
           if ((st.mode & A.S_IFMT) !== A.S_IFDIR) return -A.ENOTDIR;
+          // The cwd is the physical directory: getcwd after chdir through a symlink names the target
+          p = await fs().realpath(p).catch(() => p as string);
           proc.cwd = p;
           proc.env.PWD = p;
           return 0;
