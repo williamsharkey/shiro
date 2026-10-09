@@ -84,6 +84,21 @@ describe('binary data through string-stdio commands', () => {
     expect((await run('cat /tmp/bin | wc -c')).trim()).toBe('1024');
   });
 
+  it('gzip and tar output written with > is the exact archive', async () => {
+    const { run, file } = await setup();
+    await run('gzip -c /tmp/bin > /tmp/b.gz');
+    const gz = await file('/tmp/b.gz');
+    expect([gz[0], gz[1]]).toEqual([0x1f, 0x8b]);
+    await run('gunzip -c /tmp/b.gz > /tmp/o');
+    expect(await file('/tmp/o')).toEqual(every);
+    await run('cat /tmp/b.gz | gunzip > /tmp/o');
+    expect(await file('/tmp/o')).toEqual(every);
+    await run('cd /tmp && tar cf - bin u8 > /tmp/a.tar && mkdir -p x && cd x && tar xf /tmp/a.tar');
+    expect(await file('/tmp/x/bin')).toEqual(every);
+    expect((await run('head -c 16 /dev/urandom | od -An -tx1 | wc -w')).trim()).toBe('16');
+    expect((await run('head -c 16 /dev/urandom | sum | wc -w')).trim()).toBe('2');
+  });
+
   it('a builtin run as a kernel process writes the bytes it read', async () => {
     const { fs, shell } = await setup();
     const kernel = new Kernel({ shell, fs });
