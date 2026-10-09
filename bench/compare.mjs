@@ -143,7 +143,14 @@ function runAb(cands) {
   const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const suites = [...new Set(cands.map((c) => suiteOf(c.r)))];
   const modes = [...new Set(cands.map((c) => c.r.mode))];
-  const only = cands.map((c) => `^${esc(c.r.name)}$`).join('|');
+  // Suites gate whole groups with h.try(group) / h.wants(group) (kernel.spawn_throughput
+  // records .builtin and .wasm), so match the metric and each dotted parent of it
+  const names = new Set();
+  for (const c of cands) {
+    const parts = c.r.name.split('.');
+    for (let i = 2; i <= parts.length; i++) names.add(parts.slice(0, i).join('.'));
+  }
+  const only = [...names].map((n) => `^${esc(n)}$`).join('|');
   const dir = join(BENCH, '.cache', 'ab', 'compare');
   mkdirSync(dir, { recursive: true });
   const out = join(dir, `ab-${Date.now()}.json`);

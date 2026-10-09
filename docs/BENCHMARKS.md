@@ -237,6 +237,66 @@ untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
 
+### Integration 1d9582a → 9bb1a06: A/B-confirmed candidates (unix/bench)
+
+`node bench/compare.mjs bench/results/integration-1d9582a-quick.json
+bench/results/integration-9bb1a06-quick.json`, on machine `e57125c23b92`,
+the same machine as both files. It ran `ab.mjs` on the candidates, 5 rounds
+× 5 runs, quick:
+
+| candidate | quick run | A/B (99% CI, rounds) | verdict |
+|---|---|---|---|
+| `x86.blink.go_hello` | 164.6 → 249.2 ms | 153 → 240 ms, +62% (+46…+82%, `+++++`) | **regressed** |
+| `x86.blink.go_nethttp` | 306.5 → 533.9 ms | 292 → 529 ms, +80% (+60…+95%, `+++++`) | **regressed** |
+| `shell.for_seq_1000` | 20.9 → 26.7 ms | not significant | noise |
+| `boot.warm.first_command` | 8.0 → 9.5 ms | not significant | noise |
+| `kernel.spawn_throughput.wasm` (not isolated) | 1463 → 1316 proc/s | 1596 → 1200, CI −18…+49%, rounds `-+---` | not confirmed (too noisy) |
+| `claude.version` | 1006 ms → failed | works with `claude --npm --version` | harness fix (plain `claude` is native on the tabcomputer profile) |
+
+The same A/B also measured small exact boot changes that weren't
+candidates. The entry chunk grew by +52 KiB (1572 → 1624 KiB decoded), and
+the main-thread heap at boot grew by +7.7% (3.90 → 4.20 MiB). Renderer RSS
+at boot fell 10% (244 → 219 MiB).
+
+**Bisect of the go_* regression.** Medians of go_hello / go_nethttp, 5 runs
+each:
+
+| commit | go_hello / go_nethttp (ms) |
+|---|---|
+| 30a9352 (patches 0050–51) | 139 / 276 |
+| 5a4e756 (0052) | 134 / 290 |
+| **799a50f (0053)** | **250 / 505** |
+| 9d1f49f (0054) | 217 / 488 |
+| 9dc7d3b (0055–58) | 217 / 456 |
+| fdf3bcb (0062) | 215 / 465 |
+
+`ab.mjs 5a4e756 799a50f`, 3 rounds, every round worse:
+
+| metric | before → after | shift (99% CI) |
+|---|---|---|
+| go_hello | 149 → 234 ms | +58% (+40…+76%) |
+| go_nethttp | 281 → 473 ms | +68% (+52…+90%) |
+| hello_musl | 92 → 125 ms | +33% (+16…+57%) |
+
+Patch 0053 ends a guest's threads before the worker is terminated, waiting
+up to 0.5 s for them, and makes sleeps slice so that signals end them.
+Single-threaded C pays about +33 ms too, so the cost is on the
+per-process exit path. Reported to unix/perf-blink.
+
+Harness fixes found on the way:
+
+- **Pre-rename builds.** The rename's hard cut made the harness read only
+  `window.__tabcomputer`, so every A/B against a build before c676e9f
+  silently measured nothing. `inpage.js` now also accepts the old name.
+- **Group names in `--only`.** compare.mjs's `--only` didn't match the
+  group names that suites gate on (`kernel.spawn_throughput` records
+  `.builtin` and `.wasm`).
+- **Empty A/B side.** An A/B side without samples is now reported as
+  `unconfirmed`, not `noise`.
+- **`x86.x86.*` metrics.** Against builds before the rename, these run in
+  Blink, not the interpreter: the old build ignores
+  `TABCOMPUTER_X86_ENGINE`.
+
 ### unix/desktop 6 — dock icon sets
 
 Twelve icon sets plus Classic (docs/DESKTOP.md "Icon sets"), Drafting by
