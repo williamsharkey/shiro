@@ -209,6 +209,42 @@ class ContinueSignal { constructor(public levels: number = 1) {} }
 class ReturnSignal { constructor(public code: number = 0) {} }
 /** Sentinel thrown by `exit [N]`; caught by the outermost execute() of the shell */
 export class ExitSignal { constructor(public code: number = 0) {} }
+
+/**
+ * Whether the inside of ${…} is a parameter expansion bash can parse:
+ * [#|!]PARAM[[SUB]] and then nothing or an operator (:- = + ?, # ## % %%,
+ * / // /# /%, ^ ^^ , ,,, @X, :offset). Anything else is a "bad substitution".
+ */
+export function validParamExpansion(inner: string): boolean {
+  const base = (s: string): string | null => {
+    const m = /^([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-])/.exec(s);
+    if (!m) return null;
+    let i = m[0].length;
+    if (s[i] === '[' && /^[A-Za-z_]/.test(m[0])) {
+      let depth = 0;
+      for (; i < s.length; i++) {
+        if (s[i] === '[') depth++;
+        else if (s[i] === ']' && --depth === 0) break;
+      }
+      if (i >= s.length) return null;
+      i++;
+    }
+    return s.slice(i);
+  };
+  const op = (rest: string) => rest === '' || /^(:?[-=+?]|[#%/^,]|:)/.test(rest) && !/^@/.test(rest) || /^@[A-Za-z]$/.test(rest);
+  const plain = base(inner);
+  if (plain !== null && op(plain)) return true;
+  if (inner[0] === '#') {
+    const rest = base(inner.slice(1));
+    if (rest === '') return true;
+  }
+  if (inner[0] === '!') {
+    if (/^![A-Za-z_][A-Za-z0-9_]*[@*]$/.test(inner)) return true;
+    const rest = base(inner.slice(1));
+    if (rest !== null && op(rest)) return true;
+  }
+  return false;
+}
 function isControlSignal(e: unknown): boolean {
   return e instanceof ExitSignal || e instanceof BreakSignal || e instanceof ContinueSignal || e instanceof ReturnSignal;
 }
@@ -1184,7 +1220,14 @@ export class Shell {
           // Output streams through; the child's variables, cd and exit stay inside it
           const child = this.fork();
           child.injectedStdin = heredocStdin || null;
-          exitCode = await child.execute(inner, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
+          try {
+            exitCode = await child.execute(inner, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
+          } catch (e) {
+            // An expansion error (${x?msg}, bad substitution) ends just the subshell
+            if (e instanceof ExitSignal || e instanceof ReturnSignal) exitCode = e.code;
+            else if (e instanceof Error && e.name !== 'AbortError') { stderrWriter(`shiro: ${e.message}\r\n`); exitCode = 1; }
+            else throw e;
+          }
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
           continue;
@@ -3586,6 +3629,7 @@ export class Shell {
         let braceInSQ = false, braceInDQ = false;
         while (j < line.length) {
           const bc = line[j];
+          if (bc === '\\' && !braceInSQ) { j += 2; continue; }
           if (bc === "'" && !braceInDQ) braceInSQ = !braceInSQ;
           else if (bc === '"' && !braceInSQ) braceInDQ = !braceInDQ;
           else if (!braceInSQ && !braceInDQ) {
@@ -3596,12 +3640,45 @@ export class Shell {
         }
         if (depth === 0 && j < line.length) {
           let inner = line.slice(i + 2, j); // content between ${ and }
+          if (!validParamExpansion(inner)) throw new Error(`\${${inner}}: bad substitution`);
           // ${!ref…}: the variable named by $ref (ref=a, a[0] or a[@]) with the rest applied
-          const ind = /^!([A-Za-z_][A-Za-z0-9_]*|[0-9]+)((?![@*]$)[\s\S]*)$/.exec(inner);
-          if (ind && !/^\[[@*]\]$/.test(ind[2]) && !this.namerefs.has(ind[1])) {
-            const target = this.getVar(ind[1]) ?? '';
+          const ind = /^!([A-Za-z_][A-Za-z0-9_]*(?:\[(?![@*]\])[^\]]*\])?|[0-9]+)((?![@*]$)[\s\S]*)$/.exec(inner);
+          if (ind && !/^\[[@*]\]$/.test(ind[2]) && !/^![A-Za-z_][A-Za-z0-9_]*[@*]$/.test(inner) && !this.namerefs.has(ind[1])) {
+            const sub = /^([A-Za-z_][A-Za-z0-9_]*)\[([^\]]*)\]$/.exec(ind[1]);
+            const target = (sub ? this.getVar(sub[1], sub[2]) : this.getVar(ind[1])) ?? '';
             if (/^([A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?|[0-9]+|[@*#?$!-])$/.test(target)) inner = target + ind[2];
-            else if (ind[2] === '') { i = j + 1; continue; } // ${!x} with x empty or not a name: nothing
+            else if (target === '' && (sub ? this.getVar(sub[1], sub[2]) : this.getVar(ind[1])) === undefined) throw new Error(`${ind[1]}: invalid indirect expansion`);
+            else throw new Error(`${target}: invalid variable name`);
+          }
+          // ${x:-${a[@]}} / ${x:+"$@"}…: a word that is just a list expansion stays a list
+          const listWord = /^([A-Za-z_][A-Za-z0-9_]*)(?:\[([^\]]*)\])?(:?)([-+])("?)(?:\$\{([A-Za-z_][A-Za-z0-9_]*\[[@*]\]|[@*])\}|\$([@*]))\5$/.exec(inner);
+          if (listWord && (inDouble || !listWord[5])) {
+            const v = this.getVar(listWord[1], listWord[2]);
+            const set = v !== undefined && (listWord[3] === '' || v !== '');
+            if (set === (listWord[4] === '+')) inner = listWord[6] ?? listWord[7];
+          }
+          // Inside "…" the word of ${x-word} is double-quoted too: its own " only
+          // group, ' is literal, \ escapes $ ` " \ } (and the value stays one field)
+          const dqOp = inDouble ? /^([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[#?$!-])(:?)([-=+?])([\s\S]*)$/.exec(inner) : null;
+          if (dqOp && dqOp[4].includes('"') || dqOp && /'|\\\}/.test(dqOp[4])) {
+            const [, name, colon, op, operand] = dqOp!;
+            const val = this.getVar(name);
+            const use = (val === undefined || (colon !== '' && val === '')) !== (op === '+');
+            if (!use) {
+              result += op === '+' ? '' : protectExpansion(val ?? '');
+            } else {
+              let text = '';
+              for (let k = 0; k < operand.length; k++) {
+                if (operand[k] === '\\' && k + 1 < operand.length) { text += operand[k] + operand[++k]; continue; }
+                if (operand[k] !== '"') text += operand[k];
+              }
+              const word = this.expandVars(text, true).replace(/\\([$`"\\}])/g, '$1');
+              if (op === '?') throw new Error(`${name}: ${restoreExpansion(word) || 'parameter not set'}`);
+              if (op === '=') { const err = this.setVar(name, restoreExpansion(word)); if (err) throw new Error(err); }
+              result += protectExpansion(word);
+            }
+            i = j + 1;
+            continue;
           }
           const ref = this.expandArrayRef(inner);
           if (ref && 'list' in ref) {
@@ -3716,8 +3793,12 @@ export class Shell {
     const names = /^!([A-Za-z_][A-Za-z0-9_]*)([@*])$/.exec(inner);
     if (names) {
       const all = new Set([...Object.keys(this.env), ...this.arrays.keys(), ...this.assocArrays.keys()]);
-      return { list: [...all].filter((k) => k.startsWith(names[1]) && /^[A-Za-z_]/.test(k)).sort(), star: names[2] === '*' };
+      const list = [...all].filter((k) => k.startsWith(names[1]) && /^[A-Za-z_]/.test(k)).sort();
+      // (bash joins ${!prefix*} even unquoted when IFS is empty)
+      if (names[2] === '*' && this.env['IFS'] === '') return { text: list.join(''), raw: false };
+      return { list, star: names[2] === '*' };
     }
+    if (inner === '@' || inner === '*') return { list: this.getPositionalArgs(), star: inner === '*' };
     // ${@-word} ${@:-word} ${*+word} …: set means at least one parameter
     const pdef = /^([@*])(:?)([-+])([\s\S]*)$/.exec(inner);
     if (pdef) {
@@ -6084,7 +6165,17 @@ export class Shell {
     const parsed = rest.map((w) => (decl && /^[-+]/.test(w) ? null : parseAssignWord(w)));
     const isArrayWord = (a: AssignWord | null): boolean => !!a && (a.list || a.sub !== undefined);
     if (!parsed.some(isArrayWord)) return null;
-    if (!decl && parsed.some((a) => !a)) return null; // `a[0]=x cmd`: not ours
+    if (!decl && parsed.some((a) => !a)) {
+      // `a[0]=x cmd`: not ours; `B=(b b) cmd`: bash passes the text as a plain string
+      const first = parsed.findIndex((a) => !a);
+      if (!parsed.slice(0, first).some((a) => a?.list)) return null;
+      const quoted = rest.map((w, k) => {
+        if (k >= first || !parsed[k]?.list) return w;
+        const eq = w.indexOf('=') + 1;
+        return w.slice(0, eq) + "'" + w.slice(eq).replace(/'/g, "'\\''") + "'";
+      });
+      return this.execute(quoted.join(' '), writeStdout, writeStderr, false, undefined, true);
+    }
     this.substStatus = null;
     let status = 0;
     if (decl) {
@@ -6122,6 +6213,7 @@ export class Shell {
       const value = await this.expandScalar(a.value, writeStderr);
       return this.setVar(name, a.append ? (this.getVar(name, a.sub) ?? '') + value : value, a.sub);
     }
+    if (a.sub !== undefined) return `${a.name}[${a.sub}]: cannot assign list to array member`;
     const items = splitListWords(a.value);
     if (!items) return `syntax error in array assignment: (${a.value})`;
     // Expand every element before the array changes (a=(x "${a[@]}"))
@@ -6942,6 +7034,8 @@ export class Shell {
       }
     } catch (e) {
       if (e instanceof ExitSignal || e instanceof ReturnSignal) exitCode = e.code;
+      // An expansion error (${x?msg}, bad substitution) ends the script with status 1
+      else if (e instanceof Error && e.name !== 'AbortError') { writeStderr(`shiro: ${e.message}\r\n`); exitCode = 1; }
       else if (!(e instanceof BreakSignal || e instanceof ContinueSignal)) throw e;
     } finally {
       this.executeDepth = depth;

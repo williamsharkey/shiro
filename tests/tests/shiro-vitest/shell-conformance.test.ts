@@ -550,4 +550,37 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe('one\ntwo\nsub a\nsub b\nx1\nx2\nafter\nrc=2\nh=42\n0\n1\n0\n1\n');
   });
+
+  it('${!a[i]}, list-valued defaults, array words as env prefixes, a[i]=(…) errors', async () => {
+    const r = await script([
+      'foo=bar; a=("1 2" foo); echo "${!a[1]}"',
+      'd=("1 2" 3); for w in "${u[@]:-${d[@]}}"; do echo "[$w]"; done',
+      'set -- x "y z"; for w in "${u:-"$@"}"; do echo "<$w>"; done',
+      'B=(b b) sh -c \'echo "$B"\'',
+      'a[0]=(3 4); echo st=$?',
+      'IFS=; p_1=1; p_2=2; echo ${!p_*}; unset IFS',
+    ].join('\n'));
+    expect(r.out).toBe('bar\n[1 2]\n[3]\n<x>\n<y z>\n(b b)\nst=1\np_1p_2\n');
+  });
+
+  it('bad substitution and invalid indirection end the script; in ( … ) only the subshell', async () => {
+    const r = await script([
+      '(echo ${a[0][0]}); echo s1=$?',
+      '(echo ${!undef}); echo s2=$?',
+      '(echo ${x?boom}); echo s3=$?',
+      'echo ${#a[0]/1/x}; echo notreached',
+    ].join('\n'));
+    expect(r.out).toBe('s1=1\ns2=1\ns3=1\n');
+    expect(r.status).toBe(1);
+  });
+
+  it('inside "…" the word of ${x-word} is double-quoted: " groups, \' is literal, \\} escapes', async () => {
+    const r = await script([
+      'v="a b"; for w in "${U:-"x y"}" "${U:-"$v" c}"; do echo "[$w]"; done',
+      'echo "${U:-\'$v\'}" "${U-\\}}" "${U-\'}\'}"',
+      'f="\'a b d\'"; echo ${f%d\\\'} "${f%d\\\'}"',
+      'echo "${U=$v x}" "$U"',
+    ].join('\n'));
+    expect(r.out).toBe("[x y]\n[a b c]\n'a b' } '}'\n'a b 'a b \na b x a b x\n");
+  });
 });

@@ -61,23 +61,14 @@
    ]
   },
   "word-eval": {
-   "pass": 7,
+   "pass": 8,
    "total": 8,
-   "failures": [
-    {
-     "i": 5,
-     "name": "Default values -- more cases"
-    }
-   ]
+   "failures": []
   },
   "var-sub": {
-   "pass": 2,
+   "pass": 3,
    "total": 6,
    "failures": [
-    {
-     "i": 0,
-     "name": "Bad var sub"
-    },
     {
      "i": 1,
      "name": "Braced block inside ${}"
@@ -93,49 +84,21 @@
    ]
   },
   "var-sub-quote": {
-   "pass": 32,
+   "pass": 39,
    "total": 41,
    "failures": [
-    {
-     "i": 14,
-     "name": "Multiple words: outer double quotes, inner double quotes"
-    },
-    {
-     "i": 17,
-     "name": "Mixed inner quotes with outer quotes"
-    },
     {
      "i": 19,
      "name": "part_value tree on RHS"
     },
     {
-     "i": 24,
-     "name": "Multiple words: outer double quotes, inner double quotes"
-    },
-    {
-     "i": 25,
-     "name": "Multiple words: outer double quotes, inner single quotes"
-    },
-    {
-     "i": 27,
-     "name": "Strip a string with single quotes, unquoted"
-    },
-    {
-     "i": 28,
-     "name": "Strip a string with single quotes, double quoted"
-    },
-    {
      "i": 31,
      "name": "Syntax error for single quote in double quote"
-    },
-    {
-     "i": 38,
-     "name": "Right Brace as argument (similar to #702)"
     }
    ]
   },
   "var-op-test": {
-   "pass": 26,
+   "pass": 28,
    "total": 35,
    "failures": [
     {
@@ -155,20 +118,12 @@
      "name": "Assign default with array"
     },
     {
-     "i": 15,
-     "name": "Nix idiom ${!hooksSlice+\"${!hooksSlice}\"} - was workaround for obsolete bash 4.3 bug"
-    },
-    {
      "i": 17,
      "name": "array and - and +"
     },
     {
      "i": 21,
      "name": "$* (\"\" \"\") and - and + (IFS=)"
-    },
-    {
-     "i": 30,
-     "name": "\"\\z\" as arg"
     },
     {
      "i": 36,
@@ -195,7 +150,7 @@
    ]
   },
   "var-op-len": {
-   "pass": 3,
+   "pass": 4,
    "total": 7,
    "failures": [
     {
@@ -209,10 +164,6 @@
     {
      "i": 4,
      "name": "String length with invalid utf-8 continuation bytes"
-    },
-    {
-     "i": 7,
-     "name": "Length operator can't be followed by test operator"
     }
    ]
   },
@@ -243,13 +194,9 @@
    ]
   },
   "var-op-slice": {
-   "pass": 16,
+   "pass": 18,
    "total": 21,
    "failures": [
-    {
-     "i": 1,
-     "name": "Cannot take length of substring slice"
-    },
     {
      "i": 16,
      "name": "${@:offset} and ${*:offset}"
@@ -257,10 +204,6 @@
     {
      "i": 17,
      "name": "${@:offset:length} and ${*:offset:length}"
-    },
-    {
-     "i": 19,
-     "name": "Permutations of implicit begin and length"
     },
     {
      "i": 20,
@@ -304,7 +247,7 @@
    ]
   },
   "arith": {
-   "pass": 62,
+   "pass": 65,
    "total": 71,
    "failures": [
     {
@@ -330,18 +273,6 @@
     {
      "i": 26,
      "name": "Bitwise ops"
-    },
-    {
-     "i": 50,
-     "name": "Comment not allowed in the middle of multiline arithmetic"
-    },
-    {
-     "i": 53,
-     "name": "Double subscript"
-    },
-    {
-     "i": 65,
-     "name": "Invalid constant"
     }
    ]
   },
@@ -815,7 +746,7 @@
    ]
   },
   "append": {
-   "pass": 12,
+   "pass": 13,
    "total": 20,
    "failures": [
     {
@@ -825,10 +756,6 @@
     {
      "i": 8,
      "name": "error: append used like env prefix"
-    },
-    {
-     "i": 11,
-     "name": "Try to append list to element"
     },
     {
      "i": 13,
@@ -858,7 +785,7 @@
    "failures": []
   },
   "array": {
-   "pass": 68,
+   "pass": 75,
    "total": 78,
    "failures": [
     {
@@ -868,34 +795,6 @@
     {
      "i": 5,
      "name": "array with invalid token"
-    },
-    {
-     "i": 18,
-     "name": "${!a[1]} is named ref in bash"
-    },
-    {
-     "i": 27,
-     "name": "Arrays can't be used as env bindings"
-    },
-    {
-     "i": 28,
-     "name": "Associative arrays can't be used as env bindings either"
-    },
-    {
-     "i": 32,
-     "name": "Set array item to array"
-    },
-    {
-     "i": 46,
-     "name": "Multiple subscripts not allowed"
-    },
-    {
-     "i": 47,
-     "name": "Length op, index op, then transform op is not allowed"
-    },
-    {
-     "i": 53,
-     "name": "array default"
     },
     {
      "i": 72,

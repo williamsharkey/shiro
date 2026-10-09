@@ -6,7 +6,7 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1322/1567 (84.4%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1347/1567 (86.0%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1275/1567 (81.4%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **612/635 (96.4%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **0/320 (0.0%)** |
@@ -23,17 +23,17 @@ How each suite runs, and what is and isn't scored, is described in
 | comments | 0/2 | 2/2 | 0 |
 | quote | 0/33 | 29/33 | 4 |
 | word-split | 1/53 | 48/53 | 5 |
-| word-eval | 0/8 | 7/8 | 1 |
-| var-sub | 0/6 | 2/6 | 4 |
-| var-sub-quote | 0/41 | 32/41 | 9 |
-| var-op-test | 1/35 | 26/35 | 9 |
+| word-eval | 0/8 | 8/8 | 0 |
+| var-sub | 0/6 | 3/6 | 3 |
+| var-sub-quote | 0/41 | 39/41 | 2 |
+| var-op-test | 1/35 | 28/35 | 7 |
 | var-op-strip | 0/28 | 25/28 | 3 |
-| var-op-len | 0/7 | 3/7 | 4 |
+| var-op-len | 0/7 | 4/7 | 3 |
 | var-op-patsub | 0/27 | 22/27 | 5 |
-| var-op-slice | 0/21 | 16/21 | 5 |
+| var-op-slice | 0/21 | 18/21 | 3 |
 | var-num | 0/7 | 7/7 | 0 |
 | vars-special | 0/37 | 31/37 | 6 |
-| arith | 2/71 | 62/71 | 9 |
+| arith | 2/71 | 65/71 | 6 |
 | command-sub | 0/28 | 20/28 | 8 |
 | here-doc | 0/32 | 29/32 | 3 |
 | redirect | 3/39 | 32/39 | 7 |
@@ -56,9 +56,9 @@ How each suite runs, and what is and isn't scored, is described in
 | dbracket | 1/49 | 44/49 | 5 |
 | dparen | 0/14 | 13/14 | 1 |
 | assign | 2/43 | 35/43 | 8 |
-| append | 1/20 | 12/20 | 8 |
+| append | 1/20 | 13/20 | 7 |
 | array-basic | 0/5 | 5/5 | 0 |
-| array | 2/78 | 68/78 | 10 |
+| array | 2/78 | 75/78 | 3 |
 | array-assoc | 0/38 | 35/38 | 3 |
 | brace-expansion | 0/55 | 51/55 | 4 |
 | tilde | 0/14 | 9/14 | 5 |
@@ -85,16 +85,15 @@ How each suite runs, and what is and isn't scored, is described in
 
 - **quote**: $'' octal escapes don't have leading 0; $'' octal escapes with fewer than 3 chars; $'' supports \cA escape for Ctrl-A - mask with 0x1f; \c' is an escape, unlike bash
 - **word-split**: IFS and joining arrays by assignments; Bug #628 split on : with : in literal word; 4 x 3 table - with for loop; IFS=x and '' and $@ (#2); ""$A"" - empty string on both sides - derived from spec/toysh-posix #15
-- **word-eval**: Default values -- more cases
-- **var-sub**: Bad var sub; Braced block inside ${}; Descriptor redirect to bad "$@"; Here doc with bad "$@" delimiter
-- **var-sub-quote**: Multiple words: outer double quotes, inner double quotes; Mixed inner quotes with outer quotes; part_value tree on RHS; Multiple words: outer double quotes, inner double quotes; Multiple words: outer double quotes, inner single quotes; Strip a string with single quotes, unquoted; Strip a string with single quotes, double quoted; Syntax error for single quote in double quote; Right Brace as argument (similar to #702)
-- **var-op-test**: Lazy Evaluation of Alternative; Unquoted with array as default value; Quoted with array as default value; Assign default with array; Nix idiom ${!hooksSlice+"${!hooksSlice}"} - was workaround for obsolete bash 4.3 bug; array and - and +; $* ("" "") and - and + (IFS=); "\z" as arg; op-test for unquoted ${a[*]:-empty} with IFS=
+- **var-sub**: Braced block inside ${}; Descriptor redirect to bad "$@"; Here doc with bad "$@" delimiter
+- **var-sub-quote**: part_value tree on RHS; Syntax error for single quote in double quote
+- **var-op-test**: Lazy Evaluation of Alternative; Unquoted with array as default value; Quoted with array as default value; Assign default with array; array and - and +; $* ("" "") and - and + (IFS=); op-test for unquoted ${a[*]:-empty} with IFS=
 - **var-op-strip**: Remove const suffix is vectorized on $@ array; strip none; Strip Right Brace (#702)
-- **var-op-len**: Unicode string length (spec/testdata/utf8-chars.txt); String length with incomplete utf-8; String length with invalid utf-8 continuation bytes; Length operator can't be followed by test operator
+- **var-op-len**: Unicode string length (spec/testdata/utf8-chars.txt); String length with incomplete utf-8; String length with invalid utf-8 continuation bytes
 - **var-op-patsub**: Confusing unquoted slash matches bash (and ash); Synthesized ${x///} bug (similar to above); Replace backslash; When LC_ALL=C, pattern ? doesn't match multibyte character; Chromium from http://www.oilshell.org/blog/2016/11/07.html
-- **var-op-slice**: Cannot take length of substring slice; ${@:offset} and ${*:offset}; ${@:offset:length} and ${*:offset:length}; Permutations of implicit begin and length; ${array[@]:} vs ${array[@]: }  - bash and zsh inconsistent
+- **var-op-slice**: ${@:offset} and ${*:offset}; ${@:offset:length} and ${*:offset:length}; ${array[@]:} vs ${array[@]: }  - bash and zsh inconsistent
 - **vars-special**: $PATH is set if unset at startup; Vars set interactively only: $HISTFILE; Some vars are set, even without startup file, or env: PATH, PWD; $LINENO is the current line, not line of function call; $LINENO in other for loops; $_ with assignments, arrays, etc.
-- **arith**: Arith sub with word parts; Backticks within arith sub; Integer constant validation; Comma operator (borrowed from C); Logical Ops; Bitwise ops; Comment not allowed in the middle of multiline arithmetic; Double subscript; Invalid constant
+- **arith**: Arith sub with word parts; Backticks within arith sub; Integer constant validation; Comma operator (borrowed from C); Logical Ops; Bitwise ops
 - **command-sub**: Backtick 2; Nested backticks; Making keyword out of command sub should NOT work; Command sub with here doc; Escaped quote in [[ ]]; Quoting \ within ``; Quoting \ within `` within double quotes; Syntax errors with double quotes within backticks
 - **here-doc**: Here doc with bad comsub delimiter; Here doc with line continuation, then pipe.  Syntax error.; Function def and execution with here doc
 - **redirect**: Named file descriptor; \>&word redirects stdout and stderr when word is not a number or -; 1\>&2- to move file descriptor; 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes; xtrace not affected by redirects
@@ -114,8 +113,8 @@ How each suite runs, and what is and isn't scored, is described in
 - **dbracket**: [[ regex syntax error; [[ at runtime doesn't work; [[ with env prefix doesn't work; tilde expansion with =~ (confusing); [[ ]] with redirect
 - **dparen**: (( )) with redirect
 - **assign**: Env binding can use preceding bindings, but not subsequent ones; Env value with escaped \<; Trying to run keyword 'for'; Test above without 'local' (which is not POSIX); aliased assignment doesn't split; assign and glob; declare and glob; "declare -a arr" and "readonly -a a" creates an empty array (OSH)
-- **append**: error: typeset myarray+=s; error: append used like env prefix; Try to append list to element; typeset s+=; typeset s${dyn}+=; export readonly +=; local +=; assign builtin appending array: declare d+=(d e)
-- **array**: space before ( in array initialization; array with invalid token; ${!a[1]} is named ref in bash; Arrays can't be used as env bindings; Associative arrays can't be used as env bindings either; Set array item to array; Multiple subscripts not allowed; Length op, index op, then transform op is not allowed; array default; a+=() modifies existing instance of BashArray
+- **append**: error: typeset myarray+=s; error: append used like env prefix; typeset s+=; typeset s${dyn}+=; export readonly +=; local +=; assign builtin appending array: declare d+=(d e)
+- **array**: space before ( in array initialization; array with invalid token; a+=() modifies existing instance of BashArray
 - **array-assoc**: unset -v and assoc array; nameref and assoc array; bash bug: (( A["$key"] = 1 )) doesn't work
 - **brace-expansion**: expansion on RHS of assignment; no expansion with RHS assignment; Two kinds of tilde expansion; Mixed case char expansion is invalid
 - **tilde**: ${undef:-~}; ${x//~/~root}; a[x]=foo:~ has tilde expansion; x=${undef-~:~}; temp assignment x=~ env
