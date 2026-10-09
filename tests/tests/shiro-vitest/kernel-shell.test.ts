@@ -202,6 +202,13 @@ describe('kernel programs on the terminal pty', () => {
     expect(term.screen()).not.toContain('line 1');
   });
 
+  it('sudo/timeout PROGRAM redirected or piped: its stdout goes there, not to the tty (sudo apt-get update | tail)', async () => {
+    (shell as any).terminal = term;
+    const r = await sh('sudo wseq 2 > /tmp/sudo.out; timeout 5 wseq 3 > /tmp/timeout.out; cat /tmp/sudo.out /tmp/timeout.out | wc -l');
+    expect(r.out.trim()).toBe('5');
+    expect(term.screen()).not.toContain('line 1');
+  });
+
   it('kernel | filter builtin is one job: the builtin runs as a kernel process and writes to the tty', async () => {
     const r = await sh('wseq 3 | grep 2');
     expect(r.exitCode).toBe(0);

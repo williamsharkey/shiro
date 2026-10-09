@@ -1,5 +1,5 @@
 import type { Command } from './index';
-import { quoteArgsForShell } from '../shell';
+import { capturingStdout, quoteArgsForShell } from '../shell';
 
 /**
  * sudo [-u USER] [-E] [-H] [-i|-s] [--] COMMAND [ARG]...
@@ -62,8 +62,11 @@ export const sudoCmd: Command = {
       command = ['sh', '-c', quoteArgsForShell(command)];
     }
 
+    const toTerm = !!ctx.terminal && ctx.stdoutIsTTY !== false;
     const child = ctx.shell.fork();
-    if (ctx.terminal) child.setTerminal(ctx.terminal as any);
+    // Piped or redirected (`sudo apt-get update | tail -1`): programs keep the
+    // tty for input but their stdout comes back here, as in $(...)
+    if (ctx.terminal) child.setTerminal((toTerm ? ctx.terminal : capturingStdout(ctx.terminal)) as any);
     child.cwd = ctx.cwd;
     child.uid = uid;
     const me = ctx.env.USER || 'user';
@@ -76,7 +79,6 @@ export const sudoCmd: Command = {
       if (login) child.cwd = '/root';
     }
     child.env = env;
-    const toTerm = !!ctx.terminal && ctx.stdoutIsTTY !== false;
     const out = (s: string) => { if (toTerm) (ctx.terminal as any).writeOutput(s); else ctx.stdout += s.replace(/\r\n/g, '\n'); };
     const err = (s: string) => { if (toTerm) (ctx.terminal as any).writeOutput(s); else ctx.stderr += s.replace(/\r\n/g, '\n'); };
     return child.executeWithStdin(quoteArgsForShell(command), ctx.stdin || '', ctx.streamStdout ?? out, ctx.streamStderr ?? err);

@@ -387,7 +387,7 @@ export function splitEnvPrefix(segment: string): { assignments: ([string, string
  * kernel jobs keep the tty for stdin and stderr, as in bash, but their stdout
  * is captured instead of going to the screen.
  */
-function capturingStdout<T extends object>(term: T): T {
+export function capturingStdout<T extends object>(term: T): T {
   return new Proxy(term, {
     get(t, k) {
       if (k === 'captureStdout') return true;
