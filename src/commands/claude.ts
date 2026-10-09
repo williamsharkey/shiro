@@ -58,8 +58,9 @@ const quote = (a: string) => `'${a.replace(/'/g, `'\\''`)}'`;
 async function runNative(ctx: Parameters<Command['exec']>[0], args: string[]): Promise<number> {
   const path = nativeClaudePath(ctx.env);
   let elf = false;
+  let raw: Uint8Array | string | null = null;
   try {
-    const raw = await ctx.fs.readFile(path);
+    raw = await ctx.fs.readFile(path);
     elf = typeof raw !== 'string' && raw.length > 4 && raw[0] === 0x7f && raw[1] === 0x45 && raw[2] === 0x4c && raw[3] === 0x46;
   } catch { /* missing */ }
   if (!elf) {
@@ -82,7 +83,11 @@ async function runNative(ctx: Parameters<Command['exec']>[0], args: string[]): P
   // URLs as OSC 8 links: the sign-in URL Claude prints wraps over several
   // lines, and a click on the link opens it (no popup blocker involved)
   const links = ctx.env.FORCE_HYPERLINK === undefined ? 'FORCE_HYPERLINK=1 ' : '';
-  const line = jit + links + [path, ...args].map(quote).join(' ');
+  // Which build an agent inside is (~/AGENTS.md, src/agent-docs.ts)
+  const { nativeClaudeVersion } = await import('./claude-native');
+  const version = await nativeClaudeVersion(ctx.fs, path, raw as Uint8Array);
+  const build = `TABCOMPUTER_CLAUDE_BUILD=native TABCOMPUTER_CLAUDE_VERSION=${quote(version ?? 'unknown')} `;
+  const line = jit + links + build + [path, ...args].map(quote).join(' ');
   return ctx.shell.execute(line, (s) => { ctx.stdout += s.replace(/\r\n/g, '\n'); }, (s) => { ctx.stderr += s.replace(/\r\n/g, '\n'); }, false, ctx.terminal, true);
 }
 
@@ -149,7 +154,9 @@ export const claudeCmd: Command = {
       return 127;
     }
     // OSC 8 links for the URLs it prints (the sign-in URL is clickable), as for the native build
-    const nodeCtx = { ...ctx, env: { FORCE_HYPERLINK: '1', ...ctx.env }, args: [CLAUDE_CODE_CLI_JS, ...args], stdout: '', stderr: '' };
+    // Which build an agent inside is (~/AGENTS.md, src/agent-docs.ts)
+    const env = { FORCE_HYPERLINK: '1', ...ctx.env, TABCOMPUTER_CLAUDE_BUILD: 'npm', TABCOMPUTER_CLAUDE_VERSION: CLAUDE_CODE_VERSION };
+    const nodeCtx = { ...ctx, env, args: [CLAUDE_CODE_CLI_JS, ...args], stdout: '', stderr: '' };
     const exitCode = await nodeCmd.exec(nodeCtx);
     ctx.stdout += nodeCtx.stdout;
     ctx.stderr += nodeCtx.stderr;

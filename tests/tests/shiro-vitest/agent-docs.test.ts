@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import { hcCmd } from '@shiro/commands/hc';
 import type { FileSystem } from '@shiro/filesystem';
 import type { Shell } from '@shiro/shell';
-import { AGENTS_PATH, CLAUDE_PATH, CLAUDE_MD, MANIFEST_PATH, buildAgentsMd, seedAgentDocs } from '@shiro/agent-docs';
+import { AGENTS_PATH, CLAUDE_PATH, CLAUDE_MD, MANIFEST_PATH, KNOWN_ISSUES, buildAgentsMd, seedAgentDocs } from '@shiro/agent-docs';
 import { defaultRuntimeContext, parseRuntimeContext, type ShiroRuntimeContext } from '@shiro/seed-runtime-context';
 import { createTestShell, run } from './helpers';
 
@@ -43,6 +43,15 @@ describe('agent docs', () => {
     expect(md).toContain("runs on its own page");
     expect(md).not.toMatch(/NEO\.md|shiro-context|src\/main\.ts/);
     expect(CLAUDE_MD).toBe('@AGENTS.md\n');
+  });
+
+  it('tells the agent how to orient itself, and lists the known issues', () => {
+    const md = buildAgentsMd(defaultRuntimeContext());
+    expect(md).toContain('## Orient yourself');
+    expect(md).toContain('`doctor --agents`');
+    expect(md).toContain('$TABCOMPUTER_CLAUDE_BUILD $TABCOMPUTER_CLAUDE_VERSION');
+    expect(md).toContain('## Known issues');
+    for (const k of KNOWN_ISSUES) expect(md).toContain(k.issue);
   });
 
   it('an injected boot tells the agent to start with hc outer', () => {
