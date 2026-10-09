@@ -1,5 +1,5 @@
 import { decodeBytes, encodeText } from './utils/byte-text';
-import { activeProfile } from './profile';
+import { activeProfile, unameRelease, UNAME_VERSION } from './profile';
 
 function globPatternToRegex(pattern: string, base: string, caseInsensitive?: boolean): RegExp {
   // Resolve the pattern relative to base
@@ -269,7 +269,8 @@ class ProcProvider implements VirtualFSProvider {
       const secs = ((Date.now() - this.startTime) / 1000).toFixed(2);
       return `${secs} ${secs}\n`;
     },
-    '/proc/version': () => `Linux version 6.1.0-shiro (shiro@browser) (TypeScript) #1 SMP ${new Date().toUTCString()}\n`,
+    // What uname(2) says, as on Linux (`uname -rv`, Node's os.release())
+    '/proc/version': () => `Linux version ${unameRelease()} (user@${activeProfile().hostname}) ${UNAME_VERSION} ${new Date(this.startTime).toUTCString()}\n`,
     '/proc/meminfo': () => {
       const total = (typeof performance !== 'undefined' && (performance as any).memory?.jsHeapSizeLimit) || 256 * 1024 * 1024;
       const used = (typeof performance !== 'undefined' && (performance as any).memory?.usedJSHeapSize) || 64 * 1024 * 1024;
