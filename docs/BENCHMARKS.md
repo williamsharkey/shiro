@@ -1201,6 +1201,80 @@ store method too):
 | debian.apt.install.jq | 60.2 s | 52.9 s | 32.6 s (1.8×) |
 | debian.apt.install.python3-minimal | 161.3 s | 152.8 s | 141.5 s |
 
+### unix/perf-fs-shell 10 — storage reliability: quota, persistence, crash safety
+
+**Quota.** A QuotaExceededError used to be logged while the failed batch was
+dropped: the session kept files the disk never got, and a later commit could
+land on top of the gap. Debian's scoreboard saw this as dpkg's "unable to
+fsync updated status: Input/output error". Now the batch stays queued, with
+newer writes over it. One transaction means none of it is on disk; the disk
+stays at the last good commit. While storage is full:
+- writes that need space (new nodes, growing files) fail at once with
+  `ENOSPC: no space left on device (browser storage is full)`;
+- shrinking writes, chmod, rename and deletes still go through;
+- a burst of deletes retries the queued batch together with them;
+- `sync()`, `flushed()`, fsync(2) and close(2) report ENOSPC; the fd is
+  released and no inode is left in the table.
+
+The terminal and the desktop say storage is full, and say so again when it
+recovers. Settings → Storage shows usage, quota, persistence (with a button)
+and the full state.
+
+**Persistence.** `navigator.storage.persist()` is no longer called on every
+boot, which meant a Firefox prompt on every load. It is now called on
+`debian install`, on the first 64 MiB written in a page load, or on boot
+when 64 MiB is already stored (src/storage.ts).
+
+**Crash safety and footprint.** Measured with `bench/crash-check.mjs`
+(fresh headless profile, local mirror cache, so "fetched" is the bytes the
+page loaded). Footprint:
+
+| step | time | fetched | storage after |
+|---|---:|---:|---:|
+| boot (fresh profile) | | 1.5 MiB | 0.0 MiB |
+| `debian install` | 0.3 s | 0.5 MiB | 1.2 MiB |
+| first `/usr/bin/bash -c true` | 0.7 s | 2.7 MiB | 6.2 MiB |
+| `sudo apt-get update` | 29–42 s | 37.8 MiB | 178 MiB |
+| `apt-get install -y tree` | 28.8 s | 3.5 MiB | 209 MiB |
+| `apt-get install -y bc` | 43.6 s¹ | 4.8 MiB | 244 MiB |
+
+¹ The full test suite was running at the same time.
+
+Crash results:
+- **During `apt-get install -y jq`:** the renderer was killed (CDP
+  `Page.crash`) at 4, 12 and 25 s, then booted again in the same profile.
+  After each crash `dpkg --audit` was clean, `apt-get check` passed, and
+  reinstalling gave a working `jq-1.7`.
+- **During a 200 MB write:** a file synced before the crash was intact. The
+  big file was absent (nothing written back yet), and the FS was writable.
+- **Out of storage:** a persistent profile on a 120 MB tmpfs gives a 72 MiB
+  quota. Chromium doesn't enforce `Storage.overrideQuotaForOrigin` on
+  IndexedDB: 63 MB went into a 30 MiB override. Writing 8 MiB files filled
+  it at 64 MiB:
+  - `dd` and `sync` reported ENOSPC, and `echo x > new` failed;
+  - after `rm` the queued writes committed;
+  - after a reload, the files written before and after were intact.
+
+Tests: `storage-quota.test.ts` (ENOSPC, the batch kept, recovery after a
+delete, a second instance reading only committed data, close and fsync
+returning -ENOSPC).
+
+**Benchmark.** `bench/ab.mjs origin/unix/perf-fs-shell HEAD --quick --rounds 3`:
+- 82 metrics the same;
+- boot bundle +3 KiB (+0.19%: src/storage.ts and the full-state code);
+- `kernel.spawn_wait.builtin` and `wasm.tree_create` improved (noise-level);
+- `net.tcp_download` was flagged +9% at the edge of its CI. Re-run over 5
+  rounds it went 64.3 → 70.0 MB/s, "same", per-round direction `++--+`.
+
+Not fixed here:
+- **head/tail on binary data.** The builtins work on strings, so
+  `head -c N /dev/urandom` writes about 1.5·N bytes (bytes ≥ 0x80 come out
+  UTF-8 encoded).
+- **Storage gap.** The debian session sees about 659 MiB after
+  update plus one batch in long-lived profiles, versus 178 MiB here. That
+  points at rewritten files (apt's pkgcache.bin and srcpkgcache.bin, about
+  89 MB per rewrite) still occupying LevelDB until it compacts.
+
 ## Results
 
 <!-- bench:table:begin -->
