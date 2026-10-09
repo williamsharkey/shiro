@@ -678,7 +678,7 @@ async function handleGitProxy(req, res, targetUrl) {
   } catch (err) {
     res.writeHead(502, { 'content-type': 'application/json', ...cors });
     console.warn('[git-proxy]', targetUrl, err.message, err.cause || '');
-    res.end(JSON.stringify({ error: err.message, cause: err.cause ? String(err.cause.code || err.cause.message || err.cause) : undefined }));
+    res.end(JSON.stringify({ error: err.message, cause: err.cause ? [err.cause.code, err.cause.message].filter(Boolean).join(': ') || String(err.cause) : undefined }));
   }
 }
 
