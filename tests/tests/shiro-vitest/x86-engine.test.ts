@@ -118,6 +118,9 @@ const haveFionbio = tryBuild('gcc', ['-static', '-O1', '-o', fionbioBin, 'fionbi
 const fuzzBin = join(out, 'jitfuzz');
 const haveFuzz = tryBuild('gcc', ['-static', '-O1', '-o', fuzzBin, 'jitfuzz.c']);
 
+const argv0Bin = join(out, 'argv0');
+const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
+
 async function setup(bin: Uint8Array) {
   const { fs, shell } = await createTestShell();
   await fs.mkdir('/home/user/work', { recursive: true });
@@ -529,6 +532,19 @@ describe.skipIf(!haveTty)('Blink engine: interactive program on a kernel pty', (
 });
 
 // Blink patch 0011: the guest's fds and processes are the kernel's.
+// Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
+// (busybox picks its applet by it; Debian's redis-server -> redis-check-rdb)
+describe('argv[0] through a symlink', () => {
+  for (const engine of ['blink', 'x86']) {
+    it.skipIf(!haveArgv0)(`is the link's name, not the target's (${engine})`, async () => {
+      const { shell } = await setup(readFileSync(argv0Bin));
+      const env = engine === 'x86' ? 'TABCOMPUTER_X86_ENGINE=x86 ' : '';
+      const r = await run(shell, `ln -sf prog echo2; mkdir -p bin; ln -sf ../prog bin/redis-server; ${env}./echo2; ${env}./prog; PATH=$PWD/bin:$PATH ${env}redis-server`);
+      expect(r.output.replace(/\r\n/g, '\n')).toBe('argv0=./echo2\nargv0=./prog\nargv0=redis-server\n');
+    }, 60_000);
+  }
+});
+
 describe('Blink engine: kernel processes (fork, exec, pipes)', () => {
   it('fork+exec+wait, posix_spawn over a pipe, popen and system through /bin/sh', async () => {
     const { shell } = await setup(readFileSync(join(FIX, 'proc-musl')));
