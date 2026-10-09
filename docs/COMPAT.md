@@ -11,6 +11,27 @@ Blink engine.
 
 ## Languages and toolchains (unix/compat-dev)
 
+**Scoreboard** (each target as a user would reach it; details in the tables below):
+
+| Target | Route | Result |
+| --- | --- | --- |
+| python3, venv | `pkg install python3` (CPython 3.13.7 WASI) | works |
+| pip | builtin (PyPI over fetch) / Debian `python3-pip` | works for pure-Python wheels / works with the TCP relay |
+| node, npm, npx | builtin | works (commander, mocha, tsc 5, prettier) |
+| pnpm 9 | `npm install pnpm` | works (add, store, symlinks, run, exec, bins) |
+| yarn 1 | `npm install yarn` | works (add, lockfile, run, bins, offline) |
+| ruby, gem, rake | `pkg install ruby` (ruby.wasm 3.4.1) | works (no sockets) |
+| perl | `pkg install perl` (x86-64 in Blink) | works |
+| lua | `pkg install lua` | works |
+| go | `pkg install go` (wasip1) / Debian `golang-go` | builds and runs / fails: link step (Blink `fallocate`, reported) |
+| clang, make, ninja, cmake | `pkg install llvm make ninja cmake` | works (zlib's own build, CMake → Ninja/Make, CTest) |
+| gcc, make (Debian) | `apt install build-essential` | works: hello.c with gcc and through make |
+| node (Debian) | `apt install nodejs` | fails: SIGSEGV in Blink (reported); `builtin node` runs Shiro's |
+| sqlite | `pkg install sqlite` | works |
+| git | `pkg install git` (x86-64 in Blink) | works for local workflows, file:// clone/push |
+| php | — | owned by unix/wasix |
+| rust, java, deno, bun | — | not available (see "Not available") |
+
 Smoke tests: `tests/tests/shiro-vitest/compat-dev.test.ts` (kernel processes
 in Node worker threads). Browser checks: `scripts/browser-check.mjs` against a
 built app in headless Chromium, cross-origin isolated.
