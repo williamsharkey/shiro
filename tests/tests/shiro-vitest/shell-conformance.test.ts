@@ -700,4 +700,16 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe('s1=1\nhi\ns2=0\ns3=1\ns4=1\nstill\ncond\nbrace\np1=2\nap2=1\n');
   });
+
+  it('set -u ends just a redirected subshell or a $(…); NAME=value with only redirects persists', async () => {
+    const r = await script([
+      'set -u',
+      '(echo ${nope}) 2>/dev/null; echo s1=$?',
+      'x=$(echo ${nope}) 2>/dev/null; echo s2=$?',
+      'set +u',
+      // an assignment with only redirects stays set (unexported) and has its $(…)'s status
+      'y=$(echo hi) >/dev/null; z=$(exit 3) 2>/dev/null; echo "s3=$? $y"; sh -c \'echo ${y-unexported}\'',
+    ].join('\n'));
+    expect(r.out).toBe('s1=1\ns2=1\ns3=3 hi\nunexported\n');
+  });
 });

@@ -35,6 +35,8 @@ export default defineConfig({
       external: [],
     },
   },
+  // module workers (src/gui/deb-worker.ts) that import code-split chunks
+  worker: { format: 'es' },
   resolve: {},
   server: {
     headers: isolationHeaders,

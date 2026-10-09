@@ -16,17 +16,24 @@ gui info l3afpad         # packages, sizes, what was left out
 xserver                  # display :0: process, clients, windows
 ```
 
-On the desktop the dock has XTerm, L3afpad, Ristretto, FeatherPad and xeyes
-(more with `desktop open ID`); the first click shows a download window, then
-the app's own window. Any X client can be started directly too
+On the desktop, the dock's **Apps** entry opens a window listing the apps
+with their icons (from their Debian packages), what installing each would
+download now (less when it shares libraries with installed apps), and a
+**Get** button that installs it with a progress bar, then **Open**.
+Installed apps get their own dock icon. Opening an app that isn't installed
+(`desktop open ID`, `wm.openApp(id)`) shows a download window, then the
+app's own window. Any X client can be started directly too
 (`DISPLAY=:0` is set in the shell): `xterm &` after `gui install xterm`.
 
-Screenshots: [docs/screenshots/](screenshots/) (`gui-*.png`): the desktop
+Screenshots: [docs/screenshots/](screenshots/) (`gui-*.png`): the Apps
+window (`gui-apps.png`, `gui-apps-installing.png`), the desktop
 with xeyes, xclock, xterm, FeatherPad (Qt 5) and GPicView (GTK 2) in
 Chromium (`gui-desktop.png`), and one per app, GTK 3 included
 (`gui-l3afpad.png`, `gui-mousepad.png`, `gui-ristretto.png`).
 
 ![Debian GUI apps on the desktop](screenshots/gui-desktop.png)
+
+![The Apps window](screenshots/gui-apps.png)
 
 ## What runs
 
@@ -37,6 +44,9 @@ window, and to its first drawn frame; "warm" is a second launch in the same
 page. Install = download + unpack + triggers, from the network; "from cache" =
 the same install again from the browser's Cache Storage (after a filesystem
 reset, e.g.).
+
+(Install times here predate the decoding workers and trigger changes; see
+"First launch: click to window" below for the current ones.)
 
 | App | Toolkit | Download (first run) | Install | From cache | First frame | Warm | Status |
 |---|---|---:|---:|---:|---:|---:|---|
@@ -69,6 +79,70 @@ wrong masks / NaN results, which cairo/pixman loops on); it was reported to
 perf-blink with the gui-probe repro and fixed there.
 
 Status per app also in [COMPAT.md](COMPAT.md#linux-gui-apps-unixgui).
+
+### Heavier apps: Inkscape, NetSurf, Dillo
+
+From a fresh profile in Chromium, opened like a click:
+
+- **Inkscape 1.2.2** (GTK 3 + gtkmm, 140 packages, 83 MB of a 95 MB
+  closure): installed in 15 s; its welcome dialog appears 61 s after the
+  click; closing it opens the main window ~60 s later, and the ellipse tool
+  draws on the canvas (`gui-inkscape.png`, `gui-inkscape-welcome.png`). Its
+  windows carry `WM_CLASS` "org.inkscape.inkscape", so desktop windows are
+  matched to apps by `_NET_WM_PID` (the kernel pid the app was started
+  with) before falling back to `WM_CLASS`. Not shipped: Python (its
+  extensions), spell checking.
+- **NetSurf 3.10** (GTK 3): the welcome page is rendered 24.7 s after the
+  click (`gui-netsurf.png`); most of its 57 MB is shared with the other
+  GTK 3 apps.
+- **Dillo 3.0.5** (FLTK): 9 MB, installed in 1.4 s, window in 4.1 s
+  (`gui-dillo.png`).
+
+The two browsers don't load pages from the network yet (next steps).
+
+### First launch: click to window
+
+`tests/browser/gui-first-launch.mjs` opens each app the way a click does
+(`desktop.openApp`) in a **fresh browser profile** (empty Cache Storage and
+filesystem), times it to the app's X window and its first drawn frame, then
+closes it and opens it again (warm). `--debs https://tabcomputer.com/debian/`
+takes the packages from the live site's mirror instead of the local server.
+Chromium 141, 4 vCPUs, local server with its .deb cache warm:
+
+| App | Download | Before: install / window | Now: install / window | Warm window |
+|---|---:|---:|---:|---:|
+| l3afpad | 33 MB, 81 pkgs | 11.4 s / 20.9 s | 4.9 s / 12.5 s | 4.9 s |
+| mousepad | 42 MB, 86 pkgs | 13.4 s / 33.5 s | 6.2 s / 24.2 s | 17.1 s |
+| ristretto | 32 MB, 97 pkgs | 9.9 s / 21.0 s | 4.9 s / 14.8 s | 7.0 s |
+| GIMP (main window) | 51 MB, 83 pkgs | 19 s / 290 s | 6.3 s / 247 s | 63 s |
+
+With the packages from tabcomputer.com's mirror (a real network: ~6–10 MB/s
+from this container) l3afpad's window comes at 13.0 s and ristretto's at
+15.3 s: the downloads overlap the decoding, so the network adds ~0.5–1 s.
+
+Where the time went, and what changed:
+
+- **Decoding the .debs** was most of the install: JavaScript xz runs at
+  ~25 MB/s and a GTK 3 closure is 140–180 MB of tar (adwaita-icon-theme
+  alone 1 s). It now runs in a pool of workers (`src/gui/deb-worker.ts`, up
+  to 4), largest packages first so the long poles start at once, with up to
+  16 packages fetched and decoding ahead of the in-order file writes
+  (writing 10,000 files takes only ~0.15 s).
+- **Triggers** run in parallel, and only when a package just unpacked put
+  files in their directory (installing xeyes after a GTK app no longer
+  recompiles schemas). gdk-pixbuf's `loaders.cache` for
+  libgdk-pixbuf-2.0-0's own loaders ships as an overlay, so
+  `gdk-pixbuf-query-loaders` (1–2 s in Blink) runs only when another
+  package adds a loader.
+- **Adwaita's `icon-theme.cache`** ships as an overlay (built by
+  gen-apps.py with gtk-update-icon-cache): GTK no longer scans the theme's
+  directories, ~0.7 s off every GTK 3 start.
+- The rest is the app starting in Blink. A first start in a page is ~3 s
+  slower than the next one with the same files (not fontconfig's or GTK's
+  caches: measured); mousepad's 17 s is syscall-free guest compute
+  (GtkSourceView). Both were sent to perf-blink with this script as the
+  repro. GIMP's first start is its own first-run work (plug-in queries,
+  `~/.config/GIMP`).
 
 ## How it works
 
@@ -167,11 +241,16 @@ self-contained floating-window host for the classic full-page terminal UI.
   Shiro's own commands in `/usr/bin` are skipped too.
 - Then the postinst work dpkg triggers would do runs in Blink:
   `gdk-pixbuf-query-loaders --update-cache`, `glib-compile-schemas`.
+  Each runs only when a package just unpacked put files in its directory.
   Generated files whose generator would cost more than they do are built
   once by gen-apps.py and shipped content-addressed as overlays
-  (`public/gui/overlay/<sha256>`): today `/usr/share/mime/mime.cache`
-  (148 KB), without which GIO can't sniff file types and gdk-pixbuf can't
-  load PNGs (update-mime-database needs libxml2 + ICU, 10 MB).
+  (`public/gui/overlay/<sha256>`, fetched alongside the packages):
+  `/usr/share/mime/mime.cache` (148 KB), without which GIO can't sniff file
+  types and gdk-pixbuf can't load PNGs (update-mime-database needs libxml2 +
+  ICU, 10 MB); Adwaita's `icon-theme.cache`; and gdk-pixbuf's
+  `loaders.cache` (made in Blink, kept in `scripts/gui/overlays/`).
+- The .debs are decoded in workers (`src/gui/deb.ts`), largest first, while
+  more download; files are written in that order on the page's thread.
 - State: `/var/lib/shiro-gui/status.json` (package versions, apps).
 - **Debian mode** (`debian install`, [DEBIAN.md](DEBIAN.md)): the system is
   then a dpkg-managed Debian 13 rootfs, so `gui APP` installs with the
@@ -195,7 +274,11 @@ self-contained floating-window host for the classic full-page terminal UI.
   a static x86-64 client (`fixtures/x86/xclient.c`, raw protocol) in Blink
   connects to `Xshiro :0`, draws, gets a button press and resizes itself.
 - `gui-apps.test.ts`: `.deb` parsing, install (hash check, symlinks, skipped
-  docs, status), launching the installed ELF on the display.
+  docs, status), launching the installed ELF on the display, triggers that
+  run only for packages that touch their directory, one install shared by
+  several callers, the download left to do.
+- `tests/browser/gui-first-launch.mjs`: click-to-window from a fresh
+  profile (above).
 - `kernel-pty.test.ts`: `/dev/tty` after a session leader acquires a pty
   (xterm's child needed it).
 - `gui-probe.test.ts` (manual, `GUI_PROBE_ROOT`): run any Debian rootfs X
@@ -227,6 +310,10 @@ self-contained floating-window host for the classic full-page terminal UI.
 6. **Per-file laziness**: packages are fetched whole, before start; a kernel
    open hook (unix/kernel) would let files materialize on first open.
 7. **Wayland** (wl_shm) once Blink can share mappings with the page.
-8. Stretch apps: GIMP runs (slow first start, see above). Inkscape (GTK 3,
-   94 MB closure) is next; GIMP's first start would drop to its second-start
-   time with plug-in caches (`pluginrc`) shipped as an overlay.
+8. Heavy apps: GIMP and Inkscape run, with long first starts. GIMP's would
+   drop to its second-start time with plug-in caches (`pluginrc`) shipped
+   as an overlay, which needs the unpacker to keep the packages' file times
+   (GIMP compares them).
+9. **Web browsers** (NetSurf, Dillo) render local pages but don't fetch from
+   the network yet: no connection reaches the server's TCP relay
+   (`SHIRO_TCP_RELAY=1`); name resolution in the guest is the first suspect.

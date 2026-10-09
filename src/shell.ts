@@ -387,7 +387,7 @@ export function splitEnvPrefix(segment: string): { assignments: ([string, string
  * kernel jobs keep the tty for stdin and stderr, as in bash, but their stdout
  * is captured instead of going to the screen.
  */
-function capturingStdout<T extends object>(term: T): T {
+export function capturingStdout<T extends object>(term: T): T {
   return new Proxy(term, {
     get(t, k) {
       if (k === 'captureStdout') return true;
@@ -929,8 +929,7 @@ export class Shell {
     let stderr = '';
     const out = (s: string) => { stdout += s; };
     const err = (s: string) => { stderr += s; };
-    let exitCode = await child.execute(cmd, out, err, false, this.terminal ? capturingStdout(this.terminal) : undefined);
-    exitCode = await child.finishSubshell(exitCode, out, err);
+    const exitCode = await child.runSubshell(cmd, out, err, this.terminal ? capturingStdout(this.terminal) : undefined);
     this.substStatus = exitCode;
     return { stdout, stderr, exitCode };
   }
@@ -1702,15 +1701,7 @@ export class Shell {
           const child = this.fork();
           child.injectedStdin = heredocStdin || null;
           if (heredocStdin) child.kernelStdinLive = false;
-          try {
-            exitCode = await child.execute(inner, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
-            exitCode = await child.finishSubshell(exitCode, writeStdout, stderrWriter);
-          } catch (e) {
-            // An expansion error (${x?msg}, bad substitution) ends just the subshell
-            if (e instanceof ExitSignal || e instanceof ReturnSignal) exitCode = e.code;
-            else if (e instanceof Error && e.name !== 'AbortError') { stderrWriter(`shiro: ${e.message}\r\n`); exitCode = 1; }
-            else throw e;
-          }
+          exitCode = await child.runSubshell(inner, writeStdout, stderrWriter, terminalOverride || this.terminal);
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
           continue;
@@ -1907,6 +1898,13 @@ export class Shell {
             }
             if (exitCode === 0) await this.applyOutputRedirects('', '', redirects, false, writeStdout, stderrWriter);
             if (this.redirectFailed) { exitCode = 1; this.redirectFailed = false; }
+            // `x=$(cmd) >file`: assignments with no command stay set; the status is the last $(…)'s
+            if (envPrefix) {
+              prefixPersists = true;
+              if (exitCode === 0) exitCode = this.substStatus ?? 0;
+              // ...as plain assignments: a new or unexported variable stays unexported
+              for (const [k, v] of prefixEnvSaved) if (v === undefined || prefixWasLocal.has(k)) this.localVars.add(k);
+            }
             this.lastExitCode = exitCode;
             this.env['?'] = String(exitCode);
           }
@@ -6193,6 +6191,17 @@ export class Shell {
   }
 
   /** A subshell has finished with `code`: its EXIT trap runs now (an `exit` in it already ran it) */
+  /** Run `inner` as this (forked) shell's ( … ) body: an expansion error (set -u, ${x?msg}, bad substitution) ends just the subshell */
+  async runSubshell(inner: string, writeStdout: (s: string) => void, writeStderr: (s: string) => void, terminal = this.terminal): Promise<number> {
+    try {
+      return await this.finishSubshell(await this.execute(inner, writeStdout, writeStderr, false, terminal, true), writeStdout, writeStderr);
+    } catch (e) {
+      if (e instanceof ExitSignal || e instanceof ReturnSignal) return e.code;
+      if (e instanceof Error && e.name !== 'AbortError') { writeStderr(`shiro: ${e.message}\r\n`); return 1; }
+      throw e;
+    }
+  }
+
   async finishSubshell(code: number, writeStdout: (s: string) => void, writeStderr: (s: string) => void): Promise<number> {
     if (this.traps.has('EXIT')) {
       this.lastExitCode = code;
@@ -6345,7 +6354,7 @@ export class Shell {
       if (this.injectedStdin) child.kernelStdinLive = false;
       this.injectedStdin = null;
       const inner = input.slice(1, -1).trim();
-      return inner ? child.finishSubshell(await child.execute(inner, writeStdout, writeStderr, false, this.terminal, true), writeStdout, writeStderr) : 0;
+      return inner ? child.runSubshell(inner, writeStdout, writeStderr, this.terminal) : 0;
     }
     if (isBraceGroup(input)) {
       // { list; } runs in the current shell

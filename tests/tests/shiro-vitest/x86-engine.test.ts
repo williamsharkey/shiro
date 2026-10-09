@@ -237,10 +237,12 @@ describe.skipIf(!haveFork)('Blink engine: fork', () => {
   }, 60_000);
 });
 
-// BLINK_SAME_INSTANCE_FORK=1 (patch 0031): the child is a System in the
-// parent's Blink instance, sharing MAP_SHARED pages and running alongside
+// Same-instance fork (patch 0031, the default since 0048; =1 spelled out
+// here, =0 the opt-out): the child is a System in the parent's Blink
+// instance, sharing MAP_SHARED pages and running alongside
 describe.skipIf(!haveFork || !haveForkShared || !haveShfutex || !haveOrphan || !haveAlarmfork)('Blink engine: same-instance fork', () => {
   const sif = 'BLINK_SAME_INSTANCE_FORK=1 ./prog';
+  const old = 'BLINK_SAME_INSTANCE_FORK=0 ./prog';  // the opt-out: a worker per child
   it('copies private memory; pipes, exec and nested forks work', async () => {
     const { shell } = await setup(readFileSync(forkBin));
     expect((await run(shell, `${sif} copy`)).output).toContain('parent sees 1 p parent status 7');
@@ -271,22 +273,22 @@ describe.skipIf(!haveFork || !haveForkShared || !haveShfutex || !haveOrphan || !
       'round 0: child exit 10, its threads stopped 1\nround 1: child exit 11, its threads stopped 1\n');
   }, 60_000);
 
-  it('keeps alarms per process (here and with the default fork)', async () => {
+  it('keeps alarms per process (here and with the opt-out fork)', async () => {
     const { shell } = await setup(readFileSync(alarmforkBin));
     const want = "first alarm 0, child ok 1, parent's alarm still set 1";
     expect((await run(shell, sif)).output).toContain(want);
-    expect((await run(shell, './prog')).output).toContain(want);
+    expect((await run(shell, old)).output).toContain(want);
   }, 60_000);
 
   // LTP futex_wait07
-  it.skipIf(!haveFutexintr)('a caught signal interrupts a futex wait (here and with the default fork)', async () => {
+  it.skipIf(!haveFutexintr)('a caught signal interrupts a futex wait (here and with the opt-out fork)', async () => {
     const { shell } = await setup(readFileSync(futexintrBin));
     const want = 'main tid is pid 1\nalarm: Interrupted system call\nchild tid is pid 1\nchild state S\nkill: Interrupted system call\nchild exit 0\n';
     expect((await run(shell, sif)).output.replace(/\r\n/g, '\n')).toBe(want);
     expect((await run(shell, `${sif} nested`)).output.replace(/\r\n/g, '\n')).toBe(want);
-    // the default fork runs a child sharing memory on the parent's thread:
+    // the opt-out fork runs a child sharing memory on the parent's thread:
     // the parent can't signal it before it's done
-    const r = (await run(shell, './prog')).output.replace(/\r\n/g, '\n');
+    const r = (await run(shell, old)).output.replace(/\r\n/g, '\n');
     expect(r).toMatch(/^main tid is pid 1\nalarm: Interrupted system call\nchild tid is pid 1\n/);
     expect(r).toContain('child exit 0\n');
   }, 60_000);

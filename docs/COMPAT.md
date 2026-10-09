@@ -420,9 +420,12 @@ The install column is the whole `apt-get install` (download, unpack,
 maintainer scripts, triggers) in Blink: about a minute even for jq, most
 of it apt's dependency resolution and dpkg-preconfigure (perf-fs-shell's
 profile: 14 s and 20 s for `hello`), which unix/perf-fs-shell is cutting.
-Debian's builds of the TUIs (tmux, nano, htop, ncdu, fzf, emacs -nw) have
-only had these non-interactive checks; Shiro's own `pkg` builds of them,
-in the table above, are the ones verified on the pty in Chromium.
+In Chromium (the built desktop, `debian install`, `sudo apt-get install`,
+2026-10-09) Debian's TUIs work on the pty: htop (meters, `q`), nano (type,
+`^O` save, `^X`), tmux (a command, `C-b %` split, `exit`), ncdu (scan of
+`/etc`, `q`), fzf (filtering a pipe). There `sudo apt-get … | tail -2` used
+to print all of apt's output on the terminal (sudo gave its programs the
+tty for stdout); fixed. emacs -nw from Debian has only had the batch check.
 
 | Tool (package) | Version | Status | Install | Smoke test | Notes |
 | --- | --- | --- | --- | --- | --- |
@@ -549,7 +552,7 @@ vendor's API proves the network path).
 | opencode | 1.18.35 | ELF, Bun 1.3.14 (baseline build), glibc dynamic (185 MB); a musl build needs libstdc++/libgcc_s | `npm i -g opencode-ai` (picks `opencode-linux-x64[-baseline\|-musl]`) | **no** | not reached | — | Past `/proc/self/maps` (patch 0044) and timerfd (0045) it still dies of SIGTRAP (WebKit `CRASH()`, an `int3`) in wasm Blink right after installing its signal-30 handler; native Blink `-j` gets further. Sent to perf-blink. |
 | Gemini CLI | 0.63.0 | Node (esbuild code-split ESM chunks with top-level await) | `npm i -g @google/gemini-cli` (1.5–2.6 s) | **yes** | **yes**: `gemini --skip-trust -p` reaches `generativelanguage.googleapis.com` through `/api/gemini/`, 400 "API key not valid" | `--version` 9.9 s, `-p` to the error 24 s (Chromium) | Fixed here (below). Left: a "Failed to release project registry lock" warning from proper-lockfile (harmless). |
 | Grok CLI (community, `@vibe-kit/grok-cli`) | 0.0.34 | Node | `npm i -g @vibe-kit/grok-cli` | not run | — | — | Superseded by xAI's own Grok Build (above); not tested. |
-| aider | 0.86.2 | Python | `pip install aider-chat` | not run | — | — | Pins ~80 packages, many native (numpy, scipy, pydantic-core, tiktoken, orjson, aiohttp, tree-sitter): out of reach of the WASI CPython's pure-Python `pip`. The plausible route is Debian mode (glibc CPython and manylinux wheels in Blink), not tried. |
+| aider | 0.86.2 | Python | Debian mode: `debian install`, `pkg install curl`, then `curl -LsSf https://aider.chat/install.sh \| sh` (uv + python-build-standalone 3.12). Debian's `pip3 install aider-chat` can't work on trixie anywhere: Python 3.13 has no wheel for its pinned numpy 1.26.4 | not yet | — | install 9.5 min in Chromium (108 wheels, 121 MB) | Fixed here: socket `ioctl(FIONBIO)` (Python's `settimeout`; every pip connection failed with EINVAL) and `/proc/<pid>/exe` as a resolved path. Left: Blink answers `/proc/self/exe` itself with the unresolved path, so ld.so's `$ORIGIN` for the venv's symlinked python misses libpython (sent to perf-blink). |
 
 What was fixed in Shiro for these (tests: `agent-clis.test.ts`):
 
@@ -605,8 +608,9 @@ the X11 server in the page, into desktop windows ([GUI.md](GUI.md)). Route
 use (sha256-checked, cached by hash), then the ELF runs as a kernel process
 with `DISPLAY=:0`. Smoke tests: `x11.test.ts` (protocol, and a raw-protocol
 x86-64 client over the kernel's AF_UNIX socket), `gui-apps.test.ts`
-(install + launch); browser runs with `scripts/gui/shoot.mjs` (headless
-Chromium, screenshots in `docs/screenshots/gui-*.png`). Times: first launch
+(install + launch); browser runs with `scripts/gui/shoot.mjs` and
+`tests/browser/gui-first-launch.mjs` (headless Chromium, screenshots in
+`docs/screenshots/gui-*.png`). Times: first launch
 of an installed app → first frame, in Chromium.
 
 | Software | Version | Route | Status | Tested | Known issues |
@@ -618,9 +622,11 @@ of an installed app → first frame, in Chromium.
 | xterm | 379 | gui (9.3 MB) | works | Shiro's shell in xterm's pty, typing, output, core fonts; 2.5–2.7 s | no XKB (core keymap), UTF-8 locale falls back to C (Xlib has no C.UTF-8 entry) |
 | FeatherPad | 1.3.5 (Qt 5.15.8) | gui (35 MB of an 84 MB closure) | works | menus, toolbar icons, typing text; 10.5–16 s | Qt warns about missing XKB; no GLX (Mesa never downloaded) |
 | GPicView | 0.2.5 (GTK 2.24.33) | gui (26.8 MB) | works | opens a PNG at 512×512; 6.9–9.7 s | some stock toolbar icons missing |
-| L3afpad | 0.8.18.1.11 (GTK 3.24.38) | gui (33.1 MB of a 51 MB closure) | works | Adwaita theme, menus, typing text; 12.9 s | needed Blink patch 0029 (SSE compares) |
-| Mousepad | 0.5.10 (GTK 3, Xfce) | gui (44.6 MB) | works | editor window and menus; 32 s | slow start: waits on D-Bus / xfconf, which aren't there |
-| Ristretto | 0.12.4 (GTK 3, Xfce) | gui (35.1 MB) | works | opens a PNG; 14–15.5 s | no thumbnails (tumbler over D-Bus) |
+| L3afpad | 0.8.18.1.11 (GTK 3.24.38) | gui (33.1 MB of a 51 MB closure) | works | Adwaita theme, menus, typing text; click to window 12.5 s from a fresh profile (install 4.9 s), warm 4.9 s | needed Blink patch 0029 (SSE compares) |
+| Mousepad | 0.5.10 (GTK 3, Xfce) | gui (44.6 MB) | works | editor window and menus; click to window 24.2 s (install 6.2 s), warm 17 s | slow start: syscall-free guest compute (GtkSourceView), reported to perf-blink |
+| Ristretto | 0.12.4 (GTK 3, Xfce) | gui (35.1 MB) | works | opens a PNG; click to window 14.8 s (install 4.9 s), warm 7.0 s | no thumbnails (tumbler over D-Bus) |
 | LXImage-Qt | 1.2.0 (Qt 5) | gui (36.8 MB) | exits | — | without a D-Bus session bus its single-instance check fails and it quits (status 0) |
-| GIMP | 2.10.34 (GTK 2) | gui (53.2 MB of a 141 MB closure) | works (slow) | main window, menus; first start 290 s, later starts 84 s | first start queries ~100 plug-ins one Blink process each; 22 plug-ins whose libraries are left out (PDF, HEIF, help browser...) are removed; no MIDI/ALSA, no D-Bus |
-| Inkscape | 1.2 (GTK 3) | — | not packaged | — | 94 MB closure; next to try |
+| GIMP | 2.10.34 (GTK 2) | gui (53.2 MB of a 141 MB closure) | works (slow) | main window, menus; install 6.3 s, splash 36 s, main window 247 s on first start, 63 s later | first start queries ~100 plug-ins one Blink process each; 22 plug-ins whose libraries are left out (PDF, HEIF, help browser...) are removed; no MIDI/ALSA, no D-Bus |
+| Inkscape | 1.2.2 (GTK 3, gtkmm) | gui (83 MB of a 95 MB closure) | works (slow) | fresh profile: install 15 s, welcome dialog 61 s after the click, main window ~60 s after closing it; ellipse tool draws on the canvas (`gui-inkscape.png`) | no Python extensions (python3 not shipped), no spell checking; first start is long |
+| NetSurf | 3.10 (GTK 3) | gui (56.6 MB; most shared with other GTK 3 apps) | works (local pages) | welcome page rendered 24.7 s after the click from a fresh profile (`gui-netsurf.png`) | web pages from the network don't load yet: no connection reaches the TCP relay (name resolution in the guest, not yet investigated) |
+| Dillo | 3.0.5 (FLTK 1.3) | gui (9.2 MB) | works (local pages) | install 1.4 s, window 4.1 s (`gui-dillo.png`) | same network gap; no HTTPS (libssl left out of the startup set) |
