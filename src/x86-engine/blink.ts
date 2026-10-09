@@ -234,6 +234,8 @@ function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: SharedA
         w.postMessage({ type: 'blink-reap', pid: m.pid });
         if (ownGone && !hosted.size) terminate();
       });
+    } else if (m?.type === 'blink-abort') {
+      kernel.reportFatal(proc, `blink ${String(m.text)}`);
     } else if (m?.type === 'blink-watch') watch(m.fd);
     else if (m?.type === 'blink-unwatch') { subs.get(m.fd)?.(); subs.delete(m.fd); }
   });

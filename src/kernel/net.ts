@@ -21,6 +21,7 @@ import { networkCredential, requireNetworkSignIn, setNetworkStatus } from '../ne
 import type { KStat } from './abi';
 import { retain, release, type FdTable, type OpenFile } from './fd';
 import type { Kernel } from './kernel';
+import { klog, LOG_WARNING } from './klog';
 import { AF_NETLINK, KNetlinkSocket, netlinkSocket } from './netlink';
 import {
   EPERM, EINTR, EIO, EBADF, EAGAIN, EACCES, EFAULT, EINVAL, ENOTTY, EPIPE, ETIMEDOUT, EPROTO, ENOTSOCK, EDESTADDRREQ,
@@ -686,7 +687,10 @@ export class KSocket implements OpenFile {
       this._attach(new LoopbackPeer(this, server), local, remoteOf());
       return 0;
     }
-    if (!stack.config.relayUrl) return -ENETUNREACH;
+    if (!stack.config.relayUrl) {
+      stack.relayLog({ op: 'connect', host, port }, 'no relay configured');
+      return -ENETUNREACH;
+    }
     this.state = 'connecting';
     const p = RelayPeer.open(stack, this, host, port).then(
       ({ peer, info }) => {
@@ -1269,6 +1273,18 @@ export class NetStack {
 
   // ── relay plumbing ──
 
+  /**
+   * One kernel log line (dmesg) about the relay, rate-limited so a retry loop
+   * can't flood the buffer. curl and git only say "Could not connect"; this
+   * says why (no relay, token refused, handshake refused, relay error).
+   */
+  relayLog(request: object, why: string): void {
+    const r = request as { op?: string; host?: string; port?: number };
+    const target = r.host ? `${r.host}${r.port !== undefined ? ':' + r.port : ''}` : '';
+    const what = `${r.op ?? 'request'}${target ? (r.op === 'resolve' ? ' of ' : ' to ') + target : ''}`;
+    klog.logRatelimited(LOG_WARNING, `net: relay refused ${what}: ${why}`);
+  }
+
   private async relayToken(): Promise<string | null> {
     const { tokenUrl } = this.config;
     if (!tokenUrl) return null;
@@ -1280,14 +1296,27 @@ export class NetStack {
       ...(cred ? { headers: { Authorization: `Bearer ${cred}` } } : {}),
     });
     const own = this.config.credentials;
-    let res = await post(own ? networkCredential() : null);
+    const fetchToken = async (cred: string | null) => {
+      try { return await post(cred); } catch (e) {
+        throw new Error(`token request failed: ${(e as Error)?.message ?? e}`);
+      }
+    };
+    let res = await fetchToken(own ? networkCredential() : null);
+    let signedIn = false;
     if (res.status === 401 && own) {
       // The relay wants a signed-in user: ask once (src/net-signin.ts), then retry
       const cred = await requireNetworkSignIn({ reason: 'A program wants to connect to the internet' });
-      if (!cred) { setNetworkStatus('needs-sign-in'); throw new Error('token 401: sign-in required'); }
-      res = await post(cred);
+      if (!cred) { setNetworkStatus('needs-sign-in'); throw new Error('sign-in required (token 401)'); }
+      res = await fetchToken(cred);
+      signedIn = true;
     }
-    if (!res.ok) throw new Error(`token ${res.status}`);
+    if (!res.ok) {
+      const why = res.status === 401 ? (signedIn ? 'sign-in not accepted (token 401)' : 'sign-in required (token 401)')
+        : res.status === 403 ? 'this page\'s origin is not allowed (token 403)'
+        : res.status === 404 ? 'no relay at this server (token 404)'
+        : `token request failed (${res.status})`;
+      throw new Error(why);
+    }
     setNetworkStatus(own && networkCredential() ? 'signed-in' : 'online');
     this.token = await res.json();
     return this.token!.token;
@@ -1299,9 +1328,9 @@ export class NetStack {
    */
   openRelay<T>(request: object, onMsg: (ws: WebSocket, msg: Record<string, unknown>, settle: (v: T) => void) => boolean): Promise<T> {
     const { relayUrl } = this.config;
-    if (!relayUrl) return Promise.reject(ENETUNREACH);
+    if (!relayUrl) { this.relayLog(request, 'no relay configured'); return Promise.reject(ENETUNREACH); }
     const WS = this.config.WebSocket ?? (globalThis as any).WebSocket;
-    if (!WS) return Promise.reject(ENETUNREACH);
+    if (!WS) { this.relayLog(request, 'no WebSocket in this context'); return Promise.reject(ENETUNREACH); }
     const attempt = (retry: boolean): Promise<T> => this.relayToken().then((token) => new Promise<T>((resolve, reject) => {
       const url = token ? `${relayUrl}${relayUrl.includes('?') ? '&' : '?'}t=${encodeURIComponent(token)}` : relayUrl;
       const ws: WebSocket = new WS(url);
@@ -1315,23 +1344,32 @@ export class NetStack {
         let msg: Record<string, unknown>;
         try { msg = JSON.parse(ev.data); } catch { return; }
         if (msg.op === 'error') {
+          if (!settled) this.relayLog(request, `${String(msg.code ?? 'error')}${msg.message ? ` (${String(msg.message)})` : ''}`);
           done(() => reject(ERRNO_BY_NAME[String(msg.code)] ?? EIO));
           try { ws.close(); } catch { /* closing */ }
           return;
         }
         if (onMsg(ws, msg, (v) => done(() => resolve(v)))) settled = true;
       };
-      const failed = () => {
+      const failed = (ev?: { code?: number; reason?: string }) => {
         if (settled) return;
         settled = true;
         // A refused handshake (expired token, relay off, limits) fails before open: refresh the token once
-        if (!opened && retry && this.config.tokenUrl) { this.token = null; attempt(false).then(resolve, reject); }
-        else reject(opened ? ECONNRESET : ENETUNREACH);
+        if (!opened && retry && this.config.tokenUrl) { this.token = null; attempt(false).then(resolve, reject); return; }
+        // Browsers don't expose the HTTP status of a refused handshake; give the close code when there is one
+        const code = ev && typeof ev.code === 'number' ? ` (close ${ev.code}${ev.reason ? ` ${ev.reason}` : ''})` : '';
+        if (opened) this.relayLog(request, `relay closed the connection before replying${code}`);
+        else this.relayLog(request, `handshake refused${code}${this.config.tokenUrl ? ' after token refresh' : ''}`);
+        reject(opened ? ECONNRESET : ENETUNREACH);
       };
-      // Browsers fire error then close; Node's WebSocket only fires error for a refused handshake
-      ws.onerror = () => { if (!opened) failed(); };
-      ws.onclose = failed;
-    }), () => Promise.reject(ENETUNREACH));
+      // Browsers fire error then close; Node's WebSocket only fires error for a refused handshake.
+      // Let a close that follows the error at once supply its code.
+      ws.onerror = () => { if (!opened) setTimeout(() => failed(), 0); };
+      ws.onclose = (ev: CloseEvent) => failed(ev);
+    }), (e) => {
+      this.relayLog(request, (e as Error)?.message ?? String(e));
+      return Promise.reject(ENETUNREACH);
+    });
     return attempt(true);
   }
 
