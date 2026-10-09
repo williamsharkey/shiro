@@ -669,16 +669,31 @@ export function inodeNumber(path: string): number {
   return n;
 }
 
+/** Names per inode number, kept only above 1 (link() copies sharing a number) */
+const inoLinks = new Map<number, number>();
+
 /**
  * link() copies (no hard links), but the copy reports its source's inode
- * number, as a hard link would: git's local clone checks that. A path that
- * is removed or replaced gets a fresh number.
+ * number and link count, as a hard link would: git's local clone checks the
+ * number, shadow's lock files (groupadd, useradd) the count. A path that is
+ * removed or replaced gets a fresh number.
  */
 export function shareInodeNumber(from: string, to: string): void {
-  inoNumbers.set(to, inodeNumber(from));
+  forgetInodeNumber(to);
+  const n = inodeNumber(from);
+  inoNumbers.set(to, n);
+  inoLinks.set(n, (inoLinks.get(n) ?? 1) + 1);
 }
 export function forgetInodeNumber(path: string): void {
+  const n = inoNumbers.get(path);
+  if (n === undefined) return;
   inoNumbers.delete(path);
+  const c = inoLinks.get(n);
+  if (c !== undefined) { if (c > 2) inoLinks.set(n, c - 1); else inoLinks.delete(n); }
+}
+/** st_nlink of a regular file with inode number `ino` */
+export function linkCount(ino: number): number {
+  return inoLinks.get(ino) ?? 1;
 }
 
 export class RegularFile implements OpenFile {

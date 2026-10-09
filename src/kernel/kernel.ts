@@ -18,7 +18,7 @@ import * as A from './abi';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
   RegularFile, DirFile, abortableWait, openInode, openInodeSync, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
-  shareInodeNumber, forgetInodeNumber,
+  shareInodeNumber, forgetInodeNumber, linkCount,
 } from './fd';
 import { createPipe, Pipe, PipeEnd, FifoRdWr } from './pipe';
 import { Process } from './process';
@@ -116,6 +116,18 @@ function trailingSlash(path: string): boolean {
 /** Single-quote a word for the shell. */
 function shellQuote(s: string): string {
   return /^[A-Za-z0-9_@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * A stat as `proc` sees it. Files keep no owner (chown isn't stored), so one
+ * reported as the default user's is the caller's: root's git and ssh find
+ * their own files theirs. link() copies count as links.
+ */
+function statFor(proc: Process, st: A.KStat): A.KStat {
+  const own = st.uid === 1000 && proc.uid !== 1000;
+  const reg = st.dev === 1 && (st.mode & A.S_IFMT) === A.S_IFREG;
+  if (!own && !reg) return st;
+  return { ...st, ...(own ? { uid: proc.uid, gid: proc.gid } : {}), ...(reg ? { nlink: linkCount(st.ino) } : {}) };
 }
 
 export class Kernel {
@@ -833,14 +845,14 @@ export class Kernel {
     const n = hit.node;
     const open = n.type === 'file' ? inodeStat(fs, hit.path) : undefined;
     // The inode belongs to the resolved path: /bin and /usr/bin (a link to it) are one directory
-    if (open) { A.encodeStat({ ...open, ino: inodeNumber(hit.path) }, data); return 0; }
+    if (open) { A.encodeStat(statFor(proc, { ...open, ino: inodeNumber(hit.path) }), data); return 0; }
     const type = n.type === 'dir' ? A.S_IFDIR : n.type === 'symlink' ? A.S_IFLNK : n.special === 'fifo' ? A.S_IFIFO : A.S_IFREG;
-    A.encodeStat({
+    A.encodeStat(statFor(proc, {
       dev: 1, ino: inodeNumber(hit.path), mode: type | (n.mode & 0o7777), nlink: n.type === 'dir' ? 2 : 1,
       uid: 1000, gid: 1000, rdev: 0, size: n.size, blksize: 4096, blocks: Math.ceil(n.size / 512),
       atimeMs: n.atime ?? n.mtime, mtimeMs: n.mtime, ctimeMs: n.ctime,
       atimeNs: n.atime === undefined ? n.mtimeNs : n.atimeNs, mtimeNs: n.mtimeNs,
-    }, data);
+    }), data);
     return 0;
   }
 
@@ -1179,7 +1191,7 @@ export class Kernel {
         }
         const st = proc.fds.get(args[0])?.statSync?.();
         if (!st) return undefined;
-        A.encodeStat(st, data);
+        A.encodeStat(statFor(proc, st), data);
         return 0;
       }
       case A.SYS_lseek: {
@@ -1305,7 +1317,7 @@ export class Kernel {
             st = await this.statPath(proc, str(0, args[0]), nr === A.SYS_stat);
           }
           if (typeof st === 'number') return st;
-          A.encodeStat(st, data);
+          A.encodeStat(statFor(proc, st), data);
           return 0;
         }
         case A.SYS_access:
@@ -2117,20 +2129,26 @@ export class Kernel {
   }
 
   /** SYS_shiro_execve (see abi.ts). */
+  /**
+   * A Shiro command with no file anywhere (sh, env, ls) runs as /bin/NAME,
+   * /usr/bin/NAME and the sbin ones, so it is there for exec and for the
+   * PATH searches that stat or access each entry first (make, dash, bash).
+   * Not /usr/local/bin/NAME: execvp tries that first and must move on to a
+   * real /usr/bin/NAME a package installed. `path` must be missing itself.
+   */
+  async isBuiltinProgramPath(proc: Process, path: string): Promise<boolean> {
+    const m = /^\/(?:usr\/)?s?bin\/([^/]+)$/.exec(path);
+    if (!m || !(this.shell?.commands.get(m[1]) || SHELL_PROGRAMS.has(m[1]))) return false;
+    return typeof (await this.statPath(proc, `/bin/${m[1]}`)) === 'number' &&
+      typeof (await this.statPath(proc, `/usr/bin/${m[1]}`)) === 'number';
+  }
+
   private async sysExecve(proc: Process, req: { path: string; argv?: string[]; env?: string[]; inproc?: boolean }, data: Uint8Array): Promise<number> {
     if (!req || typeof req.path !== 'string' || !req.path) return -A.ENOENT;
     const path = this.resolvePath(proc, req.path);
     if (typeof path === 'number') return path;
     const st = await this.statPath(proc, path);
-    // A Shiro command under /bin, /usr/bin, ... (sh, env, ls) has no file but runs
-    // A Shiro command with no file anywhere runs as /bin/NAME and /usr/bin/NAME.
-    // (Not /usr/local/bin/NAME: execvp tries that first and must move on to
-    // a real /usr/bin/NAME a package installed.)
-    const base = path.slice(path.lastIndexOf('/') + 1);
-    const builtin = st === -A.ENOENT && /^\/(usr\/)?s?bin\/[^/]+$/.test(path) &&
-      (!!this.shell?.commands.get(base) || SHELL_PROGRAMS.has(base)) &&
-      typeof (await this.statPath(proc, `/bin/${base}`)) === 'number' &&
-      typeof (await this.statPath(proc, `/usr/bin/${base}`)) === 'number';
+    const builtin = st === -A.ENOENT && await this.isBuiltinProgramPath(proc, path);
     if (typeof st === 'number' && !builtin) return st;
     if (typeof st !== 'number' && (st.mode & A.S_IFMT) !== A.S_IFREG) return -A.EACCES;
     const argv = Array.isArray(req.argv) ? req.argv.map(String) : [req.path];

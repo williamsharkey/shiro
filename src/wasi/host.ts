@@ -208,7 +208,7 @@ function installWasiSyscalls(kernel: Kernel): void {
   kernel.registerSyscalls([A.SYS_stat, A.SYS_lstat, A.SYS_newfstatat, A.SYS_access, A.SYS_faccessat], Object.assign(binCommandStat, { passSync: binCommandPasses }));
 }
 
-const BIN_DIR = /^\/(?:usr\/)?(?:local\/)?s?bin\/([^/]+)$/;
+const BIN_DIR = /^\/(?:usr\/)?s?bin\/([^/]+)$/;
 
 /** binCommandStat will pass the call on: it isn't about a Shiro command's /bin path (kernel.syscallSync may answer it). */
 function binCommandPasses(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array, kernel: Kernel): boolean {
@@ -240,7 +240,8 @@ async function binCommandStat(proc: Process, nr: number, args: ArrayLike<number>
   const p = kernel.resolvePath(proc, A.decodeText(data.subarray(0, len)), at ? args[0] : A.AT_FDCWD);
   const m = typeof p === 'string' ? BIN_DIR.exec(p) : null;
   if (!m || !kernel.shell?.commands.get(m[1])) return undefined;
-  if ((await kernel.statPath(proc, p as string, false)) !== -A.ENOENT) return undefined;
+  // Exactly the paths exec runs the command by (not past a real file on PATH)
+  if ((await kernel.statPath(proc, p as string, false)) !== -A.ENOENT || !(await kernel.isBuiltinProgramPath(proc, p as string))) return undefined;
   if (nr === A.SYS_access || nr === A.SYS_faccessat) return 0;
   const now = Date.now();
   A.encodeStat({

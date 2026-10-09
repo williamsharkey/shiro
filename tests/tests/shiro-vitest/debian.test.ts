@@ -80,6 +80,12 @@ describe.skipIf(!haveRootfs)('Debian rootfs', () => {
     await fs.writeFile('/tmp/linksrc', 'hello');
     expect((await run(shell, '/usr/bin/ln /tmp/linksrc /tmp/linkdst && /usr/bin/cat /tmp/linkdst')).output).toContain('hello');
   }, 60000);
+
+  it("a PATH search finds a Shiro command where exec runs it, not in /usr/local/bin (make's echo)", async () => {
+    await fs.mkdir('/usr/local/bin', { recursive: true });
+    const r = await run(shell, "PATH=/usr/local/bin:/usr/bin /usr/bin/dash -c 'command -v ls; ls -d /tmp'");
+    expect(r.output.replace(/\r/g, '').trim().split('\n')).toEqual(['/usr/bin/ls', '/tmp']);
+  }, 60000);
 });
 
 const net = process.env.SHIRO_DEBIAN_NET === '1';
