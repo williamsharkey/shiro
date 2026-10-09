@@ -7,6 +7,12 @@
       "stub": true,
       "why": "Browsers can't open TCP connections: Shiro's transport fetches from the page's same-origin mirror. apt still verifies the signed InRelease and every hash."
     },
+    "/usr/lib/apt/methods/store": {
+      "default": "shiro",
+      "command": "shiro-apt-store",
+      "stub": true,
+      "why": "apt decompresses every downloaded index through this method; under the x86 engine xz-decoding trixie's 56 MB Packages took ~33 s of `apt-get update`. Shiro's runs the same codecs and hashes natively; apt still checks the result against the signed Release file."
+    },
     "/usr/bin/base64": {
       "default": "shiro",
       "command": "base64",

@@ -1013,6 +1013,53 @@ Browser A/B (`ab.mjs origin/unix/integration --suites shell`, 5 rounds × 7):
 expected for a shift this size. Full suite and conformance (shell-spec,
 busybox) green.
 
+### unix/perf-fs-shell 8 — apt: native `store` method (index decompression)
+
+Where apt's time goes in Chromium (integration ecd719e, per-process timeline
+from temporary kernel instrumentation; the main thread is >90% idle, so the
+cost is CPU inside the x86 engine, not Shiro's kernel or IndexedDB):
+
+| `apt-get update` (72 s) | s |
+|---|---:|
+| fetch + InRelease signature checks (`methods/sqv`, `sqv`) | ~9 |
+| `methods/store`: xz-decode trixie's 9.7 MB `Packages.xz` to 56 MB and hash it | 33 |
+| "Reading package lists": pkgcache.bin + srcpkgcache.bin build (apt CPU) | 28 |
+
+| `apt-get install -y hello` (49 s) | s |
+|---|---:|
+| apt cache load + resolve | 14 |
+| `dpkg-preconfigure --apt` (apt-utils' debconf hook: Perl + apt-extracttemplates) | 20 |
+| dpkg unpack | 4 |
+| configure + apt's post-run cache reads | 7 |
+
+Filesystem syscalls (openat/newfstatat/read/fsync) total under 1 s per
+install; dpkg's 24 fsyncs cost 15 ms, so batching dpkg's writes would not
+help. Asking apt for uncompressed indexes doesn't work either
+(`Acquire::CompressionTypes::Order` with `uncompressed` first, even after
+`#clear`: apt still fetches `Packages.xz` by hash).
+
+Change: `/usr/lib/apt/methods/store` is diverted (overlay policy, like the
+http method) to `shiro-apt-store` (`src/debian/apt-store.ts`), which speaks
+apt's method protocol and decodes with Shiro's xz/gz/bz2/zstd codecs and
+`crypto.subtle` hashes in the page; apt still checks size and hashes against
+the signed Release. Lists are byte-identical. `apt-store.test.ts` covers
+the protocol (gz, xz, plain, GzipIndexes-style copy, missing file).
+
+`bench/run.mjs --suites debian --modes isolated`, one sample each
+(`integration-ecd719e-debian-local.json` → `perf-fs-shell-8-debian.json`):
+
+| metric | before | after |
+|---|---:|---:|
+| debian.apt.update | 82.5 s | 45.6 s (1.8×) |
+| debian.apt.install.hello | 58.7 s | 48.7 s |
+| debian.apt.install.jq | 60.2 s | 52.9 s |
+| debian.apt.install.python3-minimal | 161.3 s | 152.8 s |
+
+The rest is not Shiro-side I/O: the package cache build and dependency
+resolution are apt's own CPU under Blink (perf-blink), and `dpkg-preconfigure`
+(20 s per install, a no-op under `DEBIAN_FRONTEND=noninteractive`) is a
+Debian-config decision proposed to the debian workstream.
+
 ## Results
 
 <!-- bench:table:begin -->
