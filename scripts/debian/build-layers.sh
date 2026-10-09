@@ -41,6 +41,25 @@ MIRROR="${MIRROR:-https://snapshot.debian.org/archive}"
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1790812800}"
 
 [ "$(id -u)" = 0 ] || { echo "build-layers.sh: run as root (it chroots)" >&2; exit 1; }
+
+# The chroot's mounts must never reach the host's: a shared rbind of /sys,
+# unmounted with umount -l, once took the host's /sys/fs/cgroup with it and
+# systemd could start no unit after that. So the build runs in its own mount
+# namespace with every mount private, and afterwards the caller's and PID 1's
+# mount tables must be what they were (the guard fails the build otherwise).
+if [ -z "${TC_LAYERS_PRIVATE_NS:-}" ]; then
+  mounts() { for f in /proc/1/mountinfo /proc/self/mountinfo; do awk -v f="$f" '{ print f, $5, $9 }' "$f"; done | sort; }
+  before=$(mounts)
+  rc=0
+  TC_LAYERS_PRIVATE_NS=1 unshare --mount --propagation private bash "$0" "$@" || rc=$?
+  after=$(mounts)
+  if [ "$before" != "$after" ]; then
+    echo "build-layers.sh: the host's mount table changed during the build:" >&2
+    diff <(echo "$before") <(echo "$after") >&2 || true
+    exit 3
+  fi
+  exit "$rc"
+fi
 BASE_ID=$(node -p 'require(process.argv[1]).id' "$BASE/rootfs.json")
 IDS=("$@")
 [ ${#IDS[@]} -gt 0 ] || mapfile -t IDS < <(node -e 'for (const k of Object.keys(require(process.argv[1]).layers)) console.log(k)' "$SPEC")
@@ -59,7 +78,7 @@ if [ ! -f "$BASEDIR/.complete" ]; then
 fi
 
 umount_all() {
-  for m in var/cache/apt/archives dev/pts dev sys proc; do mountpoint -q "$ROOT/$m" 2>/dev/null && umount -l "$ROOT/$m" || true; done
+  for m in var/cache/apt/archives dev/shm dev/pts dev sys proc; do mountpoint -q "$ROOT/$m" 2>/dev/null && umount "$ROOT/$m" || true; done
 }
 trap umount_all EXIT
 
@@ -83,12 +102,13 @@ for id in "${IDS[@]}"; do
   rm -f "$ROOT/.complete"
 
   mount -t proc proc "$ROOT/proc"
-  mount --rbind /sys "$ROOT/sys"
-  # One-way: without this, unmounting the chroot's copy (umount -l) propagates
-  # back and unmounts the host's own mounts too (e.g. /sys/fs/cgroup, which systemd needs)
-  mount --make-rslave "$ROOT/sys"
-  mount --rbind /dev "$ROOT/dev"
-  mount --make-rslave "$ROOT/dev"
+  # A fresh sysfs (none of the host's submounts, such as cgroups) and
+  # one-level binds of /dev, /dev/pts and /dev/shm, never recursive
+  mount -t sysfs sysfs "$ROOT/sys"
+  for d in dev dev/pts dev/shm; do
+    mkdir -p "$ROOT/$d"
+    mount --bind "/$d" "$ROOT/$d" && mount --make-slave "$ROOT/$d"
+  done
   mount --bind "$WORK/debs" "$ROOT/var/cache/apt/archives"
   cp -L /etc/resolv.conf "$ROOT/etc/resolv.conf.build"
   mv "$ROOT/etc/resolv.conf" "$ROOT/etc/resolv.conf.keep"
