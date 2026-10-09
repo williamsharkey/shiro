@@ -181,6 +181,18 @@ const installedStatus = async (m, names) => {
  * and dpkg reading its database); a failed batch is retried one package at a
  * time so each failure lands on the right package. Then smoke each.
  */
+/**
+ * After a failed install: purge what dpkg left half-installed or unconfigured
+ * (its failure is recorded already), so the next package starts from a
+ * consistent system instead of failing on "Unmet dependencies".
+ */
+async function recover(m) {
+  const out = (await m.run(`dpkg-query -W -f='\${Package} \${db:Status-Abbrev}\\n' 2>/dev/null`)).out;
+  const bad = out.split('\n').map((l) => l.trim().split(/\s+/)).filter(([n, st]) => n && st && st !== 'ii' && !st.startsWith('un') && st !== 'rc').map(([n]) => n);
+  if (bad.length) await m.run(`sudo dpkg --purge --force-all ${bad.join(' ')} 2>&1`, 600);
+  return bad;
+}
+
 async function scoreBatch(m, batch, onResult) {
   const names = batch.map((b) => b.p.name);
   const before = await installedStatus(m, names);
@@ -191,12 +203,12 @@ async function scoreBatch(m, batch, onResult) {
     const r = await m.run(`sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ${todo.map((b) => b.p.name).join(' ')} 2>&1`, INSTALL_TIMEOUT_S);
     for (const b of todo) { logs.set(b.p.name, r.out); timing.set(b.p.name, Math.round(r.ms / todo.length)); }
     if (r.code !== 0 && todo.length > 1) {
-      await m.run('sudo dpkg --configure -a 2>&1; sudo DEBIAN_FRONTEND=noninteractive apt-get -f install -y 2>&1', 1200);
+      await recover(m);
       for (const b of todo) {
         if ((await installedStatus(m, [b.p.name])).has(b.p.name)) continue;
         const one = await m.run(`sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ${b.p.name} 2>&1`, INSTALL_TIMEOUT_S);
         logs.set(b.p.name, one.out); timing.set(b.p.name, one.ms);
-        if (one.code !== 0) await m.run('sudo dpkg --configure -a 2>&1; sudo DEBIAN_FRONTEND=noninteractive apt-get -f install -y 2>&1', 1200);
+        if (one.code !== 0) await recover(m);
       }
     }
   }
@@ -262,10 +274,7 @@ async function main() {
             log(`#${r.rank} ${r.name}: ${r.result}${r.category ? ` [${r.category}] ${r.error ?? ''}` : ` (${r.smoke})`} ${Math.round(r.totalMs / 1000)}s`);
           });
           // A dpkg that can't recover would fail everything after it: start over
-          if (broken) {
-            const fix = await m.run('sudo dpkg --configure -a 2>&1; sudo DEBIAN_FRONTEND=noninteractive apt-get -f install -y 2>&1', 1200);
-            if (fix.code) { log('dpkg state broken; new machine'); await m.context.close().catch(() => {}); m = null; }
-          }
+          if (broken) await recover(m);
         } catch (e) {
           for (const { p, info } of batch) {
             if (results[p.name]?.at && results[p.name].version === info.version && results[p.name].result !== 'error') continue;
