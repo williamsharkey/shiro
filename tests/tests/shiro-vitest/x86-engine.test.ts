@@ -45,6 +45,8 @@ const forkSharedBin = join(out, 'forkshared');
 const haveForkShared = tryBuild('gcc', ['-static', '-O1', '-o', forkSharedBin, 'forkshared.c']);
 const mremapBin = join(out, 'mremap');
 const haveMremap = tryBuild('gcc', ['-static', '-O1', '-o', mremapBin, 'mremap.c']);
+const lchownBin = join(out, 'lchown');
+const haveLchown = tryBuild('gcc', ['-static', '-O1', '-o', lchownBin, 'lchown.c']);
 const ssecmpBin = join(out, 'ssecmp');
 const haveSsecmp = tryBuild('gcc', ['-static', '-O1', '-o', ssecmpBin, 'ssecmp.c', '-lm']);
 const brkmapBin = join(out, 'brkmap');
@@ -448,6 +450,18 @@ describe('Blink engine: CPU and syscall fixes', () => {
     expect(r.output.replace(/\r\n/g, '\n')).toBe(
       'no MAYMOVE: Cannot allocate memory\nmoved=1 first=7 mid=7 last=9\nold range free=1\n' +
       'shrunk same=1 tail free=1 last=7\nfixed at=1 first=7\nreadonly moved=1 byte=42\n');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  // dpkg lchowns NAME.dpkg-new symlinks before their targets exist
+  it.skipIf(!haveLchown)('lchown and fchownat(AT_SYMLINK_NOFOLLOW) act on a dangling symlink', async () => {
+    const { shell } = await setup(readFileSync(lchownBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'lchown(dangling)=0 \nfchownat(dangling, NOFOLLOW)=0 \nchown(dangling)=-1 No such file or directory\n' +
+      'fchownat(dangling)=-1 No such file or directory\nlchown(missing)=-1 No such file or directory\n' +
+      'fchownat(missing)=-1 No such file or directory\nfchownat(dirfd, dangling, NOFOLLOW)=0 \n' +
+      'fchownat(fd, "", EMPTY_PATH)=0 \n');
     expect(r.exitCode).toBe(0);
   }, 60_000);
 

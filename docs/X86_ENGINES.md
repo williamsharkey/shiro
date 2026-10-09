@@ -378,6 +378,10 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    -1 as a float, -1.0), and predicates NLT/NLE are true for NaN. GTK's
    cubic-bezier easing selects with those masks, so l3afpad's main thread
    spun forever in the solve. Test: `fixtures/x86/ssecmp.c`.
+30. Under Shiro `lchown` and `fchownat(AT_SYMLINK_NOFOLLOW)` don't follow a
+   symlink (dpkg lchowns NAME.dpkg-new links before their targets exist),
+   and `fchownat` fails for a missing path. Ownership isn't kept; they
+   check existence. Test: `fixtures/x86/lchown.c`.
 
 Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.
