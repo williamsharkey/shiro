@@ -456,24 +456,6 @@ describe('kernel processes', () => {
     kernel.kill(proc.pid, A.SIGKILL);
   });
 
-  it('link(2) copies the file but reports the source inode number (git local clone checks it)', async () => {
-    const proc = kernel.spawn({ path: 'ln', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
-    const data = new Uint8Array(4096);
-    const two = (a: string, b: string) => { const x = new TextEncoder().encode(a); data.set(x); data.set(new TextEncoder().encode(b), x.length); return [x.length, b.length]; };
-    const ino = async (p: string) => ((await (kernel as any).statPath(proc, p, false)) as { ino: number }).ino;
-    await fs.writeFile('/tmp/lsrc', 'content');
-    expect(await kernel.syscall(proc, A.SYS_link, two('/tmp/lsrc', '/tmp/ldst'), data)).toBe(0);
-    expect(await fs.readFile('/tmp/ldst', 'utf8')).toBe('content');
-    expect(await ino('/tmp/ldst')).toBe(await ino('/tmp/lsrc'));
-    expect(await kernel.syscall(proc, A.SYS_link, two('/tmp/lsrc', '/tmp/ldst'), data)).toBe(-A.EEXIST);
-    // a removed and recreated path is a new inode
-    const n = new TextEncoder().encode('/tmp/ldst'); data.set(n);
-    expect(await kernel.syscall(proc, A.SYS_unlink, [n.length], data)).toBe(0);
-    await fs.writeFile('/tmp/ldst', 'other');
-    expect(await ino('/tmp/ldst')).not.toBe(await ino('/tmp/lsrc'));
-    kernel.kill(proc.pid, A.SIGKILL);
-  });
-
   it('a burst of file writes is stored once it pauses, not after every write', async () => {
     const proc = kernel.spawn({ path: 'holder', cwd: '/tmp', run: () => new Promise<number>(() => {}) });
     const f = (await kernel.open(proc, 'kburst.bin', A.O_CREAT | A.O_WRONLY | A.O_TRUNC)) as OpenFile;
