@@ -21,7 +21,12 @@ export function createOsModule(ctx: CommandContext): any {
     freemem: () => 4 * 1024 * 1024 * 1024, // 4GB default
     EOL: '\n',
     userInfo: () => ({ username: 'user', homedir: ctx.env['HOME'] || '/home/user', shell: '/bin/sh', uid: 1000, gid: 1000 }),
-    networkInterfaces: () => ({}),
+    // Loopback plus one external interface: the page reaches the network
+    // (through fetch), and yarn reads "no interfaces" as offline
+    networkInterfaces: () => ({
+      lo: [{ address: '127.0.0.1', netmask: '255.0.0.0', family: 'IPv4', mac: '00:00:00:00:00:00', internal: true, cidr: '127.0.0.1/8' }],
+      eth0: [{ address: '10.0.2.15', netmask: '255.255.255.0', family: 'IPv4', mac: '02:42:0a:00:02:0f', internal: false, cidr: '10.0.2.15/24' }],
+    }),
     endianness: () => 'LE',
     loadavg: () => [0, 0, 0],
     uptime: () => performance.now() / 1000,
