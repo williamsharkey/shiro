@@ -14,7 +14,7 @@ import {
   type PortHost, type VirtualHttpRequest, type VirtualHttpResponse,
 } from '@shiro/kernel/net';
 
-interface Ports { echoPort: number; firehosePort: number; relayA: number; relayB: number; relayC: number; mainPort: number; origin: string }
+interface Ports { echoPort: number; firehosePort: number; relayA: number; relayB: number; relayC: number; relayD: number; mainPort: number; origin: string }
 
 let harness: ChildProcess;
 let P: Ports;
@@ -234,6 +234,42 @@ describe('kernel sockets over the TCP relay', () => {
     ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
     const blocked = JSON.parse(out.trim().split('\n').pop()!);
     expect(Object.fromEntries(addrs.map((a, i) => [a, blocked[i]]))).toEqual(Object.fromEntries(addrs.map((a, i) => [a, i >= 4])));
+  });
+
+  it('a relay that requires sign-in answers 401 until a GitHub token comes along (net-signin)', async () => {
+    const url = `http://127.0.0.1:${P.relayD}/tcp/token`;
+    const bare = await fetch(url, { method: 'POST', headers: { origin: P.origin } });
+    expect(bare.status).toBe(401);
+    expect(await bare.json()).toEqual({ error: 'signin_required', provider: 'github' });
+    expect((await fetch(url, { method: 'POST', headers: { origin: P.origin, authorization: 'Bearer nope' } })).status).toBe(401);
+    const ok = await fetch(url, { method: 'POST', headers: { origin: P.origin, authorization: 'Bearer good-token' } });
+    expect(ok.status).toBe(200);
+    expect((await ok.json()).token).toMatch(/^\d+\./);
+
+    // The kernel side: no saved sign-in → asks the hook once; with it, connects
+    const signin = await import('@shiro/net-signin');
+    const asked: unknown[] = [];
+    const stack = stackFor(P.relayD);
+    const off = signin.setNetworkSignInHandler(async (need) => { asked.push(need); return null; });
+    const s1 = stream(stack);
+    expect(await s1.connect(v4('127.0.0.1', P.echoPort))).toBeLessThan(0);
+    expect(asked.length).toBe(1);
+    expect(signin.networkStatus()).toBe('needs-sign-in');
+    off();
+    const store = new Map<string, string>();
+    (globalThis as any).localStorage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); }, removeItem: (k: string) => { store.delete(k); } };
+    try {
+      store.set('shiro_github_token', 'good-token');
+      const s2 = stream(stackFor(P.relayD));
+      expect(await s2.connect(v4('127.0.0.1', P.echoPort))).toBe(0);
+      await s2.write(enc.encode('hi'));
+      const buf = new Uint8Array(16);
+      expect(dec.decode(buf.subarray(0, await s2.read(buf)))).toBe('hi');
+      await s2.close();
+      expect(signin.networkStatus()).toBe('signed-in');
+    } finally {
+      delete (globalThis as any).localStorage;
+    }
   });
 
   it('fails cleanly when no relay is configured', async () => {

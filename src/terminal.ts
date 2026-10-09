@@ -30,6 +30,8 @@ export class ShiroTerminal {
   static instances = new Set<ShiroTerminal>();
   /** Set on extra panes: typing `exit` (or Ctrl-D on an empty line) at the prompt closes the pane */
   onExit?: () => void;
+  /** Replaces the startup HUD (the desktop draws a compact welcome instead) */
+  banner?: (t: ShiroTerminal) => void;
   private teardown?: () => void;
 
   term: Terminal;
@@ -739,6 +741,7 @@ export class ShiroTerminal {
 
   // Keep old name as alias for backwards compatibility
   drawBanner() {
+    if (this.banner) { this.banner(this); return; }
     this.drawHud();
   }
 

@@ -86,6 +86,10 @@ import { closeSplitView } from './split-view';
 import { initFileAssociations } from './file-associations';
 import { setActiveTerminal } from './active-terminal';
 import { initPanes } from './panes';
+import { uiMode } from './ui-mode';
+import { bootDesktop, type Desktop } from './desktop/index';
+import { installDomFs } from './dom-fs';
+import { desktopCmd } from './commands/desktop';
 import buildNumber from '../build-number.txt?raw';
 import { AGENTS_MD, CLAUDE_MD } from './claude-md-seed';
 import {
@@ -307,6 +311,7 @@ async function main() {
   registerCommand(commands, unbecomeCmd, 'src/commands/become.ts');
   registerCommand(commands, pageCmd, 'src/commands/page.ts');
   registerCommand(commands, titleCmd, 'src/commands/title.ts');
+  registerCommand(commands, desktopCmd, 'src/commands/desktop.ts');
 
   registerCommand(commands, lazyCommand('gh', 'GitHub CLI',
     () => import('./commands/gh').then(m => m.ghCmd)), 'src/commands/gh.ts');
@@ -463,12 +468,31 @@ async function main() {
   const storedGithubToken = localStorage.getItem('shiro_github_token');
   if (storedGithubToken) shell.env['GITHUB_TOKEN'] = storedGithubToken;
 
-  // Create terminal
+  // Extra terminals (panes, desktop windows) get fresh shells with this one's env and cwd
+  const makeShell = () => {
+    const s = new Shell(fs, commands);
+    Object.assign(s.env, shell.env);
+    s.cwd = shell.cwd;
+    return s;
+  };
+
+  // The Unix edition boots a desktop (src/desktop); shiro.computer keeps the
+  // full-page terminal (src/ui-mode.ts). The desktop puts #terminal in its
+  // first window before the terminal is created, so it measures its real size.
+  const mode = uiMode();
   const container = document.getElementById('terminal')!;
+  const desktop: Desktop | null = mode === 'desktop'
+    ? bootDesktop({ fs, shell, kernel, makeShell, terminalEl: container })
+    : null;
+  // /dom: the live page as files (docs/DESKTOP.md)
+  installDomFs(fs, kernel, () => desktop?.wm ?? null);
+
+  // Create terminal
   const terminal = new ShiroTerminal(container, shell);
 
   // Connect terminal to shell for interactive commands (vi, etc.)
   shell.setTerminal(terminal);
+  desktop?.attachMainTerminal(terminal);
 
   // Listen for font size changes from parent (seed snippet)
   window.addEventListener('message', (e) => {
@@ -495,6 +519,8 @@ async function main() {
     iframeServer, // Iframe-based virtual HTTP server
     processTable, // Windowed process registry
     kernel, // Process table, fds, pipes and syscalls for worker guests (src/kernel)
+    desktop: desktop?.wm ?? null, // Window manager API (docs/DESKTOP.md), null in the classic UI
+    uiMode: mode,
     unbecome: deactivateBecomeMode, // Exit app mode from browser console
     closeSplit: closeSplitView, // Close split pane from browser console
     lastSeedGif: null as Uint8Array | null, // Last generated seed GIF bytes (for demos/drag)
@@ -562,13 +588,8 @@ async function main() {
     document.body.classList.add('become-active');
   }
 
-  // Tiling panes: drag a corner triangle of any pane to split it
-  initPanes(terminal, () => {
-    const paneShell = new Shell(fs, commands);
-    Object.assign(paneShell.env, shell.env);
-    paneShell.cwd = shell.cwd;
-    return paneShell;
-  });
+  // Tiling panes: drag a corner triangle of any pane to split it (the desktop has windows and tabs instead)
+  if (!desktop) initPanes(terminal, makeShell);
 
   await terminal.start();
 

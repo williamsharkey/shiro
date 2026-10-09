@@ -150,8 +150,19 @@ async function runScripts(): Promise<Record<string, AreaResult>> {
     shell.cwd = '/bb/testsuite';
     Object.assign(shell.env, { PWD: '/bb/testsuite', ECHO: 'echo', TZ: 'UTC' });
     let err = '';
-    await withTimeout(shell.execute(`sh ${file}.tests`, () => {}, (s) => { err += s; }, false, undefined, true).catch((e) => { err += String(e); return -1; }),
+    let stdout = '';
+    await withTimeout(shell.execute(`sh ${file}.tests`, (s) => { stdout += s; }, (s) => { err += s; }, false, undefined, true).catch((e) => { err += String(e); return -1; }),
       300_000, () => -2);
+    // Cases a script reports itself (tsort.tests' `report`): its PASS:/FAIL: lines
+    // beyond the ones `testing` printed
+    const printed = new Map(current.seen);
+    for (const line of stdout.replace(/\r\n/g, '\n').split('\n')) {
+      const m = /^(PASS|FAIL): (.*)$/.exec(line);
+      if (!m) continue;
+      const left = printed.get(m[2]) || 0;
+      if (left > 0) { printed.set(m[2], left - 1); continue; }
+      record(m[2], m[1] === 'PASS', m[1] === 'PASS' ? {} : { reason: 'reported FAIL by the script' });
+    }
     // Cases the script never reached count as failures
     const want = baseline.scripts[file] || [];
     const reached = new Map(current.seen);

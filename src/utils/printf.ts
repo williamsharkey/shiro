@@ -207,8 +207,8 @@ export function printfFormat(fmt: string, args: string[]): PrintfResult {
         if (fmt[i + 1] === '%') { out += '%'; i += 2; continue; }
         const m = /^%([-+ #0']*)(\*|\d+)?(?:\.(\*|\d*))?(hh|h|ll|l|L|j|z|t)?([diouxXfFeEgGaAcsbq]|\((?:[^)]*)\)T)?/.exec(fmt.slice(i));
         if (!m || !m[5]) {
+          // (like bash: nothing more is printed)
           errors.push(`printf: ${fmt.slice(i, i + 2)}: invalid conversion specification`);
-          out += fmt.slice(i);
           throw new Stop();
         }
         i += m[0].length;
