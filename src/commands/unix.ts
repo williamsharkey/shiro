@@ -4,10 +4,10 @@
  */
 
 import type { Command } from './index';
+import { lazyCommand } from '../utils/lazy-command';
 
 import { alias } from './alias';
 import { arrayHelper } from './array';
-import { awk } from './awk';
 import { base64 } from './base64';
 import { basename } from './basename';
 import { bc } from './bc';
@@ -22,7 +22,6 @@ import { comm } from './comm';
 import { continueCmd } from './continue';
 import { cp } from './cp';
 import { cut } from './cut';
-import { date } from './date';
 import { declare, local, readonly, unset } from './local';
 import { df } from './df';
 import { dirname } from './dirname';
@@ -40,7 +39,6 @@ import { false as falseCmd } from './false';
 import { forCmd, inCmd } from './for';
 import { functionCmd } from './function';
 import { file } from './file';
-import { findCmd } from './find';
 import { fmt } from './fmt';
 import { fold } from './fold';
 import { free } from './free';
@@ -61,9 +59,7 @@ import { mkdir } from './mkdir';
 import { mv } from './mv';
 import { nl } from './nl';
 import { nohup } from './nohup';
-import { od } from './od';
 import { paste } from './paste';
-import { patch } from './patch';
 import { pkgConfig } from './pkg-config';
 import { pr } from './pr';
 import { printenv } from './printenv';
@@ -77,6 +73,7 @@ import { returnCmd } from './return';
 import { seq } from './seq';
 import { set } from './set';
 import { sha256sum } from './sha256sum';
+import { sha1sumCmd, sha384sumCmd, sha512sumCmd } from './checksum';
 import { shift } from './shift';
 import { shrine } from './shrine';
 import { sleep } from './sleep';
@@ -84,7 +81,6 @@ import { sort } from './sort';
 import { stat } from './stat';
 import { strings } from './strings';
 import { tail } from './tail';
-import { tar } from './tar';
 import { tee } from './tee';
 import { test } from './posix-test';
 import { time } from './time';
@@ -114,11 +110,20 @@ import { dcCmd } from './dc';
 import { splitCmd } from './split';
 import { factorCmd } from './factor';
 import { cksumCmd } from './cksum';
+import { sumCmd } from './sum';
 import { base32Cmd } from './base32';
 import { numfmtCmd } from './numfmt';
 import { csplitCmd } from './csplit';
 import { niceCmd, wCmd, whoCmd, usersCmd, lsofCmd } from './system-info';
 import { dos2unixCmd, unix2dosCmd } from './line-endings';
+
+// Large, less frequent commands load on first use (kept out of the boot bundle)
+const awk = lazyCommand('awk', 'Pattern scanning and processing language', () => import('./awk').then(m => m.awk));
+const date = lazyCommand('date', 'Display date and time', () => import('./date').then(m => m.date));
+const findCmd = lazyCommand('find', 'Search for files in a directory hierarchy', () => import('./find').then(m => m.findCmd));
+const od = lazyCommand('od', 'Dump files in octal and other formats', () => import('./od').then(m => m.od));
+const patch = lazyCommand('patch', 'Apply a diff file to an original', () => import('./patch').then(m => m.patch));
+const tar = lazyCommand('tar', 'Archive utility (GNU tar format)', () => import('./tar').then(m => m.tar));
 
 /** All Unix commands as an array for registration. */
 export const unixCommands: Command[] = [
@@ -130,11 +135,11 @@ export const unixCommands: Command[] = [
   getopts, hash, head, heredoc, hexdump, id, install, join, kill, less, letCmd,
   ls, make, md5sum, mkdir, mv, nl, nohup, od, paste, patch, pkgConfig, pr,
   printenv, printf, processSubstitution, pwd, read, readlink, realpath, returnCmd,
-  seq, set, sha256sum, shift, shrine, sleep, sort, stat, strings, tail, tar, tee,
+  seq, set, sha256sum, sha1sumCmd, sha384sumCmd, sha512sumCmd, shift, shrine, sleep, sort, stat, strings, tail, tar, tee,
   test, time, timeout, touch, tr, trap, trueCmd, colon, tsort, type, ulimit, umask,
   unalias, unexpand, uniq, uptime, watch, wc, which, whoami, xargs, yes,
   revCmd, tacCmd, shufCmd, cmpCmd, ddCmd, xxdCmd, dcCmd, splitCmd,
-  factorCmd, cksumCmd, base32Cmd, numfmtCmd, csplitCmd,
+  factorCmd, cksumCmd, sumCmd, base32Cmd, numfmtCmd, csplitCmd,
   niceCmd, wCmd, whoCmd, usersCmd, lsofCmd, dos2unixCmd, unix2dosCmd,
 ];
 

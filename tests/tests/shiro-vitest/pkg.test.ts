@@ -165,7 +165,7 @@ describe('package index', () => {
 
   it('packages built here are in public/pkg with the pinned sha256, size, and a recipe', () => {
     const own = builtinIndex().packages.filter(p => p.origin === 'shiro');
-    expect(own.map(p => p.name)).toEqual(expect.arrayContaining(['coreutils', 'jq', 'lua', 'sqlite']));
+    expect(own.map(p => p.name)).toEqual(expect.arrayContaining(['coreutils', 'jq', 'lua', 'sqlite', 'less', 'vim']));
     const checked = new Set<string>();
     for (const p of own) {
       expect(existsSync(`${REPO}/${p.recipe}`), p.recipe).toBe(true);
@@ -544,7 +544,7 @@ describe('real packages as kernel processes', () => {
     } catch {
       ctx.skip();
     }
-    expect((await sh(shell, 'pkg install grep sed ripgrep quickjs-ng')).exitCode).toBe(0);
+    expect((await sh(shell, 'pkg install grep-wasix sed-wasix ripgrep quickjs-ng')).exitCode).toBe(0);
     await fs.writeFile('/home/user/w.txt', 'b\na\nfoo bar\n');
     expect((await sh(shell, 'cd /home/user && /usr/bin/grep -n foo w.txt')).out).toBe('3:foo bar\n');
     expect((await sh(shell, 'cd /home/user && /usr/bin/sed -i s/foo/FOO/ w.txt && cat w.txt')).out).toBe('b\na\nFOO bar\n');

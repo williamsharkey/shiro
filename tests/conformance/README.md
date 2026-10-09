@@ -67,11 +67,42 @@ normal `npm run test:shiro` keeps them fixed.
   It passes when it prints its `Summary:` with passed > 0 and no failed or
   broken results (`lib/ltp.mjs`); a test gets 60 s, and is stopped 1.5 s
   after its summary if it doesn't exit. Leftover processes are killed.
-- Only tests that pass natively on the build host are scored
-  (`ltp/native-baseline.json`, from `scripts/conformance/ltp-native-baseline.mjs`).
+- Only tests that pass natively on the build host as uid 1000 (Shiro's
+  processes are not root) are scored (`ltp/native-baseline.json`, from
+  `scripts/conformance/ltp-native-baseline.mjs`; tests that need root don't
+  count).
 - A full run takes hours. Each finished test is journaled to
   `results/detail/syscalls-blink.jsonl` and its output saved under
   `results/detail/ltp/`; `LTP_RESUME=1` continues a run that died,
   `LTP_RESUME=1 LTP_RERUN_FAILED=1` runs only the previous failures again,
   `LTP_ONLY=read,write01` narrows a run. `ltp/hangs.json` lists tests that
   crash the test worker; they count as failures.
+
+## Shell in Chromium (`scripts/conformance/browser-oils.mjs`)
+
+The oils spec cases again, in the real app: builds it (`--no-build` reuses
+`dist/`), serves it with `server.mjs` (cross-origin isolated), loads it in the
+pre-installed Chromium through playwright-core (never `playwright install`;
+`CHROMIUM` overrides `/opt/pw-browsers/chromium`) and runs each scored case
+through the page's shell the same way as the vitest harness. `--files a,b`
+narrows a run (written as a `.partial.json`). Results:
+`results/shell-oils-browser.json`. Not part of `npm run conformance` (it takes
+a build and a browser); run it before updating the scoreboard.
+
+## Syscalls: wasi-testsuite (`syscalls-wasi.conf.ts`)
+
+- Not vendored: `scripts/conformance/fetch.sh` fetches
+  [WebAssembly/wasi-testsuite](https://github.com/WebAssembly/wasi-testsuite)
+  (Apache-2.0) at a pinned commit of its prebuilt `prod/testsuite-base`
+  branch into `tests/conformance/.cache/wasi-testsuite`.
+- Every wasm32-wasip1 module (C, Rust, AssemblyScript) runs as a Shiro WASI
+  process (`runWasiProgram` → a kernel process in a Node Worker, the path a
+  cross-origin isolated page takes; without the Worker factory Node would get
+  the legacy runtime) the way the suite's wasmtime adapter runs it: only the
+  test's args and env, a fresh copy of its `root` directory preopened as `/`
+  (a `/` mount, see `openPreopens`) and nothing else (`bare`), judged on the
+  exit code and, when given, stdout. Wasmtime passes all of them on Linux, so
+  all are scored. `WASI_ONLY=name,rust` narrows a run; `WASI_LEGACY=1` runs
+  the old in-page runtime (`src/wasi-runtime.ts`) instead, unscored.
+- Known failure: `path_link` needs real hard links (same inode, shared data,
+  nlink 2); the FileSystem has none, so `link()` copies.

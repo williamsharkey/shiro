@@ -4,6 +4,22 @@
 
 All changes so far are additive; nothing below renames or removes an earlier name.
 
+- **2026-10-08 (unix/shell-stdio)** — behavior of builtins run as kernel processes.
+  - `runBuiltin` no longer reads fd 0 to EOF before the command runs:
+    `ctx.stdin` is read the first time the command looks at it
+    (`execLazyStdin` in `src/shell-stdio.ts`: the first look throws
+    `NeedStdin`, then the command runs again with fd 0's contents; `node`
+    reads up front). `echo`, `mkdir`, ... leave fd 0 for the next reader.
+  - `sh`/`bash`/`dash` run by the kernel (and scripts through `runViaShell`)
+    use the process's fds as their stdio (`KernelStdio`, `Shell.kernelStdio`):
+    kernel programs in the script get fds 0-2 themselves
+    (`runKernelPipeline` option `fds`), `read` takes one record from fd 0 a
+    byte at a time, other builtins read fd 0 lazily as above, and output is
+    written to fds 1/2 as each command finishes. So a script can hold a
+    conversation with its peer over pipes (`git clone --upload-pack='…; git-upload-pack'`).
+  - `CommandContext` gained optional `liveStdin`, `streamStdout`,
+    `streamStderr` (src/commands/index.ts).
+
 - **2026-10-08 (unix/perf-kernel)** — all additive; old guests keep working.
   - **Channel transport:** the kernel serves Worker channels with
     `KernelChannel.watch()` (Atomics.waitAsync on the state word) when the
@@ -37,6 +53,10 @@ All changes so far are additive; nothing below renames or removes an earlier nam
     `FileSystem.lookupCached(path, follow)`. A `SyscallHandler` may carry
     `passSync(proc, nr, args, data, kernel)`: true when it would pass the
     call on, so registering it doesn't force every call onto the async path.
+  - **Change:** link/linkat return -EPERM instead of copying the file (the
+    filesystem has no hard links). The copy had its own inode, so `git
+    clone /local/repo` died with "hardlink different from source"; with
+    EPERM git, cp -l and others fall back to copying themselves.
   - While guests make syscalls back to back the page polls their channels
     for a few tens of µs after each reply (bounded by a 4 ms slice per
     task), so the next request is served without an event-loop round trip.
@@ -59,6 +79,38 @@ All changes so far are additive; nothing below renames or removes an earlier nam
     executable file (`binCommandStat`).
   - `FileSystem.writeFile` stores a compact copy of a typed-array view
     (IndexedDB cloned the whole underlying buffer).
+
+- **2026-10-09 (unix/compat-tools)** (additive)
+  - AF_UNIX stream sockets bound to paths and abstract names; `SYS_sendmsg`
+    (46) and `SYS_recvmsg` (47) in the kernel, with `SCM_RIGHTS`;
+    `getsockopt(SO_PEERCRED)` returns the peer's pid. Constants `SO_PEERCRED`,
+    `SCM_RIGHTS`, `SCM_CREDENTIALS`, `MSG_CTRUNC`, `MSG_CMSG_CLOEXEC`,
+    `SOCKADDR_UN_MAX`. `Kernel.socketPaths`: socket files stat as `S_IFSOCK`.
+    Layouts in [NETWORKING.md](NETWORKING.md).
+  - `ioctl(FIONBIO)` succeeds on every file (it only sets `O_NONBLOCK`).
+  - `/proc` in the kernel (`procfs.ts`, `Kernel.procfs`): open/stat/
+    readlink/getdents of `/proc/self`, `/proc/PID/...`, `/proc/stat`,
+    `/proc/loadavg`, `/proc/uptime` come from the process table (other
+    `/proc` files are still the FileSystem's). `Process.syscalls`,
+    `kernelMs`, `inSyscall`, `exitTime`; `Kernel.lastPid`.
+  - `SYS_clock_gettime` (228) for `CLOCK_REALTIME`, the monotonic clocks
+    and `CLOCK_BOOTTIME`, all counting from the kernel's boot (`procfs.ts`
+    `bootMs`) except realtime.
+  - ptys: `TIOCPKT`/`TIOCGPKT`. Stat of a device opens it `O_NOCTTY` and
+    closes it again.
+  - `sh` as a kernel process with no script on a terminal (or `-i`) runs
+    an interactive read-eval loop (`Shell.exited` marks `exit`).
+  - `link(2)` copies report the source's inode number.
+  - `SYS_uname` (63) writes a `struct utsname` whose nodename is
+    `Kernel.hostname` ("shiro"); Blink takes the host and domain names
+    from it. Constant `UTSNAME_FIELD`.
+  - `TtySession.onJobForeground`: called when a job takes the terminal; the
+    page's terminals hand it the keys typed while the command was starting.
+  - AF_UNIX socket paths decode from a shared syscall buffer (browsers'
+    `TextDecoder` refuses one; tmux failed with EIO in the browser).
+  - Closing one reference to a regular file (or exiting) writes its data
+    back to the FileSystem even while another process — a forked child —
+    still holds the description.
 
 - **2026-10-08 (unix/compat-tools)**
   - **New syscalls:** `SYS_shiro_vfork` (1010) creates a child process with
@@ -295,7 +347,7 @@ offset 0. Lengths are bytes, without a trailing NUL.
 | unlinkat | dirfd, pathLen, flags (AT_REMOVEDIR) | path | 0 |
 | renameat / renameat2 | olddirfd, oldLen, newdirfd, newLen (, flags) | old, new | 0 |
 | symlink / symlinkat | targetLen, (dirfd,) linkLen | target, linkpath | 0 |
-| link / linkat | (olddirfd,) oldLen, (newdirfd,) newLen (, flags) | old, new | 0 (copies) |
+| link / linkat | (olddirfd,) oldLen, (newdirfd,) newLen (, flags) | old, new | -EPERM (no hard links; -ENOENT/-EEXIST checked first) |
 | readlinkat | dirfd, pathLen, bufsiz | path → target | length |
 | utimensat | dirfd, pathLen (0 = the fd), flags, hasTimes | path, then 2 struct timespec (32 B) at offset pathLen | 0 |
 | chmod / fchmod / fchmodat | pathLen or fd or (dirfd, pathLen), mode | path | 0 |
@@ -352,7 +404,8 @@ that nobody waits for is reaped 30 s after it exits.
 Existing builtins stay in-page. Until the shell itself is ported, the
 kernel exposes `kernel.runBuiltin(ctx)` adapters: a builtin's
 `ctx.stdin`/`ctx.stdout` strings are bridged to fds 0/1/2 of a kernel
-process. That way a guest's `posix_spawn("ls")` runs Shiro's `ls`, and
+process (stdin read only if the command reads it; a shell uses the fds
+directly, see `src/shell-stdio.ts`). That way a guest's `posix_spawn("ls")` runs Shiro's `ls`, and
 `cat | wasm-program | grep` streams through real pipes.
 
 ## Tests

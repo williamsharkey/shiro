@@ -46,6 +46,10 @@ export const SYS_setsid = 112;
 export const SYS_getpgid = 121;
 export const SYS_getsid = 124;
 export const SYS_getdents64 = 217;
+export const SYS_clock_gettime = 228;
+export const SYS_uname = 63;
+/** struct utsname: six NUL-padded 65-byte fields */
+export const UTSNAME_FIELD = 65;
 export const SYS_exit_group = 231;
 export const SYS_openat = 257;
 export const SYS_dup3 = 292;
@@ -245,6 +249,9 @@ export const O_NOCTTY = 0o400;
 export const O_TRUNC = 0o1000;
 export const O_APPEND = 0o2000;
 export const O_NONBLOCK = 0o4000;
+export const O_DSYNC = 0o10000;
+/** O_SYNC is __O_SYNC | O_DSYNC on Linux. */
+export const O_SYNC = 0o4010000;
 export const O_DIRECTORY = 0o200000;
 export const O_NOFOLLOW = 0o400000;
 export const O_CLOEXEC = 0o2000000;
@@ -448,6 +455,7 @@ export const SO_KEEPALIVE = 9;
 export const SO_OOBINLINE = 10;
 export const SO_LINGER = 13;
 export const SO_REUSEPORT = 15;
+export const SO_PEERCRED = 17;
 export const SO_RCVLOWAT = 18;
 export const SO_SNDLOWAT = 19;
 export const SO_RCVTIMEO = 20;
@@ -463,16 +471,24 @@ export const IPV6_V6ONLY = 26;
 export const MSG_OOB = 0x1;
 export const MSG_PEEK = 0x2;
 export const MSG_DONTROUTE = 0x4;
+export const MSG_CTRUNC = 0x8;
 export const MSG_TRUNC = 0x20;
 export const MSG_DONTWAIT = 0x40;
 export const MSG_EOR = 0x80;
 export const MSG_WAITALL = 0x100;
 export const MSG_NOSIGNAL = 0x4000;
+export const MSG_CMSG_CLOEXEC = 0x40000000;
+/** cmsg type at level SOL_SOCKET: file descriptors */
+export const SCM_RIGHTS = 1;
+/** cmsg type at level SOL_SOCKET: struct ucred */
+export const SCM_CREDENTIALS = 2;
 export const SHUT_RD = 0;
 export const SHUT_WR = 1;
 export const SHUT_RDWR = 2;
 /** Room recvfrom/accept reserve after the payload for a sockaddr (sockaddr_in6 = 28 bytes). */
 export const SOCKADDR_ROOM = 28;
+/** Longest sockaddr_un (family + 108-byte sun_path). bind/connect/getsockname take it whole. */
+export const SOCKADDR_UN_MAX = 110;
 
 // ── ioctl (just the ones the core needs; termios is pty.ts) ─────────────────
 export const TCGETS = 0x5401;
@@ -513,6 +529,9 @@ export interface KStat {
   atimeMs: number;
   mtimeMs: number;
   ctimeMs: number;
+  /** Nanoseconds past atimeMs/mtimeMs (0-999999), for times set with utimensat. */
+  atimeNs?: number;
+  mtimeNs?: number;
 }
 
 /** Size of the Linux x86-64 `struct stat` that encodeStat/decodeStat use. */
@@ -540,18 +559,20 @@ export function encodeStat(st: KStat, out: Uint8Array): void {
   setU64(dv, 48, st.size);
   setU64(dv, 56, st.blksize);
   setU64(dv, 64, st.blocks);
-  const ts = (off: number, ms: number) => {
-    setU64(dv, off, Math.floor(ms / 1000));
-    setU64(dv, off + 8, Math.floor((ms % 1000) * 1e6));
+  const ts = (off: number, ms: number, ns = 0) => {
+    const sec = Math.floor(ms / 1000);
+    setU64(dv, off, sec);
+    setU64(dv, off + 8, Math.floor((ms - sec * 1000) * 1e6) + ns);
   };
-  ts(72, st.atimeMs);
-  ts(88, st.mtimeMs);
+  ts(72, st.atimeMs, st.atimeNs);
+  ts(88, st.mtimeMs, st.mtimeNs);
   ts(104, st.ctimeMs);
 }
 
 export function decodeStat(buf: Uint8Array): KStat {
   const dv = new DataView(buf.buffer, buf.byteOffset, STAT_SIZE);
   const ts = (off: number) => getU64(dv, off) * 1000 + Math.floor(getU64(dv, off + 8) / 1e6);
+  const ns = (off: number) => getU64(dv, off + 8) % 1e6;
   return {
     dev: getU64(dv, 0),
     ino: getU64(dv, 8),
@@ -566,6 +587,8 @@ export function decodeStat(buf: Uint8Array): KStat {
     atimeMs: ts(72),
     mtimeMs: ts(88),
     ctimeMs: ts(104),
+    ...(ns(72) ? { atimeNs: ns(72) } : {}),
+    ...(ns(88) ? { mtimeNs: ns(88) } : {}),
   };
 }
 

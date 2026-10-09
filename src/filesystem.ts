@@ -61,6 +61,11 @@ export interface FSNode {
   ctime: number;
   size: number;
   symlinkTarget?: string;
+  /** Access time when set apart from mtime (utimensat); absent = follows mtime. */
+  atime?: number;
+  /** Nanoseconds past atime/mtime (0-999999), when set with nanosecond precision. */
+  atimeNs?: number;
+  mtimeNs?: number;
 }
 
 export interface StatResult {
@@ -69,6 +74,11 @@ export interface StatResult {
   size: number;
   mtime: Date;
   ctime: Date;
+  /** Access time (equal to mtime unless set apart with utimes). */
+  atimeMs?: number;
+  /** Nanoseconds past mtime/atime (0-999999). */
+  mtimeNs?: number;
+  atimeNs?: number;
   isFile(): boolean;
   isDirectory(): boolean;
   isSymbolicLink(): boolean;
@@ -77,17 +87,20 @@ export interface StatResult {
 function makeStat(node: FSNode): StatResult {
   const mtime = new Date(node.mtime);
   const ctime = new Date(node.ctime);
+  const atime = node.atime === undefined ? mtime : new Date(node.atime);
   return {
     type: node.type,
     mode: node.mode,
     size: node.size,
     mtime,
     ctime,
-    atime: mtime,
+    atime,
     birthtime: ctime,
     mtimeMs: mtime.getTime(),
     ctimeMs: ctime.getTime(),
-    atimeMs: mtime.getTime(),
+    atimeMs: atime.getTime(),
+    mtimeNs: node.mtimeNs ?? 0,
+    atimeNs: node.atime === undefined ? node.mtimeNs ?? 0 : node.atimeNs ?? 0,
     birthtimeMs: ctime.getTime(),
     dev: 0,
     ino: 0,
@@ -152,11 +165,12 @@ class DevProvider implements VirtualFSProvider {
   }
   readFile(path: string, encoding?: 'utf8'): string | Uint8Array | null {
     if (path === '/dev/null') return encoding === 'utf8' ? '' : new Uint8Array(0);
-    if (path === '/dev/zero') return new Uint8Array(4096); // return a page of zeros
+    // A page of zeros / random bytes; as text, one char per byte (Latin-1, like other binary shell strings)
+    if (path === '/dev/zero') return encoding === 'utf8' ? '\0'.repeat(4096) : new Uint8Array(4096);
     if (path === '/dev/random' || path === '/dev/urandom') {
       const buf = new Uint8Array(256);
       crypto.getRandomValues(buf);
-      return buf;
+      return encoding === 'utf8' ? String.fromCharCode(...buf) : buf;
     }
     if (path === '/dev') return null; // directory
     return encoding === 'utf8' ? '' : new Uint8Array(0);
@@ -177,9 +191,54 @@ class DevProvider implements VirtualFSProvider {
   }
 }
 
+/** A process as /proc/PID shows it */
+export interface ProcInfo {
+  pid: number; ppid: number; pgid: number; sid: number; comm: string;
+  /** R running, S sleeping (in a syscall), T stopped, Z zombie */
+  state: 'R' | 'S' | 'T' | 'Z';
+  cmdline: string[];
+}
+const procInfoSources: ((pid: number) => ProcInfo | undefined)[] = [];
+/** Let /proc/PID describe processes from a process table (the kernel registers one) */
+export function addProcInfoSource(fn: (pid: number) => ProcInfo | undefined): void {
+  procInfoSources.push(fn);
+}
+function procInfo(pid: number): ProcInfo | undefined {
+  for (const fn of procInfoSources) { const i = fn(pid); if (i) return i; }
+  return undefined;
+}
+const PROC_PID_RE = /^\/proc\/(\d+)(?:\/(stat|status|cmdline|comm))?$/;
+
 /** /proc virtual provider — dynamic system info from Shiro */
 class ProcProvider implements VirtualFSProvider {
   private startTime = Date.now();
+
+  /** /proc/PID/FILE contents, or null if there is no such process or file */
+  private pidFile(path: string): string | null | 'dir' {
+    const m = PROC_PID_RE.exec(path);
+    if (!m) return null;
+    const info = procInfo(Number(m[1]));
+    if (!info) return null;
+    switch (m[2]) {
+      case undefined: return 'dir';
+      case 'stat': {
+        // pid (comm) state ppid pgrp session tty_nr tpgid flags … (52 fields)
+        const rest = Array(45).fill('0');
+        rest[0] = '-1'; // tpgid
+        rest[12] = '20'; // priority
+        rest[14] = '1'; // num_threads
+        return `${info.pid} (${info.comm}) ${info.state} ${info.ppid} ${info.pgid} ${info.sid} 0 ${rest.join(' ')}\n`;
+      }
+      case 'status': {
+        const names: Record<string, string> = { R: 'R (running)', S: 'S (sleeping)', T: 'T (stopped)', Z: 'Z (zombie)' };
+        return [`Name:\t${info.comm}`, `State:\t${names[info.state]}`, `Tgid:\t${info.pid}`, `Pid:\t${info.pid}`,
+          `PPid:\t${info.ppid}`, 'Uid:\t1000\t1000\t1000\t1000', 'Gid:\t1000\t1000\t1000\t1000', 'Threads:\t1'].join('\n') + '\n';
+      }
+      case 'cmdline': return info.cmdline.map((a) => a + '\0').join('');
+      case 'comm': return info.comm + '\n';
+    }
+    return null;
+  }
 
   private entries: Record<string, () => string> = {
     '/proc/uptime': () => {
@@ -214,6 +273,8 @@ class ProcProvider implements VirtualFSProvider {
     '/proc/loadavg': () => '0.00 0.00 0.00 1/1 1\n',
     '/proc/stat': () => 'cpu  0 0 0 0 0 0 0 0 0 0\n',
     '/proc/filesystems': () => 'nodev\tshirofs\n',
+    '/proc/sys/kernel/pid_max': () => '4194304\n',
+    '/proc/sys/fs/pipe-max-size': () => '1048576\n',
     '/proc/mounts': () => 'shirofs / shirofs rw 0 0\n',
     '/proc/self/status': () => [
       'Name:\tshiro',
@@ -228,21 +289,27 @@ class ProcProvider implements VirtualFSProvider {
     '/proc/self/exe': () => '/usr/bin/shiro',
   };
 
-  private dirs = ['/proc', '/proc/self'];
+  private dirs = ['/proc', '/proc/self', '/proc/sys', '/proc/sys/kernel', '/proc/sys/fs'];
 
   handles(path: string): boolean {
-    return path === '/proc' || path === '/proc/self' || path.startsWith('/proc/') && (path in this.entries || this.dirs.includes(path));
+    return path === '/proc' || path === '/proc/self' || path.startsWith('/proc/')
+      && (path in this.entries || this.dirs.includes(path) || this.pidFile(path) !== null);
   }
 
   readFile(path: string, encoding?: 'utf8'): string | Uint8Array | null {
     if (this.dirs.includes(path)) return null;
+    const pf = this.pidFile(path);
+    if (pf === 'dir') return null;
     const gen = this.entries[path];
-    if (!gen) return null;
-    const content = gen();
+    if (!gen && pf === null) return null;
+    const content = pf ?? gen();
     return encoding === 'utf8' ? content : new TextEncoder().encode(content);
   }
 
   stat(path: string): StatResult | null {
+    const pf = this.pidFile(path);
+    if (pf === 'dir') return makeStat({ path, type: 'dir', content: null, mode: 0o555, mtime: Date.now(), ctime: this.startTime, size: 0 });
+    if (pf !== null) return makeStat({ path, type: 'file', content: new TextEncoder().encode(pf), mode: 0o444, mtime: Date.now(), ctime: this.startTime, size: pf.length });
     if (this.dirs.includes(path)) return makeStat({ path, type: 'dir', content: null, mode: 0o555, mtime: Date.now(), ctime: this.startTime, size: 0 });
     if (path in this.entries) {
       const content = this.entries[path]();
@@ -314,6 +381,15 @@ class VarLogProvider implements VirtualFSProvider {
   exists(path: string): boolean { return this.handles(path); }
   writeFile(): boolean { return false; }
 }
+
+/** Files every Unix system has, created when missing. */
+const BASE_ETC_FILES: Record<string, string> = {
+  '/etc/passwd': 'root:x:0:0:root:/root:/bin/sh\nuser:x:1000:1000:Shiro User:/home/user:/bin/sh\nnobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n',
+  '/etc/group': 'root:x:0:\ntty:x:5:user\nuser:x:1000:\nnogroup:x:65534:\n',
+  '/etc/hostname': 'shiro\n',
+  '/etc/hosts': '127.0.0.1\tlocalhost shiro\n::1\tlocalhost ip6-localhost ip6-loopback\n',
+  '/etc/shells': '/bin/sh\n/bin/bash\n',
+};
 
 /** Run fn as a macrotask without timer clamping/throttling (MessageChannel),
  *  falling back to setTimeout where there is none. */
@@ -399,11 +475,16 @@ export class FileSystem {
     }
 
     // Ensure basic directories exist
-    for (const dir of ['/home', '/tmp', '/home/user']) {
+    for (const dir of ['/home', '/tmp', '/home/user', '/etc']) {
       const existing = await this._get(dir);
       if (!existing) {
         await this._put(this._makeNode(dir, 'dir'));
       }
+    }
+    // The account database Unix programs look themselves up in (getpwuid:
+    // ssh, git, vim's ~ expansion). The kernel runs everything as uid 1000.
+    for (const [path, text] of Object.entries(BASE_ETC_FILES)) {
+      if (!(await this._get(path))) await this._put(this._makeNode(path, 'file', new TextEncoder().encode(text)));
     }
   }
 
@@ -606,9 +687,67 @@ export class FileSystem {
     return result;
   }
 
+  /**
+   * The canonical path for `path`: symlinks in directory components are
+   * always followed (`/usr/share/vim/x` through a `/usr/share/vim` link),
+   * the final component only with `followLast`. A missing component ends
+   * the walk; the rest is appended unchanged (ENOENT comes later).
+   */
+  private async _canon(path: string, followLast: boolean, hops = { n: 0 }): Promise<string> {
+    // Usually every component is in memory: walk it without an await per component
+    if (hops.n === 0) {
+      const fast = this._canonCached(path, followLast, { n: 0 });
+      if (fast !== undefined) return fast;
+    }
+    const parts = path.split('/').filter(Boolean);
+    let cur = '';
+    for (let i = 0; i < parts.length; i++) {
+      const next = `${cur}/${parts[i]}`;
+      if (parts[i] === '.' || parts[i] === '..') {
+        cur = this.resolvePath(next, '/');
+        continue;
+      }
+      if (i === parts.length - 1 && !followLast) return next;
+      const node = await this._get(next);
+      if (!node) return next + (i < parts.length - 1 ? '/' + parts.slice(i + 1).join('/') : '');
+      if (node.type !== 'symlink') { cur = next; continue; }
+      if (++hops.n > 40) throw fsError('ELOOP', `ELOOP: too many levels of symbolic links, '${path}'`);
+      const target = node.symlinkTarget || new TextDecoder().decode(node.content!);
+      cur = await this._canon(target.startsWith('/') ? target : this.resolvePath(target, cur || '/'), true, hops);
+      if (cur === '/') cur = '';
+    }
+    return cur || '/';
+  }
+
+  /** _canon from memory alone; undefined when a component needs IndexedDB (or on a loop, which _canon reports). */
+  private _canonCached(path: string, followLast: boolean, hops: { n: number }): string | undefined {
+    const parts = path.split('/').filter(Boolean);
+    let cur = '';
+    for (let i = 0; i < parts.length; i++) {
+      const next = `${cur}/${parts[i]}`;
+      if (parts[i] === '.' || parts[i] === '..') {
+        cur = this.resolvePath(next, '/');
+        continue;
+      }
+      if (i === parts.length - 1 && !followLast) return next;
+      const node = this._getCached(next);
+      if (node === undefined) return undefined;
+      if (!node) return next + (i < parts.length - 1 ? '/' + parts.slice(i + 1).join('/') : '');
+      if (node.type !== 'symlink') { cur = next; continue; }
+      if (++hops.n > 40) return undefined;
+      const target = node.symlinkTarget || new TextDecoder().decode(node.content!);
+      const c = this._canonCached(target.startsWith('/') ? target : this.resolvePath(target, cur || '/'), true, hops);
+      if (c === undefined) return undefined;
+      cur = c === '/' ? '' : c;
+    }
+    return cur || '/';
+  }
+
   /** _get from memory: the node, null when it surely doesn't exist, undefined when only IndexedDB knows. */
   private _getCached(path: string): FSNode | null | undefined {
-    if (this.cache.has(path)) return this.cache.get(path) ?? null;
+    const hit = this.cache.get(path); // one lookup: misses (cached as undefined) are the rare case
+    if (hit) return hit;
+    if (this.cache.has(path)) return null;
     if (this._allKeys && !this._allKeys.has(path)) return null;
     return undefined;
   }
@@ -621,15 +760,63 @@ export class FileSystem {
    */
   lookupCached(path: string, follow = true): { path: string; node: FSNode } | null | undefined {
     for (const vp of this.virtualProviders) if (vp.handles(path)) return undefined;
-    let current = path;
-    for (let i = 0; i < 40; i++) {
-      const node = this._getCached(current);
-      if (!node) return node;
-      if (node.type !== 'symlink' || !follow) return { path: current, node };
-      const target = node.symlinkTarget || new TextDecoder().decode(node.content!);
-      current = target.startsWith('/') ? target : this.resolvePath(target, current.substring(0, current.lastIndexOf('/')) || '/');
+    // Fast path: the parent directory's canonical path is memoized, so only the
+    // last component needs a lookup (rg, find and ls stat thousands of names
+    // in a few directories)
+    const slash = path.lastIndexOf('/');
+    const name = path.slice(slash + 1);
+    if (slash >= 0 && name && name !== '.' && name !== '..') {
+      const dir = slash === 0 ? '/' : path.slice(0, slash);
+      let cdir = this._canonDirs.get(dir);
+      if (cdir === undefined) {
+        const d = this._lookupWalk(dir, true);
+        if (d && d.node.type === 'dir') {
+          if (this._canonDirs.size > 20000) this._canonDirs.clear();
+          this._canonDirs.set(dir, cdir = d.path);
+        }
+      }
+      if (cdir !== undefined) {
+        const full = cdir === '/' ? '/' + name : cdir + '/' + name;
+        const node = this._getCached(full);
+        if (!node) return node;
+        if (node.type !== 'symlink' || !follow) return { path: full, node };
+      }
     }
-    return undefined;
+    return this._lookupWalk(path, follow);
+  }
+
+  /**
+   * Canonical paths of directories lookupCached walked (as given → real).
+   * Cleared whenever a symlink is written or anything is deleted or renamed,
+   * the only changes that can move a directory's canonical path.
+   */
+  private _canonDirs = new Map<string, string>();
+
+  private _lookupWalk(path: string, follow: boolean): { path: string; node: FSNode } | null | undefined {
+    // Symlinks in directory components are followed, as _canon does
+    const parts = path.split('/').filter(Boolean);
+    let cur = '';
+    let hops = 0;
+    for (let i = 0; i < parts.length; i++) {
+      if (parts[i] === '.' || parts[i] === '..') { cur = this.resolvePath(`${cur}/${parts[i]}`, '/'); continue; }
+      let next = `${cur}/${parts[i]}`;
+      const last = i === parts.length - 1;
+      for (;;) {
+        const node = this._getCached(next);
+        if (!node) return node; // missing (null) or unknown here (undefined)
+        if (node.type !== 'symlink' || (last && !follow)) {
+          if (last) return { path: next, node };
+          if (node.type !== 'dir') return undefined; // ENOTDIR: let stat() say so
+          break;
+        }
+        if (++hops > 40) return undefined;
+        const target = node.symlinkTarget || new TextDecoder().decode(node.content!);
+        next = target.startsWith('/') ? this.resolvePath(target, '/') : this.resolvePath(target, cur || '/');
+      }
+      cur = next;
+    }
+    const root = this._getCached('/');
+    return root ? { path: '/', node: root } : root;
   }
 
   /** makeStat for a node from lookupCached. */
@@ -658,9 +845,9 @@ export class FileSystem {
     throw fsError('ELOOP', `ELOOP: too many levels of symbolic links, '${path}'`);
   }
 
-  /** Path with symlinks in the final component followed (like realpath for bin links). */
+  /** `path` with every symlink followed, in directories and at the end (realpath(3)). */
   async realpath(path: string): Promise<string> {
-    return this._resolve(path);
+    return this._canon(path, true);
   }
 
   private async _put(node: FSNode): Promise<void> {
@@ -673,12 +860,14 @@ export class FileSystem {
 
   /** Synchronous part of a put: cache + key index now, IndexedDB on the next flush. */
   private _putNow(node: FSNode): void {
+    if (node.type === 'symlink' || this.cache.get(node.path)?.type === 'symlink') this._canonDirs.clear();
     this.cache.set(node.path, node);
     this._noteKey(node.path, true);
     this._queue(node.path, node);
   }
 
   private _deleteNow(path: string): void {
+    this._canonDirs.clear();
     // Remember the miss: IndexedDB still has the node until the flush commits
     this.cache.set(path, undefined);
     this._noteKey(path, false);
@@ -810,6 +999,7 @@ export class FileSystem {
   /** Clear the in-memory cache (useful after external DB modifications) */
   clearCache(): void {
     this.cache.clear();
+    this._canonDirs.clear();
     this._allKeys = null;
     this._allKeysArr = null;
     this._children = null;
@@ -868,8 +1058,9 @@ export class FileSystem {
     for (const vp of this.virtualProviders) {
       if (vp.handles(path)) { const s = vp.stat(path); if (s) return s; }
     }
-    const resolved = await this._resolve(path);
-    const node = await this._get(resolved);
+    const c = this._canonCached(path, true, { n: 0 });
+    const known = c === undefined ? undefined : this._getCached(c);
+    const node = known !== undefined ? known : await this._get(await this._canon(path, true));
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, stat '${path}'`);
     return makeStat(node);
   }
@@ -878,7 +1069,9 @@ export class FileSystem {
     for (const vp of this.virtualProviders) {
       if (vp.handles(path)) { const s = vp.stat(path); if (s) return s; }
     }
-    const node = await this._get(path);
+    const c = this._canonCached(path, false, { n: 0 });
+    const known = c === undefined ? undefined : this._getCached(c);
+    const node = known !== undefined ? known : await this._get(await this._canon(path, false));
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, lstat '${path}'`);
     return makeStat(node);
   }
@@ -887,7 +1080,7 @@ export class FileSystem {
     for (const vp of this.virtualProviders) {
       if (vp.exists(path)) return true;
     }
-    const node = await this._get(path);
+    const node = await this._get(await this._canon(path, false));
     return !!node;
   }
 
@@ -899,8 +1092,7 @@ export class FileSystem {
         throw fsError('EISDIR', `EISDIR: illegal operation on a directory, read '${path}'`);
       }
     }
-    const resolved = await this._resolve(path);
-    const node = await this._get(resolved);
+    const node = await this._get(await this._canon(path, true));
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, open '${path}'`);
     if (node.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, read '${path}'`);
     const data = node.content || new Uint8Array(0);
@@ -910,10 +1102,15 @@ export class FileSystem {
     return data;
   }
 
-  async writeFile(path: string, data: Uint8Array | string, options?: { mode?: number }): Promise<void> {
+  async writeFile(path: string, data: Uint8Array | string, options?: {
+    mode?: number;
+    /** Modification (and access) time to record instead of now (the kernel writing back an open file). */
+    times?: { mtime: number; mtimeNs?: number; atime?: number; atimeNs?: number };
+  }): Promise<void> {
     for (const vp of this.virtualProviders) {
       if (vp.writeFile(path, data)) return;
     }
+    path = await this._canon(path, true);
     const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
     const parent = await this._get(parentPath);
     if (!parent) throw fsError('ENOENT', `ENOENT: no such file or directory, open '${path}'`);
@@ -934,9 +1131,10 @@ export class FileSystem {
       type: 'file',
       content,
       mode: options?.mode ?? existing?.mode ?? 0o644,
-      mtime: now,
+      mtime: options?.times?.mtime ?? now,
       ctime: existing?.ctime ?? now,
       size: content.length,
+      ...(options?.times ? { mtimeNs: options.times.mtimeNs || undefined, atime: options.times.atime, atimeNs: options.times.atimeNs || undefined } : {}),
     });
     this._emitChange('write', path);
   }
@@ -955,7 +1153,7 @@ export class FileSystem {
     combined.set(existing);
     combined.set(append, existing.length);
     // Through a symlink, append to its target rather than replacing the link
-    const target = this.virtualProviders.some(vp => vp.handles(path)) ? path : await this._resolve(path);
+    const target = this.virtualProviders.some(vp => vp.handles(path)) ? path : await this._canon(path, true);
     await this.writeFile(target, combined);
   }
 
@@ -964,7 +1162,7 @@ export class FileSystem {
       const parts = path.split('/').filter(Boolean);
       let current = '';
       for (const part of parts) {
-        current += '/' + part;
+        current = await this._canon(current + '/' + part, true);
         const existing = await this._get(current);
         if (!existing) {
           await this._put(this._makeNode(current, 'dir'));
@@ -976,6 +1174,7 @@ export class FileSystem {
       return;
     }
 
+    path = await this._canon(path, false);
     const existing = await this._get(path);
     if (existing) throw fsError('EEXIST', `EEXIST: file already exists, mkdir '${path}'`);
 
@@ -998,8 +1197,10 @@ export class FileSystem {
       }
     }
 
+    const shown = path;
+    path = await this._canon(path, true);
     const node = await this._get(path);
-    if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, readdir '${path}'`);
+    if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, readdir '${shown}'`);
     if (node.type !== 'dir') throw fsError('ENOTDIR', `ENOTDIR: not a directory '${path}'`);
 
     const entries: string[] = [...await this._childNames(path)];
@@ -1040,14 +1241,21 @@ export class FileSystem {
    * callers (node's fs.unlinkSync) that list or stat the directory right after.
    */
   unlinkNow(path: string): Promise<void> {
-    const done = this.unlink(path); // reads the cached node before it is dropped below
+    // Take the cached node before it is dropped below (unlink() canonicalizes asynchronously)
+    const cached = this.cache.get(path);
+    const done = cached ? this._unlinkNode(path, cached) : this.unlink(path);
     this.cache.set(path, undefined);
+    this._canonDirs.clear();
     this._noteKey(path, false);
     return done;
   }
 
   async unlink(path: string): Promise<void> {
-    const node = await this._get(path);
+    path = await this._canon(path, false);
+    return this._unlinkNode(path, await this._get(path));
+  }
+
+  private async _unlinkNode(path: string, node: FSNode | undefined): Promise<void> {
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, unlink '${path}'`);
     if (node.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, unlink '${path}'`);
     await this._delete(path);
@@ -1055,6 +1263,7 @@ export class FileSystem {
   }
 
   async rmdir(path: string): Promise<void> {
+    path = await this._canon(path, false);
     const node = await this._get(path);
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, rmdir '${path}'`);
     if (node.type !== 'dir') throw fsError('ENOTDIR', `ENOTDIR: not a directory '${path}'`);
@@ -1066,6 +1275,7 @@ export class FileSystem {
   }
 
   async rm(path: string, options?: { recursive?: boolean }): Promise<void> {
+    path = await this._canon(path, false);
     const node = await this._get(path);
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, rm '${path}'`);
 
@@ -1088,6 +1298,8 @@ export class FileSystem {
   }
 
   async rename(oldPath: string, newPath: string): Promise<void> {
+    oldPath = await this._canon(oldPath, false);
+    newPath = await this._canon(newPath, false);
     const node = await this._get(oldPath);
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, rename '${oldPath}'`);
 
@@ -1109,27 +1321,37 @@ export class FileSystem {
       // Prevent renaming a file over a directory
       const existing = await this._get(newPath);
       if (existing?.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, rename '${newPath}'`);
-      await this._put({ ...node, path: newPath, mtime: Date.now() });
+      await this._put({ ...node, path: newPath, ctime: Date.now() }); // rename keeps mtime (rsync -a, make)
       await this._delete(oldPath);
     }
     this._emitChange('rename', oldPath, newPath);
   }
 
   async chmod(path: string, mode: number): Promise<void> {
+    path = await this._canon(path, true);
     const node = await this._get(path);
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, chmod '${path}'`);
     await this._put({ ...node, mode });
   }
 
-  /** Set modification time (utimensat). There is no separate atime; it follows mtime. */
-  async utimes(path: string, _atimeMs: number, mtimeMs: number): Promise<void> {
+  /**
+   * Set access and modification times (utimensat) of `path` itself (a
+   * symlink is not followed). `ns`: nanoseconds past each millisecond time.
+   * An atime equal to the mtime isn't stored: atime then follows mtime.
+   */
+  async utimes(path: string, atimeMs: number, mtimeMs: number, ns?: { atime?: number; mtime?: number }): Promise<void> {
+    path = await this._canon(path, false);
     const node = await this._get(path);
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, utime '${path}'`);
-    await this._put({ ...node, mtime: mtimeMs });
+    const mtimeNs = ns?.mtime || undefined;
+    const atimeNs = ns?.atime || undefined;
+    const sameA = atimeMs === mtimeMs && atimeNs === mtimeNs;
+    await this._put({ ...node, mtime: mtimeMs, mtimeNs, atime: sameA ? undefined : atimeMs, atimeNs: sameA ? undefined : atimeNs });
   }
 
   // isomorphic-git compatibility: symlink support
   async symlink(target: string, path: string): Promise<void> {
+    path = await this._canon(path, false);
     const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
     const parent = await this._get(parentPath);
     if (!parent) throw fsError('ENOENT', `ENOENT: no such file or directory '${parentPath}'`);
@@ -1148,6 +1370,7 @@ export class FileSystem {
   }
 
   async readlink(path: string): Promise<string> {
+    path = await this._canon(path, false);
     const node = await this._get(path);
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, readlink '${path}'`);
     if (node.type !== 'symlink') throw fsError('EINVAL', `EINVAL: not a symlink '${path}'`);

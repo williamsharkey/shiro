@@ -198,7 +198,7 @@ describe('WasiRT constructor', () => {
       'environ_get', 'environ_sizes_get',
       'clock_time_get', 'clock_res_get',
       'fd_advise', 'fd_allocate',
-      'fd_close', 'fd_datasync', 'fd_fdstat_get', 'fd_fdstat_set_flags',
+      'fd_close', 'fd_datasync', 'fd_fdstat_get', 'fd_fdstat_set_flags', 'fd_fdstat_set_rights',
       'fd_filestat_get', 'fd_filestat_set_size', 'fd_filestat_set_times',
       'fd_pread', 'fd_prestat_get', 'fd_prestat_dir_name',
       'fd_pwrite', 'fd_read', 'fd_readdir', 'fd_renumber',

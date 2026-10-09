@@ -21,7 +21,8 @@ import { grepCmd } from './commands/grep';
 import { sedCmd } from './commands/sed';
 import { fetchCmd, curlCmd } from './commands/fetch';
 import { globCmd } from './commands/glob';
-import { jsEvalCmd, nodeCmd } from './commands/jseval';
+import { jsEvalCmd } from './commands/jseval/js-eval-cmd';
+import './node-compat/page-globals'; // before anything can patch fetch/timers; node-compat loads lazily
 import { npmCmd } from './commands/npm';
 import { npxCmd } from './commands/npx';
 import { viCmd } from './commands/vi';
@@ -55,7 +56,7 @@ import { titleCmd } from './commands/title';
 import { mkTempCmd } from './commands/mktemp';
 import { tputCmd } from './commands/tput';
 import { sttyCmd } from './commands/stty';
-import { gzipCmd, gunzipCmd } from './commands/gzip';
+import { gzipCmd, gunzipCmd, zcatCmd } from './commands/gzip';
 import { wgetCmd } from './commands/wget';
 import { pgrepCmd, pkillCmd } from './commands/pgrep';
 import { nprocCmd } from './commands/nproc';
@@ -246,7 +247,9 @@ async function main() {
   registerCommand(commands, curlCmd, 'src/commands/fetch.ts');
   registerCommand(commands, globCmd, 'src/commands/glob.ts');
   registerCommand(commands, jsEvalCmd, 'src/commands/jseval.ts');
-  registerCommand(commands, nodeCmd, 'src/commands/jseval.ts');
+  // Lazy: node-compat (~150 KB) loads with the first node script
+  registerCommand(commands, lazyCommand('node', 'Execute JavaScript files (browser JS VM)',
+    () => import('./commands/jseval/node-cmd').then(m => m.nodeCmd)), 'src/commands/jseval.ts');
   registerCommand(commands, npmCmd, 'src/commands/npm.ts');
   registerCommand(commands, npxCmd, 'src/commands/npx.ts');
   registerCommand(commands, lazyCommand('build', 'Bundle TypeScript/JavaScript using esbuild-wasm',
@@ -316,6 +319,7 @@ async function main() {
   registerCommand(commands, sttyCmd, 'src/commands/stty.ts');
   registerCommand(commands, gzipCmd, 'src/commands/gzip.ts');
   registerCommand(commands, gunzipCmd, 'src/commands/gzip.ts');
+  registerCommand(commands, zcatCmd, 'src/commands/gzip.ts');
   registerCommand(commands, wgetCmd, 'src/commands/wget.ts');
   registerCommand(commands, pgrepCmd, 'src/commands/pgrep.ts');
   registerCommand(commands, pkillCmd, 'src/commands/pgrep.ts');
@@ -391,6 +395,12 @@ async function main() {
     () => import('./commands/zstd').then(m => m.zstdCmd)), 'src/commands/zstd.ts');
   registerCommand(commands, lazyCommand('unzstd', 'Decompress Zstandard files',
     () => import('./commands/zstd').then(m => m.unzstdCmd)), 'src/commands/zstd.ts');
+  registerCommand(commands, lazyCommand('bzcat', 'Decompress bzip2 files to stdout',
+    () => import('./commands/bzip2').then(m => m.bzcatCmd)), 'src/commands/bzip2.ts');
+  registerCommand(commands, lazyCommand('xzcat', 'Decompress XZ files to stdout',
+    () => import('./commands/xz').then(m => m.xzcatCmd)), 'src/commands/xz.ts');
+  registerCommand(commands, lazyCommand('zstdcat', 'Decompress Zstandard files to stdout',
+    () => import('./commands/zstd').then(m => m.zstdcatCmd)), 'src/commands/zstd.ts');
 
   // Web API commands (browser-native, no CDN deps)
   registerCommand(commands, speakCmd, 'src/commands/speak.ts');

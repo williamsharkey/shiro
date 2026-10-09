@@ -21,6 +21,8 @@ export class WindowTerminal implements TerminalLike {
   private forceExitCallback: (() => void) | null = null;
   private rawModeCallback: ((key: string) => void) | null = null;
   private lastCtrlCTime = 0;
+  /** Keys typed while nothing reads them (a command starting): the next job's */
+  private typeAhead = '';
   private resizeCallbacks: ((cols: number, rows: number) => void)[] = [];
   private resizeObserver: ResizeObserver;
   private disposed = false;
@@ -93,6 +95,10 @@ export class WindowTerminal implements TerminalLike {
       // Through writeOutput, so secret masking applies to kernel programs too
       onOutput: (bytes) => this.writeOutput(ttyDecoder.decode(bytes, { stream: true })),
     });
+    this.tty.onJobForeground = () => {
+      if (this.typeAhead) this.tty.pty.input(this.typeAhead);
+      this.typeAhead = '';
+    };
 
     // Route input
     this.term.onData((data) => this.handleInput(data));
@@ -194,6 +200,8 @@ export class WindowTerminal implements TerminalLike {
       this.rawModeCallback(data);
       return;
     }
+
+    this.typeAhead = (this.typeAhead + data).slice(-4096);
   }
 
   getBufferContent(): string {

@@ -1,0 +1,27 @@
+{
+ "suite": "wasi-testsuite",
+ "title": "Syscalls: wasi-testsuite (wasm32-wasip1)",
+ "note": "WebAssembly/wasi-testsuite prebuilt wasip1 modules (C, Rust, AssemblyScript) run as Shiro WASI processes with their root directory preopened as \"/\", judged like the suite's own runner (exit code, stdout when given). Wasmtime passes all of them.",
+ "files": {
+  "assemblyscript": {
+   "pass": 12,
+   "total": 12,
+   "failures": []
+  },
+  "c": {
+   "pass": 14,
+   "total": 14,
+   "failures": []
+  },
+  "rust": {
+   "pass": 45,
+   "total": 46,
+   "failures": [
+    {
+     "name": "path_link",
+     "reason": "exit 134, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/path_link.rs:89:10: creating a link in the same directory: Errno { code: 63, name: \"PERM\", message: \"Operation not permitted.\" } note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace wasm trap: unreachable"
+    }
+   ]
+  }
+ }
+}

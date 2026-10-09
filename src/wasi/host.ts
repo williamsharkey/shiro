@@ -105,6 +105,9 @@ async function findWasm(kernel: Kernel, proc: Process, path: string): Promise<{ 
     }
   }
   for (const p of candidates) {
+    // A path known to be missing: skip it without stat()'s ENOENT (an Error
+    // per PATH entry made every builtin spawn pay for six exceptions)
+    if (fs.lookupCached?.(p) === null) continue;
     let image: Uint8Array;
     try {
       const st = await fs.stat(p);
@@ -298,13 +301,22 @@ export function wasmRunner(
   module: WebAssembly.Module, image?: Uint8Array, extraPreopens: string[] = [], mounts?: Record<string, string>,
   /** The program's own path (/proc/self/exe, an empty-name exec); default: `proc.path` found on PATH */
   exe?: string,
+  /** Preopen only `mounts` and `extraPreopens`, not the default "/" and "." (a runtime given only `--dir`s) */
+  bare = false,
 ): Runner {
   return async (proc, kernel) => {
     const mode = wasmProcessMode();
     if (mode === 'none') throw new Error('WASM processes need SharedArrayBuffer or JSPI');
-    if (!proc.env.PWD) proc.env.PWD = proc.cwd;
+    if (exe) proc.data.exe = exe; // /proc/PID/exe (procfs), however the guest spells the path
+    if (!proc.env.PWD) {
+      // The cwd as the program sees it (Go on wasip1 takes it from $PWD): under a
+      // '/' mount, its path inside the mount, left unset when that is just "/"
+      const root = bare ? mounts?.['/'] : mounts?.['/'] ?? '/';
+      if (root === '/') proc.env.PWD = proc.cwd;
+      else if (root && proc.cwd.startsWith(root + '/')) proc.env.PWD = proc.cwd.slice(root.length);
+    }
     installWasiSyscalls(kernel);
-    const preopens = await openPreopens(kernel, proc, extraPreopens, mounts);
+    const preopens = await openPreopens(kernel, proc, extraPreopens, mounts, bare);
     if (typeof preopens === 'number') throw new Error(`cannot open preopened directories (errno ${-preopens})`);
     if (mode === 'jspi') return runJspi(kernel, proc, module, preopens);
     const self = exe ?? (await findWasm(kernel, proc, proc.path).catch(() => null))?.path;
@@ -313,10 +325,12 @@ export function wasmRunner(
 }
 
 /** "/", any extra directories, and "." (the cwd) as WASI preopens, close-on-exec so children get their own. */
-async function openPreopens(kernel: Kernel, proc: Process, extra: string[] = [], mounts: Record<string, string> = {}): Promise<Preopen[] | number> {
+async function openPreopens(kernel: Kernel, proc: Process, extra: string[] = [], mounts: Record<string, string> = {}, bare = false): Promise<Preopen[] | number> {
   const out: Preopen[] = [];
   const mountList = Object.entries(mounts).filter(([guest]) => guest !== '/' && !extra.includes(guest));
-  for (const [name, path] of [['/', '/'], ...extra.map(d => [d, d]), ...mountList, ['.', proc.cwd]]) {
+  // (a '/' mount replaces the root preopen: the program sees that directory as /)
+  const root = bare ? (mounts['/'] ? [['/', mounts['/']]] : []) : [['/', mounts['/'] ?? '/']];
+  for (const [name, path] of [...root, ...extra.map(d => [d, d]), ...mountList, ...(bare ? [] : [['.', proc.cwd]])]) {
     const f = await kernel.open(proc, path, A.O_RDONLY | A.O_DIRECTORY);
     if (typeof f === 'number') {
       if (mounts[name] === path) continue; // a mount whose directory is missing: leave the path as it is

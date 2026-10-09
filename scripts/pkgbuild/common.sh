@@ -45,6 +45,22 @@ unpack() {
   echo "$PKG_WORK/build/$dir"
 }
 
+# fetch_git URL TAG COMMIT DIR -> shallow clone of TAG into $PKG_WORK/build/DIR,
+# checked against the pinned COMMIT; prints the source dir
+fetch_git() {
+  local url=$1 tag=$2 commit=$3 dir="$PKG_WORK/build/$4"
+  rm -rf "$dir"
+  mkdir -p "$PKG_WORK/build"
+  git -c advice.detachedHead=false clone -q --depth 1 --branch "$tag" "$url" "$dir"
+  local got
+  got=$(git -C "$dir" rev-parse HEAD)
+  if [ "$got" != "$commit" ]; then
+    echo "commit mismatch for $url $tag: expected $commit, got $got" >&2
+    exit 1
+  fi
+  echo "$dir"
+}
+
 setup_wasi_sdk() {
   if [ -z "${WASI_SDK:-}" ]; then
     local tgz

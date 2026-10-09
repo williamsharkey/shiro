@@ -21,8 +21,11 @@
 import type { FileSystem } from './filesystem';
 import type { CommandContext } from './commands/index';
 import { isWebc, parseWebc, type WebcPackage } from './webc';
-import { readTarball, type TarEntry } from './utils/tar';
+import type { TarEntry } from './utils/tar';
+// utils/tar (~65 KB with its codecs) loads with the first package that needs it
+const readTarball = (bytes: Uint8Array) => import('./utils/tar').then(m => m.readTarball(bytes));
 import builtinIndexJson from './pkg-index.json';
+import { untar, gunzip, type TarEntry as PkgTarEntry } from './pkg-tar';
 
 // ── Index format ─────────────────────────────────────────────────────
 
@@ -37,10 +40,11 @@ export type KernelFeature =
   | 'sync-fs'         // on-demand synchronous file access (large trees)
   | 'wasix-stack'     // WASIX stack_checkpoint/stack_restore (setjmp, fork): host-side stack capture
   | 'dynamic-linking' // modules importing env.__indirect_function_table / shared libraries
-  | 'mounts';         // package volumes mounted at fixed paths (clang's /sysroot and /lib)
+  | 'mounts'          // package volumes mounted at fixed paths (clang's /sysroot and /lib)
+  | 'x86';            // x86-64 Linux ELF in Blink (src/x86-engine): needs SharedArrayBuffer
 
 const KERNEL_FEATURES: KernelFeature[] = [
-  'wasix', 'processes', 'threads', 'sockets', 'blocking-stdin', 'tty', 'sync-fs', 'wasix-stack', 'dynamic-linking', 'mounts',
+  'wasix', 'processes', 'threads', 'sockets', 'blocking-stdin', 'tty', 'sync-fs', 'wasix-stack', 'dynamic-linking', 'mounts', 'x86',
 ];
 
 /** `x86_64-linux`: static x86-64 Linux ELF programs, run in the Blink engine (src/x86-engine) */
@@ -57,6 +61,12 @@ export interface PkgFile {
   size: number;
   /** When `url` is a WebC container: the atom to take, or a volume subtree to copy */
   webc?: { atom?: string; volume?: string; dir?: string };
+  /**
+   * The download is compressed: "gzip" is one file (installed at `path`),
+   * "tar.gz" a tree unpacked into the directory `path`. sha256/size are the
+   * download's.
+   */
+  unpack?: 'gzip' | 'tar.gz';
   /**
    * When `url` is a tarball (gzipped or not, e.g. an npm package): `member`
    * takes that file out of it; `unpack` extracts the (member's) tar archive
@@ -105,6 +115,12 @@ export interface PkgEntry {
   bin: Record<string, PkgBin>;
   /** Package directories preloaded for every run (WASI here reads files up front) */
   preload?: string[];
+  /**
+   * Symlinks outside the package root, made at install and removed with it:
+   * absolute link path → path inside the package (e.g. "/usr/share/vim" →
+   * "share/vim", where the program looks for its data).
+   */
+  links?: Record<string, string>;
   /**
    * Package directories the program sees at fixed absolute paths (guest
    * path → path relative to the package root), e.g. clang's sysroot at
@@ -173,6 +189,7 @@ export function parseIndex(doc: unknown): PkgIndex {
       if (typeof f.sha256 !== 'string' || !SHA_RE.test(f.sha256)) fail(`${where}: bad sha256 for ${f.path}`);
       if (typeof f.size !== 'number' || f.size < 0) fail(`${where}: bad size for ${f.path}`);
       if (f.webc && !f.webc.atom && !f.webc.volume) fail(`${where}: webc file ${f.path} names no atom or volume`);
+      if (f.unpack !== undefined && f.unpack !== 'gzip' && f.unpack !== 'tar.gz') fail(`${where}: bad unpack for ${f.path}`);
       if (f.tar && !f.tar.member && !f.tar.unpack) fail(`${where}: tar file ${f.path} names no member and doesn't unpack`);
       if (f.tar?.member && !safeRelPath(f.tar.member)) fail(`${where}: bad tar member ${f.tar.member}`);
       paths.add(f.path);
@@ -181,7 +198,7 @@ export function parseIndex(doc: unknown): PkgIndex {
     for (const [cmd, b] of Object.entries<any>(p.bin)) {
       if (!NAME_RE.test(cmd) && !/^[a-z0-9][a-z0-9._+\[-]*$/.test(cmd)) fail(`${where}: bad command name ${cmd}`);
       // a listed file, or one inside a directory a tarball unpacks into
-      const inUnpacked = typeof b?.file === 'string' && p.files.some((f: any) => f.tar?.unpack && b.file.startsWith(f.path + '/'));
+      const inUnpacked = typeof b?.file === 'string' && p.files.some((f: any) => (f.tar?.unpack || f.unpack === 'tar.gz') && b.file.startsWith(f.path + '/'));
       if (typeof b?.file !== 'string' || !(paths.has(b.file) || inUnpacked)) fail(`${where}: command ${cmd} runs unknown file ${b?.file}`);
       if (b.args !== undefined && (!Array.isArray(b.args) || b.args.some((a: unknown) => typeof a !== 'string'))) fail(`${where}: bad args for ${cmd}`);
       if (b.self !== undefined && (typeof b.self !== 'string' || !p.bin[b.self])) fail(`${where}: ${cmd} names unknown self command ${b.self}`);
@@ -197,6 +214,13 @@ export function parseIndex(doc: unknown): PkgIndex {
     for (const k of ['needs', 'wants'] as const) {
       if (p[k] === undefined) continue;
       if (!Array.isArray(p[k]) || p[k].some((x: string) => !KERNEL_FEATURES.includes(x as KernelFeature))) fail(`${where}: bad ${k}`);
+    }
+    if (p.links !== undefined) {
+      if (!p.links || typeof p.links !== 'object') fail(`${where}: bad links`);
+      for (const [link, target] of Object.entries<any>(p.links)) {
+        if (!/^\/(usr|etc|lib|var|opt)\//.test(link) || !safeRelPath(link.slice(1)) || link.startsWith(PKG_BIN_DIR + '/') || link.startsWith(PKG_ROOT + '/')) fail(`${where}: bad link ${link}`);
+        if (typeof target !== 'string' || !safeRelPath(target)) fail(`${where}: bad link target for ${link}`);
+      }
     }
     if (p.deps !== undefined && (!Array.isArray(p.deps) || p.deps.some((x: unknown) => typeof x !== 'string'))) fail(`${where}: bad deps`);
   }
@@ -260,6 +284,7 @@ const MODE_FEATURES: Record<string, KernelFeature[]> = {
   none: [],
 };
 let runtimeMode: 'sab' | 'jspi' | 'none' | null = null;
+let x86Engine = false;
 
 /** Look up (once per call site) how WASM processes run here; gates use the result. */
 export async function refreshRuntimeMode(): Promise<'sab' | 'jspi' | 'none'> {
@@ -268,6 +293,12 @@ export async function refreshRuntimeMode(): Promise<'sab' | 'jspi' | 'none'> {
     runtimeMode = wasmProcessMode();
   } catch {
     runtimeMode = 'none';
+  }
+  try {
+    const { blinkSupported } = await import('./x86-engine/blink');
+    x86Engine = blinkSupported();
+  } catch {
+    x86Engine = false;
   }
   return runtimeMode;
 }
@@ -280,6 +311,7 @@ export function kernelFeatures(): Set<string> {
   const k = (globalThis as any).__shiroKernel;
   const out = new Set<string>(Array.isArray(k?.features) ? k.features : []);
   for (const f of MODE_FEATURES[runtimeMode ?? 'none']) out.add(f);
+  if (x86Engine) out.add('x86');
   return out;
 }
 
@@ -409,12 +441,22 @@ async function installOne(fs: FileSystem, entry: PkgEntry, opts: PkgOptions): Pr
       fetched.set(f.sha256, bytes);
     }
     const dest = `${root}/${f.path}`;
+    if (f.unpack === 'gzip') {
+      const data = await gunzip(bytes);
+      await writeFileP(fs, dest, data, fileMode(entry, f.path));
+      size += data.length;
+      continue;
+    }
+    if (f.unpack === 'tar.gz') {
+      size += await unpackTree(fs, dest, untar(await gunzip(bytes)));
+      continue;
+    }
     if (f.tar) {
       size += await installFromTar(fs, f, bytes, dest, tarballs, entry.name);
       continue;
     }
     if (!f.webc) {
-      await writeFileP(fs, dest, bytes);
+      await writeFileP(fs, dest, bytes, fileMode(entry, f.path));
       size += bytes.length;
       continue;
     }
@@ -476,6 +518,16 @@ async function installOne(fs: FileSystem, entry: PkgEntry, opts: PkgOptions): Pr
     // search; drop it while a package provides the real program.
     if (b.shadow !== false) await removeBuiltinShim(fs, cmd);
   }
+  for (const [link, target] of Object.entries(entry.links || {})) {
+    const existing = await lstatSafe(fs, link);
+    if (existing && existing.type !== 'symlink') {
+      log(`warning: not replacing ${link}`);
+      continue;
+    }
+    if (existing) await fs.unlink(link);
+    await fs.mkdir(link.substring(0, link.lastIndexOf('/')) || '/', { recursive: true });
+    await fs.symlink(`${root}/${target}`, link);
+  }
   log(`Setting up ${entry.name} (${entry.version}) ...`);
   return { name: entry.name, version: entry.version, installedAt: Date.now(), size, bins, entry };
 }
@@ -492,9 +544,36 @@ async function lstatSafe(fs: FileSystem, path: string) {
   try { return await fs.lstat(path); } catch { return null; }
 }
 
-async function writeFileP(fs: FileSystem, path: string, data: Uint8Array): Promise<void> {
+async function writeFileP(fs: FileSystem, path: string, data: Uint8Array, mode?: number): Promise<void> {
   await fs.mkdir(path.substring(0, path.lastIndexOf('/')) || '/', { recursive: true });
-  await fs.writeFile(path, data, { mode: path.endsWith('.wasm') ? 0o755 : 0o644 });
+  await fs.writeFile(path, data, { mode: mode ?? (path.endsWith('.wasm') ? 0o755 : 0o644) });
+}
+
+/** Programs are executable: .wasm files, and an x86 package's bin/, libexec/ and sbin/ files. */
+function fileMode(entry: PkgEntry, rel: string): number {
+  if (rel.endsWith('.wasm')) return 0o755;
+  if (entry.abi === 'x86_64-linux' && /^(bin|sbin|libexec)\//.test(rel)) return 0o755;
+  return 0o644;
+}
+
+/** Write a tar's entries under `dest`; returns the bytes written. */
+async function unpackTree(fs: FileSystem, dest: string, entries: PkgTarEntry[]): Promise<number> {
+  let size = 0;
+  await fs.mkdir(dest, { recursive: true });
+  for (const e of entries) {
+    if (!safeRelPath(e.path)) continue;
+    const p = `${dest}/${e.path}`;
+    if (e.type === 'dir') { await fs.mkdir(p, { recursive: true }); continue; }
+    await fs.mkdir(p.substring(0, p.lastIndexOf('/')), { recursive: true });
+    if (e.type === 'symlink') {
+      if (await lstatSafe(fs, p)) await fs.unlink(p);
+      await fs.symlink(e.linkname, p);
+      continue;
+    }
+    await fs.writeFile(p, e.data, { mode: e.mode & 0o777 || 0o644 });
+    size += e.data.length;
+  }
+  return size;
 }
 
 /** A file from a tarball (PkgFile.tar). Returns the bytes written. */
@@ -544,6 +623,11 @@ async function installFromTar(
 }
 
 async function removeFiles(fs: FileSystem, pkg: InstalledPkg): Promise<void> {
+  for (const link of Object.keys(pkg.entry.links || {})) {
+    try {
+      if ((await fs.readlink(link)).startsWith(`${PKG_ROOT}/${pkg.name}/`)) await fs.unlink(link);
+    } catch { /* gone or not ours */ }
+  }
   for (const cmd of pkg.bins) {
     const link = `${PKG_BIN_DIR}/${cmd}`;
     try {
@@ -659,6 +743,13 @@ export async function runPackageBinary(binPath: string, argv0: string, args: str
     }
   }
 
+  if (entry?.abi === 'x86_64-linux') {
+    const { runElfWithBlink } = await import('./x86-engine/blink');
+    return runElfWithBlink(binPath, [...(bin?.args || []), ...args], {
+      fs: ctx.fs, cwd: ctx.cwd, env: { ...ctx.env }, stdin: ctx.stdin,
+      writeStdout: (t) => { ctx.stdout += t; }, writeStderr: (t) => { ctx.stderr += t; },
+    }, argv0);
+  }
   const bytes = await ctx.fs.readFile(binPath) as Uint8Array;
   let mod = moduleCache.get(binPath);
   if (!mod) {
@@ -693,12 +784,17 @@ export async function packageKernelProgram(
   const name = packageOfPath(binPath);
   const entry = name ? (await readStatus(fs))[name]?.entry : undefined;
   if (!entry || entry.abi === 'wasi_unstable') return null;
-  if (await refreshRuntimeMode() === 'none' || missingFeatures(entry).length) return null;
+  const mode = await refreshRuntimeMode();
+  if ((mode === 'none' && entry.abi !== 'x86_64-linux') || missingFeatures(entry).length) return null;
   // `python -m pip/venv` are Shiro's (runPackageBinary)
   if (name === 'python3' && pythonFrontend(args)) return null;
   const rel = binPath.slice(PKG_ROOT.length + entry.name.length + 2);
   const bin = entry.bin[argv0]?.file === rel ? entry.bin[argv0] : Object.values(entry.bin).find(b => b.file === rel);
   if (bin?.argv0 === 'path' && invokedPath) argv0 = invokedPath;
+  if (entry.abi === 'x86_64-linux') {
+    const { blinkRunner } = await import('./x86-engine/blink');
+    return { argv: [argv0, ...(bin?.args || []), ...args], run: blinkRunner(binPath) };
+  }
   const bytes = await fs.readFile(binPath) as Uint8Array;
   let mod = moduleCache.get(binPath);
   if (!mod) {
@@ -732,6 +828,22 @@ export async function packageMountsForPath(fs: FileSystem, path: string): Promis
   if (!name) return undefined;
   const entry = (await readStatus(fs))[name]?.entry;
   return entry ? entryMounts(entry, name) : undefined;
+}
+
+/**
+ * The arguments an installed command inserts after argv[0] (`egrep` is
+ * `grep -E`, `zcat` is `gzip -dc`), when `path` is its /usr/bin link: what
+ * the kernel adds when a program execs the command by path.
+ */
+export async function packageArgsForPath(fs: FileSystem, path: string): Promise<string[] | undefined> {
+  if (!path.startsWith(PKG_BIN_DIR + '/')) return undefined;
+  const cmd = path.slice(PKG_BIN_DIR.length + 1);
+  if (!packageShadows(fs).has(cmd) && !(await loadPackageShadows(fs)).has(cmd)) return undefined;
+  for (const pkg of Object.values(await readStatus(fs))) {
+    const args = pkg.entry?.bin[cmd]?.args;
+    if (args?.length) return args;
+  }
+  return undefined;
 }
 
 /**

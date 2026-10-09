@@ -17,6 +17,8 @@ set -euo pipefail
 PKG_WORK=${PKG_WORK:-$PWD/.pkgbuild}
 PKG_OUT=${PKG_OUT:-$PKG_WORK/out}
 mkdir -p "$PKG_WORK/dl" "$PKG_OUT"
+# Reproducible builds: __DATE__/__TIME__ and friends come from here
+export SOURCE_DATE_EPOCH=1704067200
 PKGBUILD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # musl.cc's x86_64 cross toolchain: gcc 11.2.1, musl 1.2.2
@@ -76,7 +78,8 @@ setup_musl() {
   export MUSL_CROSS
   export PATH="$MUSL_CROSS/bin:$PATH"
   HOST=x86_64-linux-musl
-  export CC="$HOST-gcc" CXX="$HOST-g++" AR="$HOST-ar" RANLIB="$HOST-ranlib" STRIP="$HOST-strip"
+  # -static in CC too: libtool drops it from LDFLAGS
+  export CC="$HOST-gcc -static" CXX="$HOST-g++ -static" AR="$HOST-ar" RANLIB="$HOST-ranlib" STRIP="$HOST-strip"
   export CFLAGS="-Os -fno-pie -no-pie" LDFLAGS="-static -s -no-pie"
   # Static dependencies (ncurses, zlib, ...) are installed here by deps_* below
   SYSROOT="$PKG_WORK/sysroot-x86_64"
@@ -117,6 +120,16 @@ deps_zlib() {
   (cd "$src" && CFLAGS="-Os -fPIC" ./configure --static --prefix="$SYSROOT" >configure.log && make -j"$(nproc)" >make.log && make install >install.log)
 }
 
+# deps_libevent: static libevent 2.1 (core, no OpenSSL) into $SYSROOT
+deps_libevent() {
+  [ -f "$SYSROOT/lib/libevent_core.a" ] && return 0
+  local src
+  src=$(unpack "$(fetch https://github.com/libevent/libevent/releases/download/release-2.1.12-stable/libevent-2.1.12-stable.tar.gz 92e6de1be9ec176428fd2367677e61ceffc2ee1cb119035037a27d346b0403bb)" libevent-2.1.12-stable)
+  (cd "$src" && ./configure --host=$HOST --prefix="$SYSROOT" --disable-shared --enable-static \
+      --disable-openssl --disable-samples --disable-libevent-regress --disable-debug-mode >configure.log 2>&1 &&
+    make -j"$(nproc)" >make.log 2>&1 && make install >install.log 2>&1)
+}
+
 # install_bin SRC DEST -> $PKG_OUT/DEST (stripped static ELF), prints sha256
 install_bin() {
   local src=$1 dst="$PKG_OUT/$2"
@@ -125,4 +138,86 @@ install_bin() {
   chmod 755 "$dst"
   if file "$dst" 2>/dev/null | grep -q dynamic; then echo "$dst is not static" >&2; exit 1; fi
   sha256sum "$dst"
+}
+
+# gnu_src NAME VERSION SHA256 [EXT]: unpack ftp.gnu.org's NAME-VERSION tarball; prints the source dir
+gnu_src() {
+  local ext=${4:-tar.xz}
+  unpack "$(fetch "https://ftp.gnu.org/gnu/$1/$1-$2.$ext" "$3")" "$1-$2"
+}
+
+# configure_make SRC [configure args...]: ./configure with the musl compiler,
+# then make. The build host is x86-64 Linux like the target, so configure's
+# test programs (static musl binaries) run natively: no cross-compile guesses.
+# MAKEINFO=true: manuals aren't built. MAKE_ARGS: extra make arguments
+# (libtool projects need LDFLAGS=-all-static to link statically).
+configure_make() {
+  local src=$1
+  shift
+  (cd "$src" && ./configure --prefix=/usr --sysconfdir=/etc --localstatedir=/var --disable-nls "$@" \
+      >configure.log 2>&1 && make -j"$(nproc)" MAKEINFO=true ${MAKE_ARGS:+"$MAKE_ARGS"} >make.log 2>&1) || {
+    echo "build failed in $src (see configure.log / make.log)" >&2
+    for f in configure.log make.log; do [ -f "$src/$f" ] && tail -n 20 "$src/$f" >&2; done
+    exit 1
+  }
+}
+
+# deps_openssl: static libssl/libcrypto 3.5 (LTS) into $SYSROOT; OPENSSLDIR=/etc/ssl
+OPENSSL_VERSION=3.5.9
+deps_openssl() {
+  [ -f "$SYSROOT/lib/libssl.a" ] && return 0
+  local src
+  src=$(unpack "$(fetch https://github.com/openssl/openssl/releases/download/openssl-$OPENSSL_VERSION/openssl-$OPENSSL_VERSION.tar.gz 603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a)" openssl-$OPENSSL_VERSION)
+  (cd "$src" && ./Configure linux-x86_64 no-shared no-tests no-docs no-module no-dso no-afalgeng no-engine \
+      --prefix="$SYSROOT" --libdir=lib --openssldir=/etc/ssl -static $CFLAGS >configure.log 2>&1 &&
+    make -j"$(nproc)" >make.log 2>&1 && make install_sw >install.log 2>&1) || { echo "openssl build failed in $src" >&2; exit 1; }
+}
+
+# deps_curl: static libcurl (OpenSSL, zlib) into $SYSROOT, for git
+CURL_VERSION=8.22.0
+deps_curl() {
+  [ -f "$SYSROOT/lib/libcurl.a" ] && return 0
+  deps_zlib
+  deps_openssl
+  local src
+  src=$(unpack "$(fetch https://curl.se/download/curl-$CURL_VERSION.tar.xz f7ef3ae8a22e521f289803fe93543eb64c329b58aa73a9e224dfd915a2a5f4f7)" curl-$CURL_VERSION)
+  (cd "$src" && ./configure --prefix="$SYSROOT" --disable-shared --enable-static --with-openssl="$SYSROOT" --with-zlib="$SYSROOT" \
+      --with-ca-bundle=/etc/ssl/certs/ca-certificates.crt --with-ca-path=/etc/ssl/certs \
+      --without-libpsl --without-nghttp2 --without-brotli --without-zstd --without-libidn2 --without-librtmp --disable-ldap \
+      --disable-manual --disable-docs --enable-ipv6 >configure.log 2>&1 &&
+    make -j"$(nproc)" LDFLAGS="$LDFLAGS -all-static" >make.log 2>&1 && make install >install.log 2>&1) || { echo "curl build failed in $src" >&2; exit 1; }
+}
+
+# install_prebuilt FILE PKG/PATH: install an upstream static release binary
+# as shipped (not stripped, so it still matches the release)
+install_prebuilt() {
+  local src=$1 dst="$PKG_OUT/$2"
+  mkdir -p "$(dirname "$dst")"
+  cp "$src" "$dst"
+  chmod 755 "$dst"
+  if file "$dst" 2>/dev/null | grep -q dynamic; then echo "$dst is not static" >&2; exit 1; fi
+  sha256sum "$dst"
+}
+
+# install_man PKG SRC[:NAME]...: manual pages into $PKG_OUT/PKG/share/man/manN/
+# (N from NAME's suffix; NAME defaults to SRC's file name). publish.sh links
+# every one into /usr/share/man, where man (pkg install mandoc) finds it.
+install_man() {
+  local pkg=$1 spec src name sec
+  shift
+  for spec in "$@"; do
+    src=${spec%%:*}
+    name=$(basename "${spec#*:}")
+    [ "$spec" = "$src" ] && name=$(basename "$src")
+    sec=${name##*.}
+    mkdir -p "$PKG_OUT/$pkg/share/man/man$sec"
+    cp "$src" "$PKG_OUT/$pkg/share/man/man$sec/$name"
+  done
+}
+
+# man_alias PKG NAME.N TARGET.M: NAME's page is TARGET's (a .so request)
+man_alias() {
+  local sec=${2##*.} tsec=${3##*.}
+  mkdir -p "$PKG_OUT/$1/share/man/man$sec"
+  echo ".so man$tsec/$3" >"$PKG_OUT/$1/share/man/man$sec/$2"
 }

@@ -8,24 +8,8 @@
   "skipped": 0
  },
  "accept03": {
-  "passed": 23,
-  "skipped": 0
- },
- "access01": {
-  "passed": 199,
-  "skipped": 0
- },
- "access02": {
-  "passed": 16,
-  "skipped": 0
- },
- "access03": {
-  "passed": 8,
-  "skipped": 0
- },
- "access04": {
-  "passed": 12,
-  "skipped": 0
+  "passed": 18,
+  "skipped": 5
  },
  "alarm02": {
   "passed": 6,
@@ -51,10 +35,6 @@
   "passed": 7,
   "skipped": 0
  },
- "bind02": {
-  "passed": 1,
-  "skipped": 0
- },
  "bind03": {
   "passed": 3,
   "skipped": 0
@@ -66,10 +46,6 @@
  "bind05": {
   "passed": 8,
   "skipped": 1
- },
- "chdir01": {
-  "passed": 16,
-  "skipped": 0
  },
  "chdir02": {
   "passed": 1,
@@ -83,40 +59,8 @@
   "passed": 32,
   "skipped": 0
  },
- "chmod03": {
-  "passed": 4,
-  "skipped": 0
- },
- "chmod05": {
-  "passed": 1,
-  "skipped": 0
- },
- "chmod06": {
-  "passed": 9,
-  "skipped": 0
- },
- "chmod07": {
-  "passed": 1,
-  "skipped": 0
- },
  "chmod08": {
   "passed": 3,
-  "skipped": 0
- },
- "chmod09": {
-  "passed": 3,
-  "skipped": 0
- },
- "clock_gettime01": {
-  "passed": 16,
-  "skipped": 0
- },
- "clock_gettime02": {
-  "passed": 10,
-  "skipped": 0
- },
- "clock_gettime03": {
-  "passed": 24,
   "skipped": 0
  },
  "clock_gettime04": {
@@ -129,10 +73,6 @@
  },
  "clock_nanosleep02": {
   "passed": 7,
-  "skipped": 0
- },
- "clock_nanosleep03": {
-  "passed": 2,
   "skipped": 0
  },
  "clock_nanosleep04": {
@@ -167,16 +107,8 @@
   "passed": 5,
   "skipped": 0
  },
- "clone09": {
-  "passed": 1,
-  "skipped": 0
- },
  "clone10": {
   "passed": 1,
-  "skipped": 0
- },
- "clone11": {
-  "passed": 6,
   "skipped": 0
  },
  "close01": {
@@ -203,24 +135,8 @@
   "passed": 1,
   "skipped": 0
  },
- "creat04": {
-  "passed": 2,
-  "skipped": 0
- },
  "creat05": {
   "passed": 1,
-  "skipped": 0
- },
- "creat06": {
-  "passed": 8,
-  "skipped": 0
- },
- "creat08": {
-  "passed": 9,
-  "skipped": 0
- },
- "creat09": {
-  "passed": 8,
   "skipped": 0
  },
  "dup01": {
@@ -328,8 +244,8 @@
   "skipped": 0
  },
  "epoll_ctl06": {
-  "passed": 25,
-  "skipped": 0
+  "passed": 20,
+  "skipped": 5
  },
  "epoll_ctl07": {
   "passed": 1,
@@ -371,10 +287,6 @@
   "passed": 4,
   "skipped": 0
  },
- "epoll_wait10": {
-  "passed": 2,
-  "skipped": 0
- },
  "epoll_wait11": {
   "passed": 1,
   "skipped": 0
@@ -403,10 +315,6 @@
   "passed": 1,
   "skipped": 0
  },
- "execve03": {
-  "passed": 6,
-  "skipped": 0
- },
  "execve06": {
   "passed": 1,
   "skipped": 0
@@ -427,32 +335,8 @@
   "passed": 1,
   "skipped": 0
  },
- "fchdir03": {
-  "passed": 1,
-  "skipped": 0
- },
  "fchmod01": {
   "passed": 8,
-  "skipped": 0
- },
- "fchmod02": {
-  "passed": 1,
-  "skipped": 0
- },
- "fchmod03": {
-  "passed": 1,
-  "skipped": 0
- },
- "fchmod04": {
-  "passed": 1,
-  "skipped": 0
- },
- "fchmod05": {
-  "passed": 1,
-  "skipped": 0
- },
- "fchmod06": {
-  "passed": 3,
   "skipped": 0
  },
  "fcntl02": {
@@ -549,14 +433,6 @@
  },
  "fcntl30_64": {
   "passed": 4,
-  "skipped": 0
- },
- "fcntl33": {
-  "passed": 7,
-  "skipped": 0
- },
- "fcntl33_64": {
-  "passed": 7,
   "skipped": 0
  },
  "fcntl34": {
@@ -743,10 +619,6 @@
   "passed": 11,
   "skipped": 0
  },
- "futex_wake04": {
-  "passed": 1,
-  "skipped": 0
- },
  "futex_wake05": {
   "passed": 3,
   "skipped": 0
@@ -766,14 +638,6 @@
  "getcwd04": {
   "passed": 1,
   "skipped": 0
- },
- "getdents01": {
-  "passed": 3,
-  "skipped": 1
- },
- "getdents02": {
-  "passed": 15,
-  "skipped": 1
  },
  "getpid01": {
   "passed": 100,
@@ -811,10 +675,6 @@
   "passed": 3,
   "skipped": 0
  },
- "kill05": {
-  "passed": 1,
-  "skipped": 0
- },
  "kill06": {
   "passed": 1,
   "skipped": 0
@@ -827,24 +687,12 @@
   "passed": 24,
   "skipped": 0
  },
- "leapsec01": {
-  "passed": 1,
-  "skipped": 0
- },
  "link02": {
   "passed": 2,
   "skipped": 0
  },
- "link04": {
-  "passed": 14,
-  "skipped": 0
- },
  "link05": {
   "passed": 1,
-  "skipped": 0
- },
- "link08": {
-  "passed": 4,
   "skipped": 0
  },
  "lseek01": {
@@ -879,30 +727,6 @@
   "passed": 6,
   "skipped": 0
  },
- "mkdir02": {
-  "passed": 1,
-  "skipped": 0
- },
- "mkdir03": {
-  "passed": 11,
-  "skipped": 0
- },
- "mkdir04": {
-  "passed": 1,
-  "skipped": 0
- },
- "mkdir05": {
-  "passed": 1,
-  "skipped": 0
- },
- "mkdir09": {
-  "passed": 6,
-  "skipped": 0
- },
- "mkdirat02": {
-  "passed": 4,
-  "skipped": 0
- },
  "nanosleep01": {
   "passed": 7,
   "skipped": 0
@@ -916,10 +740,6 @@
   "skipped": 0
  },
  "open01": {
-  "passed": 2,
-  "skipped": 0
- },
- "open02": {
   "passed": 2,
   "skipped": 0
  },
@@ -939,32 +759,12 @@
   "passed": 5,
   "skipped": 0
  },
- "open08": {
-  "passed": 6,
-  "skipped": 0
- },
  "open09": {
   "passed": 2,
   "skipped": 0
  },
- "open10": {
-  "passed": 9,
-  "skipped": 0
- },
- "open11": {
-  "passed": 28,
-  "skipped": 0
- },
- "open12": {
-  "passed": 4,
-  "skipped": 0
- },
  "open13": {
   "passed": 14,
-  "skipped": 0
- },
- "open14": {
-  "passed": 5,
   "skipped": 0
  },
  "open15": {
@@ -973,10 +773,6 @@
  },
  "openat01": {
   "passed": 5,
-  "skipped": 0
- },
- "openat02": {
-  "passed": 11,
   "skipped": 0
  },
  "pause01": {
@@ -1151,14 +947,6 @@
   "passed": 1,
   "skipped": 0
  },
- "readlink01": {
-  "passed": 2,
-  "skipped": 0
- },
- "readlink03": {
-  "passed": 8,
-  "skipped": 0
- },
  "readv01": {
   "passed": 10,
   "skipped": 0
@@ -1167,64 +955,8 @@
   "passed": 5,
   "skipped": 0
  },
- "rename01": {
-  "passed": 8,
-  "skipped": 0
- },
- "rename03": {
-  "passed": 8,
-  "skipped": 0
- },
- "rename04": {
-  "passed": 1,
-  "skipped": 0
- },
- "rename05": {
-  "passed": 1,
-  "skipped": 0
- },
- "rename06": {
-  "passed": 1,
-  "skipped": 0
- },
- "rename07": {
-  "passed": 1,
-  "skipped": 0
- },
- "rename08": {
-  "passed": 2,
-  "skipped": 0
- },
- "rename09": {
-  "passed": 1,
-  "skipped": 0
- },
- "rename10": {
-  "passed": 2,
-  "skipped": 0
- },
- "rename12": {
-  "passed": 1,
-  "skipped": 0
- },
- "rename13": {
-  "passed": 3,
-  "skipped": 0
- },
- "rename15": {
-  "passed": 15,
-  "skipped": 0
- },
  "rmdir01": {
   "passed": 1,
-  "skipped": 0
- },
- "rmdir02": {
-  "passed": 9,
-  "skipped": 0
- },
- "rmdir03": {
-  "passed": 2,
   "skipped": 0
  },
  "select01": {
@@ -1307,18 +1039,6 @@
   "passed": 2,
   "skipped": 0
  },
- "setrlimit02": {
-  "passed": 2,
-  "skipped": 0
- },
- "setrlimit03": {
-  "passed": 2,
-  "skipped": 0
- },
- "setrlimit04": {
-  "passed": 1,
-  "skipped": 0
- },
  "setrlimit05": {
   "passed": 1,
   "skipped": 0
@@ -1363,28 +1083,12 @@
   "passed": 4,
   "skipped": 0
  },
- "stat01": {
-  "passed": 12,
-  "skipped": 0
- },
- "stat01_64": {
-  "passed": 12,
-  "skipped": 0
- },
  "stat02": {
   "passed": 2,
   "skipped": 0
  },
  "stat02_64": {
   "passed": 2,
-  "skipped": 0
- },
- "stat03": {
-  "passed": 6,
-  "skipped": 0
- },
- "stat03_64": {
-  "passed": 6,
   "skipped": 0
  },
  "symlink02": {
@@ -1405,14 +1109,6 @@
  },
  "truncate02_64": {
   "passed": 2,
-  "skipped": 0
- },
- "truncate03": {
-  "passed": 8,
-  "skipped": 0
- },
- "truncate03_64": {
-  "passed": 8,
   "skipped": 0
  },
  "umask01": {
@@ -1437,18 +1133,6 @@
  },
  "unlink07": {
   "passed": 6,
-  "skipped": 0
- },
- "unlink08": {
-  "passed": 4,
-  "skipped": 0
- },
- "unlink09": {
-  "passed": 2,
-  "skipped": 0
- },
- "unlink10": {
-  "passed": 1,
   "skipped": 0
  },
  "unlinkat01": {

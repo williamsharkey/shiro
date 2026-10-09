@@ -28,6 +28,15 @@ export interface CommandContext {
   terminal?: TerminalLike;
   /** false when stdout goes to a pipe or file (ls then prints one name per line, like coreutils) */
   stdoutIsTTY?: boolean;
+  /**
+   * The command's stdin is fd 0 of the kernel process ctx.shell runs as, not
+   * ctx.stdin: read it with ctx.shell.kernelStdio (src/shell-stdio.ts).
+   * Reading ctx.stdin instead still works (the command then runs twice).
+   */
+  liveStdin?: boolean;
+  /** Writers that reach the command's stdout/stderr right away (set only where nothing captures them) */
+  streamStdout?: (s: string) => void;
+  streamStderr?: (s: string) => void;
 }
 
 export interface Command {

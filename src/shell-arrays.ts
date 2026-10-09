@@ -136,7 +136,7 @@ export function parseAssignWord(word: string): AssignWord | null {
   if (word[i] === '+') { append = true; i++; }
   if (word[i] !== '=') return null;
   const value = word.slice(i + 1);
-  const list = value.startsWith('(') && value.endsWith(')') && sub === undefined;
+  const list = value.startsWith('(') && value.endsWith(')');
   return { name: m[1], sub, append, value: list ? value.slice(1, -1) : value, list };
 }
 
