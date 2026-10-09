@@ -6,9 +6,10 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1214/1567 (77.5%)** |
-| [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **381/635 (60.0%)** |
-| [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **146/399 (36.6%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1295/1567 (82.6%)** |
+| [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1275/1567 (81.4%)** |
+| [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **608/635 (95.7%)** |
+| [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **0/320 (0.0%)** |
 
 How each suite runs, and what is and isn't scored, is described in
 [tests/conformance/README.md](../tests/conformance/README.md).
@@ -17,39 +18,39 @@ How each suite runs, and what is and isn't scored, is described in
 
 | Area | Before | Now | Failing |
 |---|---|---|---|
-| smoke | 0/18 | 17/18 | 1 |
+| smoke | 0/18 | 18/18 | 0 |
 | comments | 0/2 | 2/2 | 0 |
 | quote | 0/33 | 29/33 | 4 |
 | word-split | 1/53 | 44/53 | 9 |
 | word-eval | 0/8 | 7/8 | 1 |
 | var-sub | 0/6 | 2/6 | 4 |
 | var-sub-quote | 0/41 | 32/41 | 9 |
-| var-op-test | 1/35 | 22/35 | 13 |
-| var-op-strip | 0/28 | 24/28 | 4 |
+| var-op-test | 1/35 | 26/35 | 9 |
+| var-op-strip | 0/28 | 25/28 | 3 |
 | var-op-len | 0/7 | 3/7 | 4 |
 | var-op-patsub | 0/27 | 22/27 | 5 |
 | var-op-slice | 0/21 | 16/21 | 5 |
-| var-num | 0/7 | 5/7 | 2 |
-| vars-special | 0/37 | 19/37 | 18 |
+| var-num | 0/7 | 7/7 | 0 |
+| vars-special | 0/37 | 31/37 | 6 |
 | arith | 2/71 | 62/71 | 9 |
 | command-sub | 0/28 | 19/28 | 9 |
 | here-doc | 0/32 | 29/32 | 3 |
-| redirect | 3/39 | 28/39 | 11 |
+| redirect | 3/39 | 32/39 | 7 |
 | if_ | 0/5 | 4/5 | 1 |
-| loop | 1/28 | 19/28 | 9 |
+| loop | 1/28 | 21/28 | 7 |
 | case_ | 0/13 | 12/13 | 1 |
-| sh-func | 0/11 | 10/11 | 1 |
-| func-parsing | 1/12 | 4/12 | 8 |
+| sh-func | 0/11 | 11/11 | 0 |
+| func-parsing | 1/12 | 6/12 | 6 |
 | builtin-echo | 0/27 | 25/27 | 2 |
 | builtin-printf | 0/55 | 47/55 | 8 |
 | builtin-read | 0/64 | 64/64 | 0 |
-| builtin-eval-source | 0/23 | 11/23 | 12 |
+| builtin-eval-source | 0/23 | 19/23 | 4 |
 | builtin-getopts | 0/30 | 26/30 | 4 |
-| builtin-trap | 0/33 | 25/33 | 8 |
-| builtin-bracket | 0/50 | 43/50 | 7 |
-| builtin-cd | 3/28 | 14/28 | 14 |
+| builtin-trap | 0/33 | 26/33 | 7 |
+| builtin-bracket | 0/50 | 44/50 | 6 |
+| builtin-cd | 3/28 | 26/28 | 2 |
 | builtin-special | 1/12 | 7/12 | 5 |
-| builtin-type | 0/6 | 1/6 | 5 |
+| builtin-type | 0/6 | 3/6 | 3 |
 | builtin-vars | 0/38 | 31/38 | 7 |
 | dbracket | 1/49 | 44/49 | 5 |
 | dparen | 0/14 | 13/14 | 1 |
@@ -57,17 +58,17 @@ How each suite runs, and what is and isn't scored, is described in
 | append | 1/20 | 12/20 | 8 |
 | array-basic | 0/5 | 5/5 | 0 |
 | array | 2/78 | 68/78 | 10 |
-| array-assoc | 0/38 | 33/38 | 5 |
-| brace-expansion | 0/55 | 41/55 | 14 |
-| tilde | 0/14 | 7/14 | 7 |
+| array-assoc | 0/38 | 34/38 | 4 |
+| brace-expansion | 0/55 | 51/55 | 4 |
+| tilde | 0/14 | 9/14 | 5 |
 | glob | 0/23 | 18/23 | 5 |
 | pipeline | 0/25 | 19/25 | 6 |
 | exit-status | 0/11 | 5/11 | 6 |
-| errexit | 0/35 | 26/35 | 9 |
+| errexit | 0/35 | 29/35 | 6 |
 | subshell | 0/2 | 2/2 | 0 |
-| command_ | 2/16 | 7/16 | 9 |
+| command_ | 2/16 | 8/16 | 8 |
 | posix | 2/15 | 11/15 | 4 |
-| alias | 1/48 | 30/48 | 18 |
+| alias | 1/48 | 31/48 | 17 |
 | let | 0/2 | 1/2 | 1 |
 | empty-bodies | 0/3 | 3/3 | 0 |
 | whitespace | 0/0 | 0/0 | 0 |
@@ -76,40 +77,162 @@ How each suite runs, and what is and isn't scored, is described in
 | regex | 1/37 | 35/37 | 2 |
 | temp-binding | 0/4 | 4/4 | 0 |
 | background | 3/27 | 21/27 | 6 |
-| sh-options | 0/32 | 15/32 | 17 |
+| sh-options | 0/32 | 25/32 | 7 |
 | command-parsing | 0/2 | 2/2 | 0 |
 
 <details><summary>Failing cases</summary>
 
-- **smoke**: failed command
+- **quote**: $'' octal escapes don't have leading 0; $'' octal escapes with fewer than 3 chars; $'' supports \cA escape for Ctrl-A - mask with 0x1f; \c' is an escape, unlike bash
+- **word-split**: default value with unquoted IFS char; Empty IFS (regression for bug); Unset IFS (regression for bug); IFS and joining arrays by assignments; Bug #628 split on : with : in literal word; 4 x 3 table - with for loop; IFS=x and '' and $@ (#2); ""$A"" - empty string on both sides - derived from spec/toysh-posix #15; Regression: "${v:-AxBxC}"x should not be split
+- **word-eval**: Default values -- more cases
+- **var-sub**: Bad var sub; Braced block inside ${}; Descriptor redirect to bad "$@"; Here doc with bad "$@" delimiter
+- **var-sub-quote**: Multiple words: outer double quotes, inner double quotes; Mixed inner quotes with outer quotes; part_value tree on RHS; Multiple words: outer double quotes, inner double quotes; Multiple words: outer double quotes, inner single quotes; Strip a string with single quotes, unquoted; Strip a string with single quotes, double quoted; Syntax error for single quote in double quote; Right Brace as argument (similar to #702)
+- **var-op-test**: Lazy Evaluation of Alternative; Unquoted with array as default value; Quoted with array as default value; Assign default with array; Nix idiom ${!hooksSlice+"${!hooksSlice}"} - was workaround for obsolete bash 4.3 bug; array and - and +; $* ("" "") and - and + (IFS=); "\z" as arg; op-test for unquoted ${a[*]:-empty} with IFS=
+- **var-op-strip**: Remove const suffix is vectorized on $@ array; strip none; Strip Right Brace (#702)
+- **var-op-len**: Unicode string length (spec/testdata/utf8-chars.txt); String length with incomplete utf-8; String length with invalid utf-8 continuation bytes; Length operator can't be followed by test operator
+- **var-op-patsub**: Confusing unquoted slash matches bash (and ash); Synthesized ${x///} bug (similar to above); Replace backslash; When LC_ALL=C, pattern ? doesn't match multibyte character; Chromium from http://www.oilshell.org/blog/2016/11/07.html
+- **var-op-slice**: Cannot take length of substring slice; ${@:offset} and ${*:offset}; ${@:offset:length} and ${*:offset:length}; Permutations of implicit begin and length; ${array[@]:} vs ${array[@]: }  - bash and zsh inconsistent
+- **vars-special**: $PATH is set if unset at startup; Vars set interactively only: $HISTFILE; Some vars are set, even without startup file, or env: PATH, PWD; $LINENO is the current line, not line of function call; $LINENO in other for loops; $_ with assignments, arrays, etc.
+- **arith**: Arith sub with word parts; Backticks within arith sub; Integer constant validation; Comma operator (borrowed from C); Logical Ops; Bitwise ops; Comment not allowed in the middle of multiline arithmetic; Double subscript; Invalid constant
+- **command-sub**: case in subshell; Backtick 2; Nested backticks; Making keyword out of command sub should NOT work; Command sub with here doc; Escaped quote in [[ ]]; Quoting \ within ``; Quoting \ within `` within double quotes; Syntax errors with double quotes within backticks
+- **here-doc**: Here doc with bad comsub delimiter; Here doc with line continuation, then pipe.  Syntax error.; Function def and execution with here doc
+- **redirect**: Named file descriptor; \>&word redirects stdout and stderr when word is not a number or -; 1\>&2- to move file descriptor; 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes; xtrace not affected by redirects
+- **if_**: if break corner case
+- **loop**: while in pipe with subshell; continue at top level; continue in subshell; continue in subshell aborts with errexit; bad arg to break; top-level break/continue/return (without strict_control_flow); builtin,command break,continue,return,exit
+- **case_**: case \n bug regression
+- **func-parsing**: Hard case, function with } token in it; = in function name; Function name with $; Function name with command sub; Function name with !; Break after ) is OK.
+- **builtin-echo**: echo builtin should disallow typed args - literal; echo builtin should disallow typed args - variable
+- **builtin-printf**: printf with no args; printf -v a[1]; printf -v syntax error; printf %c unicode - prints the first BYTE of a string - it does not respect UTF-8; printf invalid format; bash truncates long strftime string at 128; printf positive integer overflow; printf negative integer overflow
+- **builtin-eval-source**: eval usage; eval YSH block with 'break continue return error'; Source with syntax error; Eval with syntax error
+- **builtin-getopts**: getopts with invalid variable name; OPTIND; OPTIND after multiple getopts with same spec; OPTIND after multiple getopts with different spec
+- **builtin-trap**: exit 1 when trap code string is invalid; trap EXIT calling exit; trap EXIT with PARSE error and explicit exit; exit codes for traps are isolated; traps are cleared in subshell (started with &); trap USR1, sleep, SIGINT: non-interactively; Remove trap with an unsigned integer
+- **builtin-bracket**: -a as unary operator (alias of -e); -k for sticky bit; test -p named pipe; test -o for options; -ef; test -c
+- **builtin-cd**: pwd in symlinked dir on shell initialization; Survey of getcwd() syscall
+- **builtin-special**: Prefix assignments persist after special builtins, like : (set -o posix); Prefix assignments persist after readonly, but NOT exported (set -o posix); Prefix binding for exec is a special case (versus e.g. readonly); bash 'type' gets confused - says 'function', but runs builtin; command, builtin - both can be redefined, not special (regression)
+- **builtin-type**: type -\> alias external; type of relative path; more special builtins
+- **builtin-vars**: Export sets a global variable that persists after export -n; Export a local that shadows a global; Unset exported variable, then define it again.  It's NOT still exported.; Exporting a parent func variable (dynamic scope); Unset a function without -f; Unset and scope (bug #653); local after readonly
+- **dbracket**: [[ regex syntax error; [[ at runtime doesn't work; [[ with env prefix doesn't work; tilde expansion with =~ (confusing); [[ ]] with redirect
+- **dparen**: (( )) with redirect
+- **assign**: Env binding can use preceding bindings, but not subsequent ones; Env value with escaped \<; Trying to run keyword 'for'; Test above without 'local' (which is not POSIX); aliased assignment doesn't split; assign and glob; declare and glob; "declare -a arr" and "readonly -a a" creates an empty array (OSH)
+- **append**: error: typeset myarray+=s; error: append used like env prefix; Try to append list to element; typeset s+=; typeset s${dyn}+=; export readonly +=; local +=; assign builtin appending array: declare d+=(d e)
+- **array**: space before ( in array initialization; array with invalid token; ${!a[1]} is named ref in bash; Arrays can't be used as env bindings; Associative arrays can't be used as env bindings either; Set array item to array; Multiple subscripts not allowed; Length op, index op, then transform op is not allowed; array default; a+=() modifies existing instance of BashArray
+- **array-assoc**: unset -v and assoc array; nameref and assoc array; printf -v and assoc array; bash bug: (( A["$key"] = 1 )) doesn't work
+- **brace-expansion**: expansion on RHS of assignment; no expansion with RHS assignment; Two kinds of tilde expansion; Mixed case char expansion is invalid
+- **tilde**: ${undef:-~}; ${x//~/~root}; a[x]=foo:~ has tilde expansion; x=${undef-~:~}; temp assignment x=~ env
+- **glob**: Glob of unescaped [[] and []]; Glob of negated unescaped [[] and []]; \ in unquoted substitutions does not match a backslash; \ in unquoted substitutions escapes globchars; shopt -u globskipdots shows . and ..
+- **pipeline**: PIPESTATUS is set on simple commands; \|&; ! with ( ); ! is not a command; Evaluation of argv[0] in pipeline occurs in child; SIGPIPE causes pipeline to die (regression for issue #295)
+- **exit-status**: Truncating 'return' status; subshell OverflowError https://github.com/oilshell/oil/issues/996; func subshell OverflowError https://github.com/oilshell/oil/issues/996; If subshell false -- exit code is propagated in a weird way (strict_argv prevents); Exit code when command sub evaluates to empty str, e.g. `false` (#2416); More test cases with empty argv
+- **errexit**: More && \|\|; set errexit while it's ignored in a subshell (moot with strict_errexit); errexit double guard; pipeline process respects errexit; simple command / assign - redir failure DOES respect errexit; bash atoms [[ (( - redir failure checked
+- **command_**: Command block; Permission denied; filling $PATH cache, then insert the same command earlier in cache; filling $PATH cache, then deleting command; Non-executable on $PATH; hash without args prints the cache; hash with args; Executing command with same name as directory in PATH (#2429)
+- **posix**: Empty for loop without in.  Do can be on the same line I guess.; Empty action for case is syntax error; Bare semi-colon not allowed; Command substitution in default
+- **alias**: Usage of builtins; define and use alias on a single line; alias with trailing space causes alias expansion on second word; Recursive alias expansion of SECOND word; Alias must be an unquoted word, no expansions allowed; first and second word are the same alias, with trailing space; Syntax error after expansion; Loop split across alias in another way; Loop split across both iterative and recursive aliases; Alias with a quote in the middle is a syntax error; Two aliases in pipeline; Alias can be defined and used on a single line; alias with line continuation in the middle; alias for left brace; alias for left paren; here doc inside alias; Corner case: alias inside LHS array arithmetic expression
+- **let**: let with ()
+- **shell-grammar**: If with then on same line missing semicolon
+- **process-sub**: Process sub input; Process sub from external process to stdin; Process sub from shell to stdin; Non-linear pipeline with \>(); status code is available; shopt -s process_sub_fail; process subs and pipelines together; process sub in background &
+- **regex**: Unquoted { is a regex parse error; make a lisp example
+- **background**: wait -n with arguments - arguments are respected; wait with invalid arg; Wait for job and PIPESTATUS - cat; YSH wait --all; YSH wait --verbose; Signal message for killed background job
+- **sh-options**: $- with -c; $- with interactive shell; pass shopt options like sh -O nullglob; vi and emacs are mutually exclusive; interactive shell starts with emacs mode on; -n for no execution (useful with --ast-output); noclobber on \<\>
+
+</details>
+
+## Shell: oils spec tests in Chromium
+
+The same cases as above, run by scripts/conformance/browser-oils.mjs through the built app in headless Chromium (cross-origin isolated).
+
+| Area | Before | Now | Failing |
+|---|---|---|---|
+| smoke | — | 18/18 | 0 |
+| comments | — | 2/2 | 0 |
+| quote | — | 29/33 | 4 |
+| word-split | — | 44/53 | 9 |
+| word-eval | — | 7/8 | 1 |
+| var-sub | — | 2/6 | 4 |
+| var-sub-quote | — | 32/41 | 9 |
+| var-op-test | — | 22/35 | 13 |
+| var-op-strip | — | 25/28 | 3 |
+| var-op-len | — | 3/7 | 4 |
+| var-op-patsub | — | 22/27 | 5 |
+| var-op-slice | — | 16/21 | 5 |
+| var-num | — | 5/7 | 2 |
+| vars-special | — | 30/37 | 7 |
+| arith | — | 62/71 | 9 |
+| command-sub | — | 19/28 | 9 |
+| here-doc | — | 29/32 | 3 |
+| redirect | — | 28/39 | 11 |
+| if_ | — | 4/5 | 1 |
+| loop | — | 21/28 | 7 |
+| case_ | — | 12/13 | 1 |
+| sh-func | — | 10/11 | 1 |
+| func-parsing | — | 4/12 | 8 |
+| builtin-echo | — | 25/27 | 2 |
+| builtin-printf | — | 47/55 | 8 |
+| builtin-read | — | 64/64 | 0 |
+| builtin-eval-source | — | 19/23 | 4 |
+| builtin-getopts | — | 26/30 | 4 |
+| builtin-trap | — | 25/33 | 8 |
+| builtin-bracket | — | 43/50 | 7 |
+| builtin-cd | — | 26/28 | 2 |
+| builtin-special | — | 7/12 | 5 |
+| builtin-type | — | 1/6 | 5 |
+| builtin-vars | — | 31/38 | 7 |
+| dbracket | — | 44/49 | 5 |
+| dparen | — | 13/14 | 1 |
+| assign | — | 35/43 | 8 |
+| append | — | 12/20 | 8 |
+| array-basic | — | 5/5 | 0 |
+| array | — | 68/78 | 10 |
+| array-assoc | — | 33/38 | 5 |
+| brace-expansion | — | 51/55 | 4 |
+| tilde | — | 7/14 | 7 |
+| glob | — | 18/23 | 5 |
+| pipeline | — | 19/25 | 6 |
+| exit-status | — | 5/11 | 6 |
+| errexit | — | 29/35 | 6 |
+| subshell | — | 2/2 | 0 |
+| command_ | — | 8/16 | 8 |
+| posix | — | 12/15 | 3 |
+| alias | — | 31/48 | 17 |
+| let | — | 1/2 | 1 |
+| empty-bodies | — | 3/3 | 0 |
+| whitespace | — | 0/0 | 0 |
+| shell-grammar | — | 32/33 | 1 |
+| process-sub | — | 0/8 | 8 |
+| regex | — | 35/37 | 2 |
+| temp-binding | — | 4/4 | 0 |
+| background | — | 21/27 | 6 |
+| sh-options | — | 25/32 | 7 |
+| command-parsing | — | 2/2 | 0 |
+
+<details><summary>Failing cases</summary>
+
 - **quote**: $'' octal escapes don't have leading 0; $'' octal escapes with fewer than 3 chars; $'' supports \cA escape for Ctrl-A - mask with 0x1f; \c' is an escape, unlike bash
 - **word-split**: default value with unquoted IFS char; Empty IFS (regression for bug); Unset IFS (regression for bug); IFS and joining arrays by assignments; Bug #628 split on : with : in literal word; 4 x 3 table - with for loop; IFS=x and '' and $@ (#2); ""$A"" - empty string on both sides - derived from spec/toysh-posix #15; Regression: "${v:-AxBxC}"x should not be split
 - **word-eval**: Default values -- more cases
 - **var-sub**: Bad var sub; Braced block inside ${}; Descriptor redirect to bad "$@"; Here doc with bad "$@" delimiter
 - **var-sub-quote**: Multiple words: outer double quotes, inner double quotes; Mixed inner quotes with outer quotes; part_value tree on RHS; Multiple words: outer double quotes, inner double quotes; Multiple words: outer double quotes, inner single quotes; Strip a string with single quotes, unquoted; Strip a string with single quotes, double quoted; Syntax error for single quote in double quote; Right Brace as argument (similar to #702)
 - **var-op-test**: Lazy Evaluation of Alternative; Unquoted with array as default value; Quoted with array as default value; Assign default with array; Nix idiom ${!hooksSlice+"${!hooksSlice}"} - was workaround for obsolete bash 4.3 bug; array and - and +; $@ (empty) and - and +; $* ("" "") and - and + (IFS=); "$*" ("" "") and - and + (IFS=); "\z" as arg; op-test for ${!array} with array="a" and array="a[0]"; op-test for ${!array} with array="a[@]" or array="a[*]"; op-test for unquoted ${a[*]:-empty} with IFS=
-- **var-op-strip**: Remove const suffix is vectorized on $@ array; Strip unicode prefix; strip none; Strip Right Brace (#702)
+- **var-op-strip**: Remove const suffix is vectorized on $@ array; strip none; Strip Right Brace (#702)
 - **var-op-len**: Unicode string length (spec/testdata/utf8-chars.txt); String length with incomplete utf-8; String length with invalid utf-8 continuation bytes; Length operator can't be followed by test operator
 - **var-op-patsub**: Confusing unquoted slash matches bash (and ash); Synthesized ${x///} bug (similar to above); Replace backslash; When LC_ALL=C, pattern ? doesn't match multibyte character; Chromium from http://www.oilshell.org/blog/2016/11/07.html
 - **var-op-slice**: Cannot take length of substring slice; ${@:offset} and ${*:offset}; ${@:offset:length} and ${*:offset:length}; Permutations of implicit begin and length; ${array[@]:} vs ${array[@]: }  - bash and zsh inconsistent
 - **var-num**: Normal and braced; In function
-- **vars-special**: $PATH is set if unset at startup; Vars set interactively only: $HISTFILE; Some vars are set, even without startup file, or env: PATH, PWD; UID EUID PPID can't be changed; HOSTNAME OSTYPE can be changed; $BASHPID DOES change with subshell and command sub; $UID and $EUID; $OSTYPE is non-empty; $LINENO is the current line, not line of function call; $LINENO in "bare" redirect arg (bug regression); $LINENO in other for loops; $_ with simple command and evaluation; $_ and ${_}; $_ with word splitting; $_ with && and \|\|; $_ is not reset with (( and [[; $_ with assignments, arrays, etc.; $_ with loop
+- **vars-special**: $PATH is set if unset at startup; Vars set interactively only: $HISTFILE; Some vars are set, even without startup file, or env: PATH, PWD; $LINENO is the current line, not line of function call; $LINENO in "bare" redirect arg (bug regression); $LINENO in other for loops; $_ with assignments, arrays, etc.
 - **arith**: Arith sub with word parts; Backticks within arith sub; Integer constant validation; Comma operator (borrowed from C); Logical Ops; Bitwise ops; Comment not allowed in the middle of multiline arithmetic; Double subscript; Invalid constant
 - **command-sub**: case in subshell; Backtick 2; Nested backticks; Making keyword out of command sub should NOT work; Command sub with here doc; Escaped quote in [[ ]]; Quoting \ within ``; Quoting \ within `` within double quotes; Syntax errors with double quotes within backticks
 - **here-doc**: Here doc with bad comsub delimiter; Here doc with line continuation, then pipe.  Syntax error.; Function def and execution with here doc
 - **redirect**: Named file descriptor; Redirect to file descriptor that's not open; \>&word redirects stdout and stderr when word is not a number or -; 1\>&2- to move file descriptor; 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes; echo foo \>&100 (OSH regression: does not fail with invalid fd 100); echo foo \>&N where N is first unused fd (hang/timeout); exec {fd}\>&- (OSH regression: fails to close fd); xtrace not affected by redirects
 - **if_**: if break corner case
-- **loop**: while in pipe with subshell; continue at top level; continue in subshell; continue in subshell aborts with errexit; bad arg to break; break in condition of loop; break in condition of nested loop; top-level break/continue/return (without strict_control_flow); builtin,command break,continue,return,exit
+- **loop**: while in pipe with subshell; continue at top level; continue in subshell; continue in subshell aborts with errexit; bad arg to break; top-level break/continue/return (without strict_control_flow); builtin,command break,continue,return,exit
 - **case_**: case \n bug regression
 - **sh-func**: Subshell function
 - **func-parsing**: Function with spaces, to see if ( and ) are separate tokens.; Hard case, function with } token in it; . in function name; = in function name; Function name with $; Function name with command sub; Function name with !; Break after ) is OK.
 - **builtin-echo**: echo builtin should disallow typed args - literal; echo builtin should disallow typed args - variable
 - **builtin-printf**: printf with no args; printf -v a[1]; printf -v syntax error; printf %c unicode - prints the first BYTE of a string - it does not respect UTF-8; printf invalid format; bash truncates long strftime string at 128; printf positive integer overflow; printf negative integer overflow
-- **builtin-eval-source**: eval accepts/ignores --; eval usage; eval YSH block with 'break continue return error'; source accepts/ignores --; Source with no arguments; Source with arguments; Source from a function, mutating argv and defining a local var; Source with syntax error; Eval with syntax error; source looks in PATH for files; source finds files in PATH before current dir; sourcing along PATH should ignore directories
+- **builtin-eval-source**: eval usage; eval YSH block with 'break continue return error'; Source with syntax error; Eval with syntax error
 - **builtin-getopts**: getopts with invalid variable name; OPTIND; OPTIND after multiple getopts with same spec; OPTIND after multiple getopts with different spec
 - **builtin-trap**: exit 1 when trap code string is invalid; trap EXIT calling exit; trap EXIT with PARSE error and explicit exit; exit codes for traps are isolated; traps are cleared in subshell (started with &); trap USR1, sleep, SIGINT: non-interactively; Remove trap with an unsigned integer; trap with command.NoOp - check internal invariant
 - **builtin-bracket**: -a as unary operator (alias of -e); -k for sticky bit; test -p named pipe; -u for setuid, -g too; test -o for options; -ef; test -c
-- **builtin-cd**: cd BAD/..; cd with 2 or more args - with strict_arg_parse; $OLDPWD; pwd with symlink and -P; setting $PWD doesn't affect the value of 'pwd' builtin; lie about PWD; pwd before any cd; pwd in symlinked dir on shell initialization; Test the current directory after 'cd ..' involving symlinks; cd away from dir that was deleted; cd permits double bare dash; cd to symlink with -L and -P; cd to relative path with -L and -P; CDPATH is respected; Survey of getcwd() syscall
+- **builtin-cd**: pwd in symlinked dir on shell initialization; Survey of getcwd() syscall
 - **builtin-special**: Prefix assignments persist after special builtins, like : (set -o posix); Prefix assignments persist after readonly, but NOT exported (set -o posix); Prefix binding for exec is a special case (versus e.g. readonly); bash 'type' gets confused - says 'function', but runs builtin; command, builtin - both can be redefined, not special (regression)
 - **builtin-type**: type -\> keyword builtin; type -\> alias external; type of relative path; special builtins are called out; more special builtins
 - **builtin-vars**: Export sets a global variable that persists after export -n; Export a local that shadows a global; Unset exported variable, then define it again.  It's NOT still exported.; Exporting a parent func variable (dynamic scope); Unset a function without -f; Unset and scope (bug #653); local after readonly
@@ -119,21 +242,21 @@ How each suite runs, and what is and isn't scored, is described in
 - **append**: error: typeset myarray+=s; error: append used like env prefix; Try to append list to element; typeset s+=; typeset s${dyn}+=; export readonly +=; local +=; assign builtin appending array: declare d+=(d e)
 - **array**: space before ( in array initialization; array with invalid token; ${!a[1]} is named ref in bash; Arrays can't be used as env bindings; Associative arrays can't be used as env bindings either; Set array item to array; Multiple subscripts not allowed; Length op, index op, then transform op is not allowed; array default; a+=() modifies existing instance of BashArray
 - **array-assoc**: unset -v and assoc array; nameref and assoc array; ${!ref} and assoc array; printf -v and assoc array; bash bug: (( A["$key"] = 1 )) doesn't work
-- **brace-expansion**: partial leading expansion; partial leading expansion 2; expansion on RHS of assignment; no expansion with RHS assignment; Two kinds of tilde expansion; Ascending number range expansion with negative step is invalid; regression: -1 step disallowed; regression: 0 step disallowed; Descending number range expansion with positive step is invalid; Singleton char ranges with steps; Char range expansion with step; Char ranges with steps of the wrong sign; Mixed case char expansion is invalid; Descending char range expansion
+- **brace-expansion**: expansion on RHS of assignment; no expansion with RHS assignment; Two kinds of tilde expansion; Mixed case char expansion is invalid
 - **tilde**: ${undef:-~}; ${x//~/~root}; x=foo:~ has tilde expansion; a[x]=foo:~ has tilde expansion; tilde expansion an assignment keyword; x=${undef-~:~}; temp assignment x=~ env
 - **glob**: Glob of unescaped [[] and []]; Glob of negated unescaped [[] and []]; \ in unquoted substitutions does not match a backslash; \ in unquoted substitutions escapes globchars; shopt -u globskipdots shows . and ..
 - **pipeline**: PIPESTATUS is set on simple commands; \|&; ! with ( ); ! is not a command; Evaluation of argv[0] in pipeline occurs in child; SIGPIPE causes pipeline to die (regression for issue #295)
 - **exit-status**: Truncating 'return' status; subshell OverflowError https://github.com/oilshell/oil/issues/996; func subshell OverflowError https://github.com/oilshell/oil/issues/996; If subshell false -- exit code is propagated in a weird way (strict_argv prevents); Exit code when command sub evaluates to empty str, e.g. `false` (#2416); More test cases with empty argv
-- **errexit**: More && \|\|; errexit and loop; errexit and brace group { }; set errexit while it's ignored in a subshell (moot with strict_errexit); errexit double guard; pipeline process respects errexit; simple command / assign - redir failure DOES respect errexit; bash atoms [[ (( - redir failure checked; Command sub exit code is lost
-- **command_**: Command block; Permission denied; $PATH lookup; filling $PATH cache, then insert the same command earlier in cache; filling $PATH cache, then deleting command; Non-executable on $PATH; hash without args prints the cache; hash with args; Executing command with same name as directory in PATH (#2429)
-- **posix**: Empty for loop without in.  Do can be on the same line I guess.; Empty action for case is syntax error; Bare semi-colon not allowed; Command substitution in default
-- **alias**: Usage of builtins; define and use alias on a single line; alias with trailing space causes alias expansion on second word; Recursive alias expansion of SECOND word; Alias must be an unquoted word, no expansions allowed; first and second word are the same alias, with trailing space; Syntax error after expansion; Loop split across alias in another way; Loop split across both iterative and recursive aliases; Alias with a quote in the middle is a syntax error; Two aliases in pipeline; Alias can be defined and used on a single line; alias with line continuation in the middle; alias for left brace; alias for left paren; here doc inside alias; Corner case: alias inside LHS array arithmetic expression; alias with word of multiple lines
+- **errexit**: More && \|\|; set errexit while it's ignored in a subshell (moot with strict_errexit); errexit double guard; pipeline process respects errexit; simple command / assign - redir failure DOES respect errexit; bash atoms [[ (( - redir failure checked
+- **command_**: Command block; Permission denied; filling $PATH cache, then insert the same command earlier in cache; filling $PATH cache, then deleting command; Non-executable on $PATH; hash without args prints the cache; hash with args; Executing command with same name as directory in PATH (#2429)
+- **posix**: Empty for loop without in.  Do can be on the same line I guess.; Empty action for case is syntax error; Bare semi-colon not allowed
+- **alias**: Usage of builtins; define and use alias on a single line; alias with trailing space causes alias expansion on second word; Recursive alias expansion of SECOND word; Alias must be an unquoted word, no expansions allowed; first and second word are the same alias, with trailing space; Syntax error after expansion; Loop split across alias in another way; Loop split across both iterative and recursive aliases; Alias with a quote in the middle is a syntax error; Two aliases in pipeline; Alias can be defined and used on a single line; alias with line continuation in the middle; alias for left brace; alias for left paren; here doc inside alias; Corner case: alias inside LHS array arithmetic expression
 - **let**: let with ()
 - **shell-grammar**: If with then on same line missing semicolon
 - **process-sub**: Process sub input; Process sub from external process to stdin; Process sub from shell to stdin; Non-linear pipeline with \>(); status code is available; shopt -s process_sub_fail; process subs and pipelines together; process sub in background &
 - **regex**: Unquoted { is a regex parse error; make a lisp example
 - **background**: wait -n with arguments - arguments are respected; wait with invalid arg; Wait for job and PIPESTATUS - cat; YSH wait --all; YSH wait --verbose; Signal message for killed background job
-- **sh-options**: $- with -c; $- with interactive shell; pass shopt options like sh -O nullglob; vi and emacs are mutually exclusive; interactive shell starts with emacs mode on; -n for no execution (useful with --ast-output); shopt -p -o prints 'set' options; shopt -o prints 'set' options; shopt -p prints 'shopt' options; noclobber on \<\>; shopt allows for backward compatibility like bash; shopt -p validates option names; shopt -p -o validates option names; stubbed out bash options; Unimplemented options - print, query, set, unset; Unimplemented options - OSH shopt -s ignore_shopt_not_impl; no-ops not shown by shopt -p
+- **sh-options**: $- with -c; $- with interactive shell; pass shopt options like sh -O nullglob; vi and emacs are mutually exclusive; interactive shell starts with emacs mode on; -n for no execution (useful with --ast-output); noclobber on \<\>
 
 </details>
 
@@ -143,288 +266,249 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Sh
 
 | Area | Before | Now | Failing |
 |---|---|---|---|
-| awk | 0/51 | 9/51 | 42 |
-| basename (old-style) | 2/2 | 1/2 | 1 |
+| awk | 0/51 | 51/51 | 0 |
+| basename (old-style) | 2/2 | 2/2 | 0 |
 | cat | 0/4 | 4/4 | 0 |
 | cat (old-style) | 2/2 | 2/2 | 0 |
 | cmp (old-style) | 1/1 | 1/1 | 0 |
-| comm | 0/8 | 0/8 | 8 |
-| cp | 0/6 | 0/6 | 6 |
-| cp (old-style) | 17/17 | 9/17 | 8 |
-| cut | 0/22 | 12/22 | 10 |
-| cut (old-style) | 5/5 | 4/5 | 1 |
-| date (old-style) | 3/3 | 1/3 | 2 |
-| dd (old-style) | 6/6 | 4/6 | 2 |
-| diff | 0/13 | 0/13 | 13 |
-| dirname (old-style) | 7/7 | 5/7 | 2 |
-| du (old-style) | 6/6 | 3/6 | 3 |
+| comm | 0/8 | 8/8 | 0 |
+| cp | 0/6 | 3/6 | 3 |
+| cp (old-style) | 17/17 | 16/17 | 1 |
+| cut | 0/22 | 22/22 | 0 |
+| cut (old-style) | 5/5 | 5/5 | 0 |
+| date (old-style) | 3/3 | 3/3 | 0 |
+| dd (old-style) | 6/6 | 6/6 | 0 |
+| diff | 0/13 | 13/13 | 0 |
+| dirname (old-style) | 7/7 | 7/7 | 0 |
+| du (old-style) | 6/6 | 4/6 | 2 |
 | echo (old-style) | 11/11 | 10/11 | 1 |
-| expand | 0/1 | 0/1 | 1 |
-| expr (old-style) | 2/2 | 0/2 | 2 |
-| factor | 0/13 | 1/13 | 12 |
+| expand | 0/1 | 1/1 | 0 |
+| expr (old-style) | 2/2 | 2/2 | 0 |
+| factor | 0/13 | 13/13 | 0 |
 | false (old-style) | 2/2 | 1/2 | 1 |
-| find | 0/11 | 5/11 | 6 |
+| find | 0/11 | 11/11 | 0 |
 | find (old-style) | 1/1 | 1/1 | 0 |
-| fold | 0/3 | 1/3 | 2 |
+| fold | 0/3 | 3/3 | 0 |
 | grep | 0/48 | 47/48 | 1 |
-| gunzip (old-style) | 1/1 | 0/1 | 1 |
+| gunzip (old-style) | 1/1 | 1/1 | 0 |
 | gzip (old-style) | 3/3 | 3/3 | 0 |
 | head | 0/3 | 3/3 | 0 |
 | hexdump | 0/0 | 0/0 | 0 |
-| hostname (old-style) | 4/4 | 3/4 | 1 |
+| hostname (old-style) | 4/4 | 4/4 | 0 |
 | id (old-style) | 4/4 | 4/4 | 0 |
-| ln (old-style) | 6/6 | 3/6 | 3 |
+| ln (old-style) | 6/6 | 6/6 | 0 |
 | ls | 0/0 | 0/0 | 0 |
-| ls (old-style) | 4/4 | 0/4 | 4 |
+| ls (old-style) | 4/4 | 4/4 | 0 |
 | md5sum | 0/0 | 0/0 | 0 |
-| md5sum (old-style) | 1/1 | 0/1 | 1 |
+| md5sum (old-style) | 1/1 | 1/1 | 0 |
 | mkdir (old-style) | 2/2 | 2/2 | 0 |
-| mv (old-style) | 14/14 | 10/14 | 4 |
-| nl | 0/3 | 0/3 | 3 |
-| od | 0/21 | 3/21 | 18 |
-| paste (old-style) | 5/5 | 2/5 | 3 |
-| patch | 0/6 | 4/6 | 2 |
+| mv (old-style) | 14/14 | 13/14 | 1 |
+| nl | 0/3 | 3/3 | 0 |
+| od | 0/21 | 21/21 | 0 |
+| paste (old-style) | 5/5 | 5/5 | 0 |
+| patch | 0/6 | 6/6 | 0 |
 | printf | 0/20 | 20/20 | 0 |
 | pwd (old-style) | 1/1 | 1/1 | 0 |
 | readlink | 0/6 | 5/6 | 1 |
-| realpath | 0/10 | 4/10 | 6 |
+| realpath | 0/10 | 10/10 | 0 |
 | rev | 0/3 | 3/3 | 0 |
 | rm (old-style) | 1/1 | 1/1 | 0 |
 | rmdir (old-style) | 1/1 | 0/1 | 1 |
 | sed | 0/93 | 92/93 | 1 |
-| seq | 0/24 | 20/24 | 4 |
+| seq | 0/24 | 24/24 | 0 |
 | sha1sum | 0/1 | 0/1 | 1 |
 | sha256sum | 0/0 | 0/0 | 0 |
 | sha512sum | 0/0 | 0/0 | 0 |
-| sort | 0/25 | 17/25 | 8 |
+| sort | 0/25 | 25/25 | 0 |
 | strings (old-style) | 0/0 | 0/0 | 0 |
-| sum | 0/2 | 0/2 | 2 |
+| sum | 0/2 | 2/2 | 0 |
 | tail | 0/2 | 2/2 | 0 |
 | tail (old-style) | 2/2 | 2/2 | 0 |
-| tar | 0/6 | 1/6 | 5 |
-| tar (old-style) | 14/14 | 8/14 | 6 |
+| tar | 0/6 | 5/6 | 1 |
+| tar (old-style) | 14/14 | 14/14 | 0 |
 | tee (old-style) | 2/2 | 2/2 | 0 |
 | test | 0/16 | 16/16 | 0 |
 | touch (old-style) | 3/3 | 3/3 | 0 |
-| tr | 0/5 | 3/5 | 2 |
-| tr (old-style) | 5/5 | 4/5 | 1 |
-| true (old-style) | 2/2 | 1/2 | 1 |
-| tsort | 0/20 | 2/20 | 18 |
-| unexpand | 0/17 | 0/17 | 17 |
-| uniq | 0/14 | 9/14 | 5 |
+| tr | 0/5 | 5/5 | 0 |
+| tr (old-style) | 5/5 | 5/5 | 0 |
+| true (old-style) | 2/2 | 2/2 | 0 |
+| tsort | 0/20 | 10/20 | 10 |
+| unexpand | 0/17 | 17/17 | 0 |
+| uniq | 0/14 | 12/14 | 2 |
 | uuencode | 0/0 | 0/0 | 0 |
 | wc (old-style) | 5/5 | 5/5 | 0 |
 | which (old-style) | 1/1 | 1/1 | 0 |
-| xargs | 0/11 | 1/11 | 10 |
-| xargs (old-style) | 1/1 | 0/1 | 1 |
+| xargs | 0/11 | 11/11 | 0 |
+| xargs (old-style) | 1/1 | 1/1 | 0 |
 | xxd | 0/0 | 0/0 | 0 |
 
 <details><summary>Failing cases</summary>
 
-- **awk**: awk -F case 0; awk -F case 1; awk -F case 2; awk -F case 3; awk -F case 4; awk -F case 5; awk -F case 6; awk -F case 7; awk handles empty function f(arg){}; awk handles empty function f(){}; awk properly handles function from other scope; awk 'v (a)' is not a function call, it is a concatenation; awk floating const with leading zeroes; awk -F handles escapes; awk 'gcc build bug'; awk NF in BEGIN; awk string cast (bug 725); awk handles whitespace before array subscript; awk 'delete a[v--]' evaluates v-- once; awk FS assignment; awk large integer; awk length(array); awk length(); awk print length, 1; awk print length 1; awk length == 0; awk if (length == 0); awk -f and ARGC; awk printf('%c') can output NUL; awk printf('%-10c') can output NUL; awk do not allow "str"++; awk FS regex which can match empty string; awk $NF is empty; awk exit N propagates through END's exit; awk print + redirect; awk "cmd" \| getline; awk backslash+newline eaten with no trace; awk assign while assign; awk does not split on CR (char 13); awk = and ?: precedence; awk references to empty fields; awk gsub erroneous word start match
-- **basename (old-style)**: basename-does-not-remove-identical-extension
-- **comm**: comm test 1; comm test 2; comm test 3; comm test 4; comm test 5; comm test 6; comm unterminated line 1; comm unterminated line 2
-- **cp**: cp -R; cp -Rd; cp -RP; cp -RL; cp -RH; cp -RHL
-- **cp (old-style)**: cp-RHL-does_not_preserve-links; cp-a-files-to-dir; cp-a-preserves-links; cp-d-files-to-dir; cp-does-not-copy-unreadable-file; cp-parents; cp-preserves-hard-links; cp-preserves-links
-- **cut**: cut '-' (stdin) and multi file handling; cut -b a,a,a; cut -b overlaps; -b encapsulated; cut -c a-; cut -f a-; cut show whole line with no delim; cut with -d -f( ) -s; cut empty field; cut empty field 2
-- **cut (old-style)**: cut-cuts-an-unclosed-range
-- **date (old-style)**: date-@-works; date-timezone
-- **dd (old-style)**: dd-accepts-of; dd-count-bytes
-- **diff**: diff of stdin; diff of stdin, no newline in the file; diff of stdin, twice; diff of empty file against stdin; diff of empty file against nonempty one; diff -b treats EOF as whitespace; diff -b treats all spaces as equal; diff -B ignores changes whose lines are all blank; diff -B does not ignore changes whose lines are not all blank; diff -B ignores blank single line change; diff -B does not ignore non-blank single line change; diff always takes context from old file; diff dir dir2/file/-
-- **dirname (old-style)**: dirname-handles-multiple-slashes; dirname-handles-root
-- **du (old-style)**: du-h-works; du-l-works; du-m-works
+- **cp**: cp -RL; cp -RH; cp -RHL
+- **cp (old-style)**: cp-preserves-hard-links
+- **du (old-style)**: du-s-works; du-works
 - **echo (old-style)**: echo-prints-slash_41
-- **expand**: expand
-- **expr (old-style)**: expr-big; expr-works
-- **factor**: factor '  0'; factor +1; factor ' +2'; factor 2^61-1; factor 2^62-1; factor 2^64-1; factor $((2*3*5*7*11*13*17*19*23*29*31*37*41*43*47)); factor 2 * 3037000493 * 3037000493; factor 3 * 2479700513 * 2479700513; factor 3 * 37831 * 37831 * 37831 * 37831; factor 3 * 13^16; factor 13^16
 - **false (old-style)**: false-is-silent
-- **find**: find -exec exitcode 1; find -exec exitcode 2; find -exec exitcode 3; find / -maxdepth 0 -name /; find // -maxdepth 0 -name /; find ./// -name .
-- **fold**: fold -s; fold with NULs
 - **grep**: grep -r on symlink to dir
-- **gunzip (old-style)**: gunzip-reads-from-standard-input
-- **hostname (old-style)**: hostname-d-works
-- **ln (old-style)**: ln-creates-hard-links; ln-force-creates-hard-links; ln-preserves-soft-links
-- **ls (old-style)**: ls-1-works; ls-h-works; ls-l-works; ls-s-works
-- **md5sum (old-style)**: md5sum-verifies-non-binary-file
-- **mv (old-style)**: mv-files-to-dir-2; mv-moves-hardlinks; mv-preserves-hard-links; mv-refuses-mv-dir-to-subdir
-- **nl**: nl numbers all lines; nl numbers non-empty lines; nl numbers no lines
-- **od**: od (little-endian); od -a (DESKTOP); od -B; od -o (little-endian); od -b; od -c; od -d (little-endian); od -D (little-endian); od -f (little-endian); od -H (little-endian); od -X (little-endian); od -h (little-endian); od -x (little-endian); od -i (little-endian); od -O (little-endian); od -I (little-endian); od -L (little-endian); od -l (little-endian)
-- **paste (old-style)**: paste-back-cuted-lines; paste-multi-stdin; paste-pairs
-- **patch**: patch -R with nonexistent old_file; patch FILE PATCH
+- **mv (old-style)**: mv-preserves-hard-links
 - **readlink**: readlink -f on an invalid link
-- **realpath**: realpath on non-existent absolute path 1; realpath on non-existent absolute path 2; realpath on non-existent absolute path 3; realpath on non-existent local file 1; realpath on link to non-existent file 1; realpath on link to non-existent file 3
 - **rmdir (old-style)**: rmdir-removes-parent-directories
 - **sed**: sed subst+write
-- **seq**: seq one argument with padding; seq two arguments with padding; seq count down by 3 with padding; seq count by .3 with padding 2
 - **sha1sum**: sha1sum: one-space separated input for -c
-- **sort**: sort key range with numeric option; sort key range with numeric option and global reverse; sort key range with multiple options; sort -z outputs NUL terminated lines; sort file in place; sort -sr (stable and reverse) does NOT reverse 'stable' ordering; sort -h; sort -k2,2M
-- **sum**: sum -r file file does print both names; sum -s file does print file's name
-- **tar**: tar Two zeroed blocks is a ('truncated') empty tarball; tar Twenty zeroed blocks is an empty tarball; tar --overwrite; tar writing into read-only dir; tar Symlinks and hardlinks coexist
-- **tar (old-style)**: tar-complains-about-missing-file; tar-extracts-from-standard-input; tar-extracts-to-standard-output; tar-handles-exclude-and-extract-lists; tar-handles-multiple-X-options; tar-handles-nested-exclude
-- **tr**: tr understands [:xdigit:]; tr has correct xdigit sequence
-- **tr (old-style)**: tr-works
-- **true (old-style)**: true-is-silent
-- **tsort**: tsort; tsort -; tsort input; tsort input (w/o eol); tsort /dev/null; tsort empty; tsort blank; tsort blanks; tsort empty2; tsort singleton; tsort simple; tsort 2singleton; tsort medium; tsort std.example; tsort prefixes; tsort odd; tsort odd2; tsort cycle
-- **unexpand**: unexpand case 1; unexpand case 2; unexpand case 3; unexpand case 4; unexpand case 5; unexpand case 6; unexpand case 8; unexpand flags ; unexpand flags -t8 --first-only; unexpand flags -a; unexpand flags -t8; unexpand flags -a -t8; unexpand flags -t4; unexpand flags -a -t4; unexpand flags -t4 -a; unexpand flags -t4 --first-only; unexpand flags --first-only -t4
-- **uniq**: uniq - (specify stdin); uniq input outfile (two files); uniq (stdin) outfile; uniq input - (specify stdout); uniq -f -s (skip fields and chars)
-- **xargs**: xargs -E _ stops on underscore; xargs -E ''; xargs -e without param; xargs does not stop on underscore ('new' GNU behavior); xargs -s7 can take one-char input; xargs -sNUM test 1; xargs -sNUM test 2; xargs -n1; xargs -n2; xargs -I skips empty lines and leading whitespace
-- **xargs (old-style)**: xargs-works
+- **tar**: tar --overwrite
+- **tsort**: tsort empty2; tsort singleton; tsort simple; tsort 2singleton; tsort medium; tsort std.example; tsort prefixes; tsort odd; tsort odd2; tsort cycle
+- **uniq**: uniq input outfile (two files); uniq (stdin) outfile
 
 </details>
 
 ## Syscalls: LTP under Blink (x86-64)
 
-Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel processes in the Blink engine; only tests that pass natively on the build host are scored.
+Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel processes in the Blink engine; only tests that pass natively on the build host as an unprivileged user (uid 1000, like Shiro) are scored. Current run: 0 pass because the snapshot fork in blink patch 0014 (merged from unix/integration) copies MAP_SHARED pages instead of sharing them, so LTP's parent never sees its forked child's results ("Test haven't reported results!") and tst_checkpoint times out. With the earlier fork (unix/conformance 1d062ad) 146/320 passed; that table is in git history.
 
 | Area | Before | Now | Failing |
 |---|---|---|---|
-| accept | — | 1/3 | 2 |
-| access | — | 0/4 | 4 |
+| accept | — | 0/3 | 3 |
 | alarm | — | 0/5 | 5 |
-| bind | — | 0/5 | 5 |
-| chdir | — | 1/3 | 2 |
-| chmod | — | 1/7 | 6 |
-| clock_gettime | — | 0/4 | 4 |
-| clock_nanosleep | — | 2/4 | 2 |
-| clone | — | 7/10 | 3 |
-| close | — | 2/2 | 0 |
+| bind | — | 0/4 | 4 |
+| chdir | — | 0/2 | 2 |
+| chmod | — | 0/2 | 2 |
+| clock_gettime | — | 0/1 | 1 |
+| clock_nanosleep | — | 0/3 | 3 |
+| clone | — | 0/8 | 8 |
+| close | — | 0/2 | 2 |
 | connect | — | 0/2 | 2 |
-| creat | — | 1/7 | 6 |
-| dup | — | 4/7 | 3 |
-| dup2 | — | 6/7 | 1 |
-| dup3 | — | 1/2 | 1 |
-| epoll_create | — | 3/3 | 0 |
-| epoll_create1 | — | 2/2 | 0 |
-| epoll_ctl | — | 4/7 | 3 |
-| epoll_wait | — | 5/16 | 11 |
-| execve | — | 0/3 | 3 |
-| faccessat | — | 2/2 | 0 |
-| fchdir | — | 2/3 | 1 |
-| fchmod | — | 0/6 | 6 |
-| fcntl | — | 16/38 | 22 |
-| fork | — | 5/9 | 4 |
+| creat | — | 0/3 | 3 |
+| dup | — | 0/7 | 7 |
+| dup2 | — | 0/7 | 7 |
+| dup3 | — | 0/2 | 2 |
+| epoll_create | — | 0/3 | 3 |
+| epoll_create1 | — | 0/2 | 2 |
+| epoll_ctl | — | 0/7 | 7 |
+| epoll_wait | — | 0/15 | 15 |
+| execve | — | 0/2 | 2 |
+| faccessat | — | 0/2 | 2 |
+| fchdir | — | 0/2 | 2 |
+| fchmod | — | 0/1 | 1 |
+| fcntl | — | 0/36 | 36 |
+| fork | — | 0/9 | 9 |
 | fstat | — | 0/4 | 4 |
-| ftruncate | — | 4/4 | 0 |
-| futex | — | 4/19 | 15 |
-| getcwd | — | 2/4 | 2 |
-| getdents | — | 0/2 | 2 |
+| ftruncate | — | 0/4 | 4 |
+| futex | — | 0/18 | 18 |
+| getcwd | — | 0/4 | 4 |
 | getpid | — | 0/1 | 1 |
-| getppid | — | 1/2 | 1 |
-| getrlimit | — | 2/3 | 1 |
-| gettimeofday | — | 1/2 | 1 |
-| kill | — | 0/5 | 5 |
-| link | — | 0/4 | 4 |
-| lseek | — | 2/4 | 2 |
-| lstat | — | 2/4 | 2 |
-| mkdir | — | 0/5 | 5 |
-| mkdirat | — | 0/1 | 1 |
-| nanosleep | — | 2/3 | 1 |
-| open | — | 5/14 | 9 |
-| openat | — | 1/2 | 1 |
-| other | — | 0/1 | 1 |
+| getppid | — | 0/2 | 2 |
+| getrlimit | — | 0/3 | 3 |
+| gettimeofday | — | 0/2 | 2 |
+| kill | — | 0/4 | 4 |
+| link | — | 0/2 | 2 |
+| lseek | — | 0/4 | 4 |
+| lstat | — | 0/4 | 4 |
+| nanosleep | — | 0/3 | 3 |
+| open | — | 0/8 | 8 |
+| openat | — | 0/1 | 1 |
 | pause | — | 0/2 | 2 |
-| pipe | — | 4/12 | 8 |
-| pipe2 | — | 1/2 | 1 |
-| poll | — | 3/4 | 1 |
+| pipe | — | 0/12 | 12 |
+| pipe2 | — | 0/2 | 2 |
+| poll | — | 0/4 | 4 |
 | ppoll | — | 0/1 | 1 |
-| pread | — | 2/4 | 2 |
-| pselect | — | 4/6 | 2 |
-| pwrite | — | 8/8 | 0 |
-| read | — | 3/4 | 1 |
-| readlink | — | 0/2 | 2 |
-| readv | — | 1/2 | 1 |
-| rename | — | 0/12 | 12 |
-| rmdir | — | 1/3 | 2 |
-| select | — | 1/4 | 3 |
-| sendfile | — | 2/16 | 14 |
-| setrlimit | — | 1/5 | 4 |
-| signal | — | 3/5 | 2 |
-| socket | — | 1/2 | 1 |
-| socketpair | — | 1/2 | 1 |
-| stat | — | 2/6 | 4 |
-| symlink | — | 2/2 | 0 |
-| time | — | 1/1 | 0 |
-| truncate | — | 2/4 | 2 |
-| umask | — | 1/1 | 0 |
-| uname | — | 2/3 | 1 |
-| unlink | — | 0/5 | 5 |
+| pread | — | 0/4 | 4 |
+| pselect | — | 0/6 | 6 |
+| pwrite | — | 0/8 | 8 |
+| read | — | 0/4 | 4 |
+| readv | — | 0/2 | 2 |
+| rmdir | — | 0/1 | 1 |
+| select | — | 0/4 | 4 |
+| sendfile | — | 0/16 | 16 |
+| setrlimit | — | 0/2 | 2 |
+| signal | — | 0/5 | 5 |
+| socket | — | 0/2 | 2 |
+| socketpair | — | 0/2 | 2 |
+| stat | — | 0/2 | 2 |
+| symlink | — | 0/2 | 2 |
+| time | — | 0/1 | 1 |
+| truncate | — | 0/2 | 2 |
+| umask | — | 0/1 | 1 |
+| uname | — | 0/3 | 3 |
+| unlink | — | 0/2 | 2 |
 | unlinkat | — | 0/1 | 1 |
-| vfork | — | 1/2 | 1 |
+| vfork | — | 0/2 | 2 |
 | wait4 | — | 0/3 | 3 |
-| waitid | — | 2/11 | 9 |
-| waitpid | — | 1/11 | 10 |
-| write | — | 4/6 | 2 |
-| writev | — | 1/2 | 1 |
+| waitid | — | 0/11 | 11 |
+| waitpid | — | 0/11 | 11 |
+| write | — | 0/6 | 6 |
+| writev | — | 0/2 | 2 |
 
 <details><summary>Failing cases</summary>
 
-- **accept**: accept02 — accept02.c:116: TBROK: ioctl(3,SIOCGIFINDEX,...) failed: ENOTTY (25); accept03 — accept03.c:46: TFAIL: accept() on O_PATH file expected EBADF: ENOTSOCK (88)
-- **access**: access01 — passed 0 failed 0 broken 0; access02 — passed 0 failed 0 broken 0; access03 — passed 0 failed 0 broken 0; access04 — passed 0 failed 0 broken 0
-- **alarm**: alarm02 — alarm02.c:34: TFAIL: alarm(2147483647) invalid retval 30: SUCCESS (0); alarm03 — alarm03.c:20: TFAIL: alarm(100) invalid retval 30: SUCCESS (0); alarm05 — alarm05.c:26: TFAIL: alarm(10) invalid retval 32: SUCCESS (0); alarm06 — alarm06.c:30: TFAIL: alarm(2) invalid retval 34: SUCCESS (0); alarm07 — alarm07.c:24: TFAIL: alarm(1) invalid retval 34: SUCCESS (0)
-- **bind**: bind01 — passed 0 failed 0 broken 0; bind02 — passed 0 failed 0 broken 0; bind03 — passed 0 failed 0 broken 0; bind04 — passed 0 failed 0 broken 0; bind05 — passed 0 failed 0 broken 0
-- **chdir**: chdir01 — passed 0 failed 0 broken 0; chdir04 — chdir04.c:27: TFAIL: chdir() expected ENAMETOOLONG: ENOENT (2)
-- **chmod**: chmod01 — no summary; chmod03 — passed 0 failed 0 broken 0; chmod05 — passed 0 failed 0 broken 0; chmod06 — passed 0 failed 0 broken 0; chmod07 — passed 0 failed 0 broken 0; chmod09 — passed 0 failed 0 broken 0
-- **clock_gettime**: clock_gettime01 — passed 0 failed 0 broken 0; clock_gettime02 — passed 0 failed 0 broken 0; clock_gettime03 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; clock_gettime04 — clock_gettime04.c:161: TFAIL: CLOCK_REALTIME: Time travelled backwards (0): -64 ns
-- **clock_nanosleep**: clock_nanosleep01 — no summary; clock_nanosleep03 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config
-- **clone**: clone08 (hang/timeout) — no summary; clone09 — passed 0 failed 0 broken 0; clone11 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config
-- **connect**: connect01 (hang/timeout) — no summary; connect03 — passed 0 failed 0 broken 0
-- **creat**: creat01 — creat01.c:47: TFAIL: creat() failed to truncate file to 0 bytes; creat04 — passed 0 failed 0 broken 0; creat05 — creat05.c:55: TBROK: creat(creat05_1020,0666) failed: EMFILE (24); creat06 — passed 0 failed 0 broken 0; creat08 — passed 0 failed 0 broken 0; creat09 — passed 0 failed 0 broken 0
-- **dup**: dup03 — dup03.c:36: TBROK: dup(3) failed: EMFILE (24); dup05 — dup05.c:26: TBROK: mkfifo(dupfile, 0777) failed: EPERM (1); dup06 — dup06.c:58: TFAIL: Not enough files duped
-- **dup2**: dup205 — dup205.c:53: TFAIL: Not enough files duped
-- **dup3**: dup3_02 — dup3_02.c:39: TFAIL: dup3(3, 5, -1) expected EINVAL: EBADF (9)
-- **epoll_ctl**: epoll_ctl02 — epoll_ctl02.c:85: TFAIL: epoll_ctl(...) if events is NULL succeeded; epoll_ctl04 — epoll_ctl04.c:61: TFAIL: epoll_ctl(..., EPOLL_CTL_ADD, ...) with number of nesting is 5 succeeded; epoll_ctl06 — epoll_ctl06.c:69: TFAIL: epoll_ctl() on O_PATH file expected EBADF: EPERM (1)
-- **epoll_wait**: epoll_wait02 — tst_timer_test.c:292: TFAIL: epoll_wait() woken up early 249 times range: [999,381]; epoll_wait03 — epoll_wait03.c:63: TFAIL: epoll_wait() events has no write permissions invalid retval 1: SUCCESS (0); epoll_wait05 — epoll_wait05.c:41: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110); epoll_wait06 — epoll_wait06.c:78: TFAIL: write() failed invalid retval 4096: SUCCESS (0); epoll_wait08 (hang/timeout) — no summary; epoll_wait10 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; epoll_wait11 — epoll_wait11.c:48: TFAIL: epoll_wait() returned 0, expected 1: SUCCESS (0); epoll_wait12 — epoll_wait12.c:64: TFAIL: epoll_wait(efd, &ev, 1, 5000) retval 0 != 1: SUCCESS (0); epoll_wait14 — epoll_wait14.c:99: TFAIL: fd 0 reported 18 times, expected 4; epoll_wait15 — epoll_wait15.c:52: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110); epoll_wait16 — epoll_wait16.c:88: TBROK: Failed to open FILE '/proc/301/stat' for reading: ENOENT (2)
-- **execve**: execve01 — tst_test.c:543: TBROK: Invalid child (311) exit value 127; execve03 — passed 0 failed 0 broken 0; execve06 — tst_test.c:211: TBROK: Invalid shared memory region (bad magic)
-- **fchdir**: fchdir03 — passed 0 failed 0 broken 0
-- **fchmod**: fchmod01 — fchmod01.c:37: TFAIL: testfile: Incorrect modes 0644, Expected 0000; fchmod02 — passed 0 failed 0 broken 0; fchmod03 — passed 0 failed 0 broken 0; fchmod04 — passed 0 failed 0 broken 0; fchmod05 — passed 0 failed 0 broken 0; fchmod06 — passed 0 failed 0 broken 0
-- **fcntl**: fcntl13 — fcntl13.c:45: TFAIL: fcntl(1, F_SETLK, flock) succeeded; fcntl13_64 — fcntl13.c:45: TFAIL: fcntl(1, F_SETLK, flock) succeeded; fcntl14 — fcntl14.c:74: TFAIL: flock.l_pid (0) != parent_pid (363); fcntl14_64 — fcntl14.c:74: TFAIL: flock.l_pid (0) != parent_pid (368); fcntl15 — fcntl15.c:88: TFAIL: Succeeded to lock already locked region one; fcntl15_64 — fcntl15.c:88: TFAIL: Succeeded to lock already locked region one; fcntl27 — fcntl27.c:37: TFAIL: fcntl(fd, F_SETLEASE, F_RDLCK) expected EAGAIN/EWOULDBLOCK: EINVAL (22); fcntl27_64 — fcntl27.c:37: TFAIL: fcntl(fd, F_SETLEASE, F_RDLCK) expected EAGAIN/EWOULDBLOCK: EINVAL (22); fcntl30 — fcntl30.c:37: TBROK: Failed to open FILE '/proc/sys/fs/pipe-max-size' for reading: ENOENT (2); fcntl30_64 — fcntl30.c:37: TBROK: Failed to open FILE '/proc/sys/fs/pipe-max-size' for reading: ENOENT (2); fcntl33 — passed 0 failed 0 broken 0; fcntl33_64 — passed 0 failed 0 broken 0; fcntl34 — fcntl34.c:99: TBROK: Short read(3,0x4fffffffe900,4096) returned only 0; fcntl34_64 — fcntl34.c:99: TBROK: Short read(3,0x4fffffffe8f0,4096) returned only 0; fcntl37 — fcntl37.c:73: TBROK: Failed to open FILE '/proc/sys/fs/pipe-max-size' for reading: ENOENT (2); fcntl37_64 — fcntl37.c:73: TBROK: Failed to open FILE '/proc/sys/fs/pipe-max-size' for reading: ENOENT (2); fcntl38 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl38_64 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl39 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl39_64 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl40 — passed 0 failed 0 broken 0; fcntl40_64 — passed 0 failed 0 broken 0
-- **fork**: fork04 — fork04.c:37: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110); fork08 (hang/timeout) — skipped: hangs Shiro; fork09 — no summary; fork14 — passed 0 failed 0 broken 0
-- **fstat**: fstat02 — fstat02.c:33: TFAIL: stat_buf.st_nlink (1) != NLINK (2); fstat02_64 — fstat02.c:33: TFAIL: stat_buf.st_nlink (1) != NLINK (2); fstat03 — fstat03.c:56: TFAIL: fstat() returned 0, expected -1; fstat03_64 — fstat03.c:56: TFAIL: fstat() returned 0, expected -1
-- **futex**: futex_cmp_requeue01 (hang/timeout) — no summary; futex_cmp_requeue02 — futex_cmp_requeue02.c:60: TFAIL: futex_cmp_requeue() failed unexpectedly, expected EAGAIN/EWOULDBLOCK: EINVAL (22); futex_cmp_requeue03 — futex_cmp_requeue03.c:71: TFAIL: uaddr unmapped expected EFAULT: EINVAL (22); futex_wait02 (hang/timeout) — no summary; futex_wait03 — futex_wait03.c:33: TBROK: Failed to open FILE '/proc/1216/stat' for reading: ENOENT (2); futex_wait05 — tst_timer_test.c:292: TFAIL: futex_wait() woken up early 3 times range: [24,11]; futex_wait07 — futex_wait07.c:50: TFAIL: futex_wait(tv->fntype, futex, *futex, &timeout, 0) expected EINTR: ETIMEDOUT (110); futex_wait_bitset01 — futex_wait_bitset01.c:70: TFAIL: expected ETIMEDOUT: EINVAL (22); futex_waitv01 — passed 0 failed 0 broken 0; futex_waitv02 — passed 0 failed 0 broken 0; futex_waitv03 — passed 0 failed 0 broken 0; futex_wake02 (hang/timeout) — no summary; futex_wake03 (hang/timeout) — no summary; futex_wake04 — passed 0 failed 0 broken 0; futex_wake05 (hang/timeout) — no summary
-- **getcwd**: getcwd03 — getcwd03.c:58: TFAIL: getcwd() got mismatched working directories (/tmp/ltp/getcwd03/LTP_get1Z8hPh/getcwd1.1248, /tmp/ltp/getcwd03/LTP_get1Z8hPh/getcwd2.1248); getcwd04 — passed 0 failed 0 broken 0
-- **getdents**: getdents01 — passed 0 failed 0 broken 0; getdents02 — passed 0 failed 0 broken 0
-- **getpid**: getpid01 — getpid01.c:18: TBROK: Failed to open FILE '/proc/sys/kernel/pid_max' for reading: ENOENT (2)
-- **getppid**: getppid01 — getppid01.c:18: TBROK: Failed to open FILE '/proc/sys/kernel/pid_max' for reading: ENOENT (2)
-- **getrlimit**: getrlimit02 — getrlimit02.c:36: TFAIL: getrlimit() with invalid resource type succeeded
-- **gettimeofday**: gettimeofday02 (hang/timeout) — no summary
-- **kill**: kill03 — tst_pid.c:46: TBROK: Failed to open FILE '/proc/sys/kernel/pid_max' for reading: ENOENT (2); kill05 — passed 0 failed 0 broken 0; kill06 (hang/timeout) — no summary; kill08 (hang/timeout) — no summary; kill11 (hang/timeout) — no summary
-- **link**: link02 — link02.c:36: TFAIL: link(oldpath,newpath) returned 0 but stat link counts do not match 1 1; link04 — passed 0 failed 0 broken 0; link05 — link05.c:45: TFAIL: link(lkfile_1288, lkfile_1288[1-1000]) ret 0 for 1000 files, stat values do not match 1 1; link08 — passed 0 failed 0 broken 0
-- **lseek**: lseek02 — lseek02.c:76: TBROK: mkfifo(tfifo1, 0777) failed: EPERM (1); lseek11 — passed 0 failed 0 broken 0
-- **lstat**: lstat02 — lstat02.c:66: TFAIL: lstat() returned 0, expected -1: SUCCESS (0); lstat02_64 — lstat02.c:66: TFAIL: lstat() returned 0, expected -1: SUCCESS (0)
-- **mkdir**: mkdir02 — passed 0 failed 0 broken 0; mkdir03 — passed 0 failed 0 broken 0; mkdir04 — passed 0 failed 0 broken 0; mkdir05 — passed 0 failed 0 broken 0; mkdir09 — passed 0 failed 0 broken 0
-- **mkdirat**: mkdirat02 — passed 0 failed 0 broken 0
-- **nanosleep**: nanosleep02 — nanosleep02.c:46: TFAIL: nanosleep was not interrupted, returned 0, expected -1
-- **open**: open02 — passed 0 failed 0 broken 0; open06 — open06.c:20: TBROK: mkfifo(tmpfile, 0644) failed: EPERM (1); open07 — open07.c:50: TBROK: creat(symdir1/testfile,0644) failed: ENOTDIR (20); open08 — passed 0 failed 0 broken 0; open10 — passed 0 failed 0 broken 0; open11 — passed 0 failed 0 broken 0; open12 — passed 0 failed 0 broken 0; open13 — open13.c:76: TFAIL: read() on original FD succeeded; open14 — passed 0 failed 0 broken 0
-- **openat**: openat02 — passed 0 failed 0 broken 0
-- **other**: leapsec01 — passed 0 failed 0 broken 0
-- **pause**: pause01 — pause01.c:21: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110); pause02 — pause02.c:16: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110)
-- **pipe**: pipe02 — pipe02.c:30: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); pipe06 — pipe06.c:29: TBROK: pipe({1022,1023}) failed: EMFILE (24); pipe07 — pipe07.c:28: TBROK: opendir(/proc/self/fd) failed: ENOENT (2); pipe08 — pipe08.c:35: TFAIL: sigpipe_cnt (0) != 1 (1); pipe10 — pipe10.c:33: TBROK: close(-1) failed: EBADF (9); pipe11 — pipe11.c:94: TBROK: close(-1) failed: EBADF (9); pipe13 — pipe13.c:57: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110); pipe15 — pipe15.c:53: TBROK: Failed to open FILE '/proc/sys/fs/pipe-user-pages-soft' for reading: ENOENT (2)
-- **pipe2**: pipe2_04 (hang/timeout) — no summary
-- **poll**: poll02 — tst_timer_test.c:292: TFAIL: poll() woken up early 205 times range: [998,302]
+- **accept**: accept01 — passed 0 failed 0 broken 0; accept02 — accept02.c:116: TBROK: ioctl(3,SIOCGIFINDEX,...) failed: ENOTTY (25); accept03 — accept03.c:46: TFAIL: accept() on O_PATH file expected EBADF: ENOTSOCK (88)
+- **alarm**: alarm02 — alarm02.c:36: TFAIL: alarm(0) retval 0 != 2147483647: SUCCESS (0); alarm03 — passed 0 failed 0 broken 0; alarm05 — alarm05.c:30: TFAIL: alarms_fired (0) != 1 (1); alarm06 — passed 0 failed 0 broken 0; alarm07 — alarm07.c:34: TFAIL: alarm_cnt (0) != 1 (1)
+- **bind**: bind01 — passed 0 failed 0 broken 0; bind03 — passed 0 failed 0 broken 0; bind04 — passed 0 failed 0 broken 0; bind05 — passed 0 failed 0 broken 0
+- **chdir**: chdir02 — passed 0 failed 0 broken 0; chdir04 — chdir04.c:27: TFAIL: chdir() expected ENAMETOOLONG: ENOENT (2)
+- **chmod**: chmod01 — passed 0 failed 0 broken 0; chmod08 — passed 0 failed 0 broken 0
+- **clock_gettime**: clock_gettime04 — clock_gettime04.c:161: TFAIL: CLOCK_REALTIME: Time travelled backwards (0): -128 ns
+- **clock_nanosleep**: clock_nanosleep01 — clock_nanosleep01.c:195: TFAIL: The clock_nanosleep() haven't updated timespec or it's not valid: SUCCESS (0); clock_nanosleep02 — passed 0 failed 0 broken 0; clock_nanosleep04 — passed 0 failed 0 broken 0
+- **clone**: clone01 — passed 0 failed 0 broken 0; clone03 — clone03.c:36: TFAIL: pid(0) retval 155 != 0: SUCCESS (0); clone04 — passed 0 failed 0 broken 0; clone05 — passed 0 failed 0 broken 0; clone06 — tst_test.c:1730: TBROK: Test haven't reported results!; clone07 — passed 0 failed 0 broken 0; clone08 — clone08.c:85: TBROK: CLONE_PARENT clone() failed: EINVAL (22); clone10 — passed 0 failed 0 broken 0
+- **close**: close01 — passed 0 failed 0 broken 0; close02 — passed 0 failed 0 broken 0
+- **connect**: connect01 — passed 0 failed 0 broken 0; connect03 — passed 0 failed 0 broken 0
+- **creat**: creat01 — creat01.c:47: TFAIL: creat() failed to truncate file to 0 bytes; creat03 — passed 0 failed 0 broken 0; creat05 — creat05.c:55: TBROK: creat(creat05_1020,0666) failed: EMFILE (24)
+- **dup**: dup01 — passed 0 failed 0 broken 0; dup02 — passed 0 failed 0 broken 0; dup03 — dup03.c:36: TBROK: dup(3) failed: EMFILE (24); dup04 — passed 0 failed 0 broken 0; dup05 — dup05.c:26: TBROK: mkfifo(dupfile, 0777) failed: EPERM (1); dup06 — dup06.c:58: TFAIL: Not enough files duped; dup07 — passed 0 failed 0 broken 0
+- **dup2**: dup201 — passed 0 failed 0 broken 0; dup202 — passed 0 failed 0 broken 0; dup203 — passed 0 failed 0 broken 0; dup204 — passed 0 failed 0 broken 0; dup205 — dup205.c:53: TFAIL: Not enough files duped; dup206 — passed 0 failed 0 broken 0; dup207 — passed 0 failed 0 broken 0
+- **dup3**: dup3_01 — passed 0 failed 0 broken 0; dup3_02 — dup3_02.c:39: TFAIL: dup3(3, 5, -1) expected EINVAL: EBADF (9)
+- **epoll_create**: epoll_create01 — passed 0 failed 0 broken 0; epoll_create02 — passed 0 failed 0 broken 0; epoll_create03 — passed 0 failed 0 broken 0
+- **epoll_create1**: epoll_create1_01 — passed 0 failed 0 broken 0; epoll_create1_02 — passed 0 failed 0 broken 0
+- **epoll_ctl**: epoll_ctl01 — passed 0 failed 0 broken 0; epoll_ctl02 — epoll_ctl02.c:85: TFAIL: epoll_ctl(...) if events is NULL succeeded; epoll_ctl03 — passed 0 failed 0 broken 0; epoll_ctl04 — epoll_ctl04.c:61: TFAIL: epoll_ctl(..., EPOLL_CTL_ADD, ...) with number of nesting is 5 succeeded; epoll_ctl05 — passed 0 failed 0 broken 0; epoll_ctl06 — epoll_ctl06.c:69: TFAIL: epoll_ctl() on O_PATH file expected EBADF: EPERM (1); epoll_ctl07 — passed 0 failed 0 broken 0
+- **epoll_wait**: epoll_wait01 — passed 0 failed 0 broken 0; epoll_wait02 — tst_timer_test.c:314: TFAIL: epoll_wait() slept for too long; epoll_wait03 — epoll_wait03.c:63: TFAIL: epoll_wait() events has no write permissions invalid retval 1: SUCCESS (0); epoll_wait04 — passed 0 failed 0 broken 0; epoll_wait05 — epoll_wait05.c:58: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); epoll_wait06 — epoll_wait06.c:78: TFAIL: write() failed invalid retval 4096: SUCCESS (0); epoll_wait07 — passed 0 failed 0 broken 0; epoll_wait08 — tst_test.c:1730: TBROK: Test haven't reported results!; epoll_wait09 — passed 0 failed 0 broken 0; epoll_wait11 — tst_test.c:1730: TBROK: Test haven't reported results!; epoll_wait12 — tst_test.c:1730: TBROK: Test haven't reported results!; epoll_wait13 — passed 0 failed 0 broken 0; epoll_wait14 — epoll_wait14.c:99: TFAIL: fd 0 reported 18 times, expected 4; epoll_wait15 — epoll_wait15.c:80: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); epoll_wait16 — epoll_wait16.c:93: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)
+- **execve**: execve01 — tst_test.c:211: TBROK: Invalid shared memory region (bad magic); execve06 — tst_test.c:211: TBROK: Invalid shared memory region (bad magic)
+- **faccessat**: faccessat01 — passed 0 failed 0 broken 0; faccessat02 — passed 0 failed 0 broken 0
+- **fchdir**: fchdir01 — passed 0 failed 0 broken 0; fchdir02 — passed 0 failed 0 broken 0
+- **fchmod**: fchmod01 — fchmod01.c:37: TFAIL: testfile: Incorrect modes 0644, Expected 0000
+- **fcntl**: fcntl02 — passed 0 failed 0 broken 0; fcntl02_64 — passed 0 failed 0 broken 0; fcntl03 — passed 0 failed 0 broken 0; fcntl03_64 — passed 0 failed 0 broken 0; fcntl04 — passed 0 failed 0 broken 0; fcntl04_64 — passed 0 failed 0 broken 0; fcntl05 — passed 0 failed 0 broken 0; fcntl05_64 — passed 0 failed 0 broken 0; fcntl08 — passed 0 failed 0 broken 0; fcntl08_64 — passed 0 failed 0 broken 0; fcntl12 — tst_test.c:1730: TBROK: Test haven't reported results!; fcntl12_64 — tst_test.c:1730: TBROK: Test haven't reported results!; fcntl13 — fcntl13.c:45: TFAIL: fcntl(1, F_SETLK, flock) succeeded; fcntl13_64 — fcntl13.c:45: TFAIL: fcntl(1, F_SETLK, flock) succeeded; fcntl14 (hang/timeout) — no summary; fcntl14_64 (hang/timeout) — no summary; fcntl15 — fcntl15.c:88: TFAIL: Succeeded to lock already locked region one; fcntl15_64 — fcntl15.c:88: TFAIL: Succeeded to lock already locked region one; fcntl27 — fcntl27.c:37: TFAIL: fcntl(fd, F_SETLEASE, F_RDLCK) expected EAGAIN/EWOULDBLOCK: EINVAL (22); fcntl27_64 — fcntl27.c:37: TFAIL: fcntl(fd, F_SETLEASE, F_RDLCK) expected EAGAIN/EWOULDBLOCK: EINVAL (22); fcntl29 — passed 0 failed 0 broken 0; fcntl29_64 — passed 0 failed 0 broken 0; fcntl30 — fcntl30.c:27: TFAIL: Expect: new pipe size (65536) >= requested size (1048576); fcntl30_64 — fcntl30.c:27: TFAIL: Expect: new pipe size (65536) >= requested size (1048576); fcntl34 — fcntl34.c:99: TBROK: Short read(3,0x4fffffffe8e0,4096) returned only 0; fcntl34_64 — fcntl34.c:99: TBROK: Short read(3,0x4fffffffe8d0,4096) returned only 0; fcntl36 — passed 0 failed 0 broken 0; fcntl36_64 — passed 0 failed 0 broken 0; fcntl37 — passed 0 failed 0 broken 0; fcntl37_64 — passed 0 failed 0 broken 0; fcntl38 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl38_64 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl39 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl39_64 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl40 (hang/timeout) — skipped: hangs Shiro; fcntl40_64 — passed 0 failed 0 broken 0
+- **fork**: fork01 — passed 0 failed 0 broken 0; fork03 — passed 0 failed 0 broken 0; fork04 — fork04.c:63: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); fork07 — passed 0 failed 0 broken 0; fork08 — passed 0 failed 0 broken 0; fork09 — passed 0 failed 0 broken 0; fork10 — passed 0 failed 0 broken 0; fork14 — passed 0 failed 0 broken 0; fork_procs (hang/timeout) — no summary
+- **fstat**: fstat02 — fstat02.c:33: TFAIL: stat_buf.st_nlink (1) != NLINK (2); fstat02_64 — fstat02.c:33: TFAIL: stat_buf.st_nlink (1) != NLINK (2); fstat03 — tst_test.c:1746: TBROK: Test 0 haven't reported results!; fstat03_64 — tst_test.c:1746: TBROK: Test 0 haven't reported results!
+- **ftruncate**: ftruncate01 — passed 0 failed 0 broken 0; ftruncate01_64 — passed 0 failed 0 broken 0; ftruncate03 — passed 0 failed 0 broken 0; ftruncate03_64 — passed 0 failed 0 broken 0
+- **futex**: futex_cmp_requeue01 (hang/timeout) — no summary; futex_cmp_requeue02 — futex_cmp_requeue02.c:60: TFAIL: futex_cmp_requeue() failed unexpectedly, expected EAGAIN/EWOULDBLOCK: EINVAL (22); futex_cmp_requeue03 — futex_cmp_requeue03.c:71: TFAIL: uaddr unmapped expected EFAULT: EINVAL (22); futex_wait01 — passed 0 failed 0 broken 0; futex_wait02 (hang/timeout) — no summary; futex_wait03 — passed 0 failed 0 broken 0; futex_wait04 — passed 0 failed 0 broken 0; futex_wait05 — tst_timer_test.c:292: TFAIL: futex_wait() woken up early 2 times range: [10,8]; futex_wait06 — passed 0 failed 0 broken 0; futex_wait07 (hang/timeout) — no summary; futex_wait_bitset01 — passed 0 failed 0 broken 0; futex_waitv01 — passed 0 failed 0 broken 0; futex_waitv02 — passed 0 failed 0 broken 0; futex_waitv03 — passed 0 failed 0 broken 0; futex_wake01 — passed 0 failed 0 broken 0; futex_wake02 — futex_utils.h:46: TBROK: opendir(/proc/1322/task/) failed: ENOENT (2); futex_wake03 (hang/timeout) — skipped: hangs Shiro; futex_wake05 (hang/timeout) — no summary
+- **getcwd**: getcwd01 — passed 0 failed 0 broken 0; getcwd02 — passed 0 failed 0 broken 0; getcwd03 — getcwd03.c:58: TFAIL: getcwd() got mismatched working directories (/tmp/ltp/getcwd03/LTP_getiMJDav/getcwd1.107, /tmp/ltp/getcwd03/LTP_getiMJDav/getcwd2.107); getcwd04 — passed 0 failed 0 broken 0
+- **getpid**: getpid01 — tst_test.c:1730: TBROK: Test haven't reported results!
+- **getppid**: getppid01 — passed 0 failed 0 broken 0; getppid02 — getppid02.c:36: TFAIL: *child_pid (0) != pid (215)
+- **getrlimit**: getrlimit01 — passed 0 failed 0 broken 0; getrlimit02 — getrlimit02.c:36: TFAIL: getrlimit() with invalid resource type succeeded; getrlimit03 — passed 0 failed 0 broken 0
+- **gettimeofday**: gettimeofday01 — passed 0 failed 0 broken 0; gettimeofday02 (hang/timeout) — no summary
+- **kill**: kill03 — passed 0 failed 0 broken 0; kill06 — passed 0 failed 0 broken 0; kill08 — passed 0 failed 0 broken 0; kill11 — passed 0 failed 0 broken 0
+- **link**: link02 — link02.c:36: TFAIL: link(oldpath,newpath) returned 0 but stat link counts do not match 1 1; link05 — link05.c:45: TFAIL: link(lkfile_273, lkfile_273[1-1000]) ret 0 for 1000 files, stat values do not match 1 1
+- **lseek**: lseek01 — passed 0 failed 0 broken 0; lseek02 — lseek02.c:76: TBROK: mkfifo(tfifo1, 0777) failed: EPERM (1); lseek07 — passed 0 failed 0 broken 0; lseek11 — passed 0 failed 0 broken 0
+- **lstat**: lstat01 — passed 0 failed 0 broken 0; lstat01_64 — passed 0 failed 0 broken 0; lstat02 — lstat02.c:66: TFAIL: lstat() returned 0, expected -1: SUCCESS (0); lstat02_64 — lstat02.c:66: TFAIL: lstat() returned 0, expected -1: SUCCESS (0)
+- **nanosleep**: nanosleep01 — passed 0 failed 0 broken 0; nanosleep02 — nanosleep02.c:46: TFAIL: nanosleep was not interrupted, returned 0, expected -1; nanosleep04 — passed 0 failed 0 broken 0
+- **open**: open01 — passed 0 failed 0 broken 0; open03 — passed 0 failed 0 broken 0; open04 — passed 0 failed 0 broken 0; open06 — open06.c:20: TBROK: mkfifo(tmpfile, 0644) failed: EPERM (1); open07 — open07.c:50: TBROK: creat(symdir1/testfile,0644) failed: ENOTDIR (20); open09 — passed 0 failed 0 broken 0; open13 — open13.c:76: TFAIL: read() on original FD succeeded; open15 — passed 0 failed 0 broken 0
+- **openat**: openat01 — passed 0 failed 0 broken 0
+- **pause**: pause01 — pause01.c:36: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); pause02 — pause02.c:32: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)
+- **pipe**: pipe01 — passed 0 failed 0 broken 0; pipe02 — pipe02.c:30: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); pipe03 — passed 0 failed 0 broken 0; pipe06 — pipe06.c:29: TBROK: pipe({1022,1023}) failed: EMFILE (24); pipe07 — pipe07.c:28: TBROK: opendir(/proc/self/fd) failed: ENOENT (2); pipe08 — passed 0 failed 0 broken 0; pipe10 — tst_test.c:1730: TBROK: Test haven't reported results!; pipe11 — tst_test.c:1746: TBROK: Test 0 haven't reported results!; pipe12 — passed 0 failed 0 broken 0; pipe13 — pipe13.c:77: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); pipe14 — passed 0 failed 0 broken 0; pipe15 — pipe15.c:53: TBROK: Failed to open FILE '/proc/sys/fs/pipe-user-pages-soft' for reading: ENOENT (2)
+- **pipe2**: pipe2_01 — passed 0 failed 0 broken 0; pipe2_04 — pipe2_04.c:82: TFAIL: Pipe size (65536) must be page size (4096)
+- **poll**: poll01 — passed 0 failed 0 broken 0; poll02 — tst_timer_test.c:292: TFAIL: poll() woken up early 3 times range: [1860,1358]; poll03 — passed 0 failed 0 broken 0; poll04 — passed 0 failed 0 broken 0
 - **ppoll**: ppoll01 — ppoll01.c:288: TFAIL: ret: 0, exp: -1, ret_errno: SUCCESS (0), exp_errno: EINTR (4)
-- **pread**: pread02 — pread02.c:42: TFAIL: pread(7, 1024, 0) file descriptor is a directory expected EISDIR: ESPIPE (29); pread02_64 — pread02.c:42: TFAIL: pread(7, 1024, 0) file descriptor is a directory expected EISDIR: ESPIPE (29)
-- **pselect**: pselect01 — tst_timer_test.c:292: TFAIL: pselect() woken up early 267 times range: [999,267]; pselect01_64 — tst_timer_test.c:292: TFAIL: pselect() woken up early 277 times range: [999,469]
-- **read**: read03 — read03.c:32: TBROK: mknod() failed: EPERM (1)
-- **readlink**: readlink01 — passed 0 failed 0 broken 0; readlink03 — passed 0 failed 0 broken 0
-- **readv**: readv02 — readv02.c:72: TFAIL: readv(3, 0x5371c0, 1) succeeded
-- **rename**: rename01 — passed 0 failed 0 broken 0; rename03 — passed 0 failed 0 broken 0; rename04 — passed 0 failed 0 broken 0; rename05 — passed 0 failed 0 broken 0; rename06 — passed 0 failed 0 broken 0; rename07 — passed 0 failed 0 broken 0; rename08 — passed 0 failed 0 broken 0; rename09 — passed 0 failed 0 broken 0; rename10 — passed 0 failed 0 broken 0; rename12 — passed 0 failed 0 broken 0; rename13 — passed 0 failed 0 broken 0; rename15 — passed 0 failed 0 broken 0
-- **rmdir**: rmdir02 — passed 0 failed 0 broken 0; rmdir03 — passed 0 failed 0 broken 0
-- **select**: select01 — select01.c:106: TBROK: mkfifo(tmpfile2, 0666) failed: EPERM (1); select02 — tst_timer_test.c:292: TFAIL: select() woken up early 225 times range: [999,344]; select03 — no summary
-- **sendfile**: sendfile03 — sendfile03.c:51: TFAIL: sendfile(..) with out_fd=-1 expected EBADF: EFAULT (14); sendfile03_64 — sendfile03.c:51: TFAIL: sendfile(..) with out_fd=-1 expected EBADF: EFAULT (14); sendfile04 — sendfile04.c:60: TFAIL: sendfile(..) with pass_mapped_buffer, protection=1 succeeded; sendfile04_64 — sendfile04.c:60: TFAIL: sendfile(..) with pass_mapped_buffer, protection=1 succeeded; sendfile05 — sendfile05.c:39: TFAIL: sendfile(out, in, &offset, ..) with offset=-1 succeeded; sendfile05_64 — sendfile05.c:39: TFAIL: sendfile(out, in, &offset, ..) with offset=-1 succeeded; sendfile06 — sendfile06.c:50: TFAIL: sendfile() failed to return expected value, expected: 26, got: -1; sendfile06_64 — sendfile06.c:50: TFAIL: sendfile() failed to return expected value, expected: 26, got: -1; sendfile07 — passed 0 failed 0 broken 0; sendfile07_64 — passed 0 failed 0 broken 0; sendfile08 — sendfile08.c:34: TBROK: sendfile() failed: EFAULT (14); sendfile08_64 — sendfile08.c:34: TBROK: sendfile() failed: EFAULT (14); sendfile09 — passed 0 failed 0 broken 0; sendfile09_64 — passed 0 failed 0 broken 0
-- **setrlimit**: setrlimit02 — passed 0 failed 0 broken 0; setrlimit03 — passed 0 failed 0 broken 0; setrlimit04 — passed 0 failed 0 broken 0; setrlimit06 — no summary
-- **signal**: signal01 (hang/timeout) — no summary; signal05 (hang/timeout) — skipped: hangs Shiro
-- **socket**: socket01 — socket01.c:67: TFAIL: expected EINVAL(22): EPROTONOSUPPORT (93)
-- **socketpair**: socketpair01 — socketpair01.c:73: TFAIL: expected EINVAL(22): EOPNOTSUPP (95)
-- **stat**: stat01 — passed 0 failed 0 broken 0; stat01_64 — passed 0 failed 0 broken 0; stat03 — passed 0 failed 0 broken 0; stat03_64 — passed 0 failed 0 broken 0
-- **truncate**: truncate03 — passed 0 failed 0 broken 0; truncate03_64 — passed 0 failed 0 broken 0
-- **uname**: uname04 — uname04.c:72: TBROK: persona(131072) failed: ENOSYS (38)
-- **unlink**: unlink05 — unlink05.c:29: TBROK: mkfifo(tfifo_137, 0777) failed: EPERM (1); unlink07 — unlink07.c:44: TFAIL: path contains a regular file expected ENOTDIR: ENOENT (2); unlink08 — passed 0 failed 0 broken 0; unlink09 — passed 0 failed 0 broken 0; unlink10 — passed 0 failed 0 broken 0
+- **pread**: pread01 — passed 0 failed 0 broken 0; pread01_64 — passed 0 failed 0 broken 0; pread02 — pread02.c:42: TFAIL: pread(7, 1024, 0) file descriptor is a directory expected EISDIR: ESPIPE (29); pread02_64 — pread02.c:42: TFAIL: pread(7, 1024, 0) file descriptor is a directory expected EISDIR: ESPIPE (29)
+- **pselect**: pselect01 — tst_timer_test.c:292: TFAIL: pselect() woken up early 1 times range: [1362,1362]; pselect01_64 — tst_timer_test.c:314: TFAIL: pselect() slept for too long; pselect02 — passed 0 failed 0 broken 0; pselect02_64 — passed 0 failed 0 broken 0; pselect03 — passed 0 failed 0 broken 0; pselect03_64 — passed 0 failed 0 broken 0
+- **pwrite**: pwrite01 — passed 0 failed 0 broken 0; pwrite01_64 — passed 0 failed 0 broken 0; pwrite02 — passed 0 failed 0 broken 0; pwrite02_64 — passed 0 failed 0 broken 0; pwrite03 — passed 0 failed 0 broken 0; pwrite03_64 — passed 0 failed 0 broken 0; pwrite04 — passed 0 failed 0 broken 0; pwrite04_64 — passed 0 failed 0 broken 0
+- **read**: read01 — passed 0 failed 0 broken 0; read02 — passed 0 failed 0 broken 0; read03 — read03.c:32: TBROK: mknod() failed: EPERM (1); read04 — passed 0 failed 0 broken 0
+- **readv**: readv01 — passed 0 failed 0 broken 0; readv02 — readv02.c:72: TFAIL: readv(3, 0x5371c0, 1) succeeded
+- **rmdir**: rmdir01 — passed 0 failed 0 broken 0
+- **select**: select01 — select01.c:106: TBROK: mkfifo(tmpfile2, 0666) failed: EPERM (1); select02 — tst_timer_test.c:292: TFAIL: select() woken up early 1 times range: [856,856]; select03 — tst_test.c:1746: TBROK: Test 0 haven't reported results!; select04 — passed 0 failed 0 broken 0
+- **sendfile**: sendfile02 — passed 0 failed 0 broken 0; sendfile02_64 — passed 0 failed 0 broken 0; sendfile03 — sendfile03.c:51: TFAIL: sendfile(..) with out_fd=-1 expected EBADF: EFAULT (14); sendfile03_64 — sendfile03.c:51: TFAIL: sendfile(..) with out_fd=-1 expected EBADF: EFAULT (14); sendfile04 — sendfile04.c:60: TFAIL: sendfile(..) with pass_mapped_buffer, protection=1 succeeded; sendfile04_64 — sendfile04.c:60: TFAIL: sendfile(..) with pass_mapped_buffer, protection=1 succeeded; sendfile05 — sendfile05.c:39: TFAIL: sendfile(out, in, &offset, ..) with offset=-1 succeeded; sendfile05_64 — sendfile05.c:39: TFAIL: sendfile(out, in, &offset, ..) with offset=-1 succeeded; sendfile06 — sendfile06.c:50: TFAIL: sendfile() failed to return expected value, expected: 26, got: -1; sendfile06_64 — sendfile06.c:50: TFAIL: sendfile() failed to return expected value, expected: 26, got: -1; sendfile07 — passed 0 failed 0 broken 0; sendfile07_64 — passed 0 failed 0 broken 0; sendfile08 — sendfile08.c:34: TBROK: sendfile() failed: EFAULT (14); sendfile08_64 — sendfile08.c:34: TBROK: sendfile() failed: EFAULT (14); sendfile09 — passed 0 failed 0 broken 0; sendfile09_64 — passed 0 failed 0 broken 0
+- **setrlimit**: setrlimit05 — tst_test.c:1730: TBROK: Test haven't reported results!; setrlimit06 — setrlimit06.c:81: TFAIL: setrlimit(RLIMIT_CPU) failed: EPERM (1)
+- **signal**: signal01 — tst_test.c:1746: TBROK: Test 0 haven't reported results!; signal02 — passed 0 failed 0 broken 0; signal03 — passed 0 failed 0 broken 0; signal04 — passed 0 failed 0 broken 0; signal05 — passed 0 failed 0 broken 0
+- **socket**: socket01 — socket01.c:67: TFAIL: expected EINVAL(22): EPROTONOSUPPORT (93); socket02 — passed 0 failed 0 broken 0
+- **socketpair**: socketpair01 — socketpair01.c:73: TFAIL: expected EINVAL(22): EOPNOTSUPP (95); socketpair02 — passed 0 failed 0 broken 0
+- **stat**: stat02 — passed 0 failed 0 broken 0; stat02_64 — passed 0 failed 0 broken 0
+- **symlink**: symlink02 — passed 0 failed 0 broken 0; symlink04 — passed 0 failed 0 broken 0
+- **time**: time01 — passed 0 failed 0 broken 0
+- **truncate**: truncate02 — passed 0 failed 0 broken 0; truncate02_64 — passed 0 failed 0 broken 0
+- **umask**: umask01 — passed 0 failed 0 broken 0
+- **uname**: uname01 — passed 0 failed 0 broken 0; uname02 — passed 0 failed 0 broken 0; uname04 — uname04.c:72: TBROK: persona(131072) failed: ENOSYS (38)
+- **unlink**: unlink05 — unlink05.c:29: TBROK: mkfifo(tfifo_541, 0777) failed: EPERM (1); unlink07 — unlink07.c:44: TFAIL: path contains a regular file expected ENOTDIR: ENOENT (2)
 - **unlinkat**: unlinkat01 — unlinkat01.c:80: TFAIL: unlinkat() failed: ENOTDIR (20)
-- **vfork**: vfork02 — vfork02.c:61: TBROK: SIGUSR1 is not on hold
-- **wait4**: wait401 (hang/timeout) — no summary; wait402 — wait402.c:28: TBROK: Failed to open FILE '/proc/sys/kernel/pid_max' for reading: ENOENT (2); wait403 — tst_taint.c:43: TBROK: Failed to open FILE '/proc/sys/kernel/tainted' for reading: ENOENT (2)
-- **waitid**: waitid01 — no summary; waitid02 — waitid02.c:19: TFAIL: waitid(P_ALL, 0, infop, WNOHANG) expected EINVAL: ECHILD (10); waitid04 — no summary; waitid05 — no summary; waitid06 — no summary; waitid07 (hang/timeout) — no summary; waitid08 (hang/timeout) — no summary; waitid10 — waitid10.c:51: TBROK: Failed to open FILE '/proc/sys/kernel/core_pattern' for reading: ENOENT (2); waitid11 (hang/timeout) — no summary
-- **waitpid**: waitpid01 — waitpid01.c:80: TBROK: setrlimit(4,0x4ffffffff960) failed: EPERM (1); waitpid04 — waitpid04.c:30: TFAIL: waipid(-1, NULL, 0xffffffff) expected EINVAL: ECHILD (10); waitpid06 (hang/timeout) — no summary; waitpid07 (hang/timeout) — no summary; waitpid08 (hang/timeout) — no summary; waitpid09 (hang/timeout) — no summary; waitpid10 (hang/timeout) — no summary; waitpid11 (hang/timeout) — no summary; waitpid12 (hang/timeout) — no summary; waitpid13 (hang/timeout) — no summary
-- **write**: write04 — write04.c:40: TBROK: mknod() failed: EPERM (1); write05 — write05.c:65: TFAIL: sigpipe_cnt = 0
-- **writev**: writev01 (hang/timeout) — no summary
+- **vfork**: vfork01 — passed 0 failed 0 broken 0; vfork02 — vfork02.c:26: TFAIL: sigismember(&signal, SIGUSR1) (1) != 0 (0)
+- **wait4**: wait401 — passed 0 failed 0 broken 0; wait402 — passed 0 failed 0 broken 0; wait403 — tst_taint.c:43: TBROK: Failed to open FILE '/proc/sys/kernel/tainted' for reading: ENOENT (2)
+- **waitid**: waitid01 — passed 0 failed 0 broken 0; waitid02 — waitid02.c:19: TFAIL: waitid(P_ALL, 0, infop, WNOHANG) expected EINVAL: ECHILD (10); waitid03 — passed 0 failed 0 broken 0; waitid04 — waitid04.c:24: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); waitid05 — passed 0 failed 0 broken 0; waitid06 — passed 0 failed 0 broken 0; waitid07 — waitid07.c:24: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); waitid08 — waitid08.c:24: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); waitid09 — passed 0 failed 0 broken 0; waitid10 — waitid10.c:51: TBROK: Failed to open FILE '/proc/sys/kernel/core_pattern' for reading: ENOENT (2); waitid11 — passed 0 failed 0 broken 0
+- **waitpid**: waitpid01 — waitpid01.c:80: TBROK: setrlimit(4,0x4ffffffff930) failed: EPERM (1); waitpid03 — passed 0 failed 0 broken 0; waitpid04 — waitpid04.c:30: TFAIL: waipid(-1, NULL, 0xffffffff) expected EINVAL: ECHILD (10); waitpid06 (hang/timeout) — skipped: hangs Shiro; waitpid07 — waitpid_common.h:57: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); waitpid08 — waitpid_common.h:57: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); waitpid09 — waitpid09.c:43: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); waitpid10 — waitpid10.c:90: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); waitpid11 — waitpid_common.h:57: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); waitpid12 — waitpid_common.h:57: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); waitpid13 — waitpid_common.h:57: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)
+- **write**: write01 — passed 0 failed 0 broken 0; write02 — passed 0 failed 0 broken 0; write03 — passed 0 failed 0 broken 0; write04 — write04.c:40: TBROK: mknod() failed: EPERM (1); write05 — passed 0 failed 0 broken 0; write06 — passed 0 failed 0 broken 0
+- **writev**: writev01 — writev01.c:124: TFAIL: invalid iov_len, expected: -1 (EINVAL), got: 127 (SUCCESS); writev07 — passed 0 failed 0 broken 0
 
 </details>

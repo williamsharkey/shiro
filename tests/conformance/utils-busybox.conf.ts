@@ -128,7 +128,9 @@ async function runScripts(): Promise<Record<string, AreaResult>> {
       let err = '';
       let timedOut = false;
       const status = await withTimeout(
-        ctx.shell.executeWithStdin(`eval ${quoteArgsForShell([cmd])}`, echoNe(stdin ?? ''), (s: string) => { got += s; }, (s: string) => { err += s; }),
+        // In a subshell, like upstream's `echo -ne "$5" | eval "$2"` (a cd stays inside it)
+        ctx.shell.fork().executeWithStdin(`eval ${quoteArgsForShell([cmd])}`, echoNe(stdin ?? ''), (s: string) => { got += s; }, (s: string) => { err += s; })
+          .catch((e: any) => (e?.constructor?.name === 'ExitSignal' ? e.code : Promise.reject(e))),
         CASE_TIMEOUT, () => { timedOut = true; return -2; });
       got = got.replace(/\r\n/g, '\n');
       const want = echoNe(expect ?? '');

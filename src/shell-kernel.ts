@@ -70,7 +70,7 @@ export async function resolveKernelProgram(
   }
   const base = name.slice(name.lastIndexOf('/') + 1);
   // pkg-installed binaries carry their own arguments, preopens and kernel gate
-  if (packageOfPath(path) && isWasmBytes(bytes)) return packageKernelProgram(shell.fs, path, base, args, found.startsWith('/') ? found : shell.fs.resolvePath(found, shell.cwd));
+  if (packageOfPath(path) && (isWasmBytes(bytes) || isElfBytes(bytes))) return packageKernelProgram(shell.fs, path, base, args, found.startsWith('/') ? found : shell.fs.resolvePath(found, shell.cwd));
   const { wasmProcessMode, wasmRunner } = await import('./wasi/host');
 
   if (isWasmBytes(bytes)) {
@@ -121,6 +121,8 @@ const PIPE_FILTERS = new Set([
 /** A pipe-filter builtin as a kernel stage, or null */
 export function builtinStage(shell: Shell, name: string, args: string[]): KernelProgram | null {
   if (!PIPE_FILTERS.has(name) || shell.functions[name] || shell.aliases.has(name)) return null;
+  // An installed package's program replaces the builtin (pkg-manager.ts)
+  if (shell.pkgShadowBypass !== name && packageShadows(shell.fs).has(name)) return null;
   const cmd = shell.commands.get(name);
   if (!cmd) return null;
   return { argv: [name, ...args], run: (proc, kernel) => kernel.runBuiltin(proc, cmd), builtin: true };
@@ -133,6 +135,10 @@ export interface KernelRunOptions {
   captureStdout: boolean;
   /** Collect stderr too (the last segment has redirects) */
   captureStderr: boolean;
+  /** The last stage's stdout goes to this file (`> f`, `>> f`), opened by the kernel */
+  stdoutTo?: { path: string; append: boolean };
+  /** stderr to a file (`2> f`), or wherever stdout goes (`2>&1`) */
+  stderrTo?: { path: string; append: boolean } | 'stdout';
   writeStdout: (s: string) => void;
   writeStderr: (s: string) => void;
   terminal?: TerminalLike;
@@ -172,13 +178,33 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
   let stdout = '';
   let stderr = '';
   const slave = tty ? tty.openSlave() : null;
-  const stdin0: OpenFile = opts.stdin !== undefined ? new BufferFile(opts.stdin, A.O_RDONLY) : (slave ?? new BufferFile('', A.O_RDONLY));
-  const lastOut: OpenFile = opts.captureStdout
+  // A shell running as a kernel process hands its own fds down
+  const host = !tty && shell.kernelHost && shell.kernelHost.kernel === kernel && !shell.kernelHost.proc.exiting ? shell.kernelHost.proc : null;
+  const hostFd = (fd: number) => host?.fds.get(fd);
+  const openOut = async (to: { path: string; append: boolean }): Promise<OpenFile | string> => {
+    const { Process } = await import('./kernel/process');
+    const probe = new Process({ pid: -1, ppid: 1, path: 'sh', argv: ['sh'], env: opts.env, cwd: opts.cwd });
+    const f = await kernel.open(probe, to.path, A.O_WRONLY | A.O_CREAT | (to.append ? A.O_APPEND : A.O_TRUNC), 0o666);
+    return typeof f === 'number' ? `${to.path}: ${f === -A.EISDIR ? 'Is a directory' : f === -A.ENOENT ? 'No such file or directory' : 'Permission denied'}` : f;
+  };
+  const toFile = opts.stdoutTo ? await openOut(opts.stdoutTo) : undefined;
+  const errFile = opts.stderrTo && opts.stderrTo !== 'stdout' ? await openOut(opts.stderrTo) : undefined;
+  for (const f of [toFile, errFile]) {
+    if (typeof f === 'string') {
+      opts.writeStderr(`sh: ${f}\n`);
+      if (slave) void slave.close();
+      if (typeof toFile === 'object') void toFile.close();
+      if (typeof errFile === 'object') void errFile.close();
+      return { exitCode: 1, statuses: programs.map(() => 1), stdout: '', stderr: '' };
+    }
+  }
+  const stdin0: OpenFile = opts.stdin !== undefined ? new BufferFile(opts.stdin, A.O_RDONLY) : (slave ?? hostFd(0) ?? new BufferFile('', A.O_RDONLY));
+  const lastOut: OpenFile = (toFile as OpenFile | undefined) ?? (opts.captureStdout
     ? new SinkFile((t) => { stdout += t; })
-    : slave ?? new SinkFile((t) => opts.writeStdout(t));
-  const errOut: OpenFile = opts.captureStderr
+    : slave ?? hostFd(1) ?? new SinkFile((t) => opts.writeStdout(t)));
+  const errOut: OpenFile = (opts.stderrTo === 'stdout' ? lastOut : errFile as OpenFile | undefined) ?? (opts.captureStderr
     ? new SinkFile((t) => { stderr += t; })
-    : slave ?? new SinkFile((t) => opts.writeStderr(t));
+    : slave ?? hostFd(2) ?? new SinkFile((t) => opts.writeStderr(t)));
 
   const env = { ...opts.env };
   if (tty) {
@@ -199,7 +225,9 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
     const spawn = {
       path: p.argv[0], argv: p.argv, env, cwd: opts.cwd,
       fds: { 0: input, 1: out, 2: errOut }, run: p.run,
-      pgid: procs.length ? procs[0].pgid : 0,
+      // children of a hosted shell stay in its process group, under it
+      pgid: host ? undefined : procs.length ? procs[0].pgid : 0,
+      parent: host ?? undefined,
     };
     procs.push(tty ? tty.spawnJob(kernel, spawn) : kernel.spawn(spawn));
     if (nextInput) input = nextInput;

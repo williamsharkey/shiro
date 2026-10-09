@@ -1147,7 +1147,8 @@ describe('Shell Advanced', () => {
     it('type identifies functions', async () => {
       await run(shell, 'myfn() { echo hi; }');
       const { output } = await run(shell, 'type myfn');
-      expect(output.replace(/\r/g, '').trim()).toBe('myfn is a function');
+      // bash prints the definition after the first line
+      expect(output.replace(/\r/g, '').trim()).toBe('myfn is a function\nmyfn () \n{ \n    echo hi\n}');
     });
 
     it('type identifies registered commands', async () => {

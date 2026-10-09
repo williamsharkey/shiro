@@ -41,7 +41,7 @@ static void mix(u64 x) {
     asm volatile(insn "\n\tpushfq\n\tpopq %1"                 \
                  : "+r"(r), "=r"(f)                           \
                  : "r"(b)                                     \
-                 : "cc");                                     \
+                 : "cc", "rax", "rbx", "rcx", "rdx");         \
     mix(r);                                                   \
     mix(f & FMASK);                                           \
   }
@@ -125,6 +125,133 @@ OP2(bswap, "bswapq %0")
 OP2(bsf, "bsfq %2, %0")
 OP2(rol, "rolq $5, %0")
 OP2(btq, "btq %2, %0\n\tsetc %b0")
+// 16-bit forms
+OP2(and16, "andw %w2, %w0")
+OP2(or16, "orw %w2, %w0")
+OP2(xor16, "xorw %w2, %w0")
+OP2(test16, "testw %w2, %w0")
+OP2(inc16, "incw %w0")
+OP2(dec16, "decw %w0")
+OP2(addi16, "addw $0x7fff, %w0")
+OP2(subi16, "subw $-3, %w0")
+OP2(cmov16, "cmpq %2, %0\n\tcmovbw %w2, %w0")
+OP2(cmovl16, "cmpw %w2, %w0\n\tcmovlw %w2, %w0")
+OP2(movi16, "movw $0x8765, %w0")
+OP2(movr16, "movq %2, %%rax\n\tmovw $0x1234, %%ax\n\tmovw %%ax, %w0")
+// carries in
+OP2(adc32, "btl $3, %k2\n\tadcl %k2, %k0")
+OP2(sbb32, "btl $5, %k2\n\tsbbl %k2, %k0")
+OP2(adc8, "btl $1, %k2\n\tadcb %b2, %b0")
+OP2(sbb16, "btl $2, %k2\n\tsbbw %w2, %w0")
+OP2(adcq0, "btq $63, %2\n\tadcq $0, %0")
+OP2(sbbself, "btq $7, %2\n\tsbbq %0, %0")
+OP2(adcchain, "addq %2, %0\n\tadcq %2, %0\n\tsbbq $1, %0")
+// group 3
+OP2(neg32, "negl %k0")
+OP2(neg16, "negw %w0")
+OP2(neg8, "negb %b0")
+OP2(negjz, "negq %0\n\tjnz 1f\n\tmovq $77, %0\n1:")
+OP2(not32, "notl %k0")
+OP2(not16, "notw %w0")
+OP2(mul64, "movq %0, %%rax\n\tmulq %2\n\tleaq (%%rax,%%rdx,2), %0")
+OP2(mul32, "movq %0, %%rax\n\tmull %k2\n\tleaq (%%rax,%%rdx,2), %0")
+OP2(mul16, "movq %0, %%rax\n\tmovq %2, %%rdx\n\tmulw %w2\n\tleaq (%%rax,%%rdx,2), %0")
+OP2(mul8, "movq %0, %%rax\n\tmulb %b2\n\tmovq %%rax, %0")
+OP2(imul1_64, "movq %0, %%rax\n\timulq %2\n\tleaq (%%rax,%%rdx,2), %0")
+OP2(imul1_32, "movq %0, %%rax\n\timull %k2\n\tleaq (%%rax,%%rdx,2), %0")
+OP2(imul1_16, "movq %0, %%rax\n\tmovq %2, %%rdx\n\timulw %w2\n\tleaq (%%rax,%%rdx,2), %0")
+OP2(imul1_8, "movq %0, %%rax\n\timulb %b2\n\tmovq %%rax, %0")
+// bit tests
+OP2(bts64, "btsq %2, %0")
+OP2(btr32, "btrl %k2, %k0")
+OP2(btc64, "btcq %2, %0")
+OP2(bt16, "btw %w2, %w0\n\tsetc %b0")
+OP2(btsi, "btsq $45, %0")
+OP2(btri32, "btrl $3, %k0")
+OP2(btci, "btcq $63, %0")
+OP2(bti16, "btw $9, %w0\n\tsetc %b0")
+// bit scans (Blink: bsf/bsr write 0 for a zero source)
+OP2(bsr, "bsrq %2, %0")
+OP2(bsf32, "bsfl %k2, %k0")
+OP2(bsr16, "bsrw %w2, %w0")
+OP2(tzcnt64, "tzcntq %2, %0")
+OP2(tzcnt32, "tzcntl %k2, %k0")
+OP2(lzcnt64, "lzcntq %2, %0")
+OP2(lzcnt32, "lzcntl %k2, %k0")
+OP2(lzcnt16, "lzcntw %w2, %w0")
+
+// divides (flags are undefined): 128-bit dividends take Blink's slow path
+static void div64(u64 a, u64 b) {
+  u64 d = b | 1, hi = (b & 0x100) ? (a >> 7) % d : 0, q, r;
+  asm volatile("divq %4" : "=a"(q), "=d"(r) : "0"(a), "1"(hi), "r"(d) : "cc");
+  mix(q);
+  mix(r);
+}
+static void idiv64(u64 a, u64 b) {
+  int64_t d = (int64_t)(b | 1), hi = (int64_t)a >> 63, q, r;
+  if (d == -1) d = 3;
+  if (b & 0x100) d = (int64_t)(b | 1ull << 62) & INT64_MAX, hi = 1;
+  asm volatile("idivq %4" : "=a"(q), "=d"(r) : "0"(a), "1"(hi), "r"(d) : "cc");
+  mix(q);
+  mix(r);
+}
+static void div32(u64 a, u64 b) {
+  u64 d = (b | 1) & 0xffffffff, hi = ((b & 0x100) ? (a >> 32) % d : 0) | (b << 32), q, r;
+  asm volatile("divl %k4" : "=a"(q), "=d"(r) : "0"(a), "1"(hi), "r"(d) : "cc");
+  mix(q);
+  mix(r);
+}
+static void idiv32(u64 a, u64 b) {
+  int32_t d = (int32_t)(b | 1);
+  if (d == -1) d = 7;
+  u64 hi = (u64)((int64_t)(int32_t)a >> 32), q, r;
+  asm volatile("idivl %k4" : "=a"(q), "=d"(r) : "0"(a), "1"(hi), "r"((u64)d) : "cc");
+  mix(q);
+  mix(r);
+}
+static u64 dmem[2];
+static void divmem(u64 a, u64 b) {
+  u64 q, r;
+  dmem[1] = b | 1;
+  asm volatile("divq 8(%4)" : "=a"(q), "=d"(r) : "0"(a), "1"(0ull), "r"(dmem) : "cc", "memory");
+  mix(q);
+  mix(r);
+}
+
+// bit tests on memory, with register offsets reaching outside the operand
+static u64 barr[16];
+static void btmem(u64 a, u64 b) {
+  u64 f, off = (u64)((long)(b % 512) - 256);
+  for (int i = 0; i < 16; ++i) barr[i] = a ^ (i * 0x9e3779b97f4a7c15ull);
+  asm volatile("btsq %1, (%2)\n\t"
+               "btrl %k1, 4(%2)\n\t"
+               "btcw %w1, (%2)\n\t"
+               "btsl $31, 8(%2)\n\t"
+               "btcq $5, -8(%2)\n\t"
+               "btq %1, (%2)\n\t"
+               "pushfq\n\tpopq %0"
+               : "=&r"(f)
+               : "r"(off), "r"(barr + 8)
+               : "cc", "memory");
+  mix(f & 1);
+  for (int i = 0; i < 16; ++i) mix(barr[i]);
+}
+
+// a cmp whose consumer is separated from it by a page-crossing load (the
+// load exits to the interpreter, which must see the flags)
+static char *page;
+static void cmpcross(u64 a, u64 b) {
+  int off = 4096 - 4 + (b & 3);  // (no store first: it would exit too)
+  u64 x, r = 0;
+  asm volatile("cmpq %3, %2\n\t"
+               "movq (%4), %1\n\t"
+               "setb %b0"
+               : "+r"(r), "=&r"(x)
+               : "r"(a), "r"(b), "r"(page + off)
+               : "cc", "memory");
+  mix(r);
+  mix(x);
+}
 
 static const char *ccnames = "o no b ae e ne be a s ns p np l ge le g";
 
@@ -261,6 +388,16 @@ static const struct {
     E(cwde),   E(cqo),     E(cdq),    E(lea1),   E(lea32),   E(leaneg),
     E(ahreg),  E(bhreg),   E(xchg),   E(bswap),  E(bsf),     E(rol),
     E(btq),
+    E(and16),  E(or16),    E(xor16),  E(test16), E(inc16),   E(dec16),
+    E(addi16), E(subi16),  E(cmov16), E(cmovl16), E(movi16), E(movr16),
+    E(adc32),  E(sbb32),   E(adc8),   E(sbb16),  E(adcq0),   E(sbbself),
+    E(adcchain), E(neg32), E(neg16),  E(neg8),   E(negjz),   E(not32),
+    E(not16),  E(mul64),   E(mul32),  E(mul16),  E(mul8),    E(imul1_64),
+    E(imul1_32), E(imul1_16), E(imul1_8), E(bts64), E(btr32), E(btc64),
+    E(bt16),   E(btsi),    E(btri32), E(btci),   E(bti16),   E(bsr),
+    E(bsf32),  E(bsr16),   E(tzcnt64), E(tzcnt32), E(lzcnt64), E(lzcnt32),
+    E(lzcnt16), E(div64),  E(idiv64), E(div32),  E(idiv32),  E(divmem),
+    E(btmem),  E(cmpcross),
     E(set_o),  E(set_no),  E(set_b),  E(set_ae), E(set_e),   E(set_ne),
     E(set_be), E(set_a),   E(set_s),  E(set_ns), E(set_p),   E(set_np),
     E(set_l),  E(set_ge),  E(set_le), E(set_g),  E(j_o),     E(j_no),

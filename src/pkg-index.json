@@ -1046,60 +1046,6 @@
    "notes": "An x86-64 Linux binary in Blink: needs a cross-origin isolated page. Interpreted, so starting is ~1 s and big modules (POSIX) take seconds to load. No XS module loading (all core XS is built in); no pods (perldoc)."
   },
   {
-   "name": "git",
-   "version": "2.47.1",
-   "description": "Git (static x86-64 build run in the Blink engine); replaces Shiro's built-in git",
-   "license": "GPL-2.0-only",
-   "source": "https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.47.1.tar.gz",
-   "homepage": "https://git-scm.com/",
-   "origin": "shiro",
-   "recipe": "scripts/pkgbuild/git.sh",
-   "section": "vcs",
-   "abi": "x86_64-linux",
-   "files": [
-    {
-     "path": "bin",
-     "tar": {
-      "unpack": true,
-      "dir": "bin"
-     },
-     "url": "/pkg/git/2.47.1/git-2.47.1-x86_64.tar.gz",
-     "sha256": "33d6a8f13809135c1703687c8180169306bf0e941892474234fefdc16b122f19",
-     "size": 5149573
-    },
-    {
-     "path": "libexec",
-     "tar": {
-      "unpack": true,
-      "dir": "libexec"
-     },
-     "url": "/pkg/git/2.47.1/git-2.47.1-x86_64.tar.gz",
-     "sha256": "33d6a8f13809135c1703687c8180169306bf0e941892474234fefdc16b122f19",
-     "size": 5149573
-    },
-    {
-     "path": "share",
-     "tar": {
-      "unpack": true,
-      "dir": "share"
-     },
-     "url": "/pkg/git/2.47.1/git-2.47.1-x86_64.tar.gz",
-     "sha256": "33d6a8f13809135c1703687c8180169306bf0e941892474234fefdc16b122f19",
-     "size": 5149573
-    }
-   ],
-   "bin": {
-    "git": {
-     "file": "bin/git"
-    }
-   },
-   "needs": [
-    "threads",
-    "processes"
-   ],
-   "notes": "Upstream git in Blink (needs a cross-origin isolated page): local workflows as on Linux (merge, rebase, stash, blame, bisect, worktrees, clone from a path, hooks). No http(s) remotes (built without curl): uninstall it to get Shiro's built-in git back for GitHub clone/push."
-  },
-  {
    "name": "ninja",
    "version": "1.12.1",
    "description": "Ninja build system (static x86-64 build run in the Blink engine)",
@@ -1132,6 +1078,53 @@
     "processes"
    ],
    "notes": "An x86-64 Linux binary in Blink: needs a cross-origin isolated page. Build commands run with posix_spawn; Shiro programs (clang from the llvm package, the shell) run as kernel processes."
+  },
+  {
+   "name": "cmake",
+   "version": "3.31.9",
+   "description": "CMake and CTest (static x86-64 musl build run in the Blink engine)",
+   "license": "BSD-3-Clause",
+   "source": "https://cmake.org/files/v3.31/cmake-3.31.9.tar.gz",
+   "homepage": "https://cmake.org/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/cmake.sh",
+   "section": "devel",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin",
+     "tar": {
+      "unpack": true,
+      "dir": "bin"
+     },
+     "url": "/pkg/cmake/3.31.9/cmake-3.31.9-x86_64.tar.gz",
+     "sha256": "0b2031b94f087aeec3b074a6bdf3f60a9211f0f1b6b8bab1a2479f2df2be947a",
+     "size": 15670963
+    },
+    {
+     "path": "share",
+     "tar": {
+      "unpack": true,
+      "dir": "share"
+     },
+     "url": "/pkg/cmake/3.31.9/cmake-3.31.9-x86_64.tar.gz",
+     "sha256": "0b2031b94f087aeec3b074a6bdf3f60a9211f0f1b6b8bab1a2479f2df2be947a",
+     "size": 15670963
+    }
+   ],
+   "bin": {
+    "cmake": {
+     "file": "bin/cmake"
+    },
+    "ctest": {
+     "file": "bin/ctest"
+    }
+   },
+   "needs": [
+    "threads",
+    "processes"
+   ],
+   "notes": "An x86-64 Linux binary in Blink: needs a cross-origin isolated page. Generates Makefiles or Ninja files for the llvm package's clang (install make or ninja too); no OpenSSL (file(DOWNLOAD) of https fails), no ccmake/cmake-gui."
   },
   {
    "name": "fortune",
@@ -1212,7 +1205,7 @@
    }
   },
   {
-   "name": "openssl",
+   "name": "openssl-wasm",
    "version": "0.2.0",
    "description": "OpenSSL 1.1 command-line tool: digests, base64, symmetric ciphers, keys",
    "license": "OpenSSL",
@@ -1236,7 +1229,7 @@
      "file": "bin/openssl.wasm"
     }
    },
-   "notes": "No networking (s_client needs sockets)."
+   "notes": "No networking (s_client needs sockets). The `openssl` package is now OpenSSL 3.5 as a static x86-64 build (needs a cross-origin isolated page)."
   },
   {
    "name": "qr2text",
@@ -1426,7 +1419,7 @@
    ]
   },
   {
-   "name": "grep",
+   "name": "grep-wasix",
    "version": "3.12.0",
    "description": "GNU grep (WASIX build)",
    "license": "GPL-3.0-or-later",
@@ -1458,7 +1451,7 @@
    "notes": "WASIX build (wasix_32v1, shared env.memory). Run it as /usr/bin/grep (the builtin keeps the name). grep -r fails with ENOSYS."
   },
   {
-   "name": "sed",
+   "name": "sed-wasix",
    "version": "4.9.0",
    "description": "GNU sed (WASIX build)",
    "license": "GPL-3.0-or-later",
@@ -1493,7 +1486,7 @@
    ]
   },
   {
-   "name": "less",
+   "name": "less-wasix",
    "version": "685.0.1",
    "description": "less pager (WASIX build)",
    "license": "GPL-3.0-or-later OR BSD-2-Clause",
@@ -1559,7 +1552,7 @@
    "notes": "WASIX build (wasix_32v1, shared env.memory). Run it as /usr/bin/rg (the builtin keeps the name)."
   },
   {
-   "name": "curl",
+   "name": "curl-wasix",
    "version": "8.4.0",
    "description": "curl URL transfer tool (WASIX build, OpenSSL)",
    "license": "curl",
@@ -1599,7 +1592,7 @@
     "threads",
     "sockets"
    ],
-   "notes": "WASIX build (wasix_32v1, shared env.memory). HTTP and HTTPS (its own OpenSSL, CA certificates mounted at /openssl) through the kernel sockets and the TCP relay.",
+   "notes": "WASIX build (wasix_32v1, shared env.memory). HTTP and HTTPS (its own OpenSSL, CA certificates mounted at /openssl) through the kernel sockets and the TCP relay. The `curl` package is now curl 8.22 as a static x86-64 build (needs a cross-origin isolated page).",
    "mounts": {
     "/openssl": "share/openssl"
    }
@@ -1898,6 +1891,1301 @@
     "/sysroot": "share/sysroot",
     "/lib": "share/lib"
    }
+  },
+  {
+   "name": "less",
+   "version": "710",
+   "description": "less pager (static x86-64 build; reads keys from /dev/tty)",
+   "license": "GPL-3.0-or-later OR BSD-2-Clause",
+   "source": "https://www.greenwoodsoftware.com/less/less-710.tar.gz",
+   "homepage": "https://www.greenwoodsoftware.com/less/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/less.sh",
+   "section": "text",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/less",
+     "url": "/pkg/less/710/less.gz",
+     "sha256": "26dd6ab97ad7cacfae27dc2bb78516491e5f0fd8d8a42063cc05098f5a93b50c",
+     "size": 179537,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/lessecho",
+     "url": "/pkg/less/710/lessecho.gz",
+     "sha256": "ea971f97bc3bd0b2bb2f8c82f7cc2b3abf0555cfcbd20d79c4ef7b4068084517",
+     "size": 15593,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "less": {
+     "file": "bin/less"
+    },
+    "lessecho": {
+     "file": "bin/lessecho"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "vim",
+   "version": "9.2.0000",
+   "description": "Vi IMproved (huge features, syntax highlighting, :help; static x86-64 build)",
+   "license": "Vim",
+   "source": "https://github.com/vim/vim/tree/v9.2.0000",
+   "homepage": "https://www.vim.org/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/vim.sh",
+   "section": "editors",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/vim",
+     "url": "/pkg/vim/9.2.0000/vim.gz",
+     "sha256": "f34559a8ecf901f8c0799231b7b2d4ce154601d3a6e14b193eb5df9678bd80e3",
+     "size": 1586122,
+     "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/vim/9.2.0000/share.tar.gz",
+     "sha256": "bf2cca9af6d5ee6d2885894609bf6c588d91245313cf6c7aaba98997d2f6aaf7",
+     "size": 7122314,
+     "unpack": "tar.gz"
+    }
+   ],
+   "bin": {
+    "vim": {
+     "file": "bin/vim"
+    },
+    "vi": {
+     "file": "bin/vim"
+    },
+    "view": {
+     "file": "bin/vim"
+    },
+    "vimdiff": {
+     "file": "bin/vim"
+    },
+    "ex": {
+     "file": "bin/vim"
+    }
+   },
+   "links": {
+    "/usr/share/vim": "share/vim"
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "nano",
+   "version": "9.2",
+   "description": "GNU nano text editor (syntax highlighting; static x86-64 build)",
+   "license": "GPL-3.0-or-later",
+   "source": "https://www.nano-editor.org/dist/v9/nano-9.2.tar.xz",
+   "homepage": "https://www.nano-editor.org/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/nano.sh",
+   "section": "editors",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/nano",
+     "url": "/pkg/nano/9.2/nano.gz",
+     "sha256": "0a2a12dcee3d660d03d39ce7b46aa4b51ee11ce80fe2a60a4b20f684349db1de",
+     "size": 284554,
+     "unpack": "gzip"
+    },
+    {
+     "path": "etc",
+     "url": "/pkg/nano/9.2/etc.tar.gz",
+     "sha256": "57e9f931f0bd3d2bca05bb3db9baaf106d8d15fb41016d142ccc0d00bc331643",
+     "size": 155,
+     "unpack": "tar.gz"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/nano/9.2/share.tar.gz",
+     "sha256": "403cc279ddbe1caf6ad4b8b80c78540d7392c1c43ba9d74a1110dc9d20200823",
+     "size": 18974,
+     "unpack": "tar.gz"
+    }
+   ],
+   "bin": {
+    "nano": {
+     "file": "bin/nano"
+    }
+   },
+   "links": {
+    "/etc/nanorc": "etc/nanorc",
+    "/usr/share/nano": "share/nano"
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "diffutils",
+   "version": "3.12",
+   "description": "GNU diff, cmp, diff3, sdiff",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/diffutils/diffutils-3.12.tar.xz",
+   "homepage": "https://www.gnu.org/software/diffutils/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/diffutils.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/cmp",
+     "url": "/pkg/diffutils/3.12/cmp.gz",
+     "sha256": "571f2ec58f86af52693b59d21cd9b16811dbeb0333adda79b4dea55811226dfb",
+     "size": 37373,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/diff",
+     "url": "/pkg/diffutils/3.12/diff.gz",
+     "sha256": "8ee56eaf1ee4a962f5333c4b55cd47d74d28aa7737c4a95a537ffccebbd62222",
+     "size": 120064,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/diff3",
+     "url": "/pkg/diffutils/3.12/diff3.gz",
+     "sha256": "54c6ccd9651969d518c6c39b96c15551dde7c572c62e85fd49165dce99af1dd3",
+     "size": 40869,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/sdiff",
+     "url": "/pkg/diffutils/3.12/sdiff.gz",
+     "sha256": "4e6088c78a73c5ede591bbac05f22daf93c9d15298edea4ca2e418a49dd007df",
+     "size": 41217,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "diff": {
+     "file": "bin/diff"
+    },
+    "cmp": {
+     "file": "bin/cmp"
+    },
+    "diff3": {
+     "file": "bin/diff3"
+    },
+    "sdiff": {
+     "file": "bin/sdiff"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "patch",
+   "version": "2.8",
+   "description": "GNU patch: apply diffs",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/patch/patch-2.8.tar.xz",
+   "homepage": "https://www.gnu.org/software/patch/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/patch.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/patch",
+     "url": "/pkg/patch/2.8/patch.gz",
+     "sha256": "3873d3488e4376312b38aa340691cec6e618fbbedabb923d662673e5fbec51b2",
+     "size": 88181,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "patch": {
+     "file": "bin/patch"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "gawk",
+   "version": "5.4.1",
+   "description": "GNU awk",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/gawk/gawk-5.4.1.tar.xz",
+   "homepage": "https://www.gnu.org/software/gawk/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/gawk.sh",
+   "section": "text",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/gawk",
+     "url": "/pkg/gawk/5.4.1/gawk.gz",
+     "sha256": "ad88f41ffa7af3aafe6735e66b6de57fdcbab1c69da8e573b15f2f43e0e7675e",
+     "size": 353632,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "gawk": {
+     "file": "bin/gawk"
+    },
+    "awk": {
+     "file": "bin/gawk"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "sed",
+   "version": "4.10",
+   "description": "GNU sed stream editor",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/sed/sed-4.10.tar.xz",
+   "homepage": "https://www.gnu.org/software/sed/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/sed.sh",
+   "section": "text",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/sed",
+     "url": "/pkg/sed/4.10/sed.gz",
+     "sha256": "e195bc1b7f02ca27958418e579d507a6a3675f392b3ea677b95aadb925bc703a",
+     "size": 101327,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "sed": {
+     "file": "bin/sed"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "grep",
+   "version": "3.12",
+   "description": "GNU grep (also egrep, fgrep)",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/grep/grep-3.12.tar.xz",
+   "homepage": "https://www.gnu.org/software/grep/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/grep.sh",
+   "section": "text",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/grep",
+     "url": "/pkg/grep/3.12/grep.gz",
+     "sha256": "768e12b30ec7be5fd0b31bf8dc1ee8435186860a65643038680ccd7306813c89",
+     "size": 116331,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "grep": {
+     "file": "bin/grep"
+    },
+    "egrep": {
+     "file": "bin/grep",
+     "args": [
+      "-E"
+     ]
+    },
+    "fgrep": {
+     "file": "bin/grep",
+     "args": [
+      "-F"
+     ]
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "findutils",
+   "version": "4.11.0",
+   "description": "GNU find and xargs",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/findutils/findutils-4.11.0.tar.xz",
+   "homepage": "https://www.gnu.org/software/findutils/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/findutils.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/find",
+     "url": "/pkg/findutils/4.11.0/find.gz",
+     "sha256": "e2bc335397d685d3a8b0a40bcc6c2437972063698c13c3122190a1d5820e0546",
+     "size": 159069,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/xargs",
+     "url": "/pkg/findutils/4.11.0/xargs.gz",
+     "sha256": "f447533891daf3918aad5d1b1dfb99f93d0e9e991d5be96c246913182690e8a0",
+     "size": 49997,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "find": {
+     "file": "bin/find"
+    },
+    "xargs": {
+     "file": "bin/xargs"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "bc",
+   "version": "1.08.2",
+   "description": "GNU bc and dc calculators",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/bc/bc-1.08.2.tar.gz",
+   "homepage": "https://www.gnu.org/software/bc/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/bc.sh",
+   "section": "math",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/bc",
+     "url": "/pkg/bc/1.08.2/bc.gz",
+     "sha256": "221e5300183cdb159990509a0e8b28c8d332bbae7b9186186673b7d53fa83310",
+     "size": 50359,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/dc",
+     "url": "/pkg/bc/1.08.2/dc.gz",
+     "sha256": "b0519a87584254973864f87f60dfcbbd3aa697c8191383f461854083e049ed61",
+     "size": 37755,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "bc": {
+     "file": "bin/bc"
+    },
+    "dc": {
+     "file": "bin/dc"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "tar",
+   "version": "1.35",
+   "description": "GNU tar (gzip/xz/zstd/bzip2 through those programs)",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/tar/tar-1.35.tar.xz",
+   "homepage": "https://www.gnu.org/software/tar/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/tar.sh",
+   "section": "archive",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/tar",
+     "url": "/pkg/tar/1.35/tar.gz",
+     "sha256": "379da183d7628c118703ac2dd7c571659162e8ea8fb4e754e8b03985339a26ff",
+     "size": 370541,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "tar": {
+     "file": "bin/tar"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "gzip",
+   "version": "1.15",
+   "description": "GNU gzip, gunzip, zcat",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/gzip/gzip-1.15.tar.xz",
+   "homepage": "https://www.gnu.org/software/gzip/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/gzip.sh",
+   "section": "archive",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/gzip",
+     "url": "/pkg/gzip/1.15/gzip.gz",
+     "sha256": "c3d005f06a02a5e6ef70e2d12062a0ab7fb39f6dd534ee238b1f185b67f32a32",
+     "size": 71669,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "gzip": {
+     "file": "bin/gzip"
+    },
+    "gunzip": {
+     "file": "bin/gzip",
+     "args": [
+      "-d"
+     ]
+    },
+    "zcat": {
+     "file": "bin/gzip",
+     "args": [
+      "-dc"
+     ]
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "tree",
+   "version": "2.2.1",
+   "description": "List directories as a tree",
+   "license": "GPL-2.0-or-later",
+   "source": "https://gitlab.com/OldManProgrammer/unix-tree/-/archive/2.2.1/unix-tree-2.2.1.tar.gz",
+   "homepage": "https://oldmanprogrammer.net/source.php?dir=projects/tree",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/tree.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/tree",
+     "url": "/pkg/tree/2.2.1/tree.gz",
+     "sha256": "b772a8cfd49be5fc82b125cad674eb511734e0333dd5ede31f17fad1a3a940db",
+     "size": 57337,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "tree": {
+     "file": "bin/tree"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "file",
+   "version": "5.46",
+   "description": "Determine file types (libmagic, with its magic database)",
+   "license": "BSD-2-Clause",
+   "source": "https://astron.com/pub/file/file-5.46.tar.gz",
+   "homepage": "https://www.darwinsys.com/file/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/file.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/file",
+     "url": "/pkg/file/5.46/file.gz",
+     "sha256": "3b719ec27c8ae5daf6d30e3a153714a0d8825385bba0577f043a33707c631107",
+     "size": 141204,
+     "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/file/5.46/share.tar.gz",
+     "sha256": "6d26f7f641ef9c5e576683f60642f83ed7a1200163943d7d3db44156f95de54f",
+     "size": 445125,
+     "unpack": "tar.gz"
+    }
+   ],
+   "bin": {
+    "file": {
+     "file": "bin/file"
+    }
+   },
+   "links": {
+    "/usr/share/misc/magic.mgc": "share/misc/magic.mgc"
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "xz",
+   "version": "5.8.1",
+   "description": "XZ Utils: xz, unxz, xzcat, lzma",
+   "license": "0BSD",
+   "source": "https://github.com/tukaani-project/xz/releases/download/v5.8.1/xz-5.8.1.tar.gz",
+   "homepage": "https://tukaani.org/xz/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/xz.sh",
+   "section": "archive",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/xz",
+     "url": "/pkg/xz/5.8.1/xz.gz",
+     "sha256": "23fdc6815cc494d030733d69a4f3f001bc3b7588f7f70743e36dc3a8c86572a1",
+     "size": 129108,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "xz": {
+     "file": "bin/xz"
+    },
+    "unxz": {
+     "file": "bin/xz",
+     "args": [
+      "-d"
+     ]
+    },
+    "xzcat": {
+     "file": "bin/xz",
+     "args": [
+      "-dc"
+     ]
+    },
+    "lzma": {
+     "file": "bin/xz",
+     "args": [
+      "--format=lzma"
+     ]
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "zstd",
+   "version": "1.5.7",
+   "description": "Zstandard compression: zstd, unzstd, zstdcat",
+   "license": "BSD-3-Clause OR GPL-2.0-only",
+   "source": "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz",
+   "homepage": "https://facebook.github.io/zstd/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/zstd.sh",
+   "section": "archive",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/zstd",
+     "url": "/pkg/zstd/1.5.7/zstd.gz",
+     "sha256": "7e2563c9206ea6fc179fabff89fce258fe76f309b65bf04622ecc55c62627122",
+     "size": 289114,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "zstd": {
+     "file": "bin/zstd"
+    },
+    "unzstd": {
+     "file": "bin/zstd",
+     "args": [
+      "-d"
+     ]
+    },
+    "zstdcat": {
+     "file": "bin/zstd",
+     "args": [
+      "-dc"
+     ]
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "zip",
+   "version": "3.0",
+   "description": "Info-ZIP zip (with Debian patches)",
+   "license": "Info-ZIP",
+   "source": "https://deb.debian.org/debian/pool/main/z/zip/zip_3.0.orig.tar.gz",
+   "homepage": "https://infozip.sourceforge.net/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/zip.sh",
+   "section": "archive",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/zip",
+     "url": "/pkg/zip/3.0/zip.gz",
+     "sha256": "99ce8c822a667dfc774dd1ec594cf7c5a4a0e0ed97a43b1ed72d6887b2fdf7aa",
+     "size": 109429,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "zip": {
+     "file": "bin/zip"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "unzip",
+   "version": "6.0",
+   "description": "Info-ZIP unzip and zipinfo (with Debian security patches)",
+   "license": "Info-ZIP",
+   "source": "https://deb.debian.org/debian/pool/main/u/unzip/unzip_6.0.orig.tar.gz",
+   "homepage": "https://infozip.sourceforge.net/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/unzip.sh",
+   "section": "archive",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/unzip",
+     "url": "/pkg/unzip/6.0/unzip.gz",
+     "sha256": "8ece210ad1eaafb29617a5bafdb9401c37e75b924ff7ee758565c7c5b49be58e",
+     "size": 82772,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "unzip": {
+     "file": "bin/unzip"
+    },
+    "zipinfo": {
+     "file": "bin/unzip"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "ca-certificates",
+   "version": "2026-09-25",
+   "description": "Mozilla's CA certificate bundle (as extracted by curl)",
+   "license": "MPL-2.0",
+   "source": "https://curl.se/ca/cacert-2026-09-25.pem",
+   "homepage": "https://curl.se/docs/caextract.html",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/ca-certificates.sh",
+   "section": "net",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "etc",
+     "url": "/pkg/ca-certificates/2026-09-25/etc.tar.gz",
+     "sha256": "0520125b9deff3eeb31986503f8d6e7796f6446b9fe1deda09ca16cc85f5ce15",
+     "size": 108442,
+     "unpack": "tar.gz"
+    }
+   ],
+   "bin": {},
+   "links": {
+    "/etc/ssl/certs/ca-certificates.crt": "etc/ssl/certs/ca-certificates.crt",
+    "/etc/ssl/cert.pem": "etc/ssl/certs/ca-certificates.crt"
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "openssl",
+   "version": "3.5.9",
+   "description": "OpenSSL 3.5 LTS command-line tool (static x86-64 build)",
+   "license": "Apache-2.0",
+   "source": "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz",
+   "homepage": "https://openssl-library.org/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/openssl.sh",
+   "section": "net",
+   "abi": "x86_64-linux",
+   "deps": [
+    "ca-certificates"
+   ],
+   "files": [
+    {
+     "path": "bin/openssl",
+     "url": "/pkg/openssl/3.5.9/openssl.gz",
+     "sha256": "c13cee6b42da44bde781fbfeb14df6af92620a075bbc666b5119a262dad4f298",
+     "size": 2243346,
+     "unpack": "gzip"
+    },
+    {
+     "path": "etc",
+     "url": "/pkg/openssl/3.5.9/etc.tar.gz",
+     "sha256": "929fb6d84d86fdb003f34b4101446f3011661af16bf16185df7fbdb83cd39664",
+     "size": 4662,
+     "unpack": "tar.gz"
+    }
+   ],
+   "bin": {
+    "openssl": {
+     "file": "bin/openssl"
+    }
+   },
+   "links": {
+    "/etc/ssl/openssl.cnf": "etc/ssl/openssl.cnf"
+   },
+   "needs": [
+    "x86"
+   ],
+   "notes": "s_client and other network commands use kernel sockets: TCP leaves the page through the relay (SHIRO_TCP_RELAY)."
+  },
+  {
+   "name": "curl",
+   "version": "8.22.0",
+   "description": "curl: transfer URLs (HTTP/HTTPS/FTP...; OpenSSL, zlib; static x86-64 build)",
+   "license": "curl",
+   "source": "https://curl.se/download/curl-8.22.0.tar.xz",
+   "homepage": "https://curl.se/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/curl.sh",
+   "section": "net",
+   "abi": "x86_64-linux",
+   "deps": [
+    "ca-certificates"
+   ],
+   "files": [
+    {
+     "path": "bin/curl",
+     "url": "/pkg/curl/8.22.0/curl.gz",
+     "sha256": "bb3d6b3cb842cfdb7b928f609ed8cbef545644c9d1d1a9967ad38798522ffd88",
+     "size": 2223324,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "curl": {
+     "file": "bin/curl"
+    }
+   },
+   "needs": [
+    "x86"
+   ],
+   "notes": "Connections go through the kernel's sockets: the TCP relay for the internet, the page for localhost."
+  },
+  {
+   "name": "git",
+   "version": "2.56.0",
+   "description": "Git distributed version control (real git: libcurl/OpenSSL for https remotes)",
+   "license": "GPL-2.0-only",
+   "source": "https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.56.0.tar.xz",
+   "homepage": "https://git-scm.com/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/git.sh",
+   "section": "vcs",
+   "abi": "x86_64-linux",
+   "deps": [
+    "ca-certificates"
+   ],
+   "files": [
+    {
+     "path": "bin/git",
+     "url": "/pkg/git/2.56.0/git.gz",
+     "sha256": "37074fef8114f3e5aa984ff0743551638d485a74ca0949967520b966001e19a6",
+     "size": 1661177,
+     "unpack": "gzip"
+    },
+    {
+     "path": "libexec",
+     "url": "/pkg/git/2.56.0/libexec.tar.gz",
+     "sha256": "5f61027e4dafc1181ebf1152ed6739cc3841a5d4f01175a616c61e329b75cbd1",
+     "size": 4133863,
+     "unpack": "tar.gz"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/git/2.56.0/share.tar.gz",
+     "sha256": "3b35d3ad338cc4b6530492e74b646c0c80113861a34da7f1e9d9affae2c4da21",
+     "size": 10077,
+     "unpack": "tar.gz"
+    }
+   ],
+   "bin": {
+    "git": {
+     "file": "bin/git"
+    },
+    "git-upload-pack": {
+     "file": "bin/git"
+    },
+    "git-receive-pack": {
+     "file": "bin/git"
+    },
+    "git-upload-archive": {
+     "file": "bin/git"
+    }
+   },
+   "links": {
+    "/usr/libexec/git-core": "libexec/git-core",
+    "/usr/share/git-core": "share/git-core"
+   },
+   "needs": [
+    "x86"
+   ],
+   "notes": "Replaces Shiro's built-in git (isomorphic-git) while installed; `builtin git` still reaches it. Remotes over https need the TCP relay."
+  },
+  {
+   "name": "fd",
+   "version": "10.3.0",
+   "description": "Simple, fast alternative to find (upstream static musl build)",
+   "license": "MIT OR Apache-2.0",
+   "source": "https://github.com/sharkdp/fd/releases/download/v10.3.0/fd-v10.3.0-x86_64-unknown-linux-musl.tar.gz",
+   "homepage": "https://github.com/sharkdp/fd",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/fd.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/fd",
+     "url": "/pkg/fd/10.3.0/fd.gz",
+     "sha256": "0385d29cbb9fb58e6e4cbc0faf89c69b4d5fab21bcd7af9ad08a4f6b74fabeef",
+     "size": 1706074,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "fd": {
+     "file": "bin/fd"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "bat",
+   "version": "0.26.1",
+   "description": "cat with syntax highlighting and Git integration (upstream static musl build)",
+   "license": "MIT OR Apache-2.0",
+   "source": "https://github.com/sharkdp/bat/releases/download/v0.26.1/bat-v0.26.1-x86_64-unknown-linux-musl.tar.gz",
+   "homepage": "https://github.com/sharkdp/bat",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/bat.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/bat",
+     "url": "/pkg/bat/0.26.1/bat.gz",
+     "sha256": "05b6f2e29abe08b019b34c37e53ff19577b8469f50af28f6568ecb7723725bd7",
+     "size": 3518050,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "bat": {
+     "file": "bin/bat"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "fzf",
+   "version": "0.74.0",
+   "description": "Command-line fuzzy finder (upstream static Go build)",
+   "license": "MIT",
+   "source": "https://github.com/junegunn/fzf/releases/download/v0.74.0/fzf-0.74.0-linux_amd64.tar.gz",
+   "homepage": "https://github.com/junegunn/fzf",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/fzf.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/fzf",
+     "url": "/pkg/fzf/0.74.0/fzf.gz",
+     "sha256": "0d0a9d0c4d8017675b4fe2a53bb486d009770cd387f58bcb11732899e3883e30",
+     "size": 1964408,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "fzf": {
+     "file": "bin/fzf"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "yq",
+   "version": "4.52.1",
+   "description": "YAML, JSON, XML and TOML processor (mikefarah/yq, upstream static Go build)",
+   "license": "MIT",
+   "source": "https://github.com/mikefarah/yq/releases/download/v4.52.1/yq_linux_amd64.tar.gz",
+   "homepage": "https://github.com/mikefarah/yq",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/yq.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/yq",
+     "url": "/pkg/yq/4.52.1/yq.gz",
+     "sha256": "f699fd3c9da635b055ae0e0043b9850e006b68660a98feb592809d58098e21e6",
+     "size": 5374164,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "yq": {
+     "file": "bin/yq"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "tmux",
+   "version": "3.8",
+   "description": "Terminal multiplexer (static x86-64 build)",
+   "license": "ISC",
+   "source": "https://github.com/tmux/tmux/releases/download/3.8/tmux-3.8.tar.gz",
+   "homepage": "https://github.com/tmux/tmux",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/tmux.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/tmux",
+     "url": "/pkg/tmux/3.8/tmux.gz",
+     "sha256": "b91c97c91627d47bafdab346c32cc6ba2a74529f783bc4b6b9e02fb99147a06c",
+     "size": 608839,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "tmux": {
+     "file": "bin/tmux"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "screen",
+   "version": "5.0.2",
+   "description": "GNU screen terminal multiplexer (static x86-64 build)",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/screen/screen-5.0.2.tar.gz",
+   "homepage": "https://www.gnu.org/software/screen/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/screen.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/screen",
+     "url": "/pkg/screen/5.0.2/screen.gz",
+     "sha256": "49a143f2af8da4145644c169cc09f7ba4d9cb36952226a0ed72457ac1d6b259d",
+     "size": 263344,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "screen": {
+     "file": "bin/screen"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "htop",
+   "version": "3.5.3",
+   "description": "Interactive process viewer (static x86-64 build)",
+   "license": "GPL-2.0-or-later",
+   "source": "https://github.com/htop-dev/htop/releases/download/3.5.3/htop-3.5.3.tar.xz",
+   "homepage": "https://htop.dev/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/htop.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/htop",
+     "url": "/pkg/htop/3.5.3/htop.gz",
+     "sha256": "f3d4ff1b8f2b283162979e808606be17ddf3d93ac5fec37afde36bd81353270d",
+     "size": 256209,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "htop": {
+     "file": "bin/htop"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "procps",
+   "version": "4.0.7",
+   "description": "procps-ng: top, ps, free, uptime, pgrep/pkill, pidof, watch, vmstat, w (static x86-64 build)",
+   "license": "GPL-2.0-or-later",
+   "source": "https://downloads.sourceforge.net/project/procps-ng/Production/procps-ng-4.0.7.tar.xz",
+   "homepage": "https://gitlab.com/procps-ng/procps",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/procps.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/free",
+     "url": "/pkg/procps/4.0.7/free.gz",
+     "sha256": "7e8dc98afbf951a0c917b07af9c1eca866a96c2e48d19bc8b08f35b1e56115ec",
+     "size": 37348,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/pgrep",
+     "url": "/pkg/procps/4.0.7/pgrep.gz",
+     "sha256": "d498ee9204930dfbafede344a3bf3aa892582e73c8e8bb47e9058697e899e83d",
+     "size": 83382,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/pidof",
+     "url": "/pkg/procps/4.0.7/pidof.gz",
+     "sha256": "6126295e4c447f2193d023b332b002f2ab04118dfa18d3037626b0306b323b05",
+     "size": 56675,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/ps",
+     "url": "/pkg/procps/4.0.7/ps.gz",
+     "sha256": "0b38aa7968a4ad4cec6682019e610de4ba4a9e3fea0bc72c82115d56c66c0165",
+     "size": 111589,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/top",
+     "url": "/pkg/procps/4.0.7/top.gz",
+     "sha256": "b1a91506932afd8aa4d3fb75db1874f5801987de8fe3b7c25cbd52476b53a2c2",
+     "size": 161749,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/uptime",
+     "url": "/pkg/procps/4.0.7/uptime.gz",
+     "sha256": "2ea5f4685c11cb58c9703ad41259d64e930c9c4bb6c8401182a9180c3dbdf48e",
+     "size": 59881,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/vmstat",
+     "url": "/pkg/procps/4.0.7/vmstat.gz",
+     "sha256": "42370f1742a00b80122802ddc3e605b8050cb81316e0c6df6692eff106da549f",
+     "size": 88468,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/w",
+     "url": "/pkg/procps/4.0.7/w.gz",
+     "sha256": "52d530a9a7713c7c3fc0eb128db8aa472d782d827a8c5e4a19c667537fcb8323",
+     "size": 70369,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/watch",
+     "url": "/pkg/procps/4.0.7/watch.gz",
+     "sha256": "cf03e9a7c2fae99e84447548d81090187b9bc6e0ab5a675ef5063f2936f65e12",
+     "size": 149858,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "top": {
+     "file": "bin/top"
+    },
+    "ps": {
+     "file": "bin/ps"
+    },
+    "free": {
+     "file": "bin/free"
+    },
+    "uptime": {
+     "file": "bin/uptime"
+    },
+    "pgrep": {
+     "file": "bin/pgrep"
+    },
+    "pidof": {
+     "file": "bin/pidof"
+    },
+    "watch": {
+     "file": "bin/watch"
+    },
+    "vmstat": {
+     "file": "bin/vmstat"
+    },
+    "w": {
+     "file": "bin/w"
+    },
+    "pkill": {
+     "file": "bin/pgrep"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "wget",
+   "version": "1.25.0",
+   "description": "GNU wget: non-interactive downloader (OpenSSL, zlib; static x86-64 build)",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/wget/wget-1.25.0.tar.gz",
+   "homepage": "https://www.gnu.org/software/wget/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/wget.sh",
+   "section": "net",
+   "abi": "x86_64-linux",
+   "deps": [
+    "ca-certificates"
+   ],
+   "files": [
+    {
+     "path": "bin/wget",
+     "url": "/pkg/wget/1.25.0/wget.gz",
+     "sha256": "d59f17b701adc44a1e05dcfcc005d4f0c98ebbfa06bc1303403bb8f24534d0d0",
+     "size": 2188313,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "wget": {
+     "file": "bin/wget"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "rsync",
+   "version": "3.5.1",
+   "description": "rsync: fast incremental file copy (static x86-64 build)",
+   "license": "GPL-3.0-or-later",
+   "source": "https://download.samba.org/pub/rsync/src/rsync-3.5.1.tar.gz",
+   "homepage": "https://rsync.samba.org/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/rsync.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/rsync",
+     "url": "/pkg/rsync/3.5.1/rsync.gz",
+     "sha256": "6c19c0911a980cfa696a96fd60b2b6b8b59a0075ae02cbf77340f7fccbe05332",
+     "size": 426549,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "rsync": {
+     "file": "bin/rsync"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "mandoc",
+   "version": "1.14.6",
+   "description": "mandoc: man, apropos, whatis and the mdoc/man formatter (static x86-64 build)",
+   "license": "ISC",
+   "source": "https://mandoc.bsd.lv/snapshots/mandoc-1.14.6.tar.gz",
+   "homepage": "https://mandoc.bsd.lv/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/mandoc.sh",
+   "section": "doc",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/mandoc",
+     "url": "/pkg/mandoc/1.14.6/mandoc.gz",
+     "sha256": "2689b01b6ad33543cbf08590e555fcd80b6145691d53af499a753eff747db16b",
+     "size": 256920,
+     "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/mandoc/1.14.6/share.tar.gz",
+     "sha256": "163f5ec06e967a1e159d2f20719574ec1773ec4aabfeb89cf4b24c4d0d9c2186",
+     "size": 86744,
+     "unpack": "tar.gz"
+    }
+   ],
+   "bin": {
+    "man": {
+     "file": "bin/mandoc"
+    },
+    "mandoc": {
+     "file": "bin/mandoc"
+    },
+    "apropos": {
+     "file": "bin/mandoc"
+    },
+    "whatis": {
+     "file": "bin/mandoc"
+    },
+    "makewhatis": {
+     "file": "bin/mandoc"
+    }
+   },
+   "links": {
+    "/usr/share/man/man1/apropos.1": "share/man/man1/apropos.1",
+    "/usr/share/man/man1/man.1": "share/man/man1/man.1",
+    "/usr/share/man/man1/mandoc.1": "share/man/man1/mandoc.1",
+    "/usr/share/man/man5/man.conf.5": "share/man/man5/man.conf.5",
+    "/usr/share/man/man5/mandoc.db.5": "share/man/man5/mandoc.db.5",
+    "/usr/share/man/man7/eqn.7": "share/man/man7/eqn.7",
+    "/usr/share/man/man7/man.7": "share/man/man7/man.7",
+    "/usr/share/man/man7/mandoc_char.7": "share/man/man7/mandoc_char.7",
+    "/usr/share/man/man7/mdoc.7": "share/man/man7/mdoc.7",
+    "/usr/share/man/man7/roff.7": "share/man/man7/roff.7",
+    "/usr/share/man/man7/tbl.7": "share/man/man7/tbl.7",
+    "/usr/share/man/man8/makewhatis.8": "share/man/man8/makewhatis.8"
+   },
+   "needs": [
+    "x86"
+   ]
   }
  ]
 }

@@ -13,6 +13,7 @@ const bins = {
   'hello-glibc': process.env.BENCH_DIR + '/hello-glibc',
   'cpuloop': process.env.BENCH_DIR + '/cpuloop',
   'cloop': process.env.BENCH_DIR + '/cloop',
+  'arith': process.env.BENCH_DIR + '/arith',
   'go-tls': process.env.BENCH_DIR + '/go-tls',
   'gh': process.env.BENCH_DIR + '/gh',
 };
