@@ -7,15 +7,16 @@ import type { DesktopAPI, DesktopWindow } from '../desktop/wm';
 import type { FileSystem } from '../filesystem';
 import type { Kernel } from '../kernel/kernel';
 
-/** id, name, in the dock, icon glyph */
+/** id, name, in the dock (apps checked in Chromium), icon glyph */
 const APPS: [string, string, boolean, string][] = [
   ['xterm', 'XTerm', true, 'X'],
   ['l3afpad', 'L3afpad', true, '✎'],
-  ['ristretto', 'Ristretto', true, '▣'],
+  ['ristretto', 'Ristretto', false, '▣'],
   ['featherpad', 'FeatherPad', true, '✐'],
   ['lximage-qt', 'LXImage-Qt', false, '▤'],
   ['mousepad', 'Mousepad', false, '✎'],
-  ['gpicview', 'GPicView', false, '▣'],
+  ['gpicview', 'GPicView', true, '▣'],
+  ['gimp', 'GIMP', false, 'G'],
   ['xeyes', 'xeyes', true, '◉'],
   ['xclock', 'xclock', false, '◷'],
   ['xcalc', 'xcalc', false, '±'],

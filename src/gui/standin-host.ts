@@ -14,15 +14,17 @@ export function createStandinHost(root: HTMLElement = document.body): WindowHost
   return {
     name: 'standin',
     desktopSize: () => ({ width: Math.max(640, window.innerWidth), height: Math.max(480, window.innerHeight) }),
-    placeWindow(width: number, height: number) {
-      const vw = window.innerWidth, vh = window.innerHeight;
-      const step = (cascade++ % 8) * 28;
-      return {
-        x: Math.max(8, Math.min(vw - width - 8, Math.round((vw - width) / 2) - 120 + step)),
-        y: Math.max(TITLE_H + 8, Math.min(vh - height - 8, Math.round((vh - height) / 3) + step)),
-      };
-    },
+    placeWindow: createStandinPlacement,
     createCanvasWindow: (opts) => new StandinWindow(root, opts),
+  };
+}
+
+function createStandinPlacement(width: number, height: number): { x: number; y: number } {
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const step = (cascade++ % 8) * 28;
+  return {
+    x: Math.max(8, Math.min(vw - width - 8, Math.round((vw - width) / 2) - 120 + step)),
+    y: Math.max(TITLE_H + 8, Math.min(vh - height - 8, Math.round((vh - height) / 3) + step)),
   };
 }
 
@@ -39,7 +41,9 @@ class StandinWindow implements CanvasWindow {
   private h: number;
 
   constructor(root: HTMLElement, private opts: CanvasWindowOptions) {
-    this.x = opts.x; this.y = opts.y; this.w = opts.width; this.h = opts.height;
+    this.w = opts.width; this.h = opts.height;
+    const auto = opts.x === undefined || opts.y === undefined ? createStandinPlacement(opts.width, opts.height) : null;
+    this.x = opts.x ?? auto!.x; this.y = opts.y ?? auto!.y;
     const f = document.createElement('div');
     f.className = 'shiro-x11-window';
     f.dataset.x11Window = opts.title;

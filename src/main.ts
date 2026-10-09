@@ -73,6 +73,7 @@ import { spiritCmd } from './commands/spirit';
 import { processTable } from './process-table';
 import { createPathShims } from './path-shims';
 import { getKernel } from './kernel/kernel';
+import { startDisplay } from './x11/display';
 import { installNet } from './kernel/net';
 import { attachKernelTty } from './kernel/pty';
 import { sudoCmd } from './commands/sudo';
@@ -487,7 +488,7 @@ async function main() {
   // X11 display :0 (src/x11, docs/GUI.md): `Xshiro :0` listens on /tmp/.X11-unix/X0 now;
   // the server and its fonts load on the first client, windows open on the desktop
   shell.env['DISPLAY'] ??= ':0';
-  void import('./x11/display').then(m => m.startDisplay(kernel, 0)).catch(e => console.warn('[Xshiro]', e));
+  void startDisplay(kernel, 0).catch(e => console.warn('[Xshiro]', e));
 
   // Populate API keys from localStorage so `claude` CLI picks them up
   const storedAnthropicKey = localStorage.getItem('shiro_anthropic_key') || localStorage.getItem('shiro_api_key');

@@ -192,6 +192,48 @@ alternated on one machine, medians of 6:
 
 At the first prompt itself (CDP, before idle work): 14 → 9 requests and 241 →
 177 DOM nodes; the bench's TTI is a second later and includes the GUI apps.
+### unix/gui — X11 server in the page, Debian GUI apps on first use
+
+New: `Xshiro :0` (a kernel process listening on `/tmp/.X11-unix/X0`, ~1 KB in
+the main bundle; the server, RENDER and fonts are a 180 KB gzip chunk loaded
+on the first X client), dock entries for four GUI apps, and `gui`
+(docs/GUI.md). Boot cost, `--quick --suites boot --runs 5 --modes isolated`,
+base 4970079 (unix/integration) vs. this branch, two rounds alternated on one
+machine, medians of all samples:
+
+| metric | base | unix/gui |
+|---|---:|---:|
+| boot.cold.first_prompt | 305 ms | 307 ms |
+| boot.warm.first_prompt | 199 ms | 163 ms (noise) |
+| boot.cold.long_tasks | 2 | 2 |
+| boot.cold.requests | 12 | 12 |
+| boot.cold.transfer | 1550 KiB | 1554 KiB |
+| boot.mem.js_heap | 3.8 MiB | 3.9 MiB |
+| boot.mem.renderer_rss | 230 MiB | 231 MiB |
+| boot.mem.dom_nodes | 355 | 387 (+4 dock icons) |
+
+The first version loaded the display listener and the dock list as two lazy
+chunks: +2 requests on every boot. Both are static imports now.
+
+GUI apps in headless Chromium (`scripts/gui/shoot.mjs`, local server with
+network to deb.debian.org), from `gui APP` to the first drawn frame; install
+is download + unpack + triggers:
+
+| app | download | install | first frame | warm start |
+|---|---:|---:|---:|---:|
+| xeyes (Xt, SHAPE) | 7.5 MB | 1.9 s | 0.9–1.3 s | 0.5 s |
+| xterm (Xaw, pty) | 9.3 MB | 2.1 s | 2.5–2.7 s | 1.6–1.9 s |
+| GPicView (GTK 2) | 26.8 MB | 4.8–7.6 s | 6.9–9.7 s | 6.7 s |
+| FeatherPad (Qt 5) | 35.0 MB | 6.1–7.8 s | 10.5–16 s | 8.9–14.7 s |
+| L3afpad (GTK 3) | 33.1 MB | 10.3–12.2 s | 12.9 s | — |
+| Ristretto (GTK 3) | 35.1 MB | 10.9 s | 14.4–15.5 s | 13.1 s |
+| GIMP 2.10 (GTK 2) | 53.2 MB | 19 s | 290 s (main window) | 84 s |
+
+Reinstalling from the browser's Cache Storage (by sha256, no network): xeyes
+1.4 s, xterm 1.7 s, GPicView 7.2 s, FeatherPad 7.0–8.2 s — unpacking (JS xz)
+and writing files dominates. Start-up is Blink loading ~70–100 shared
+libraries and toolkit init, so a warm start is barely faster than the first.
+GTK 3 needed Blink patch 0029 (it spun in cairo/pixman SSE compares).
 
 ### unix/desktop — the desktop shell (menu bar, dock, windows) on the boot path
 
@@ -777,6 +819,18 @@ and re-run 3× alternating (7 runs each): `kernel.pipe_throughput*`,
 `kernel.syscall_inpage`, `kernel.spawn_throughput.*` (isolated),
 `shell.pipeline_seq_grep_wc`, `wasm.startup.*`: overlapping ranges, noise.
 `boot.settled.time` 6.3 s on the other host is 3.9 s here on both.
+
+### A/B tooling: `bench/ab.mjs` (no product change)
+
+`node bench/ab.mjs <base> [<new>]` builds each ref once in its own worktree,
+interleaves base/new runs over several rounds and flags a metric only when a
+Mann–Whitney test, a minimum shift and every round's direction agree (see
+bench/README.md "A/B"). First use: the suspected 68dbbbc → 1d9582a
+regression (`--suites shell,wasm --only 'shell.loop_1000|wasm.startup|wasm.peak_rss'`,
+3 rounds × 7 runs, isolated). All 15 metrics: **same**. `peak_rss.quickjs_ng`
+2.06 → 1.74 MiB, p = 0.90, rounds `-+-`; `shell.loop_1000` 95 → 99 ms,
+p = 0.60, rounds `++-`; `startup.lua` 7.6 → 6.6 ms, `startup.sqlite3`
+9.8 → 8.6 ms (both p > 0.01, split rounds).
 
 ## Results
 

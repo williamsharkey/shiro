@@ -18,11 +18,19 @@ import { untar, gunzip, type TarEntry } from '../pkg-tar';
 
 export interface DebPackage { version: string; filename: string; sha256: string; size: number }
 export interface GuiApp {
-  description: string; toolkit: string; bin: string; packages: string[];
+  description: string; toolkit: string; bin: string;
+  /** The Debian package that provides the app (apt's name for it). */
+  pkg?: string;
+  packages: string[];
   size: number; closureSize: number; dropped: string[];
+  /** Paths deleted after unpacking: optional plug-ins whose libraries were left out. */
+  remove?: string[];
 }
+/** A file a postinst would generate, built by gen-apps.py (public/gui/overlay/SHA256), applied when `when` is installed. */
+export interface Overlay { path: string; sha256: string; size: number; when: string }
 export interface AppsManifest {
   suite: string; arch: string; mirror: string; snapshot: string;
+  overlays?: Overlay[];
   packages: Record<string, DebPackage>;
   apps: Record<string, GuiApp>;
 }
@@ -92,8 +100,44 @@ async function writeStatus(fs: FileSystem, s: Status): Promise<void> {
 }
 
 export async function isAppInstalled(fs: FileSystem, app: string): Promise<boolean> {
+  if (await debianMode(fs)) {
+    const a = (await guiManifest()).apps[app];
+    return !!a && (await fs.exists(`/var/lib/dpkg/info/${a.pkg ?? app}.list`)) && (await fs.exists(a.bin));
+  }
   const st = await readStatus(fs);
   return st.apps.includes(app);
+}
+
+/**
+ * Debian mode (`debian install`, docs/DEBIAN.md): the system is a Debian
+ * rootfs managed by dpkg, so apps come from its own apt instead of being
+ * unpacked from this manifest (whose bookworm libraries would replace the
+ * system's).
+ */
+export async function debianMode(fs: FileSystem): Promise<boolean> {
+  try { return !!(await (await import('../debian/rootfs')).installedRootfs(fs)); } catch { return false; }
+}
+
+/** Install with the system's apt (Debian mode); `log` gets apt's output lines. */
+async function installWithApt(fs: FileSystem, kernel: Kernel, name: string, app: GuiApp, log: (s: string) => void): Promise<InstallResult> {
+  const t0 = Date.now();
+  const pkg = app.pkg ?? name;
+  const { BufferFile } = await import('../kernel/fd');
+  // `sudo` is Shiro's builtin (uid 0 for apt); a bare name reaches it through the kernel's builtin loader
+  const run = async (cmd: string) => {
+    const out = new BufferFile(null);
+    const argv = cmd.split(' ');
+    const p = kernel.spawn({ path: argv[0], argv, cwd: '/', env: appEnv({ DEBIAN_FRONTEND: 'noninteractive' }), fds: { 0: new BufferFile(''), 1: out, 2: out } });
+    const st = await p.wait();
+    for (const line of out.text().split('\n').filter(Boolean).slice(-6)) log(line);
+    return st;
+  };
+  // lists may be empty right after `debian install`
+  const hasLists = (await fs.readdir('/var/lib/apt/lists').catch(() => [] as string[])).some((f) => f.endsWith('_Packages'));
+  if (!hasLists && await run('sudo apt-get update') !== 0) throw new Error('apt-get update failed');
+  if (await run(`sudo apt-get install -y --no-install-recommends ${pkg}`) !== 0) throw new Error(`apt-get install ${pkg} failed`);
+  const ms = Date.now() - t0;
+  return { app: name, packages: 1, skipped: 0, fetched: 0, cached: 0, bytes: 0, ms: { total: ms, fetch: 0, unpack: ms, triggers: 0 } };
 }
 
 // ── fetching ──
@@ -109,7 +153,13 @@ async function openCache(): Promise<Cache | null> {
 
 /** A .deb by content hash: Cache Storage first, else the server's /debian/ route. */
 async function getDeb(p: DebPackage, cache: Cache | null): Promise<{ data: Uint8Array; cached: boolean }> {
-  const key = new URL(`debian-sha256/${p.sha256}`, baseUrl()).href;
+  return getBlob(p.sha256, p.size, `debian/${p.filename}`, cache, fetchOverride ? () => fetchOverride!(p) : null);
+}
+
+/** Bytes by sha256: Cache Storage, else `url` (or `fetcher`), verified and cached. */
+async function getBlob(sha256: string, size: number, url: string, cache: Cache | null, fetcher: (() => Promise<Uint8Array>) | null): Promise<{ data: Uint8Array; cached: boolean }> {
+  const p = { sha256, size, filename: url };
+  const key = new URL(`sha256/${p.sha256}`, baseUrl()).href;
   if (cache) {
     const hit = await cache.match(key).catch(() => undefined);
     if (hit) {
@@ -118,9 +168,9 @@ async function getDeb(p: DebPackage, cache: Cache | null): Promise<{ data: Uint8
     }
   }
   let data: Uint8Array;
-  if (fetchOverride) data = await fetchOverride(p);
+  if (fetcher) data = await fetcher();
   else {
-    const r = await fetch(new URL(`debian/${p.filename}`, baseUrl()).href);
+    const r = await fetch(new URL(url, baseUrl()).href);
     if (!r.ok) throw new Error(`${p.filename}: HTTP ${r.status}`);
     data = new Uint8Array(await r.arrayBuffer());
   }
@@ -191,7 +241,6 @@ async function unpack(fs: FileSystem, entries: TarEntry[], ownBins: Set<string>)
 const TRIGGERS: { when: string; argv: string[] }[] = [
   { when: '/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders', argv: ['/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders', '--update-cache'] },
   { when: '/usr/bin/glib-compile-schemas', argv: ['/usr/bin/glib-compile-schemas', '/usr/share/glib-2.0/schemas'] },
-  { when: '/usr/bin/update-mime-database', argv: ['/usr/bin/update-mime-database', '/usr/share/mime'] },
 ];
 
 async function runTriggers(fs: FileSystem, kernel: Kernel, log: (s: string) => void): Promise<void> {
@@ -224,12 +273,12 @@ export function appEnv(extra: Record<string, string> = {}): Record<string, strin
 }
 
 /**
- * Blink's wasm JIT stalls GTK startup in about 2 of 3 runs under Node
- * (reported to the perf-blink session); the interpreter is reliable there.
- * Qt and plain Xlib apps run fine with the JIT.
+ * Per-toolkit environment. Empty since Blink patch 0029 (SSE compares): GTK 3
+ * spun after mapping its window before it, with and without the JIT.
  */
 export function toolkitEnv(app: GuiApp): Record<string, string> {
-  return app.toolkit.startsWith('gtk') ? { BLINK_WJIT: '0' } : {};
+  void app;
+  return {};
 }
 
 // ── install & launch ──
@@ -250,6 +299,7 @@ async function doInstall(fs: FileSystem, kernel: Kernel, name: string, onProgres
   const m = await guiManifest();
   const app = m.apps[name];
   if (!app) throw new Error(`no GUI app named ${name}`);
+  if (await debianMode(fs)) return installWithApt(fs, kernel, name, app, log);
   const status = await readStatus(fs);
   const want = app.packages.filter((n) => status.packages[n] !== m.packages[n].version);
   const totalBytes = want.reduce((a, n) => a + m.packages[n].size, 0);
@@ -288,6 +338,13 @@ async function doInstall(fs: FileSystem, kernel: Kernel, name: string, onProgres
   }
   res.ms.fetch = fetchWait;
   void tFetch0;
+  for (const path of app.remove ?? []) await fs.rm(path, { recursive: true }).catch(() => {});
+  for (const o of m.overlays ?? []) {
+    if (!app.packages.includes(o.when) || !want.includes(o.when)) continue;
+    const { data } = await getBlob(o.sha256, o.size, `gui/overlay/${o.sha256}`, cache, null);
+    await fs.mkdir(o.path.slice(0, o.path.lastIndexOf('/')), { recursive: true }).catch(() => {});
+    await fs.writeFile(o.path, data);
+  }
   const tt = Date.now();
   report('triggers');
   if (want.length) await runTriggers(fs, kernel, log);
