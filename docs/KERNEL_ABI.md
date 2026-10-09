@@ -176,7 +176,7 @@ All changes so far are additive; nothing below renames or removes an earlier nam
     after fork() (daemon()) reparented the child to init first, which then
     never started (tmux's server, now and then).
   - `SYS_uname` (63) writes a `struct utsname` whose nodename is
-    `Kernel.hostname` ("shiro"); Blink takes the host and domain names
+    `Kernel.hostname` ("shiro" then; now the profile's `hostname`, "tabcomputer"); Blink takes the host and domain names
     from it. Constant `UTSNAME_FIELD`.
   - `TtySession.onJobForeground`: called when a job takes the terminal; the
     page's terminals hand it the keys typed while the command was starting.

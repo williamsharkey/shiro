@@ -55,7 +55,7 @@ async function runFile(file: string): Promise<CaseResult[]> {
     if (!want.has(i)) continue;
     if (process.env.SPEC_CASES && !process.env.SPEC_CASES.split(',').includes(String(i))) continue;
     if (HANGS[file]?.includes(i)) {
-      results.push({ i, name: c.name, ok: false, status: -3, stdout: '', stderr: '[harness] skipped: hangs Shiro', timeout: true });
+      results.push({ i, name: c.name, ok: false, status: -3, stdout: '', stderr: '[harness] skipped: hangs tabcomputer', timeout: true });
       continue;
     }
     if (PROGRESS) appendFileSync(PROGRESS, `${file} ${i} ${c.name} @${Date.now() % 1000000}\n`);
