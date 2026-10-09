@@ -7,9 +7,10 @@
 //   location, x.location        → __tcLocation, x.__tcLocation
 //       (shim.ts: an Object.prototype accessor; for a real Location it returns
 //        a stand-in that reports the real origin, otherwise x.location as is)
-//   top, window.top             → __tcTop, window.__tcTop
-//       (the tab's top document, not the desktop above it; `.top` is only
-//        rewritten on window-like expressions, so rect.top and style.top stay)
+//   top, x.top                  → __tcTop, x.__tcTop
+//       (for a window, the tab's top document, not the desktop above it; for
+//        anything else, x.top. Every `.top` goes through it: frame walks like
+//        `while (w !== w.top) w = w.parent` must see one consistent world)
 //   x.postMessage(m, origin)    → x.postMessage(m, __tcPMO(origin))
 //       (a real target origin becomes its browse origin, else the message is dropped)
 //   eval(src)                   → eval(__tcJS(src))      (still a direct eval)
@@ -24,9 +25,6 @@ export const LOC = '__tcLocation';
 export const TOP = '__tcTop';
 /** Globals whose every binding is renamed. */
 const RENAME: Record<string, string> = { location: LOC, top: TOP };
-/** Expressions that are (almost always) windows, for `.top`. */
-const WINDOW_NAMES = new Set(['window', 'self', 'globalThis', 'parent', 'top', 'frames', 'opener']);
-const WINDOW_PROPS = new Set(['window', 'self', 'parent', 'top', 'opener', 'defaultView', 'contentWindow', 'frames']);
 const PMO = '__tcPMO';
 const EVAL = '__tcJS';
 
@@ -94,9 +92,6 @@ function apply(src: string, edits: Edit[]): string {
 const renamed = (n: AnyNode | null | undefined): string | null =>
   !!n && n.type === 'Identifier' && Object.prototype.hasOwnProperty.call(RENAME, n.name) ? n.name : null;
 const rename = (n: AnyNode, edits: Edit[]) => edits.push({ at: n.start, end: n.end, text: RENAME[n.name] });
-const windowish = (n: AnyNode): boolean =>
-  (n.type === 'Identifier' && WINDOW_NAMES.has(n.name))
-  || (n.type === 'MemberExpression' && !n.computed && n.property.type === 'Identifier' && WINDOW_PROPS.has(n.property.name));
 const wrap = (n: AnyNode, fn: string, edits: Edit[]) => {
   edits.push({ at: n.start, end: n.start, text: fn + '(' });
   edits.push({ at: n.end, end: n.end, text: ')' });
@@ -111,7 +106,7 @@ function collect(node: AnyNode, parent: AnyNode | null, edits: Edit[]): void {
       collect(node.object, node, edits);
       if (node.computed) { collect(node.property, node, edits); return; }
       const name = renamed(node.property);
-      if (name && !(parent?.type === 'UnaryExpression' && parent.operator === 'delete') && (name === 'location' || windowish(node.object))) rename(node.property, edits);
+      if (name && !(parent?.type === 'UnaryExpression' && parent.operator === 'delete')) rename(node.property, edits);
       return;
     }
     case 'Property': {

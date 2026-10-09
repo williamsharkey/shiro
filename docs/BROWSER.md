@@ -250,7 +250,7 @@ scripts a page inserts, and direct `eval` sources get these changes:
 | In the script | Becomes | At run time (`shim.ts`) |
 |---|---|---|
 | `location`, `x.location` | `__tcLocation`, `x.__tcLocation` | An `Object.prototype` accessor: a real `Location` comes back as a stand-in that reports the real URL and origin and navigates through the real one; anything else is `x.location` unchanged. |
-| `top`, `window.top` | `__tcTop`, `window.__tcTop` | For a window, the tab's top document (found from `ancestorOrigins` and the app origin); else `x.top`. `.top` is only rewritten on window-like expressions, so `rect.top` and `style.top` stay. |
+| `top`, `x.top` | `__tcTop`, `x.__tcTop` | For a window, the tab's top document (found from `ancestorOrigins` and the app origin); for anything else (`rect.top`, `style.top`) just `x.top`. Every `.top` goes through it, so frame walks (`while (w !== w.top) w = w.parent`, common in ad and consent code) stop at the tab's top document. `parent` is *not* changed: code we never rewrite (scripts `document.write`s into ad frames) walks `parent` to the real `top`, and a tab's top document that was its own parent made those walks loop forever (the Guardian, w3schools). |
 | `w.postMessage(m, origin)` | `w.postMessage(m, __tcPMO(origin))` | A real target origin becomes its browse origin. Without this, a message to `https://www.youtube.com` from a page that built it from `location` is dropped by the browser. |
 | `eval(src)` | `eval(__tcJS(src))` | Still a direct eval; the source gets the same rewrite. |
 
@@ -273,14 +273,14 @@ scripts a page inserts, and direct `eval` sources get these changes:
   allows it by hash still runs it.
 - Elsewhere in the runtime: `self.origin`, `document.URL`/`documentURI`/
   `baseURI`/`domain`, and link `href`/`origin`/`host` report real URLs.
-  `history.pushState` and `new Worker()` accept real URLs. A tab's top
-  document is its own `parent`, and same-origin frames (`about:blank`) get
-  the shim when the page first touches them.
+  `history.pushState` and `new Worker()` accept real URLs. Same-origin
+  frames (`about:blank`) get the shim when the page first touches them.
 
 Not covered: `new Function`, string `setTimeout`, `document.write` of
-scripts, computed access (`window["location"]`), `with` scopes, and
-null-prototype objects with a `location` property (their reads through the
-accessor see `undefined`). Code in a cross-origin frame that reads
+scripts, computed access (`window["location"]`), `with` scopes, `parent !== window` checks in a
+tab's top document (it is still framed by the desktop), and
+null-prototype objects with a `location` or `top` property (their reads
+through the accessor see `undefined`). Code in a cross-origin frame that reads
 `parent.location` now gets a SecurityError for the accessor instead of a
 cross-origin Location, which only matters for scripts that write
 `parent.location.href`.

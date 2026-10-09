@@ -85,12 +85,21 @@ export function installShim(g: any, map: OriginMap, app?: string): void {
   });
 
   const isWindow = (w: any): boolean => { try { return !!w && typeof w === 'object' && w.window === w; } catch { return false; } };
-  /** The tab's top document above `w`: the window just below the app in its ancestor chain. */
+  /**
+   * The tab's top document above `w`: the window just below the app in its
+   * ancestor chain. `parent` is left alone (code we never rewrite, such as
+   * document.write into an ad frame, walks `parent` up to the real `top`), so
+   * a rewritten walk stops here only by comparing with top, as such walks do.
+   */
   const tabTop = (w: any): any => {
     try {
       const anc = app ? w.location.ancestorOrigins : null;
       const k = anc ? Array.prototype.indexOf.call(anc, app) : -1;
-      if (k >= 0) { let a = w; for (let i = 0; i < k; i++) a = a.parent; return a; }
+      if (k >= 0) {
+        let a = w;
+        for (let i = 0; i < k; i++) a = a.parent;
+        return a;
+      }
     } catch { /* not ours to see */ }
     return w.top;
   };

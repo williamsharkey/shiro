@@ -42,10 +42,10 @@ describe('jsrewrite', () => {
       .toBe('import {location as __tcLocation} from "m"; export {__tcLocation as location}; export {location as loc} from "n"');
   });
 
-  it('renames top, but .top only on windows', () => {
+  it('renames top and every .top', () => {
     expect(rw('if (top !== self) top.location = self.location')).toBe('if (__tcTop !== self) __tcTop.__tcLocation = self.__tcLocation');
     expect(rw('window.top.postMessage(m, "*"); parent.top; f.contentWindow.top')).toBe('window.__tcTop.postMessage(m, __tcPMO("*")); parent.__tcTop; f.contentWindow.__tcTop');
-    expect(rw('el.style.top = "1px"; x = r.top; const {top} = r; ({top})')).toBe('el.style.top = "1px"; x = r.top; const {top: __tcTop} = r; ({top: __tcTop})');
+    expect(rw('el.style.top = "1px"; x = r.top; const {top} = r; ({top}); s.top()')).toBe('el.style.__tcTop = "1px"; x = r.__tcTop; const {top: __tcTop} = r; ({top: __tcTop}); s.__tcTop()');
   });
 
   it('wraps postMessage target origins and direct eval sources', () => {
@@ -103,7 +103,9 @@ describe('shim', () => {
     expect(run('Object.prototype.toString.call(location)')).toBe('[object Location]');
     expect(run('origin')).toBe('https://login.example.com');
     expect(run('top === window && window.top === self')).toBe(true);
-    expect(run('({ top: 3 }).top')).toBe(3);
+    expect(run('const o = { top: 3, n() { return this.top } }; o.top += 1; [o.top, o.n(), JSON.stringify(o)]')).toEqual([4, 4, '{"top":4}']);
+    // A frame walk ends at the tab's top document
+    expect(run('let w = window, n = 0; while (w !== w.top && n < 5) { w = w.parent; n++ } n')).toBe(0);
   });
 
   it('leaves other objects’ location properties alone, and navigates through the real Location', () => {

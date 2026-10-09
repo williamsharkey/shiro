@@ -62,7 +62,9 @@ import type { BrokerToClient, ClientMsg } from './protocol';
     void askApp('sw').then((p) => { if (p) navigator.serviceWorker.controller?.postMessage({ tc: 'port' }, [p]); });
   });
 
-  const toAbs = (v: string | URL): URL | null => { try { return new URL(String(v), document.baseURI); } catch { return null; } };
+  // The document's own base (baseURI itself is patched below to report the real URL)
+  const baseDesc = Object.getOwnPropertyDescriptor(Node.prototype, 'baseURI')!;
+  const toAbs = (v: string | URL): URL | null => { try { return new URL(String(v), baseDesc.get!.call(document)); } catch { return null; } };
   /** A URL as the browse origin serves it (real origins → browse origins; others unchanged). */
   const proxied = (v: string | URL): string => {
     const u = toAbs(v);
@@ -177,10 +179,6 @@ import type { BrokerToClient, ClientMsg } from './protocol';
     get() { const o = originDesc.get!.call(this); return map.realOrigin(o) ?? o; },
   });
   installShim(window, map, APP);
-  // A tab's top document is the top of its world: its parent is itself, not the desktop
-  if (location.ancestorOrigins?.[0] === APP) {
-    try { Object.defineProperty(window, 'parent', { configurable: true, get: () => window }); } catch { /* not replaceable */ }
-  }
   const realGetter = (proto: object, name: string, f: (v: string) => string) => {
     const d = Object.getOwnPropertyDescriptor(proto, name);
     if (!d?.get) return;
