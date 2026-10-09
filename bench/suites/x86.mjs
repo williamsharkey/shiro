@@ -56,4 +56,24 @@ export async function run(h) {
       });
     }
   }
+  // Vim 9.2 (static, from public/pkg) opening a C file: mostly its startup
+  // scripts (defaults.vim: filetype.vim, syntax) run by Vim's interpreter
+  const vim = 'x86.blink.vim_startup';
+  if (h.isolated && h.wants(vim) && !h.quick) {
+    await h.try(vim, 'ms', async () => {
+      const inst = await h.sh('pkg install vim 2>&1');
+      if (inst.code !== 0) throw new Error(`pkg install vim: ${inst.out.trim().split('\n').pop()}`);
+      await h.sh('echo "int main(void) { return 0; }" > /home/user/x/x.c');
+      const cmd = 'vim --not-a-term -c qa x.c';
+      const first = await runOnce(h, cmd);
+      if (first.code !== 0) throw new Error(`exit ${first.code}: ${first.out.trim().slice(-160)}`);
+      const res = [];
+      for (let i = 0; i < h.runs; i++) {
+        const r = await runOnce(h, cmd);
+        if (r.code !== 0) throw new Error(`exit ${r.code} on run ${i + 2}`);
+        res.push(r);
+      }
+      h.sample(vim, res.map((r) => r.ms), 'ms', { notes: `\`${cmd}\` wall time at the prompt (Blink); first run ${Math.round(first.ms)} ms` });
+    });
+  }
 }
