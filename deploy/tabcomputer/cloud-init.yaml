@@ -38,6 +38,10 @@ write_files:
       # Build and switch to the head of deploy/tabcomputer if it moved.
       set -euo pipefail
       exec 9>/run/tabcomputer-deploy.lock; flock -n 9 || exit 0
+      # The last run's output is public at /_deploy/log (no secrets live on this box).
+      mkdir -p /var/www/tabdeploy
+      exec > >(tee /var/www/tabdeploy/log.new) 2>&1
+      trap 'mv -f /var/www/tabdeploy/log.new /var/www/tabdeploy/log' EXIT
       REPO=https://github.com/williamsharkey/shiro.git
       BRANCH=deploy/tabcomputer
       ROOT=/opt/tabcomputer
@@ -121,6 +125,12 @@ write_files:
         listen [::]:80;
         server_name tabcomputer.com www.tabcomputer.com;
         client_max_body_size 100m;
+        location /_deploy/ {
+          alias /var/www/tabdeploy/;
+          default_type text/plain;
+          add_header Cache-Control no-store;
+        }
+        error_page 502 503 504 /_deploy/log;
         location / {
           proxy_pass http://127.0.0.1:3000;
           proxy_http_version 1.1;
