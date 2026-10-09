@@ -632,7 +632,7 @@ export function inodeStat(fs: FileSystem, path: string): KStat | undefined {
 
 function inodeKStat(ino: Inode): KStat {
   return {
-    dev: 1, ino: inodeNumber(ino.path), mode: S_IFREG | (ino.mode & 0o7777), nlink: linkCount(ino.path), uid: 1000, gid: 1000, rdev: 0,
+    dev: 1, ino: inodeNumber(ino.fs, ino.path), mode: S_IFREG | (ino.mode & 0o7777), nlink: linkCount(ino.fs, ino.path), uid: 1000, gid: 1000, rdev: 0,
     size: ino.size, blksize: 4096, blocks: Math.ceil(ino.size / 512),
     atimeMs: ino.atimeMs ?? ino.mtimeMs, mtimeMs: ino.mtimeMs, ctimeMs: ino.ctimeMs,
     atimeNs: ino.atimeMs === null ? ino.mtimeNs : ino.atimeNs, mtimeNs: ino.mtimeNs,
@@ -666,33 +666,44 @@ export async function setInodeTimes(fs: FileSystem, path: string, t: { atimeMs: 
   ino.atimeNs = same ? 0 : t.atimeNs;
 }
 
-/** Stable small inode numbers for paths (the FileSystem has none). */
+/**
+ * st_ino of canonical `path`: the FileSystem's persistent per-node number
+ * (FSNode.ino), so it agrees across stat, fstat, getdents and reloads and
+ * follows renames. Without a FileSystem, a per-path counter.
+ */
 const inoNumbers = new Map<string, number>();
 let nextIno = 2;
-export function inodeNumber(path: string): number {
+export function inodeNumber(fs: FileSystem | null | undefined, path: string): number {
+  if (fs) return fs.inoOf(path);
   let n = inoNumbers.get(path);
   if (!n) { n = nextIno++; inoNumbers.set(path, n); }
   return n;
 }
 
 /**
- * link() copies (no hard links), but the copy reports its source's inode
- * number, as a hard link would: git's local clone checks that. A path that
- * is removed or replaced gets a fresh number.
+ * link() copies (no hard links), but the copy gets its source's inode number,
+ * as a hard link would (git's local clone checks that), and both names count
+ * in st_nlink.
  */
-export function shareInodeNumber(from: string, to: string): void {
-  const n = inodeNumber(from);
-  forgetInodeNumber(to);
-  inoNumbers.set(to, n);
+export function shareInodeNumber(fs: FileSystem, from: string, to: string): void {
+  const n = inodeNumber(fs, from);
+  forgetInodeNumber(fs, to);
+  fs.setIno(to, n);
   let names = linkNames.get(n);
   if (!names) { names = new Set([from]); linkNames.set(n, names); }
   names.add(to);
 }
-export function forgetInodeNumber(path: string): void {
-  const n = inoNumbers.get(path);
-  inoNumbers.delete(path);
-  const names = n === undefined ? undefined : linkNames.get(n);
-  if (names) { names.delete(path); if (names.size < 2) linkNames.delete(n!); }
+
+/** `path` is unlinked (or renamed away): it no longer counts as a link. */
+export function forgetInodeNumber(fs: FileSystem, path: string): void {
+  for (const [n, names] of linkNames) {
+    if (names.delete(path)) { if (names.size < 2) linkNames.delete(n); break; }
+  }
+}
+
+/** A rename moves a link name (the number moves with the node). */
+export function renameLinkName(from: string, to: string): void {
+  for (const names of linkNames.values()) if (names.delete(from)) { names.add(to); break; }
 }
 
 /** The names link() gave one inode number (only numbers with two or more). */
@@ -702,9 +713,8 @@ const linkNames = new Map<number, Set<string>>();
  * st_nlink of a regular file: how many names link() gave it (shadow's
  * lock, link(group.PID, group.lock), checks that the count went to 2).
  */
-export function linkCount(path: string): number {
-  const n = inoNumbers.get(path);
-  return (n === undefined ? undefined : linkNames.get(n)?.size) ?? 1;
+export function linkCount(fs: FileSystem | null | undefined, path: string): number {
+  return linkNames.get(inodeNumber(fs, path))?.size ?? 1;
 }
 
 export class RegularFile implements OpenFile {
@@ -856,7 +866,7 @@ export class DirFile implements OpenFile {
   async stat(): Promise<KStat> {
     const st = await this.fs.stat(this.path);
     return {
-      dev: 1, ino: inodeNumber(this.path), mode: S_IFDIR | (st.mode & 0o7777), nlink: 2, uid: 1000, gid: 1000, rdev: 0,
+      dev: 1, ino: inodeNumber(this.fs, this.path), mode: S_IFDIR | (st.mode & 0o7777), nlink: 2, uid: 1000, gid: 1000, rdev: 0,
       size: 4096, blksize: 4096, blocks: 8,
       atimeMs: st.atimeMs ?? st.mtime.getTime(), mtimeMs: st.mtime.getTime(), ctimeMs: st.ctime.getTime(),
       atimeNs: st.atimeNs, mtimeNs: st.mtimeNs,
@@ -866,7 +876,7 @@ export class DirFile implements OpenFile {
     const hit = this.fs.lookupCached(this.path);
     if (!hit || hit.node.type !== 'dir') return undefined;
     return {
-      dev: 1, ino: inodeNumber(this.path), mode: S_IFDIR | (hit.node.mode & 0o7777), nlink: 2, uid: 1000, gid: 1000, rdev: 0,
+      dev: 1, ino: inodeNumber(this.fs, this.path), mode: S_IFDIR | (hit.node.mode & 0o7777), nlink: 2, uid: 1000, gid: 1000, rdev: 0,
       size: 4096, blksize: 4096, blocks: 8, atimeMs: hit.node.atime ?? hit.node.mtime, mtimeMs: hit.node.mtime, ctimeMs: hit.node.ctime,
       atimeNs: hit.node.atime === undefined ? hit.node.mtimeNs : hit.node.atimeNs, mtimeNs: hit.node.mtimeNs,
     };

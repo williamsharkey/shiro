@@ -54,7 +54,7 @@ export class Harness {
    * Open a page and boot Shiro; returns timings. `context` reuses one (warm
    * cache: its HTTP cache and IndexedDB survive), otherwise a fresh one (cold).
    */
-  async boot({ context, page, waitSettled = false, settleQuietMs = 1000 } = {}) {
+  async boot({ context, page, waitSettled = false, settleQuietMs = 1000, path } = {}) {
     context = context ?? (await this.newContext());
     page = page ?? (await context.newPage());
     const cdp = await context.newCDPSession(page);
@@ -76,7 +76,7 @@ export class Harness {
     page.on('pageerror', (e) => this.log(`[pageerror] ${e.message}`));
     const t0 = Date.now();
     if (page.url().startsWith(this.origin)) await page.reload({ waitUntil: 'commit' });
-    else await page.goto(this.origin + (process.env.BENCH_PATH || '/'), { waitUntil: 'commit' });
+    else await page.goto(this.origin + (path ?? process.env.BENCH_PATH ?? '/'), { waitUntil: 'commit' });
     await page.waitForFunction(() => window.__bench?.marks.firstPrompt, null, { timeout: 120000, polling: 50 });
     // Time to interactive: first prompt, then no long task for settleQuietMs
     let tti;
@@ -157,18 +157,21 @@ export class Harness {
    * Run `fn` while sampling renderer RSS every 25 ms; returns
    * { result, peakRss, baseRss, peakDelta }.
    */
-  async withPeakRss(fn) {
-    const pids = await this.rendererPids();
+  async withPeakRss(fn, { dynamic = false } = {}) {
+    // dynamic: re-read the renderer list while sampling (a navigation can swap processes)
+    let pids = await this.rendererPids();
     const read = () => pids.reduce((s, p) => s + (procRss(p) || 0), 0);
     const base = read();
-    let peak = base;
+    let peak = base, stop = false;
     const timer = setInterval(() => { const v = read(); if (v > peak) peak = v; }, 25);
+    const refresh = dynamic ? (async () => { while (!stop) { pids = await this.rendererPids(); await new Promise((r) => setTimeout(r, 100)); } })() : null;
     try {
       const result = await fn();
       const v = read(); if (v > peak) peak = v;
       return { result, baseRss: base, peakRss: peak, peakDelta: peak - base };
-    } finally { clearInterval(timer); }
+    } finally { clearInterval(timer); stop = true; await refresh; }
   }
+
 
   /** In-page evaluate with a readable error. */
   eval(fn, arg) { return this.page.evaluate(fn, arg); }
@@ -178,7 +181,7 @@ export class Harness {
   sample(name, samples, unit, { notes = '', cache, extra } = {}) {
     const s = summarize(samples);
     const rec = {
-      name, mode: this.mode, cache: cache ?? null, unit,
+      name, suite: this.suite ?? null, mode: this.mode, cache: cache ?? null, unit,
       median: round(s.median), p90: round(s.p90), min: round(s.min), max: round(s.max), n: s.n,
       samples: samples.map((x) => round(x)), notes,
       ...(extra ? { extra } : {}),
@@ -190,7 +193,7 @@ export class Harness {
 
   /** A metric that failed or is unavailable in this mode. */
   skip(name, unit, reason) {
-    this.results.push({ name, mode: this.mode, cache: null, unit, median: null, p90: null, n: 0, samples: [], notes: reason, error: true });
+    this.results.push({ name, suite: this.suite ?? null, mode: this.mode, cache: null, unit, median: null, p90: null, n: 0, samples: [], notes: reason, error: true });
     this.log(`  ${name.padEnd(44)} ${'—'.padStart(10)} ${unit.padEnd(6)} ${reason}`);
   }
 

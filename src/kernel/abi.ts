@@ -102,6 +102,18 @@ export const SYS_epoll_create1 = 291;
 export const SYS_renameat2 = 316;
 export const SYS_geteuid = 107;
 export const SYS_getegid = 108;
+export const SYS_setuid = 105;
+export const SYS_setgid = 106;
+export const SYS_setreuid = 113;
+export const SYS_setregid = 114;
+export const SYS_getgroups = 115;
+export const SYS_setgroups = 116;
+export const SYS_setresuid = 117;
+export const SYS_getresuid = 118;
+export const SYS_setresgid = 119;
+export const SYS_getresgid = 120;
+export const SYS_setfsuid = 122;
+export const SYS_setfsgid = 123;
 export const SYS_eventfd = 284;
 export const SYS_eventfd2 = 290;
 /**
@@ -114,6 +126,11 @@ export const SYS_eventfd2 = 290;
  * expirations since the last read.
  */
 export const SYS_timerfd_create = 283;
+export const SYS_signalfd = 282;
+export const SYS_signalfd4 = 289;
+/** signalfd4 flags (the O_ ones) */
+export const SFD_CLOEXEC = 0o2000000;
+export const SFD_NONBLOCK = 0o4000;
 export const SYS_timerfd_settime = 286;
 export const SYS_timerfd_gettime = 287;
 export const TFD_TIMER_ABSTIME = 1;

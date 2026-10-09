@@ -58,6 +58,25 @@ export function blinkAssetUrl(name: string): string {
   return new URL(name, defaultAssetBase()).href;
 }
 
+/**
+ * URL of blink.wasm: its content-hashed copy from engines/manifest.json when
+ * the build has one (cached for good: a new build is a new URL), else the
+ * plain name. Looked up once per page.
+ */
+let wasmUrl: Promise<string | undefined> | null = null;
+function blinkWasmUrl(): Promise<string | undefined> {
+  if (isNode()) return Promise.resolve(undefined);
+  return (wasmUrl ??= (async () => {
+    try {
+      const r = await fetch(new URL('../manifest.json', defaultAssetBase()).href, { cache: 'no-cache' });
+      const hashed = r.ok ? (await r.json())['blink/blink.wasm'] : undefined;
+      return typeof hashed === 'string' ? new URL('../' + hashed, defaultAssetBase()).href : undefined;
+    } catch {
+      return undefined;
+    }
+  })());
+}
+
 function defaultAssetBase(): string {
   if (assetBase) return assetBase;
   if (isNode()) {
@@ -128,13 +147,14 @@ export function blinkRunner(path: string, restore?: ArrayBuffer): Runner {
     const create = await workerFactory();
     const mounts = kernel.fs ? (await kernel.fs.readdir('/')).map((n) => '/' + n) : [];
     const pool = Array.from({ length: POOL_CHANNELS }, () => createChannelBuffer(POOL_DATA));
+    const wasm = await blinkWasmUrl();
     const runner = workerRunner((p) => {
       const w = create();
       wireWorker(p, w, kernel, pool);
       return w;
     }, {
       // TABCOMPUTER_BLINK_DEBUG=1: the worker logs kernel syscalls and Blink's own messages to the console
-      startData: { path, moduleUrl: defaultAssetBase() + 'blink.mjs', mounts, pool, restore, debug: proc.env?.TABCOMPUTER_BLINK_DEBUG === '1' },
+      startData: { path, moduleUrl: defaultAssetBase() + 'blink.mjs', wasmUrl: wasm, mounts, pool, restore, debug: proc.env?.TABCOMPUTER_BLINK_DEBUG === '1' },
     });
     return runner(proc, kernel);
   };

@@ -12,6 +12,7 @@ import { addProcInfoSource, type FileSystem } from '../filesystem';
 import type { Shell } from '../shell';
 import type { Command, CommandContext } from '../commands/index';
 import { KernelStdio, execLazyStdin } from '../shell-stdio';
+import { parseShellArgs } from '../shell-args';
 import { ProcFs, bootMs } from './procfs';
 import { klog, KmsgFile, LOG_ERR, LOG_INFO, SYSLOG_ACTION_READ_ALL, SYSLOG_ACTION_SIZE_BUFFER, SYSLOG_ACTION_SIZE_UNREAD } from './klog';
 import { processTable, type ShiroProcess } from '../process-table';
@@ -20,13 +21,14 @@ import * as A from './abi';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
   RegularFile, DirFile, abortableWait, openInode, openInodeSync, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
-  shareInodeNumber, forgetInodeNumber, linkCount,
+  shareInodeNumber, forgetInodeNumber, renameLinkName, linkCount,
 } from './fd';
 import { createPipe, Pipe, PipeEnd, FifoRdWr } from './pipe';
 import type { PtyFile } from './pty';
 import { LockTable, F_RDLCK, F_WRLCK, F_UNLCK } from './locks';
 import { Process } from './process';
 import { EpollFile, waitReady } from './epoll';
+import { SignalFile, notifySignalPending } from './signalfd';
 import { EventFile, TimerFile } from './fd';
 import { activeProfile, unameRelease, UNAME_VERSION } from '../profile';
 
@@ -401,9 +403,10 @@ export class Kernel {
    * scripts run in a shell that uses this process's fds (src/shell-stdio.ts).
    */
   private async shellCommandDirect(probe: Process): Promise<Runner | null> {
-    const a = probe.argv;
-    if (a.length < 3 || a[1] !== '-c') return null;
-    const words = simpleCommandWords(a[2]);
+    // Only a plain -c (login and the like don't matter to one simple command; -e, -x, -o ... do)
+    const opts = parseShellArgs(probe.argv.slice(1));
+    if (!opts.command || opts.error || opts.on.length || opts.off.length || opts.shopts.length || opts.interactive || !opts.rest.length) return null;
+    const words = simpleCommandWords(opts.rest[0]);
     if (!words || !words.length || words[0].includes('=')) return null;
     const name = words[0];
     let path: string | null = null;
@@ -459,6 +462,7 @@ export class Kernel {
     proc.uid = opts.uid ?? parent.uid;
     // sudo's root gets root's group too; dropping back to the user gets the user's
     proc.gid = opts.uid === undefined ? parent.gid : opts.uid === 0 ? 0 : 1000;
+    if (opts.uid === undefined) copyCredentials(parent, proc);
     proc.ctty = opts.setsid ? undefined : parent.ctty;
     if (opts.inheritSignals) {
       // Across exec caught signals reset to default; ignored stay ignored; the mask carries over
@@ -683,9 +687,10 @@ export class Kernel {
     if (sig === A.SIGCONT) { proc.markContinued(); this.notify(); }
     if (proc.signalHook?.(proc, sig)) return;
     const disp = proc.dispositions.get(sig) ?? 'default';
+    // A blocked signal stays pending even when ignored (signalfd reads it; setSigmask drops it if still ignored)
+    if (proc.sigmask.has(sig)) { proc.deferredSignals.add(sig); notifySignalPending(proc); return; }
     if (disp === 'ignore') return;
     if (disp === 'default' && A.defaultSignalAction(sig) === 'ignore') return;
-    if (proc.sigmask.has(sig)) { proc.deferredSignals.add(sig); return; }
     if (typeof disp === 'number') {
       // A guest handler: flag it for the guest and interrupt blocking syscalls (EINTR)
       proc.pendingSignals.add(sig);
@@ -849,7 +854,9 @@ export class Kernel {
         if ((flags & A.O_CREAT) && (flags & A.O_EXCL)) return -A.EEXIST;
         if (st.isDirectory()) {
           if (canWrite(flags)) return -A.EISDIR;
-          return new DirFile(fs, p, statusFlags);
+          // The physical directory, as on Linux: fstat, getdents d_ino, /proc/self/fd and
+          // *at() through this fd agree with stat of it when it was opened through a symlink
+          return new DirFile(fs, await fs.realpath(p), statusFlags);
         }
         if (mustBeDir) return -A.ENOTDIR;
         if (st.isFIFO?.()) return await this.openFifo(proc, await fs.realpath(target), flags);
@@ -946,7 +953,7 @@ export class Kernel {
     if (hit === undefined) return undefined;
     if (hit === null) return -A.ENOENT;
     const statusFlags = flags & ~(A.O_CREAT | A.O_EXCL | A.O_TRUNC | A.O_CLOEXEC | A.O_NOCTTY | A.O_DIRECTORY | A.O_NOFOLLOW);
-    if (hit.node.type === 'dir') return canWrite(flags) ? -A.EISDIR : new DirFile(fs, p, statusFlags);
+    if (hit.node.type === 'dir') return canWrite(flags) ? -A.EISDIR : new DirFile(fs, hit.path, statusFlags);
     if (flags & A.O_DIRECTORY) return -A.ENOTDIR;
     if (hit.node.type !== 'file' || hit.node.lazy || hit.node.special) return undefined; // lazy: open() fetches it; FIFOs block
     return new RegularFile(openInodeSync(fs, hit.path, hit.node), statusFlags);
@@ -965,10 +972,10 @@ export class Kernel {
     const n = hit.node;
     const open = n.type === 'file' ? inodeStat(fs, hit.path) : undefined;
     // The inode belongs to the resolved path: /bin and /usr/bin (a link to it) are one directory
-    if (open) { A.encodeStat(statFor(proc, { ...open, ino: inodeNumber(hit.path) }), data); return 0; }
+    if (open) { A.encodeStat(statFor(proc, { ...open, ino: inodeNumber(this.fs, hit.path) }), data); return 0; }
     const type = n.type === 'dir' ? A.S_IFDIR : n.type === 'symlink' ? A.S_IFLNK : n.special === 'fifo' ? A.S_IFIFO : A.S_IFREG;
     A.encodeStat(statFor(proc, {
-      dev: 1, ino: inodeNumber(hit.path), mode: type | (n.mode & 0o7777), nlink: n.type === 'dir' ? 2 : linkCount(hit.path),
+      dev: 1, ino: inodeNumber(this.fs, hit.path), mode: type | (n.mode & 0o7777), nlink: n.type === 'dir' ? 2 : linkCount(this.fs, hit.path),
       uid: 1000, gid: 1000, rdev: 0, size: n.size, blksize: 4096, blocks: Math.ceil(n.size / 512),
       atimeMs: n.atime ?? n.mtime, mtimeMs: n.mtime, ctimeMs: n.ctime,
       atimeNs: n.atime === undefined ? n.mtimeNs : n.atimeNs, mtimeNs: n.mtimeNs,
@@ -1024,9 +1031,9 @@ export class Kernel {
       if (type === A.S_IFREG && this.socketPaths?.has(real)) type = A.S_IFSOCK;
       // A file open here: its size and times as the open descriptions see them
       const open = type === A.S_IFREG && hasOpenInodes(fs) ? inodeStat(fs, real) : undefined;
-      if (open) return { ...open, ino: inodeNumber(real) };
+      if (open) return { ...open, ino: inodeNumber(this.fs, real) };
       return {
-        dev: 1, ino: inodeNumber(real), mode: type | (st.mode & 0o7777), nlink: st.isDirectory() ? 2 : linkCount(real),
+        dev: 1, ino: inodeNumber(this.fs, real), mode: type | (st.mode & 0o7777), nlink: st.isDirectory() ? 2 : linkCount(this.fs, real),
         uid: 1000, gid: 1000, rdev: 0, size: st.size, blksize: 4096, blocks: Math.ceil(st.size / 512),
         atimeMs: st.atimeMs ?? st.mtime.getTime(), mtimeMs: st.mtime.getTime(), ctimeMs: st.ctime.getTime(),
         atimeNs: st.atimeNs, mtimeNs: st.mtimeNs,
@@ -1130,29 +1137,44 @@ export class Kernel {
   private async runShellProcess(proc: Process): Promise<number> {
     const shell = this.forkShell(proc);
     shell.kernelHost = { kernel: this, proc };
-    const args = proc.argv.slice(1);
-    let i = 0;
-    while (i < args.length && /^-[a-zA-Z]+$/.test(args[i]) && args[i] !== '-c') i++; // -e, -x, -l ...
+    // bash's options, before or after -c: `sh -c -l 'cmd'` (Claude Code), `bash -l -c 'cmd' a b`
+    const name = (proc.argv[0] ?? 'sh').replace(/^.*\//, '').replace(/^-/, '') || 'sh';
+    const opts = parseShellArgs(proc.argv.slice(1));
+    if (opts.error) {
+      await this.writeAll(proc, 2, enc.encode(`${name}: ${opts.error}\n`));
+      return 2;
+    }
+    for (const o of opts.on) shell.options.add(o);
+    for (const o of opts.off) shell.options.delete(o);
+    for (const [o, on] of opts.shopts) { if (on) shell.shoptopts.add(o); else shell.shoptopts.delete(o); }
+    if (opts.posix) shell.options.add('posix');
+    const args = opts.rest;
     let script: string | undefined;
     let positional: string[] = [];
-    // No script and a terminal (or -i): an interactive shell (a tmux pane, screen window, `sh` from a program)
-    if (args[i] !== '-c' && (args.slice(0, i).includes('-i') || (i >= args.length && proc.fds.get(0)?.kind === 'pty'))) {
+    // No command or script, and a terminal (or -i): an interactive shell (a tmux pane, screen window, `sh` from a program)
+    if (!opts.command && (opts.interactive || ((args.length === 0 || opts.stdin) && proc.fds.get(0)?.kind === 'pty'))) {
       return this.interactiveShell(proc, shell);
     }
-    if (args[i] === '-c') {
-      script = args[i + 1] ?? '';
-      positional = args.slice(i + 2);
-    } else if (i < args.length) {
+    if (opts.command) {
+      if (!args.length) {
+        await this.writeAll(proc, 2, enc.encode(`${name}: -c: option requires an argument\n`));
+        return 2;
+      }
+      script = args[0];
+      positional = args.length > 1 ? args.slice(1) : [];
+    } else if (args.length && !opts.stdin) {
       try {
-        const p = this.resolvePath(proc, args[i]);
+        const p = this.resolvePath(proc, args[0]);
         if (typeof p === 'number') throw new Error('bad path');
         const raw = await this.fs!.readFile(p);
         script = typeof raw === 'string' ? raw : A.decodeText(raw);
       } catch {
-        await this.writeAll(proc, 2, enc.encode(`sh: ${args[i]}: No such file or directory\n`));
+        await this.writeAll(proc, 2, enc.encode(`${name}: ${args[0]}: No such file or directory\n`));
         return 127;
       }
-      positional = args.slice(i);
+      positional = args;
+    } else if (opts.stdin && args.length) {
+      positional = [name, ...args]; // sh -s ARGS: $0 is the shell, the rest $1…
     }
     const stdio = new KernelStdio(this, proc);
     shell.kernelStdio = stdio;
@@ -1359,8 +1381,8 @@ export class Kernel {
       }
       case A.SYS_getpid: return proc.pid;
       case A.SYS_getppid: return proc.ppid;
-      case A.SYS_getuid: return proc.uid;
-      case A.SYS_getgid: return proc.gid;
+      case A.SYS_getuid: return proc.ruid ?? proc.uid;
+      case A.SYS_getgid: return proc.rgid ?? proc.gid;
       case A.SYS_getpgrp: return proc.pgid;
       default: return undefined;
     }
@@ -1426,6 +1448,8 @@ export class Kernel {
         case A.SYS_read: {
           const f = file(args[0]);
           if (!f) return -A.EBADF;
+          // a signalfd reads the reading process's signals
+          if (f instanceof SignalFile) return await f.readAs(proc, data.subarray(0, Math.min(args[1] >>> 0, data.length)), sig);
           return await f.read(data.subarray(0, Math.min(args[1] >>> 0, data.length)), sig);
         }
         case A.SYS_write: {
@@ -1578,11 +1602,32 @@ export class Kernel {
         }
         case A.SYS_geteuid: return proc.uid;
         case A.SYS_getegid: return proc.gid;
+        case A.SYS_setuid: case A.SYS_setgid: case A.SYS_setreuid: case A.SYS_setregid:
+        case A.SYS_setresuid: case A.SYS_setresgid: case A.SYS_getresuid: case A.SYS_getresgid:
+        case A.SYS_getgroups: case A.SYS_setgroups: case A.SYS_setfsuid: case A.SYS_setfsgid:
+          return setCredentials(proc, nr, args, data);
         case A.SYS_eventfd:
         case A.SYS_eventfd2: {
           const flags = nr === A.SYS_eventfd2 ? args[1] : 0;
           if (flags & ~(A.O_NONBLOCK | A.O_CLOEXEC | A.EFD_SEMAPHORE)) return -A.EINVAL;
           return fds.alloc(new EventFile(args[0], A.O_RDWR | (flags & A.O_NONBLOCK), !!(flags & A.EFD_SEMAPHORE)), 0, !!(flags & A.O_CLOEXEC));
+        }
+        case A.SYS_signalfd:
+        case A.SYS_signalfd4: {
+          // fd (-1: a new one), sizeof(sigset_t) (8), flags; data = the sigset
+          const flags = nr === A.SYS_signalfd4 ? args[2] : 0;
+          if (flags & ~(A.SFD_NONBLOCK | A.SFD_CLOEXEC)) return -A.EINVAL;
+          if (args[1] !== 8) return -A.EINVAL;
+          const dv = new DataView(data.buffer, data.byteOffset, 8);
+          const mask = A.sigsetFromWords(dv.getUint32(0, true), dv.getUint32(4, true));
+          if ((args[0] | 0) !== -1) {
+            const f = file(args[0]);
+            if (!f) return -A.EBADF;
+            if (!(f instanceof SignalFile)) return -A.EINVAL;
+            f.setMask(mask);
+            return args[0];
+          }
+          return fds.alloc(new SignalFile(proc, mask, flags & A.SFD_NONBLOCK), 0, !!(flags & A.SFD_CLOEXEC));
         }
         case A.SYS_timerfd_create: {
           const clock = args[0], flags = args[1];
@@ -1661,8 +1706,8 @@ export class Kernel {
         case A.SYS_getpid: return proc.pid;
         case A.SYS_gettid: return proc.pid;
         case A.SYS_getppid: return proc.ppid;
-        case A.SYS_getuid: return proc.uid;
-        case A.SYS_getgid: return proc.gid;
+        case A.SYS_getuid: return proc.ruid ?? proc.uid;
+        case A.SYS_getgid: return proc.rgid ?? proc.gid;
         case A.SYS_getpgrp: return proc.pgid;
         case A.SYS_getpgid:
         case A.SYS_getsid: {
@@ -1857,8 +1902,8 @@ export class Kernel {
           const moved = await renameInodes(fs(), from, to);
           await fs().rename(from, to);
           moved();
-          shareInodeNumber(from, to);
-          forgetInodeNumber(from);
+          forgetInodeNumber(fs(), to);
+          renameLinkName(from, to);
           if (this.socketPaths?.delete(from)) this.socketPaths.add(to);
           return 0;
         }
@@ -1905,7 +1950,7 @@ export class Kernel {
             return typeof t !== 'number' && (t.mode & A.S_IFMT) === A.S_IFDIR ? -A.EISDIR : -A.ENOTDIR;
           }
           if (isDir) await fs().rmdir(p);
-          else { await unlinkInode(fs(), p); await fs().unlink(p); forgetInodeNumber(p); this.socketPaths?.delete(p); this.fifos.delete(p); }
+          else { await unlinkInode(fs(), p); await fs().unlink(p); forgetInodeNumber(fs(), p); this.socketPaths?.delete(p); this.fifos.delete(p); }
           return 0;
         }
         case A.SYS_symlink:
@@ -1951,7 +1996,7 @@ export class Kernel {
               const bytes = typeof raw === 'string' ? enc.encode(raw) : raw.slice();
               await fs().writeFile(to, bytes, { mode: st.mode & 0o7777, times: { mtime: st.mtimeMs, mtimeNs: st.mtimeNs } });
             }
-            shareInodeNumber(src, to);
+            shareInodeNumber(fs(), src, to);
           } catch (e) {
             return A.errnoFromError(e);
           }
@@ -2324,8 +2369,9 @@ export class Kernel {
           type = t === A.S_IFDIR ? A.DT_DIR : t === A.S_IFLNK ? A.DT_LNK : t === A.S_IFREG ? A.DT_REG : t === A.S_IFCHR ? A.DT_CHR : A.DT_UNKNOWN;
         }
       }
-      dv.setUint32(off, inodeNumber(full), true);
-      dv.setUint32(off + 4, 0, true);
+      const dino = inodeNumber(this.fs, full);
+      dv.setUint32(off, dino >>> 0, true);
+      dv.setUint32(off + 4, Math.floor(dino / 0x100000000), true);
       dv.setUint32(off + 8, used + 1, true);
       dv.setUint32(off + 12, 0, true);
       dv.setUint16(off + 16, reclen, true);
@@ -2356,6 +2402,7 @@ export class Kernel {
     child.ctty = parent.ctty;
     child.uid = parent.uid;
     child.gid = parent.gid;
+    copyCredentials(parent, child);
     child.data.embryo = true;
     child.data.forkParent = parent.pid; // startForkChild: the parent may have exited (and the child been reparented) by then
     this.procs.set(pid, child);
@@ -2540,3 +2587,81 @@ export function simpleCommandWords(script: string): string[] | null {
   return words;
 }
 
+
+/** fork and spawn without a new uid: the child has the parent's real, saved and supplementary ids. */
+function copyCredentials(from: Process, to: Process): void {
+  to.ruid = from.ruid; to.suid = from.suid; to.rgid = from.rgid; to.sgid = from.sgid;
+  to.groups = from.groups ? [...from.groups] : undefined;
+}
+
+/**
+ * set*id/get*id/setgroups as Linux does them, with CAP_SETUID/CAP_SETGID
+ * meaning an effective uid of 0 (su, runuser, setpriv, daemons dropping
+ * root). -1 leaves an id unchanged. Data: getres*id writes three u32s,
+ * getgroups up to args[0] u32s, setgroups reads args[0] u32s.
+ */
+function setCredentials(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): number {
+  const priv = proc.uid === 0;
+  const u = { r: proc.ruid ?? proc.uid, e: proc.uid, s: proc.suid ?? proc.uid };
+  const g = { r: proc.rgid ?? proc.gid, e: proc.gid, s: proc.sgid ?? proc.gid };
+  const id = (v: number) => (v | 0) === -1 ? -1 : v >>> 0;
+  const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const apply = (kind: 'u' | 'g', c: { r: number; e: number; s: number }) => {
+    if (kind === 'u') { proc.uid = c.e; proc.ruid = c.r; proc.suid = c.s; } else { proc.gid = c.e; proc.rgid = c.r; proc.sgid = c.s; }
+    return 0;
+  };
+  const one = (kind: 'u' | 'g', cur: { r: number; e: number; s: number }, v: number) => {
+    // setuid/setgid: privileged sets all three; otherwise only the effective id, to the real or saved one
+    if (priv) return apply(kind, { r: v, e: v, s: v });
+    if (v !== cur.r && v !== cur.s) return -A.EPERM;
+    return apply(kind, { ...cur, e: v });
+  };
+  const res = (kind: 'u' | 'g', cur: { r: number; e: number; s: number }, r: number, e: number, s: number) => {
+    const allowed = (v: number) => v === -1 || priv || v === cur.r || v === cur.e || v === cur.s;
+    if (!allowed(r) || !allowed(e) || !allowed(s)) return -A.EPERM;
+    return apply(kind, { r: r === -1 ? cur.r : r, e: e === -1 ? cur.e : e, s: s === -1 ? cur.s : s });
+  };
+  const re = (kind: 'u' | 'g', cur: { r: number; e: number; s: number }, r: number, e: number) => {
+    if (!priv && ((r !== -1 && r !== cur.r && r !== cur.e) || (e !== -1 && e !== cur.r && e !== cur.e && e !== cur.s))) return -A.EPERM;
+    const next = { r: r === -1 ? cur.r : r, e: e === -1 ? cur.e : e, s: cur.s };
+    // The saved id follows a changed real id, or an effective id set to something but the old real id
+    if (r !== -1 || (e !== -1 && e !== cur.r)) next.s = next.e;
+    return apply(kind, next);
+  };
+  switch (nr) {
+    case A.SYS_setuid: return one('u', u, id(args[0]));
+    case A.SYS_setgid: return one('g', g, id(args[0]));
+    case A.SYS_setresuid: return res('u', u, id(args[0]), id(args[1]), id(args[2]));
+    case A.SYS_setresgid: return res('g', g, id(args[0]), id(args[1]), id(args[2]));
+    case A.SYS_setreuid: return re('u', u, id(args[0]), id(args[1]));
+    case A.SYS_setregid: return re('g', g, id(args[0]), id(args[1]));
+    case A.SYS_getresuid: case A.SYS_getresgid: {
+      if (data.length < 12) return -A.EFAULT;
+      const c = nr === A.SYS_getresuid ? u : g;
+      dv.setUint32(0, c.r, true); dv.setUint32(4, c.e, true); dv.setUint32(8, c.s, true);
+      return 0;
+    }
+    case A.SYS_getgroups: {
+      const groups = proc.groups ?? [proc.gid];
+      const size = args[0] | 0;
+      if (size < 0) return -A.EINVAL;
+      if (size === 0) return groups.length;
+      if (size < groups.length) return -A.EINVAL;
+      if (data.length < groups.length * 4) return -A.EFAULT;
+      groups.forEach((x, i) => dv.setUint32(i * 4, x, true));
+      return groups.length;
+    }
+    case A.SYS_setgroups: {
+      if (!priv) return -A.EPERM;
+      const n = args[0] | 0;
+      if (n < 0 || n > 65536) return -A.EINVAL;
+      if (data.length < n * 4) return -A.EFAULT;
+      proc.groups = Array.from({ length: n }, (_, i) => dv.getUint32(i * 4, true));
+      return 0;
+    }
+    // setfsuid/setfsgid: the filesystem id is the effective id here; the call returns the old one
+    case A.SYS_setfsuid: return u.e;
+    case A.SYS_setfsgid: return g.e;
+  }
+  return -A.ENOSYS;
+}

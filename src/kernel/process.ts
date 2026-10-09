@@ -29,8 +29,18 @@ export class Process {
   /** Program path as passed to spawn. */
   path: string;
   umask = 0o022;
+  /** Effective user and group ids (what file ownership and permission checks see). */
   uid = 1000;
   gid = 1000;
+  /**
+   * Real and saved ids and supplementary groups, as setresuid(2) and friends
+   * change them; undefined = the same as the effective id (a fresh process).
+   */
+  ruid?: number;
+  suid?: number;
+  rgid?: number;
+  sgid?: number;
+  groups?: number[];
   fds: FdTable;
   /** Controlling terminal (pty.ts sets it; /dev/tty opens it). */
   ctty?: OpenFile;

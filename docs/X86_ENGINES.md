@@ -571,6 +571,15 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
 60. `syslog(2)` (klogctl) goes to the kernel's log, `SYS_syslog`: the read
    actions copy its text out (util-linux `dmesg -S`). From the unix/kernel
    session (their 0055, 9c3f7a1). Test: `debian.test.ts` dmesg.
+61. `epoll_wait` takes any `maxevents` > 0 (at most 4096 events per call;
+   Redis 8 passes maxclients + 128 and aborted on `EINVAL`), and the CPU
+   clock ids from `clock_getcpuclockid`/`pthread_getcpuclockid` work, as
+   the time since the first CPU-clock read (emscripten has no CPU clocks;
+   GHC's `getCurrentThreadCPUTime` failed). Test: `fixtures/x86/cpuclock.c`.
+62. `getpriority`/`setpriority` keep a nice value per process (0 to start,
+   inherited on fork; raw `getpriority` is 20 − nice; only root lowers
+   it, `EACCES` otherwise). emscripten's stubs said `-ENODEV`/`EPERM`, so
+   pam_limits failed every `su`/`runuser` session. Test: `fixtures/x86/nice.c`.
 
 The guest's kernel calls go over a pool of channels (`src/x86-engine/blink.ts`
 → `public/engines/blink/host.mjs`). It starts at 6, and host.mjs asks the

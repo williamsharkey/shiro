@@ -18,6 +18,7 @@
 import type { Kernel } from './kernel';
 import { Process } from './process';
 import { processTable } from '../process-table';
+import { notifySignalPending } from './signalfd';
 
 // ── Linux signal numbers ────────────────────────────────────────────────────
 export const SIGHUP = 1;
@@ -468,11 +469,13 @@ export class JobControl {
       st.pending = sigset.del(st.pending, SIGCONT);
     }
 
-    if (st.isIgnored(sig)) return;
+    // A blocked signal stays pending even when ignored (Linux: the disposition may change before
+    // it is unblocked, and signalfd reads it); flushPending discards it if it is still ignored then
     if (st.isBlocked(sig)) {
       st.pending = sigset.add(st.pending, sig);
       return;
     }
+    if (st.isIgnored(sig)) return;
     this.act(p, sig);
   }
 
@@ -741,8 +744,10 @@ class ProcessSignalState extends SignalState {
     return m;
   }
   set pending(v: bigint) {
+    const before = this.proc.deferredSignals.size;
     this.proc.deferredSignals = new Set();
     for (let s = 1; s < NSIG; s++) if (sigset.has(v, s)) this.proc.deferredSignals.add(s);
+    if (this.proc.deferredSignals.size > before) notifySignalPending(this.proc);
   }
 
   get mask(): bigint {

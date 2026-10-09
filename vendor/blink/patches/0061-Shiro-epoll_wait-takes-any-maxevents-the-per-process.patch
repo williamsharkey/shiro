@@ -1,0 +1,100 @@
+From 9159e4dbe2bba595913d2f03e2e07a35d4db4c5d Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 18:33:15 +0000
+Subject: [PATCH 61/61] Shiro: epoll_wait takes any maxevents; the
+ per-process/thread CPU clocks work
+
+- epoll_wait/epoll_pwait returned EINVAL for maxevents above 4096 (Redis
+  8 passes maxclients + 128 and aborted at startup); Linux only rejects
+  <= 0. Above 4096 a call returns at most 4096 events.
+- The CPU clock ids that clock_getcpuclockid and pthread_getcpuclockid
+  encode (~pid << 3 | type) had no emscripten clock: clock_getcpuclockid
+  failed with ESRCH and GHC's getCurrentThreadCPUTime with ENOTTY. They,
+  and CLOCK_PROCESS/THREAD_CPUTIME_ID, read the monotonic time since the
+  first such read (a stand-in that only moves forward); clock_getres 1 us.
+---
+ blink/shiro.inc |  3 ++-
+ blink/syscall.c | 41 +++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 43 insertions(+), 1 deletion(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index b0137c1..64a17ea 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -579,7 +579,8 @@ static i64 ShiroEpollWait(struct Machine *m, int epfd, i64 events, int max,
+                           int timeout) {
+   u8 *buf;
+   i64 r;
+-  if (max <= 0 || max > 4096) return -EINVAL_LINUX;
++  if (max <= 0) return -EINVAL_LINUX;
++  if (max > 4096) max = 4096;  // fewer events per call is fine (Redis: maxclients + 128)
+   buf = (u8 *)ShiroAlloc(m, max * 12);
+   r = ShiroCall(m, 232, A12(epfd, max, timeout), buf, 0, max * 12, false, true);
+   if (r > 0 && CopyToUserWrite(m, events, buf, r * 12) == -1) return -EFAULT_LINUX;
+diff --git a/blink/syscall.c b/blink/syscall.c
+index cc2f587..17d2bb2 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -4529,11 +4529,42 @@ static int SysSigaltstack(struct Machine *m, i64 newaddr, i64 oldaddr) {
+   return 0;
+ }
+ 
++#ifdef __EMSCRIPTEN__
++// CPU-time clocks, which emscripten doesn't have: CLOCK_PROCESS_CPUTIME_ID,
++// CLOCK_THREAD_CPUTIME_ID and the per-process/thread ids that
++// clock_getcpuclockid and pthread_getcpuclockid encode as ~pid << 3 | type
++// (GHC's runtime: "getCurrentThreadCPUTime: no supported"). They count the
++// time since the first such read, a stand-in that only ever moves forward.
++static bool IsCpuClock(int clock) {
++  return clock == 2 || clock == 3 || (clock < 0 && (clock & 3) != 3);
++}
++static struct timespec g_cpuclock0;
++static void InitCpuClock(void) {
++  g_cpuclock0 = GetMonotonic();
++}
++static struct timespec CpuClockNow(void) {
++  static pthread_once_t once = PTHREAD_ONCE_INIT;
++  pthread_once(&once, InitCpuClock);
++  return SubtractTime(GetMonotonic(), g_cpuclock0);
++}
++#endif
++
+ static int SysClockGettime(struct Machine *m, int clock, i64 ts) {
+   int rc;
+   clock_t sysclock;
+   struct timespec htimespec;
+   struct timespec_linux gtimespec;
++#ifdef __EMSCRIPTEN__
++  if (IsCpuClock(clock)) {
++    htimespec = CpuClockNow();
++    if (ts) {
++      Write64(gtimespec.sec, htimespec.tv_sec);
++      Write64(gtimespec.nsec, htimespec.tv_nsec);
++      if (CopyToUserWrite(m, ts, &gtimespec, sizeof(gtimespec)) == -1) return -1;
++    }
++    return 0;
++  }
++#endif
+   if (clock == CLOCK_REALTIME_LINUX) {
+     sysclock = CLOCK_REALTIME;
+   } else if (XlatClock(clock, &sysclock) == -1) {
+@@ -4568,6 +4599,16 @@ static int SysClockGetres(struct Machine *m, int clock, i64 ts) {
+   clock_t sysclock;
+   struct timespec htimespec;
+   struct timespec_linux gtimespec;
++#ifdef __EMSCRIPTEN__
++  if (IsCpuClock(clock)) {
++    if (ts) {
++      Write64(gtimespec.sec, 0);
++      Write64(gtimespec.nsec, 1000);
++      if (CopyToUserWrite(m, ts, &gtimespec, sizeof(gtimespec)) == -1) return -1;
++    }
++    return 0;
++  }
++#endif
+   if (XlatClock(clock, &sysclock) == -1) return -1;
+   if ((rc = clock_getres(sysclock, &htimespec)) != -1) {
+     if (ts) {
+-- 
+2.43.0
+
