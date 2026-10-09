@@ -22,6 +22,8 @@ import type { Process } from '../kernel/process';
 import { WIFEXITED, WEXITSTATUS } from '../kernel/abi';
 
 const DEBIAN_SUFFIX = '.debian';
+const UPDATES = '/var/lib/dpkg/updates';
+const TORN = '/var/lib/dpkg/updates.torn';
 const CHANGES = new Set(['install', 'reinstall', 'remove', 'purge', 'upgrade', 'full-upgrade', 'dist-upgrade', 'autoremove', 'autopurge', 'build-dep', 'satisfy']);
 /** dpkg statuses that mean an operation stopped part-way (dpkg --audit lists these). */
 const BROKEN = /^(half-installed|unpacked|half-configured)$/;
@@ -47,40 +49,58 @@ export function brokenPackages(status: string): string[] {
   return out;
 }
 
-async function run(kernel: Kernel, proc: Process, path: string, argv: string[]): Promise<number> {
-  const child = kernel.spawn({ path, argv, env: proc.env, cwd: proc.cwd, parent: proc, inheritSignals: true });
-  const r = await kernel.waitpid(child.pid, 0, proc);
-  if (r.pid < 0) return 127;
-  return WIFEXITED(r.status) ? WEXITSTATUS(r.status) : 128 + (r.status & 0x7f);
+/** What the guard needs from whoever runs it (a kernel process or Shiro's shell). */
+export interface AptGuardIO {
+  /** /usr/bin/apt-get or /usr/bin/apt (Debian's is this + .debian). */
+  script: string;
+  args: string[];
+  uid: number;
+  fs?: {
+    readdir(p: string): Promise<string[]>;
+    readFile(p: string, enc: 'utf8'): Promise<string | Uint8Array>;
+    rename?(from: string, to: string): Promise<void>;
+    mkdir?(p: string, opts?: { recursive?: boolean }): Promise<unknown>;
+  };
+  /** Run a program to completion: its exit status. */
+  run(path: string, argv: string[]): Promise<number>;
+  say(line: string): Promise<void> | void;
 }
 
-/** Runner for `shiro-apt` (a kernel program command; the stub's argv is [interp, /usr/bin/apt-get, ...args]). */
-export async function aptGuardProgram(proc: Process, kernel: Kernel, product = 'tabcomputer'): Promise<number> {
-  const script = proc.argv[1]?.startsWith('/') ? proc.argv[1] : '/usr/bin/apt-get';
-  const args = proc.argv.slice(2);
-  const real = () => run(kernel, proc, script + DEBIAN_SUFFIX, [script, ...args]);
+/** The recovery logic, independent of how programs are run. */
+export async function aptGuard(io: AptGuardIO, product = 'tabcomputer'): Promise<number> {
+  const { script, args, fs } = io;
+  const real = () => io.run(script + DEBIAN_SUFFIX, [script, ...args]);
   const sub = aptSubcommand(args);
-  const fs = kernel.fs;
   const dry = args.some((a) => /^(-s|--simulate|--just-print|--dry-run|--recon|--no-act|--print-uris|-d|--download-only)$/.test(a));
-  if (!fs || proc.uid !== 0 || !sub || !CHANGES.has(sub) || dry) return real();
+  if (!fs || io.uid !== 0 || !sub || !CHANGES.has(sub) || dry) return real();
 
-  const say = async (s: string) => { await proc.fds.get(2)?.write(new TextEncoder().encode(`${product}: ${s}\n`)); };
-  const interrupted = async () => ((await fs.readdir('/var/lib/dpkg/updates').catch(() => [] as string[])).length > 0);
+  const say = async (s: string) => { await io.say(`${product}: ${s}\n`); };
+  const interrupted = async () => (await fs.readdir(UPDATES).catch(() => [] as string[])).some((f) => /^\d+$/.test(f));
   const broken = async () => brokenPackages(String(await fs.readFile('/var/lib/dpkg/status', 'utf8').catch(() => '')));
-  const recover = async (): Promise<boolean> => {
-    let acted = false;
+  // dpkg's journal entries are status stanzas; one torn by a crash makes every
+  // dpkg run fail to parse it. Keep it aside, as an admin would.
+  const tornAside = async (): Promise<void> => {
+    if (!fs.rename || !fs.mkdir) return;
+    for (const f of await fs.readdir(UPDATES).catch(() => [] as string[])) {
+      if (!/^\d+$/.test(f)) continue;
+      const text = String(await fs.readFile(`${UPDATES}/${f}`, 'utf8').catch(() => ''));
+      if (/^Package: \S/m.test(text) && /^Status: \S+ \S+ \S+$/m.test(text)) continue;
+      await fs.mkdir(TORN, { recursive: true }).catch(() => {});
+      await fs.rename(`${UPDATES}/${f}`, `${TORN}/${f}`).catch(() => {});
+      await say(`dpkg's journal entry ${f} was incomplete; moved it to ${TORN}`);
+    }
+  };
+  const recover = async (): Promise<void> => {
     if (await interrupted()) {
+      await tornAside();
       await say("dpkg was interrupted; running 'dpkg --configure -a' first");
-      await run(kernel, proc, '/usr/bin/dpkg', ['dpkg', '--configure', '-a']);
-      acted = true;
+      await io.run('/usr/bin/dpkg', ['dpkg', '--configure', '-a']);
     }
     const left = await broken();
     if (left.length) {
       await say(`finishing what an earlier install left part-way (${left.slice(0, 5).join(', ')}${left.length > 5 ? ', …' : ''}): apt-get -f install`);
-      await run(kernel, proc, '/usr/bin/apt-get' + DEBIAN_SUFFIX, ['apt-get', '-f', 'install', '-y']);
-      acted = true;
+      await io.run('/usr/bin/apt-get' + DEBIAN_SUFFIX, ['apt-get', '-f', 'install', '-y']);
     }
-    return acted;
   };
 
   await recover();
@@ -91,4 +111,22 @@ export async function aptGuardProgram(proc: Process, kernel: Kernel, product = '
   await say('the install stopped part-way; recovering and trying once more');
   await recover();
   return real();
+}
+
+/** Runner for `shiro-apt` as a kernel program (the stub's argv is [interp, /usr/bin/apt-get, ...args]). */
+export async function aptGuardProgram(proc: Process, kernel: Kernel, product = 'tabcomputer'): Promise<number> {
+  const run = async (path: string, argv: string[]): Promise<number> => {
+    const child = kernel.spawn({ path, argv, env: proc.env, cwd: proc.cwd, parent: proc, inheritSignals: true });
+    const r = await kernel.waitpid(child.pid, 0, proc);
+    if (r.pid < 0) return 127;
+    return WIFEXITED(r.status) ? WEXITSTATUS(r.status) : 128 + (r.status & 0x7f);
+  };
+  return aptGuard({
+    script: proc.argv[1]?.startsWith('/') ? proc.argv[1] : '/usr/bin/apt-get',
+    args: proc.argv.slice(2),
+    uid: proc.uid,
+    fs: kernel.fs ?? undefined,
+    run,
+    say: async (s) => { await proc.fds.get(2)?.write(new TextEncoder().encode(s)); },
+  }, product);
 }
