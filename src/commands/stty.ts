@@ -1,4 +1,5 @@
 import { Command, CommandContext } from './index';
+import { ptyOf } from './tty-of';
 import type { Shell } from '../shell';
 import {
   Pty, Termios, cloneTermios, defaultTermios, makeRaw, NCCS,
@@ -39,7 +40,7 @@ const CCHARS: Array<[string, number]> = [
 const detachedTtys = new WeakMap<Shell, Pty>();
 
 function ttyFor(ctx: CommandContext): Pty {
-  const tty = ctx.terminal?.tty?.pty;
+  const tty = ptyOf(ctx, [0]);
   if (tty) return tty;
   let p = detachedTtys.get(ctx.shell);
   if (!p) {

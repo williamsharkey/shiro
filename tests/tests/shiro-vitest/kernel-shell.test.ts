@@ -272,6 +272,12 @@ describe('job control in a kernel sh on a pty (a screen or tmux window)', () => 
     expect(tty.pty.fgPgrp).toBe(sh.pgid);
     await type('echo "fg $?"; jobs; echo end');
     expect(screen).toMatch(/fg 2\r\nend/);
+    // Builtins see the pty: its size (TIOCGWINSZ), and a resize
+    await type('stty size; tput cols');
+    expect(screen).toMatch(/stty size; tput cols\r\n24 80\r\n80\r\n/);
+    tty.resize(30, 100);
+    await type('stty size; tput lines');
+    expect(screen).toMatch(/stty size; tput lines\r\n30 100\r\n30\r\n/);
     tty.pty.input('exit\r');
     expect(await sh.wait()).toBe(0);
   }, 30_000);
