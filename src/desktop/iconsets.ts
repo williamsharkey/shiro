@@ -96,6 +96,21 @@ const G = {
   clock: circ(12, 12, 8.5) + 'M12 7.5V12l3 2',
   calc: 'M6 3.5h12v17H6zM8.5 6.5h7v3h-7z' + dot(9, 13) + dot(12, 13) + dot(15, 13) + dot(9, 16.5) + dot(12, 16.5) + dot(15, 16.5),
   eyes: circ(8.5, 12, 4.5) + circ(15.5, 12, 4.5) + dot(9.5, 12.5) + dot(16.5, 12.5),
+  // Developer and AI agents stacks (devtools.ts)
+  /** A branch: two commits and a merge line */
+  git: 'M7 5v14M7 15.5a4 4 0 0 1 4-4h2a4 4 0 0 0 4-4V7' + circ(7, 4.2, 1.8) + circ(7, 19.8, 1.8) + circ(17, 5.2, 1.8),
+  /** An IDE window: sidebar and code lines */
+  geany: 'M3.5 5.5h17v13h-17zM8.5 5.5v13M11 9.5h6M11 12.5h4.5M11 15.5h5.5',
+  /** Two sparkles */
+  gemini: 'M10 3.5l1.6 5.4 5.4 1.6-5.4 1.6L10 17.5l-1.6-5.4-5.4-1.6 5.4-1.6zM17.5 14.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z',
+  /** A prompt in a hexagon */
+  codex: 'M12 3l7.8 4.5v9L12 21l-7.8-4.5v-9zM8.8 10l2.4 2-2.4 2M12.8 15h2.6',
+  /** A slash through a ring */
+  grok: circ(12, 12, 7.5) + 'M6.5 19.5L18 4.5',
+  /** An arrow rising off a line */
+  agy: 'M12 17V5M7.5 9.5L12 5l4.5 4.5M5 20h14',
+  /** Two speech bubbles */
+  aider: 'M4 5.5h10v7H8l-3 2.5v-2.5H4zM10 15h5l3 2.5V15h2V8.5h-3',
 };
 
 /** App id → glyph. Debian GUI apps (src/gui/desktop-apps.ts) map onto what they are. */
@@ -107,6 +122,7 @@ const APP_GLYPH: Record<string, string> = {
   l3afpad: G.editor, mousepad: G.editor, featherpad: G.editor, xedit: G.editor,
   ristretto: G.image, gpicview: G.image, 'lximage-qt': G.image,
   xclock: G.clock, xcalc: G.calc, xeyes: G.eyes,
+  claude: G.agents,
 };
 
 /** Glyphs apps registered with (AppDescriptor.glyph), ahead of the built-in ones */
@@ -146,6 +162,13 @@ export function glyphTile(appId: string, name: string, i = 0, glyph?: string): s
     : `<text class="sd-ic-m" x="12" y="16.2" text-anchor="middle">${escAttr(monogram(name))}</text>`;
   return `<span class="sd-ic" data-glyph="${escAttr(appId)}" data-k="${i % 3}" style="--i:${i}"><svg viewBox="0 0 24 24" aria-hidden="true">` +
     `<path class="sd-ic-c" d="M1.5 12h21M12 1.5v21${circ(12, 12, 9.6)}"/>${mark}</svg></span>`;
+}
+
+/** A Classic-style tile (icons.ts: gradient, shine) with the app's glyph in white, for apps without their own art */
+export function glyphClassicTile(appId: string, from: string, to: string): string {
+  const d = glyphFor(appId) ?? '';
+  return `<span class="sd-tile" style="--t1:${from};--t2:${to}"><svg viewBox="3 3 58 58" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">` +
+    `<g transform="translate(14 14) scale(1.5)" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></g></svg></span>`;
 }
 
 /** The classic icon of an app: its registered icon (SVG markup or an image URL) */

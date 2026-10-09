@@ -541,6 +541,8 @@ export class Shell {
   /** The `exit` builtin ended this shell (an interactive loop stops reading). */
   exited = false;
   functions: Record<string, { body: string }> = {};
+  /** Functions marked with `export -f`: the only ones a new shell process (sh -c, a script) gets */
+  exportedFunctions = new Set<string>();
   backgroundJobs: Map<number, BackgroundJob> = new Map();
   /** Shell options: errexit (-e), xtrace (-x), nounset (-u), verbose (-v) */
   options: Set<string> = new Set(DEFAULT_OPTIONS);
@@ -763,9 +765,10 @@ export class Shell {
    * with endProcess() when it finishes.
    */
   startProcess(pid = this.bashPid, ppid = this.forkParentPid): void {
-    // Only exported variables reach a new process
+    // Only exported variables reach a new process, and only `export -f` functions
     for (const n of this.localVars) delete this.env[n];
     this.localVars.clear();
+    this.dropUnexportedFunctions();
     this.parentTraps = undefined;
     this.startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
     // ...and its own options; readonly is not passed on either
@@ -778,6 +781,13 @@ export class Shell {
     this.parentPid = ppid;
     this.shellPid = pid;
     shellsByPid.set(pid, new WeakRef(this));
+  }
+
+  /** A new process keeps only the functions exported with `export -f` (bash's BASH_FUNC_name%%) */
+  dropUnexportedFunctions(): void {
+    for (const name of Object.keys(this.functions)) {
+      if (!this.exportedFunctions.has(name)) delete this.functions[name];
+    }
   }
 
   /** `hash`: command name → where it was found, and how often it ran */
@@ -863,6 +873,7 @@ export class Shell {
     child.cwd = this.cwd;
     child.env = { ...this.env };
     child.functions = { ...this.functions };
+    child.exportedFunctions = new Set(this.exportedFunctions);
     child.options = new Set(this.options);
     child.shoptopts = new Set(this.shoptopts);
     child.readonlyVars = new Set(this.readonlyVars);
@@ -3042,6 +3053,7 @@ export class Shell {
           for (const name of unsetNames) {
             if (unsetFunc) {
               delete this.functions[name];
+              this.exportedFunctions.delete(name);
             } else {
               // Check for array element: arr[idx]
               const bracketMatch = name.match(/^(\w+)\[(.+)\]$/);
@@ -3144,9 +3156,18 @@ export class Shell {
               writeStdout(v === undefined ? `${kw} ${k}\r\n` : `${kw} ${k}="${v.replace(/(["\\$`])/g, '\\$1')}"\r\n`);
             }
           } else {
-            const unexport = cmdArgs.includes('-n');
+            const flags = cmdArgs.filter((a) => /^-[fnp]+$/.test(a)).join('');
+            const unexport = flags.includes('n');
+            const fns = flags.includes('f');
             for (const arg of cmdArgs) {
-              if (arg === '-p' || arg === '-n') continue;
+              if (/^-[fnp]+$/.test(arg)) continue;
+              // export -f NAME (and -nf): functions, for the shells this one starts
+              if (fns) {
+                if (!this.functions[arg]) { stderrWriter(`tabcomputer: export: ${arg}: not a function\r\n`); exitCode = 1; continue; }
+                if (unexport) this.exportedFunctions.delete(arg);
+                else this.exportedFunctions.add(arg);
+                continue;
+              }
               const eqIdx = arg.indexOf('=');
               const name = eqIdx !== -1 ? arg.slice(0, eqIdx) : arg;
               if (eqIdx !== -1) {
@@ -3750,6 +3771,12 @@ export class Shell {
           stdin = hereString;
         }
 
+        // Inside a compound command whose input is piped (`… | if …; then cat; fi`,
+        // a for/case/function body): a command with no stdin of its own reads the
+        // pipe's remainder, once it actually reads (`echo a; cat` leaves it for cat)
+        const fromEnclosingPipe = i === 0 && !stdin && !heredocStdin && hereString === undefined &&
+          !redirects.some(r => r.type === '<') && '__PIPE_STDIN' in this.env;
+
         const pwdBefore = this.env['PWD'], cwdBefore = this.cwd;
         const ctx: CommandContext = {
           args: cmdArgs,
@@ -3765,6 +3792,23 @@ export class Shell {
           stdoutIsTTY: i === pipeline.length - 1 && !redirects.some(r => r.type === '>' || r.type === '>>') &&
             !(terminalOverride || this.terminal)?.captureStdout,
         };
+        if (fromEnclosingPipe) {
+          let taken = false;
+          let value = '';
+          Object.defineProperty(ctx, 'stdin', {
+            get: () => {
+              if (!taken) {
+                taken = true;
+                value = this.env['__PIPE_STDIN'] ?? '';
+                if ('__PIPE_STDIN' in this.env) this.env['__PIPE_STDIN'] = '';
+              }
+              return value;
+            },
+            set: (v: string) => { taken = true; value = v; },
+            enumerable: true,
+            configurable: true,
+          });
+        }
 
         // Check shell functions first
         if (this.functions[effectiveCmdName]) {
@@ -3804,7 +3848,7 @@ export class Shell {
         }
 
         // WASM and x86 programs, with the filter builtins piped to and from them, run as one kernel job
-        const hasShellStdin = i > 0 || hereString !== undefined || (i === 0 && !!heredocStdin) || redirects.some(r => r.type === '<');
+        const hasShellStdin = i > 0 || hereString !== undefined || (i === 0 && !!heredocStdin) || redirects.some(r => r.type === '<') || fromEnclosingPipe;
         const live = this.liveStdin(i, heredocStdin, hereString, redirects);
         const kernelRun = await this.tryKernelRun(pipeline, i, effectiveCmdName, cmdArgs, redirects, ctx,
           hasShellStdin, writeStdout, stderrWriter, terminalOverride || this.terminal, live);
