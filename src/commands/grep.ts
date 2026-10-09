@@ -13,7 +13,7 @@ export const grepCmd: Command = {
   async exec(ctx: CommandContext) {
     let mode: 'G' | 'E' | 'F' | 'P' = 'G';
     let ignoreCase = false, invertMatch = false, lineNumbers = false, countOnly = false;
-    let filesWith = false, filesWithout = false, recursive = false, onlyMatching = false;
+    let filesWith = false, filesWithout = false, recursive = false, deref = false, onlyMatching = false;
     let wordMatch = false, wholeLine = false, quiet = false, silentErrors = false;
     let maxCount = -1, beforeCtx = 0, afterCtx = 0;
     let withFilename: boolean | null = null;
@@ -61,7 +61,7 @@ export const grepCmd: Command = {
       '--only-matching': () => { onlyMatching = true; }, '--quiet': () => { quiet = true; }, '--silent': () => { quiet = true; },
       '--no-messages': () => { silentErrors = true; }, '--line-number': () => { lineNumbers = true; },
       '--with-filename': () => { withFilename = true; }, '--no-filename': () => { withFilename = false; },
-      '--recursive': () => { recursive = true; }, '--dereference-recursive': () => { recursive = true; },
+      '--recursive': () => { recursive = true; }, '--dereference-recursive': () => { recursive = true; deref = true; },
       '--text': () => { textMode = true; }, '--line-buffered': () => {}, '--color': () => { colorMode = 'always'; },
       '--colour': () => { colorMode = 'always'; },
     };
@@ -113,7 +113,8 @@ export const grepCmd: Command = {
           case 'c': countOnly = true; continue;
           case 'l': filesWith = true; continue;
           case 'L': filesWithout = true; continue;
-          case 'r': case 'R': recursive = true; continue;
+          case 'r': recursive = true; continue;
+          case 'R': recursive = true; deref = true; continue;
           case 'o': onlyMatching = true; continue;
           case 'w': wordMatch = true; continue;
           case 'x': wholeLine = true; continue;
@@ -249,6 +250,8 @@ export const grepCmd: Command = {
     const searchPath = async (path: string, display: string, top: boolean): Promise<void> => {
       if (quiet && anySelected) return;
       const resolved = ctx.fs.resolvePath(path, ctx.cwd);
+      // -r skips symlinks met while recursing (-R follows them)
+      if (!top && !deref && (await ctx.fs.lstat(resolved).catch(() => null))?.isSymbolicLink()) return;
       const st = await ctx.fs.stat(resolved).catch(() => null);
       if (!st) { error(`${display}: No such file or directory`); return; }
       if (st.isDirectory()) {

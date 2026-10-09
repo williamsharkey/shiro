@@ -1,7 +1,7 @@
-From fe73eb9659cf04d1b942560d37875250852076fb Mon Sep 17 00:00:00 2001
+From b67bf676d572f8f27d94b2660302ad3762cce061 Mon Sep 17 00:00:00 2001
 From: Shiro <shiro@localhost>
 Date: Thu, 8 Oct 2026 20:44:36 +0000
-Subject: [PATCH 17/19] pextrw zero-extends into the whole destination register
+Subject: [PATCH 17/20] pextrw zero-extends into the whole destination register
  (Rust's miniz_oxide inflate under LTO)
 
 ---

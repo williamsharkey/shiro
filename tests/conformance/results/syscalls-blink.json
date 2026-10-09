@@ -1,7 +1,7 @@
 {
  "suite": "LTP syscalls",
  "title": "Syscalls: LTP under Blink (x86-64)",
- "note": "Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel processes in the Blink engine; only tests that pass natively on the build host are scored.",
+ "note": "Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel processes in the Blink engine; only tests that pass natively on the build host as an unprivileged user (uid 1000, like Shiro) are scored. The snapshot fork of Blink does not share MAP_SHARED pages, where LTP keeps its result counts, so when the Summary reads all zeros the TPASS/TFAIL/TBROK lines are counted instead (tests/conformance/lib/ltp.mjs); tests that synchronize through shared memory (tst_checkpoint) still fail.",
  "files": {
   "accept": {
    "pass": 1,
@@ -17,73 +17,31 @@
     }
    ]
   },
-  "access": {
-   "pass": 0,
-   "total": 4,
-   "failures": [
-    {
-     "name": "access01",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "access02",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "access03",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "access04",
-     "reason": "passed 0 failed 0 broken 0"
-    }
-   ]
-  },
   "alarm": {
-   "pass": 0,
+   "pass": 2,
    "total": 5,
    "failures": [
     {
      "name": "alarm02",
-     "reason": "alarm02.c:34: TFAIL: alarm(2147483647) invalid retval 30: SUCCESS (0)"
-    },
-    {
-     "name": "alarm03",
-     "reason": "alarm03.c:20: TFAIL: alarm(100) invalid retval 30: SUCCESS (0)"
+     "reason": "alarm02.c:36: TFAIL: alarm(0) retval 0 != 2147483647: SUCCESS (0)"
     },
     {
      "name": "alarm05",
-     "reason": "alarm05.c:26: TFAIL: alarm(10) invalid retval 32: SUCCESS (0)"
-    },
-    {
-     "name": "alarm06",
-     "reason": "alarm06.c:30: TFAIL: alarm(2) invalid retval 34: SUCCESS (0)"
+     "reason": "alarm05.c:30: TFAIL: alarms_fired (0) != 1 (1)"
     },
     {
      "name": "alarm07",
-     "reason": "alarm07.c:24: TFAIL: alarm(1) invalid retval 34: SUCCESS (0)"
+     "reason": "alarm07.c:34: TFAIL: alarm_cnt (0) != 1 (1)"
     }
    ]
   },
   "bind": {
-   "pass": 0,
-   "total": 5,
+   "pass": 2,
+   "total": 4,
    "failures": [
     {
      "name": "bind01",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "bind02",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "bind03",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "bind04",
-     "reason": "passed 0 failed 0 broken 0"
+     "reason": "bind01.c:72: TFAIL: UNIX-domain of current directory expected EAFNOSUPPORT: EADDRNOTAVAIL (99)"
     },
     {
      "name": "bind05",
@@ -93,12 +51,8 @@
   },
   "chdir": {
    "pass": 1,
-   "total": 3,
+   "total": 2,
    "failures": [
-    {
-     "name": "chdir01",
-     "reason": "passed 0 failed 0 broken 0"
-    },
     {
      "name": "chdir04",
      "reason": "chdir04.c:27: TFAIL: chdir() expected ENAMETOOLONG: ENOENT (2)"
@@ -106,51 +60,14 @@
    ]
   },
   "chmod": {
-   "pass": 1,
-   "total": 7,
-   "failures": [
-    {
-     "name": "chmod01",
-     "reason": "no summary"
-    },
-    {
-     "name": "chmod03",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "chmod05",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "chmod06",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "chmod07",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "chmod09",
-     "reason": "passed 0 failed 0 broken 0"
-    }
-   ]
+   "pass": 2,
+   "total": 2,
+   "failures": []
   },
   "clock_gettime": {
    "pass": 0,
-   "total": 4,
+   "total": 1,
    "failures": [
-    {
-     "name": "clock_gettime01",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "clock_gettime02",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "clock_gettime03",
-     "reason": "tst_kconfig.c:289: TBROK: Cannot parse kernel .config"
-    },
     {
      "name": "clock_gettime04",
      "reason": "clock_gettime04.c:161: TFAIL: CLOCK_REALTIME: Time travelled backwards (0): -64 ns"
@@ -159,34 +76,25 @@
   },
   "clock_nanosleep": {
    "pass": 2,
-   "total": 4,
+   "total": 3,
    "failures": [
     {
      "name": "clock_nanosleep01",
-     "reason": "no summary"
-    },
-    {
-     "name": "clock_nanosleep03",
-     "reason": "tst_kconfig.c:289: TBROK: Cannot parse kernel .config"
+     "reason": "clock_nanosleep01.c:195: TFAIL: The clock_nanosleep() haven't updated timespec or it's not valid: SUCCESS (0)"
     }
    ]
   },
   "clone": {
-   "pass": 7,
-   "total": 10,
+   "pass": 6,
+   "total": 8,
    "failures": [
     {
+     "name": "clone03",
+     "reason": "clone03.c:36: TFAIL: pid(0) retval 155 != 0: SUCCESS (0)"
+    },
+    {
      "name": "clone08",
-     "reason": "no summary",
-     "timeout": true
-    },
-    {
-     "name": "clone09",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "clone11",
-     "reason": "tst_kconfig.c:289: TBROK: Cannot parse kernel .config"
+     "reason": "clone08.c:85: TBROK: CLONE_PARENT clone() failed: EINVAL (22)"
     }
    ]
   },
@@ -196,14 +104,9 @@
    "failures": []
   },
   "connect": {
-   "pass": 0,
+   "pass": 1,
    "total": 2,
    "failures": [
-    {
-     "name": "connect01",
-     "reason": "no summary",
-     "timeout": true
-    },
     {
      "name": "connect03",
      "reason": "passed 0 failed 0 broken 0"
@@ -211,32 +114,12 @@
    ]
   },
   "creat": {
-   "pass": 1,
-   "total": 7,
+   "pass": 2,
+   "total": 3,
    "failures": [
-    {
-     "name": "creat01",
-     "reason": "creat01.c:47: TFAIL: creat() failed to truncate file to 0 bytes"
-    },
-    {
-     "name": "creat04",
-     "reason": "passed 0 failed 0 broken 0"
-    },
     {
      "name": "creat05",
      "reason": "creat05.c:55: TBROK: creat(creat05_1020,0666) failed: EMFILE (24)"
-    },
-    {
-     "name": "creat06",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "creat08",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "creat09",
-     "reason": "passed 0 failed 0 broken 0"
     }
    ]
   },
@@ -307,12 +190,12 @@
    ]
   },
   "epoll_wait": {
-   "pass": 5,
-   "total": 16,
+   "pass": 7,
+   "total": 15,
    "failures": [
     {
      "name": "epoll_wait02",
-     "reason": "tst_timer_test.c:292: TFAIL: epoll_wait() woken up early 249 times range: [999,381]"
+     "reason": "tst_timer_test.c:314: TFAIL: epoll_wait() slept for too long"
     },
     {
      "name": "epoll_wait03",
@@ -320,7 +203,7 @@
     },
     {
      "name": "epoll_wait05",
-     "reason": "epoll_wait05.c:41: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110)"
+     "reason": "epoll_wait05.c:58: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)"
     },
     {
      "name": "epoll_wait06",
@@ -332,42 +215,26 @@
      "timeout": true
     },
     {
-     "name": "epoll_wait10",
-     "reason": "tst_kconfig.c:289: TBROK: Cannot parse kernel .config"
-    },
-    {
-     "name": "epoll_wait11",
-     "reason": "epoll_wait11.c:48: TFAIL: epoll_wait() returned 0, expected 1: SUCCESS (0)"
-    },
-    {
-     "name": "epoll_wait12",
-     "reason": "epoll_wait12.c:64: TFAIL: epoll_wait(efd, &ev, 1, 5000) retval 0 != 1: SUCCESS (0)"
-    },
-    {
      "name": "epoll_wait14",
      "reason": "epoll_wait14.c:99: TFAIL: fd 0 reported 18 times, expected 4"
     },
     {
      "name": "epoll_wait15",
-     "reason": "epoll_wait15.c:52: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110)"
+     "reason": "epoll_wait15.c:80: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)"
     },
     {
      "name": "epoll_wait16",
-     "reason": "epoll_wait16.c:88: TBROK: Failed to open FILE '/proc/301/stat' for reading: ENOENT (2)"
+     "reason": "epoll_wait16.c:93: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)"
     }
    ]
   },
   "execve": {
    "pass": 0,
-   "total": 3,
+   "total": 2,
    "failures": [
     {
      "name": "execve01",
-     "reason": "tst_test.c:543: TBROK: Invalid child (311) exit value 127"
-    },
-    {
-     "name": "execve03",
-     "reason": "passed 0 failed 0 broken 0"
+     "reason": "tst_test.c:211: TBROK: Invalid shared memory region (bad magic)"
     },
     {
      "name": "execve06",
@@ -382,47 +249,22 @@
   },
   "fchdir": {
    "pass": 2,
-   "total": 3,
-   "failures": [
-    {
-     "name": "fchdir03",
-     "reason": "passed 0 failed 0 broken 0"
-    }
-   ]
+   "total": 2,
+   "failures": []
   },
   "fchmod": {
    "pass": 0,
-   "total": 6,
+   "total": 1,
    "failures": [
     {
      "name": "fchmod01",
      "reason": "fchmod01.c:37: TFAIL: testfile: Incorrect modes 0644, Expected 0000"
-    },
-    {
-     "name": "fchmod02",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "fchmod03",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "fchmod04",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "fchmod05",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "fchmod06",
-     "reason": "passed 0 failed 0 broken 0"
     }
    ]
   },
   "fcntl": {
    "pass": 16,
-   "total": 38,
+   "total": 36,
    "failures": [
     {
      "name": "fcntl13",
@@ -434,11 +276,13 @@
     },
     {
      "name": "fcntl14",
-     "reason": "fcntl14.c:74: TFAIL: flock.l_pid (0) != parent_pid (363)"
+     "reason": "no summary",
+     "timeout": true
     },
     {
      "name": "fcntl14_64",
-     "reason": "fcntl14.c:74: TFAIL: flock.l_pid (0) != parent_pid (368)"
+     "reason": "no summary",
+     "timeout": true
     },
     {
      "name": "fcntl15",
@@ -458,35 +302,27 @@
     },
     {
      "name": "fcntl30",
-     "reason": "fcntl30.c:37: TBROK: Failed to open FILE '/proc/sys/fs/pipe-max-size' for reading: ENOENT (2)"
+     "reason": "fcntl30.c:27: TFAIL: Expect: new pipe size (65536) >= requested size (1048576)"
     },
     {
      "name": "fcntl30_64",
-     "reason": "fcntl30.c:37: TBROK: Failed to open FILE '/proc/sys/fs/pipe-max-size' for reading: ENOENT (2)"
-    },
-    {
-     "name": "fcntl33",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "fcntl33_64",
-     "reason": "passed 0 failed 0 broken 0"
+     "reason": "fcntl30.c:27: TFAIL: Expect: new pipe size (65536) >= requested size (1048576)"
     },
     {
      "name": "fcntl34",
-     "reason": "fcntl34.c:99: TBROK: Short read(3,0x4fffffffe900,4096) returned only 0"
+     "reason": "fcntl34.c:99: TBROK: Short read(3,0x4fffffffe880,4096) returned only 0"
     },
     {
      "name": "fcntl34_64",
-     "reason": "fcntl34.c:99: TBROK: Short read(3,0x4fffffffe8f0,4096) returned only 0"
+     "reason": "fcntl34.c:99: TBROK: Short read(3,0x4fffffffe870,4096) returned only 0"
     },
     {
      "name": "fcntl37",
-     "reason": "fcntl37.c:73: TBROK: Failed to open FILE '/proc/sys/fs/pipe-max-size' for reading: ENOENT (2)"
+     "reason": "passed 0 failed 0 broken 0"
     },
     {
      "name": "fcntl37_64",
-     "reason": "fcntl37.c:73: TBROK: Failed to open FILE '/proc/sys/fs/pipe-max-size' for reading: ENOENT (2)"
+     "reason": "passed 0 failed 0 broken 0"
     },
     {
      "name": "fcntl38",
@@ -506,7 +342,8 @@
     },
     {
      "name": "fcntl40",
-     "reason": "passed 0 failed 0 broken 0"
+     "reason": "skipped: hangs Shiro",
+     "timeout": true
     },
     {
      "name": "fcntl40_64",
@@ -515,47 +352,35 @@
    ]
   },
   "fork": {
-   "pass": 5,
+   "pass": 6,
    "total": 9,
    "failures": [
     {
      "name": "fork04",
-     "reason": "fork04.c:37: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110)"
-    },
-    {
-     "name": "fork08",
-     "reason": "skipped: hangs Shiro",
-     "timeout": true
-    },
-    {
-     "name": "fork09",
-     "reason": "no summary"
+     "reason": "fork04.c:63: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)"
     },
     {
      "name": "fork14",
      "reason": "passed 0 failed 0 broken 0"
+    },
+    {
+     "name": "fork_procs",
+     "reason": "no summary",
+     "timeout": true
     }
    ]
   },
   "fstat": {
-   "pass": 0,
+   "pass": 2,
    "total": 4,
    "failures": [
     {
      "name": "fstat02",
-     "reason": "fstat02.c:33: TFAIL: stat_buf.st_nlink (1) != NLINK (2)"
+     "reason": "fstat02.c:48: TBROK: link(test_file,link_test_file) failed: EPERM (1)"
     },
     {
      "name": "fstat02_64",
-     "reason": "fstat02.c:33: TFAIL: stat_buf.st_nlink (1) != NLINK (2)"
-    },
-    {
-     "name": "fstat03",
-     "reason": "fstat03.c:56: TFAIL: fstat() returned 0, expected -1"
-    },
-    {
-     "name": "fstat03_64",
-     "reason": "fstat03.c:56: TFAIL: fstat() returned 0, expected -1"
+     "reason": "fstat02.c:48: TBROK: link(test_file,link_test_file) failed: EPERM (1)"
     }
    ]
   },
@@ -565,8 +390,8 @@
    "failures": []
   },
   "futex": {
-   "pass": 4,
-   "total": 19,
+   "pass": 5,
+   "total": 18,
    "failures": [
     {
      "name": "futex_cmp_requeue01",
@@ -587,20 +412,17 @@
      "timeout": true
     },
     {
-     "name": "futex_wait03",
-     "reason": "futex_wait03.c:33: TBROK: Failed to open FILE '/proc/1216/stat' for reading: ENOENT (2)"
-    },
-    {
      "name": "futex_wait05",
-     "reason": "tst_timer_test.c:292: TFAIL: futex_wait() woken up early 3 times range: [24,11]"
+     "reason": "skipped: hangs Shiro",
+     "timeout": true
     },
     {
      "name": "futex_wait07",
-     "reason": "futex_wait07.c:50: TFAIL: futex_wait(tv->fntype, futex, *futex, &timeout, 0) expected EINTR: ETIMEDOUT (110)"
+     "reason": "passed 0 failed 0 broken 0"
     },
     {
      "name": "futex_wait_bitset01",
-     "reason": "futex_wait_bitset01.c:70: TFAIL: expected ETIMEDOUT: EINVAL (22)"
+     "reason": "futex_wait_bitset01.c:76: TFAIL: futex_wait_bitset() woken up prematurely 99467us, expected 100010us"
     },
     {
      "name": "futex_waitv01",
@@ -621,12 +443,8 @@
     },
     {
      "name": "futex_wake03",
-     "reason": "no summary",
+     "reason": "skipped: hangs Shiro",
      "timeout": true
-    },
-    {
-     "name": "futex_wake04",
-     "reason": "passed 0 failed 0 broken 0"
     },
     {
      "name": "futex_wake05",
@@ -641,45 +459,27 @@
    "failures": [
     {
      "name": "getcwd03",
-     "reason": "getcwd03.c:58: TFAIL: getcwd() got mismatched working directories (/tmp/ltp/getcwd03/LTP_get1Z8hPh/getcwd1.1248, /tmp/ltp/getcwd03/LTP_get1Z8hPh/getcwd2.1248)"
+     "reason": "getcwd03.c:58: TFAIL: getcwd() got mismatched working directories (/tmp/ltp/getcwd03/LTP_gethNxXhU/getcwd1.122, /tmp/ltp/getcwd03/LTP_gethNxXhU/getcwd2.122)"
     },
     {
      "name": "getcwd04",
-     "reason": "passed 0 failed 0 broken 0"
-    }
-   ]
-  },
-  "getdents": {
-   "pass": 0,
-   "total": 2,
-   "failures": [
-    {
-     "name": "getdents01",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "getdents02",
-     "reason": "passed 0 failed 0 broken 0"
+     "reason": "no summary",
+     "timeout": true
     }
    ]
   },
   "getpid": {
-   "pass": 0,
+   "pass": 1,
    "total": 1,
-   "failures": [
-    {
-     "name": "getpid01",
-     "reason": "getpid01.c:18: TBROK: Failed to open FILE '/proc/sys/kernel/pid_max' for reading: ENOENT (2)"
-    }
-   ]
+   "failures": []
   },
   "getppid": {
    "pass": 1,
    "total": 2,
    "failures": [
     {
-     "name": "getppid01",
-     "reason": "getppid01.c:18: TBROK: Failed to open FILE '/proc/sys/kernel/pid_max' for reading: ENOENT (2)"
+     "name": "getppid02",
+     "reason": "getppid02.c:36: TFAIL: *child_pid (0) != pid (232)"
     }
    ]
   },
@@ -705,53 +505,21 @@
    ]
   },
   "kill": {
-   "pass": 0,
-   "total": 5,
-   "failures": [
-    {
-     "name": "kill03",
-     "reason": "tst_pid.c:46: TBROK: Failed to open FILE '/proc/sys/kernel/pid_max' for reading: ENOENT (2)"
-    },
-    {
-     "name": "kill05",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "kill06",
-     "reason": "no summary",
-     "timeout": true
-    },
-    {
-     "name": "kill08",
-     "reason": "no summary",
-     "timeout": true
-    },
-    {
-     "name": "kill11",
-     "reason": "no summary",
-     "timeout": true
-    }
-   ]
+   "pass": 4,
+   "total": 4,
+   "failures": []
   },
   "link": {
    "pass": 0,
-   "total": 4,
+   "total": 2,
    "failures": [
     {
      "name": "link02",
-     "reason": "link02.c:36: TFAIL: link(oldpath,newpath) returned 0 but stat link counts do not match 1 1"
-    },
-    {
-     "name": "link04",
-     "reason": "passed 0 failed 0 broken 0"
+     "reason": "link02.c:24: TFAIL: link(OLDPATH, NEWPATH) failed: EPERM (1)"
     },
     {
      "name": "link05",
-     "reason": "link05.c:45: TFAIL: link(lkfile_1288, lkfile_1288[1-1000]) ret 0 for 1000 files, stat values do not match 1 1"
-    },
-    {
-     "name": "link08",
-     "reason": "passed 0 failed 0 broken 0"
+     "reason": "link05.c:30: TFAIL: 1: link(lkfile_290, lkfile_290_1) failed: EPERM (1)"
     }
    ]
   },
@@ -783,42 +551,6 @@
     }
    ]
   },
-  "mkdir": {
-   "pass": 0,
-   "total": 5,
-   "failures": [
-    {
-     "name": "mkdir02",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "mkdir03",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "mkdir04",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "mkdir05",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "mkdir09",
-     "reason": "passed 0 failed 0 broken 0"
-    }
-   ]
-  },
-  "mkdirat": {
-   "pass": 0,
-   "total": 1,
-   "failures": [
-    {
-     "name": "mkdirat02",
-     "reason": "passed 0 failed 0 broken 0"
-    }
-   ]
-  },
   "nanosleep": {
    "pass": 2,
    "total": 3,
@@ -830,66 +562,23 @@
    ]
   },
   "open": {
-   "pass": 5,
-   "total": 14,
+   "pass": 6,
+   "total": 8,
    "failures": [
-    {
-     "name": "open02",
-     "reason": "passed 0 failed 0 broken 0"
-    },
     {
      "name": "open06",
      "reason": "open06.c:20: TBROK: mkfifo(tmpfile, 0644) failed: EPERM (1)"
     },
     {
-     "name": "open07",
-     "reason": "open07.c:50: TBROK: creat(symdir1/testfile,0644) failed: ENOTDIR (20)"
-    },
-    {
-     "name": "open08",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "open10",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "open11",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "open12",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
      "name": "open13",
      "reason": "open13.c:76: TFAIL: read() on original FD succeeded"
-    },
-    {
-     "name": "open14",
-     "reason": "passed 0 failed 0 broken 0"
     }
    ]
   },
   "openat": {
    "pass": 1,
-   "total": 2,
-   "failures": [
-    {
-     "name": "openat02",
-     "reason": "passed 0 failed 0 broken 0"
-    }
-   ]
-  },
-  "other": {
-   "pass": 0,
    "total": 1,
-   "failures": [
-    {
-     "name": "leapsec01",
-     "reason": "passed 0 failed 0 broken 0"
-    }
-   ]
+   "failures": []
   },
   "pause": {
    "pass": 0,
@@ -897,16 +586,16 @@
    "failures": [
     {
      "name": "pause01",
-     "reason": "pause01.c:21: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110)"
+     "reason": "pause01.c:36: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)"
     },
     {
      "name": "pause02",
-     "reason": "pause02.c:16: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110)"
+     "reason": "pause02.c:32: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)"
     }
    ]
   },
   "pipe": {
-   "pass": 4,
+   "pass": 7,
    "total": 12,
    "failures": [
     {
@@ -919,23 +608,11 @@
     },
     {
      "name": "pipe07",
-     "reason": "pipe07.c:28: TBROK: opendir(/proc/self/fd) failed: ENOENT (2)"
-    },
-    {
-     "name": "pipe08",
-     "reason": "pipe08.c:35: TFAIL: sigpipe_cnt (0) != 1 (1)"
-    },
-    {
-     "name": "pipe10",
-     "reason": "pipe10.c:33: TBROK: close(-1) failed: EBADF (9)"
-    },
-    {
-     "name": "pipe11",
-     "reason": "pipe11.c:94: TBROK: close(-1) failed: EBADF (9)"
+     "reason": "pipe07.c:76: TFAIL: exp_num_pipes (4092) != num_pipe_fds (1020)"
     },
     {
      "name": "pipe13",
-     "reason": "pipe13.c:57: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110)"
+     "reason": "pipe13.c:77: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)"
     },
     {
      "name": "pipe15",
@@ -949,8 +626,7 @@
    "failures": [
     {
      "name": "pipe2_04",
-     "reason": "no summary",
-     "timeout": true
+     "reason": "pipe2_04.c:82: TFAIL: Pipe size (65536) must be page size (4096)"
     }
    ]
   },
@@ -960,7 +636,7 @@
    "failures": [
     {
      "name": "poll02",
-     "reason": "tst_timer_test.c:292: TFAIL: poll() woken up early 205 times range: [998,302]"
+     "reason": "tst_timer_test.c:314: TFAIL: poll() slept for too long"
     }
    ]
   },
@@ -975,18 +651,9 @@
    ]
   },
   "pread": {
-   "pass": 2,
+   "pass": 4,
    "total": 4,
-   "failures": [
-    {
-     "name": "pread02",
-     "reason": "pread02.c:42: TFAIL: pread(7, 1024, 0) file descriptor is a directory expected EISDIR: ESPIPE (29)"
-    },
-    {
-     "name": "pread02_64",
-     "reason": "pread02.c:42: TFAIL: pread(7, 1024, 0) file descriptor is a directory expected EISDIR: ESPIPE (29)"
-    }
-   ]
+   "failures": []
   },
   "pselect": {
    "pass": 4,
@@ -994,40 +661,47 @@
    "failures": [
     {
      "name": "pselect01",
-     "reason": "tst_timer_test.c:292: TFAIL: pselect() woken up early 267 times range: [999,267]"
+     "reason": "tst_timer_test.c:314: TFAIL: pselect() slept for too long"
     },
     {
      "name": "pselect01_64",
-     "reason": "tst_timer_test.c:292: TFAIL: pselect() woken up early 277 times range: [999,469]"
+     "reason": "tst_timer_test.c:314: TFAIL: pselect() slept for too long"
     }
    ]
   },
   "pwrite": {
-   "pass": 8,
+   "pass": 6,
    "total": 8,
-   "failures": []
-  },
-  "read": {
-   "pass": 3,
-   "total": 4,
    "failures": [
     {
-     "name": "read03",
-     "reason": "read03.c:32: TBROK: mknod() failed: EPERM (1)"
+     "name": "pwrite01_64",
+     "reason": "no summary",
+     "timeout": true
+    },
+    {
+     "name": "pwrite04",
+     "reason": "no summary",
+     "timeout": true
     }
    ]
   },
-  "readlink": {
-   "pass": 0,
-   "total": 2,
+  "read": {
+   "pass": 1,
+   "total": 4,
    "failures": [
     {
-     "name": "readlink01",
-     "reason": "passed 0 failed 0 broken 0"
+     "name": "read02",
+     "reason": "no summary",
+     "timeout": true
     },
     {
-     "name": "readlink03",
-     "reason": "passed 0 failed 0 broken 0"
+     "name": "read03",
+     "reason": "read03.c:32: TBROK: mknod() failed: EPERM (1)"
+    },
+    {
+     "name": "read04",
+     "reason": "no summary",
+     "timeout": true
     }
    ]
   },
@@ -1037,77 +711,15 @@
    "failures": [
     {
      "name": "readv02",
-     "reason": "readv02.c:72: TFAIL: readv(3, 0x5371c0, 1) succeeded"
-    }
-   ]
-  },
-  "rename": {
-   "pass": 0,
-   "total": 12,
-   "failures": [
-    {
-     "name": "rename01",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "rename03",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "rename04",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "rename05",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "rename06",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "rename07",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "rename08",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "rename09",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "rename10",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "rename12",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "rename13",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "rename15",
-     "reason": "passed 0 failed 0 broken 0"
+     "reason": "no summary",
+     "timeout": true
     }
    ]
   },
   "rmdir": {
    "pass": 1,
-   "total": 3,
-   "failures": [
-    {
-     "name": "rmdir02",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "rmdir03",
-     "reason": "passed 0 failed 0 broken 0"
-    }
-   ]
+   "total": 1,
+   "failures": []
   },
   "select": {
    "pass": 1,
@@ -1119,18 +731,30 @@
     },
     {
      "name": "select02",
-     "reason": "tst_timer_test.c:292: TFAIL: select() woken up early 225 times range: [999,344]"
+     "reason": "no summary",
+     "timeout": true
     },
     {
-     "name": "select03",
-     "reason": "no summary"
+     "name": "select04",
+     "reason": "no summary",
+     "timeout": true
     }
    ]
   },
   "sendfile": {
-   "pass": 2,
+   "pass": 0,
    "total": 16,
    "failures": [
+    {
+     "name": "sendfile02",
+     "reason": "no summary",
+     "timeout": true
+    },
+    {
+     "name": "sendfile02_64",
+     "reason": "skipped: hangs Shiro",
+     "timeout": true
+    },
     {
      "name": "sendfile03",
      "reason": "sendfile03.c:51: TFAIL: sendfile(..) with out_fd=-1 expected EBADF: EFAULT (14)"
@@ -1191,41 +815,18 @@
   },
   "setrlimit": {
    "pass": 1,
-   "total": 5,
+   "total": 2,
    "failures": [
     {
-     "name": "setrlimit02",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "setrlimit03",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "setrlimit04",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
      "name": "setrlimit06",
-     "reason": "no summary"
+     "reason": "setrlimit06.c:81: TFAIL: setrlimit(RLIMIT_CPU) failed: EPERM (1)"
     }
    ]
   },
   "signal": {
-   "pass": 3,
+   "pass": 5,
    "total": 5,
-   "failures": [
-    {
-     "name": "signal01",
-     "reason": "no summary",
-     "timeout": true
-    },
-    {
-     "name": "signal05",
-     "reason": "skipped: hangs Shiro",
-     "timeout": true
-    }
-   ]
+   "failures": []
   },
   "socket": {
    "pass": 1,
@@ -1249,25 +850,8 @@
   },
   "stat": {
    "pass": 2,
-   "total": 6,
-   "failures": [
-    {
-     "name": "stat01",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "stat01_64",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "stat03",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "stat03_64",
-     "reason": "passed 0 failed 0 broken 0"
-    }
-   ]
+   "total": 2,
+   "failures": []
   },
   "symlink": {
    "pass": 2,
@@ -1281,17 +865,8 @@
   },
   "truncate": {
    "pass": 2,
-   "total": 4,
-   "failures": [
-    {
-     "name": "truncate03",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "truncate03_64",
-     "reason": "passed 0 failed 0 broken 0"
-    }
-   ]
+   "total": 2,
+   "failures": []
   },
   "umask": {
    "pass": 1,
@@ -1310,27 +885,15 @@
   },
   "unlink": {
    "pass": 0,
-   "total": 5,
+   "total": 2,
    "failures": [
     {
      "name": "unlink05",
-     "reason": "unlink05.c:29: TBROK: mkfifo(tfifo_137, 0777) failed: EPERM (1)"
+     "reason": "unlink05.c:29: TBROK: mkfifo(tfifo_178, 0777) failed: EPERM (1)"
     },
     {
      "name": "unlink07",
      "reason": "unlink07.c:44: TFAIL: path contains a regular file expected ENOTDIR: ENOENT (2)"
-    },
-    {
-     "name": "unlink08",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "unlink09",
-     "reason": "passed 0 failed 0 broken 0"
-    },
-    {
-     "name": "unlink10",
-     "reason": "passed 0 failed 0 broken 0"
     }
    ]
   },
@@ -1350,23 +913,14 @@
    "failures": [
     {
      "name": "vfork02",
-     "reason": "vfork02.c:61: TBROK: SIGUSR1 is not on hold"
+     "reason": "vfork02.c:26: TFAIL: sigismember(&signal, SIGUSR1) (1) != 0 (0)"
     }
    ]
   },
   "wait4": {
-   "pass": 0,
+   "pass": 2,
    "total": 3,
    "failures": [
-    {
-     "name": "wait401",
-     "reason": "no summary",
-     "timeout": true
-    },
-    {
-     "name": "wait402",
-     "reason": "wait402.c:28: TBROK: Failed to open FILE '/proc/sys/kernel/pid_max' for reading: ENOENT (2)"
-    },
     {
      "name": "wait403",
      "reason": "tst_taint.c:43: TBROK: Failed to open FILE '/proc/sys/kernel/tainted' for reading: ENOENT (2)"
@@ -1374,47 +928,28 @@
    ]
   },
   "waitid": {
-   "pass": 2,
+   "pass": 6,
    "total": 11,
    "failures": [
-    {
-     "name": "waitid01",
-     "reason": "no summary"
-    },
     {
      "name": "waitid02",
      "reason": "waitid02.c:19: TFAIL: waitid(P_ALL, 0, infop, WNOHANG) expected EINVAL: ECHILD (10)"
     },
     {
      "name": "waitid04",
-     "reason": "no summary"
-    },
-    {
-     "name": "waitid05",
-     "reason": "no summary"
-    },
-    {
-     "name": "waitid06",
-     "reason": "no summary"
+     "reason": "waitid04.c:24: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)"
     },
     {
      "name": "waitid07",
-     "reason": "no summary",
-     "timeout": true
+     "reason": "waitid07.c:24: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)"
     },
     {
      "name": "waitid08",
-     "reason": "no summary",
-     "timeout": true
+     "reason": "waitid08.c:24: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)"
     },
     {
      "name": "waitid10",
      "reason": "waitid10.c:51: TBROK: Failed to open FILE '/proc/sys/kernel/core_pattern' for reading: ENOENT (2)"
-    },
-    {
-     "name": "waitid11",
-     "reason": "no summary",
-     "timeout": true
     }
    ]
   },
@@ -1424,7 +959,7 @@
    "failures": [
     {
      "name": "waitpid01",
-     "reason": "waitpid01.c:80: TBROK: setrlimit(4,0x4ffffffff960) failed: EPERM (1)"
+     "reason": "waitpid01.c:80: TBROK: setrlimit(4,0x4ffffffff930) failed: EPERM (1)"
     },
     {
      "name": "waitpid04",
@@ -1432,57 +967,46 @@
     },
     {
      "name": "waitpid06",
-     "reason": "no summary",
+     "reason": "skipped: hangs Shiro",
      "timeout": true
     },
     {
      "name": "waitpid07",
-     "reason": "no summary",
-     "timeout": true
+     "reason": "waitpid_common.h:57: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)"
     },
     {
      "name": "waitpid08",
-     "reason": "no summary",
-     "timeout": true
+     "reason": "waitpid_common.h:57: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)"
     },
     {
      "name": "waitpid09",
-     "reason": "no summary",
-     "timeout": true
+     "reason": "waitpid09.c:43: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)"
     },
     {
      "name": "waitpid10",
-     "reason": "no summary",
-     "timeout": true
+     "reason": "waitpid_common.h:57: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)"
     },
     {
      "name": "waitpid11",
-     "reason": "no summary",
-     "timeout": true
+     "reason": "waitpid_common.h:57: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)"
     },
     {
      "name": "waitpid12",
-     "reason": "no summary",
-     "timeout": true
+     "reason": "waitpid_common.h:57: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)"
     },
     {
      "name": "waitpid13",
-     "reason": "no summary",
-     "timeout": true
+     "reason": "waitpid_common.h:57: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)"
     }
    ]
   },
   "write": {
-   "pass": 4,
+   "pass": 5,
    "total": 6,
    "failures": [
     {
      "name": "write04",
      "reason": "write04.c:40: TBROK: mknod() failed: EPERM (1)"
-    },
-    {
-     "name": "write05",
-     "reason": "write05.c:65: TFAIL: sigpipe_cnt = 0"
     }
    ]
   },
@@ -1492,8 +1016,7 @@
    "failures": [
     {
      "name": "writev01",
-     "reason": "no summary",
-     "timeout": true
+     "reason": "writev01.c:124: TFAIL: invalid iov_len, expected: -1 (EINVAL), got: 127 (SUCCESS)"
     }
    ]
   }

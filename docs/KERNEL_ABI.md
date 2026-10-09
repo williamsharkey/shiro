@@ -80,6 +80,38 @@ All changes so far are additive; nothing below renames or removes an earlier nam
   - `FileSystem.writeFile` stores a compact copy of a typed-array view
     (IndexedDB cloned the whole underlying buffer).
 
+- **2026-10-09 (unix/compat-tools)** (additive)
+  - AF_UNIX stream sockets bound to paths and abstract names; `SYS_sendmsg`
+    (46) and `SYS_recvmsg` (47) in the kernel, with `SCM_RIGHTS`;
+    `getsockopt(SO_PEERCRED)` returns the peer's pid. Constants `SO_PEERCRED`,
+    `SCM_RIGHTS`, `SCM_CREDENTIALS`, `MSG_CTRUNC`, `MSG_CMSG_CLOEXEC`,
+    `SOCKADDR_UN_MAX`. `Kernel.socketPaths`: socket files stat as `S_IFSOCK`.
+    Layouts in [NETWORKING.md](NETWORKING.md).
+  - `ioctl(FIONBIO)` succeeds on every file (it only sets `O_NONBLOCK`).
+  - `/proc` in the kernel (`procfs.ts`, `Kernel.procfs`): open/stat/
+    readlink/getdents of `/proc/self`, `/proc/PID/...`, `/proc/stat`,
+    `/proc/loadavg`, `/proc/uptime` come from the process table (other
+    `/proc` files are still the FileSystem's). `Process.syscalls`,
+    `kernelMs`, `inSyscall`, `exitTime`; `Kernel.lastPid`.
+  - `SYS_clock_gettime` (228) for `CLOCK_REALTIME`, the monotonic clocks
+    and `CLOCK_BOOTTIME`, all counting from the kernel's boot (`procfs.ts`
+    `bootMs`) except realtime.
+  - ptys: `TIOCPKT`/`TIOCGPKT`. Stat of a device opens it `O_NOCTTY` and
+    closes it again.
+  - `sh` as a kernel process with no script on a terminal (or `-i`) runs
+    an interactive read-eval loop (`Shell.exited` marks `exit`).
+  - `link(2)` copies report the source's inode number.
+  - `SYS_uname` (63) writes a `struct utsname` whose nodename is
+    `Kernel.hostname` ("shiro"); Blink takes the host and domain names
+    from it. Constant `UTSNAME_FIELD`.
+  - `TtySession.onJobForeground`: called when a job takes the terminal; the
+    page's terminals hand it the keys typed while the command was starting.
+  - AF_UNIX socket paths decode from a shared syscall buffer (browsers'
+    `TextDecoder` refuses one; tmux failed with EIO in the browser).
+  - Closing one reference to a regular file (or exiting) writes its data
+    back to the FileSystem even while another process — a forked child —
+    still holds the description.
+
 - **2026-10-08 (unix/compat-tools)**
   - **New syscalls:** `SYS_shiro_vfork` (1010) creates a child process with
     nothing running in it (fd table forked, signal state copied); the

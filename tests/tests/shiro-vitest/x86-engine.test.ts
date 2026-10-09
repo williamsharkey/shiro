@@ -41,6 +41,10 @@ const jitBin = join(out, 'jit');
 const haveJit = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', jitBin, 'jit.c']);
 const forkBin = join(out, 'forkcopy');
 const haveFork = tryBuild('gcc', ['-static', '-O1', '-o', forkBin, 'forkcopy.c']);
+const forkSharedBin = join(out, 'forkshared');
+const haveForkShared = tryBuild('gcc', ['-static', '-O1', '-o', forkSharedBin, 'forkshared.c']);
+const fionbioBin = join(out, 'fionbio');
+const haveFionbio = tryBuild('gcc', ['-static', '-O1', '-o', fionbioBin, 'fionbio.c']);
 const fuzzBin = join(out, 'jitfuzz');
 const haveFuzz = tryBuild('gcc', ['-static', '-O1', '-o', fuzzBin, 'jitfuzz.c']);
 
@@ -163,6 +167,14 @@ describe.skipIf(!haveFork)('Blink engine: fork', () => {
     const { shell } = await setup(readFileSync(forkBin));
     const r = await run(shell, './prog nested');
     expect(r.output).toContain('nested status 44 counter 1');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  // LTP keeps its results and checkpoint futexes in MAP_SHARED pages
+  it.skipIf(!haveForkShared)('MAP_SHARED memory stays shared with the child; unmapped, fork copies again', async () => {
+    const { shell } = await setup(readFileSync(forkSharedBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('anon shared 42\nfile shared 7\nprivate after unmap 100\n');
     expect(r.exitCode).toBe(0);
   }, 60_000);
 });
@@ -419,5 +431,26 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const r = await run(shell, './prog');
     expect(r.exitCode).toBe(0);
     expect(r.output.replace(/\r\n/g, '\n')).toBe('pextrw 0xfffe\nmadvise 0 0 0\nfutex_wait_bitset timedout on time\nfutex_wake_bitset 0\ngetrandom 16\n');
+  }, 60_000);
+});
+
+// libuv makes every fd non-blocking with ioctl(FIONBIO); on /dev/null the
+// kernel answered ENOTTY and cmake died (exit 139) in its uname probes.
+describe.skipIf(!haveFionbio)('Blink engine: FIONBIO', () => {
+  it('sets O_NONBLOCK on /dev/null, a pipe and a file', async () => {
+    const { shell } = await setup(readFileSync(fionbioBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('devnull 0 1 0 0\npipe 0 1 0 0\nfile 0 1 0 0\n');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+});
+
+// AF_UNIX path sockets with SCM_RIGHTS through Blink's sendmsg/recvmsg (tmux, screen).
+describe('Blink engine: AF_UNIX sockets', () => {
+  it('a server and a forked client talk over a path socket and pass an fd', async () => {
+    const { shell } = await setup(readFileSync(join(FIX, 'unix-musl')));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe("server: 2 bytes 'hi' fd ok peercred ok socket file ok\nclient: via the passed fd\n");
+    expect(r.exitCode).toBe(0);
   }, 60_000);
 });

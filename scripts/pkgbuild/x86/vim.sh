@@ -25,5 +25,12 @@ rm -rf "$RT" && mkdir -p "$RT"
 (cd runtime && cp -r autoload colors compiler doc ftplugin indent keymap lang macros pack plugin print spell syntax tutor \
   defaults.vim evim.vim filetype.vim ftoff.vim ftplugin.vim ftplugof.vim indent.vim indoff.vim menu.vim \
   optwin.vim scripts.vim synmenu.vim delmenu.vim "$RT"/ 2>/dev/null || true)
-rm -rf "$RT/spell"/*.{latin1,utf-8}.{spl,sug} "$RT/lang"/*.po 2>/dev/null || true
+# Leave out the test suites, translations and spell files (the latter download on demand in vim)
+rm -rf "$RT/syntax/testdir" "$RT/indent/testdir" "$RT/lang" "$RT/spell"/*.{spl,sug} "$RT/tutor"/*.??.* 2>/dev/null || true
 (cd "$PKG_OUT/vim" && "$SRC/src/vim" -u NONE -es -c 'helptags share/vim/vim92/doc' -c q >/dev/null 2>&1 || true)
+
+# Manual pages (man, from pkg install mandoc)
+install_man vim "$SRC/runtime/doc/vim.1" "$SRC/runtime/doc/vimdiff.1"
+man_alias vim vi.1 vim.1
+man_alias vim view.1 vim.1
+man_alias vim ex.1 vim.1

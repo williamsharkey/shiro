@@ -36,12 +36,7 @@ import { createMiscModule } from './modules/misc';
 import { createAppShim } from './shims/app-shims';
 import { getShiroOrigin } from '../utils/shiro-origin';
 
-// The page's own fetch and timers, captured before any node script replaces them
-const PAGE_FETCH = globalThis.fetch.bind(globalThis);
-const PAGE_SET_TIMEOUT = globalThis.setTimeout.bind(globalThis) as typeof setTimeout;
-const PAGE_CLEAR_TIMEOUT = globalThis.clearTimeout.bind(globalThis) as typeof clearTimeout;
-const PAGE_SET_INTERVAL = globalThis.setInterval.bind(globalThis) as typeof setInterval;
-const PAGE_CLEAR_INTERVAL = globalThis.clearInterval.bind(globalThis) as typeof clearInterval;
+import { PAGE_FETCH, PAGE_SET_TIMEOUT, PAGE_CLEAR_TIMEOUT, PAGE_SET_INTERVAL, PAGE_CLEAR_INTERVAL } from './page-globals';
 
 /** A Node Timeout object around a page timer id: ref/unref/hasRef/refresh,
  *  and it converts to the id, so arithmetic and clearTimeout(id) both work

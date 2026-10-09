@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
 const RESULTS = join(ROOT, 'tests/conformance/results');
-const ORDER = ['shell-oils.json', 'utils-busybox.json', 'syscalls-blink.json', 'syscalls-wasi.json'];
+const ORDER = ['shell-oils.json', 'shell-oils-browser.json', 'utils-busybox.json', 'syscalls-blink.json', 'syscalls-wasi.json'];
 
 const files = readdirSync(RESULTS).filter((f) => f.endsWith('.json') && !f.endsWith('.partial.json'))
   .sort((a, b) => (ORDER.indexOf(a) + 1 || 99) - (ORDER.indexOf(b) + 1 || 99) || a.localeCompare(b));

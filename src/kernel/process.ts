@@ -35,11 +35,18 @@ export class Process {
   /** Controlling terminal (pty.ts sets it; /dev/tty opens it). */
   ctty?: OpenFile;
   state: ProcessState = 'running';
+  /** Syscalls in progress (a blocked one makes the process "sleeping") */
+  inSyscall = 0;
   /** Linux wait status once the process has exited. */
   exitStatus?: number;
   /** A stop/continue the parent has not collected with waitpid(WUNTRACED/WCONTINUED). */
   pendingStopReport?: number;
   readonly startTime = Date.now();
+  /** When it became a zombie. */
+  exitTime = 0;
+  /** Syscalls made through kernel.syscall, the time spent in them, and how many are in progress (/proc CPU estimate). */
+  syscalls = 0;
+  kernelMs = 0;
   /** Pending signals not yet seen by the guest (also mirrored in the channel's signal word). */
   pendingSignals = new Set<number>();
   /** Blocked signals (sigprocmask); signals.ts maintains it. */
@@ -180,6 +187,7 @@ export class Process {
   markExited(status: number): void {
     if (this.state === 'zombie') return;
     this.state = 'zombie';
+    this.exitTime = Date.now();
     this.exitStatus = status;
     for (const w of this.exitWaiters.splice(0)) w(status);
     this.notifyStateChange();

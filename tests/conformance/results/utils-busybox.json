@@ -4,145 +4,14 @@
  "note": "busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Shiro; only cases the host GNU tools pass are scored.",
  "files": {
   "awk": {
-   "pass": 9,
+   "pass": 51,
    "total": 51,
-   "failures": [
-    {
-     "name": "awk -F case 0"
-    },
-    {
-     "name": "awk -F case 1"
-    },
-    {
-     "name": "awk -F case 2"
-    },
-    {
-     "name": "awk -F case 3"
-    },
-    {
-     "name": "awk -F case 4"
-    },
-    {
-     "name": "awk -F case 5"
-    },
-    {
-     "name": "awk -F case 6"
-    },
-    {
-     "name": "awk -F case 7"
-    },
-    {
-     "name": "awk handles empty function f(arg){}"
-    },
-    {
-     "name": "awk handles empty function f(){}"
-    },
-    {
-     "name": "awk properly handles function from other scope"
-    },
-    {
-     "name": "awk 'v (a)' is not a function call, it is a concatenation"
-    },
-    {
-     "name": "awk floating const with leading zeroes"
-    },
-    {
-     "name": "awk -F handles escapes"
-    },
-    {
-     "name": "awk 'gcc build bug'"
-    },
-    {
-     "name": "awk NF in BEGIN"
-    },
-    {
-     "name": "awk string cast (bug 725)"
-    },
-    {
-     "name": "awk handles whitespace before array subscript"
-    },
-    {
-     "name": "awk 'delete a[v--]' evaluates v-- once"
-    },
-    {
-     "name": "awk FS assignment"
-    },
-    {
-     "name": "awk large integer"
-    },
-    {
-     "name": "awk length(array)"
-    },
-    {
-     "name": "awk length()"
-    },
-    {
-     "name": "awk print length, 1"
-    },
-    {
-     "name": "awk print length 1"
-    },
-    {
-     "name": "awk length == 0"
-    },
-    {
-     "name": "awk if (length == 0)"
-    },
-    {
-     "name": "awk -f and ARGC"
-    },
-    {
-     "name": "awk printf('%c') can output NUL"
-    },
-    {
-     "name": "awk printf('%-10c') can output NUL"
-    },
-    {
-     "name": "awk do not allow \"str\"++"
-    },
-    {
-     "name": "awk FS regex which can match empty string"
-    },
-    {
-     "name": "awk $NF is empty"
-    },
-    {
-     "name": "awk exit N propagates through END's exit"
-    },
-    {
-     "name": "awk print + redirect"
-    },
-    {
-     "name": "awk \"cmd\" | getline"
-    },
-    {
-     "name": "awk backslash+newline eaten with no trace"
-    },
-    {
-     "name": "awk assign while assign"
-    },
-    {
-     "name": "awk does not split on CR (char 13)"
-    },
-    {
-     "name": "awk = and ?: precedence"
-    },
-    {
-     "name": "awk references to empty fields"
-    },
-    {
-     "name": "awk gsub erroneous word start match"
-    }
-   ]
+   "failures": []
   },
   "basename (old-style)": {
-   "pass": 1,
+   "pass": 2,
    "total": 2,
-   "failures": [
-    {
-     "name": "basename-does-not-remove-identical-extension"
-    }
-   ]
+   "failures": []
   },
   "cat": {
    "pass": 4,
@@ -160,227 +29,63 @@
    "failures": []
   },
   "comm": {
-   "pass": 0,
+   "pass": 8,
    "total": 8,
-   "failures": [
-    {
-     "name": "comm test 1"
-    },
-    {
-     "name": "comm test 2"
-    },
-    {
-     "name": "comm test 3"
-    },
-    {
-     "name": "comm test 4"
-    },
-    {
-     "name": "comm test 5"
-    },
-    {
-     "name": "comm test 6"
-    },
-    {
-     "name": "comm unterminated line 1"
-    },
-    {
-     "name": "comm unterminated line 2"
-    }
-   ]
+   "failures": []
   },
   "cp": {
-   "pass": 0,
+   "pass": 6,
    "total": 6,
-   "failures": [
-    {
-     "name": "cp -R"
-    },
-    {
-     "name": "cp -Rd"
-    },
-    {
-     "name": "cp -RP"
-    },
-    {
-     "name": "cp -RL"
-    },
-    {
-     "name": "cp -RH"
-    },
-    {
-     "name": "cp -RHL"
-    }
-   ]
+   "failures": []
   },
   "cp (old-style)": {
-   "pass": 9,
+   "pass": 16,
    "total": 17,
    "failures": [
     {
-     "name": "cp-RHL-does_not_preserve-links"
-    },
-    {
-     "name": "cp-a-files-to-dir"
-    },
-    {
-     "name": "cp-a-preserves-links"
-    },
-    {
-     "name": "cp-d-files-to-dir"
-    },
-    {
-     "name": "cp-does-not-copy-unreadable-file"
-    },
-    {
-     "name": "cp-parents"
-    },
-    {
      "name": "cp-preserves-hard-links"
-    },
-    {
-     "name": "cp-preserves-links"
     }
    ]
   },
   "cut": {
-   "pass": 12,
+   "pass": 22,
    "total": 22,
-   "failures": [
-    {
-     "name": "cut '-' (stdin) and multi file handling"
-    },
-    {
-     "name": "cut -b a,a,a"
-    },
-    {
-     "name": "cut -b overlaps"
-    },
-    {
-     "name": "-b encapsulated"
-    },
-    {
-     "name": "cut -c a-"
-    },
-    {
-     "name": "cut -f a-"
-    },
-    {
-     "name": "cut show whole line with no delim"
-    },
-    {
-     "name": "cut with -d -f( ) -s"
-    },
-    {
-     "name": "cut empty field"
-    },
-    {
-     "name": "cut empty field 2"
-    }
-   ]
+   "failures": []
   },
   "cut (old-style)": {
-   "pass": 4,
+   "pass": 5,
    "total": 5,
-   "failures": [
-    {
-     "name": "cut-cuts-an-unclosed-range"
-    }
-   ]
+   "failures": []
   },
   "date (old-style)": {
-   "pass": 1,
+   "pass": 3,
    "total": 3,
-   "failures": [
-    {
-     "name": "date-@-works"
-    },
-    {
-     "name": "date-timezone"
-    }
-   ]
+   "failures": []
   },
   "dd (old-style)": {
+   "pass": 6,
+   "total": 6,
+   "failures": []
+  },
+  "diff": {
+   "pass": 13,
+   "total": 13,
+   "failures": []
+  },
+  "dirname (old-style)": {
+   "pass": 7,
+   "total": 7,
+   "failures": []
+  },
+  "du (old-style)": {
    "pass": 4,
    "total": 6,
    "failures": [
     {
-     "name": "dd-accepts-of"
+     "name": "du-s-works"
     },
     {
-     "name": "dd-count-bytes"
-    }
-   ]
-  },
-  "diff": {
-   "pass": 0,
-   "total": 13,
-   "failures": [
-    {
-     "name": "diff of stdin"
-    },
-    {
-     "name": "diff of stdin, no newline in the file"
-    },
-    {
-     "name": "diff of stdin, twice"
-    },
-    {
-     "name": "diff of empty file against stdin"
-    },
-    {
-     "name": "diff of empty file against nonempty one"
-    },
-    {
-     "name": "diff -b treats EOF as whitespace"
-    },
-    {
-     "name": "diff -b treats all spaces as equal"
-    },
-    {
-     "name": "diff -B ignores changes whose lines are all blank"
-    },
-    {
-     "name": "diff -B does not ignore changes whose lines are not all blank"
-    },
-    {
-     "name": "diff -B ignores blank single line change"
-    },
-    {
-     "name": "diff -B does not ignore non-blank single line change"
-    },
-    {
-     "name": "diff always takes context from old file"
-    },
-    {
-     "name": "diff dir dir2/file/-"
-    }
-   ]
-  },
-  "dirname (old-style)": {
-   "pass": 5,
-   "total": 7,
-   "failures": [
-    {
-     "name": "dirname-handles-multiple-slashes"
-    },
-    {
-     "name": "dirname-handles-root"
-    }
-   ]
-  },
-  "du (old-style)": {
-   "pass": 3,
-   "total": 6,
-   "failures": [
-    {
-     "name": "du-h-works"
-    },
-    {
-     "name": "du-l-works"
-    },
-    {
-     "name": "du-m-works"
+     "name": "du-works"
     }
    ]
   },
@@ -394,67 +99,19 @@
    ]
   },
   "expand": {
-   "pass": 0,
+   "pass": 1,
    "total": 1,
-   "failures": [
-    {
-     "name": "expand"
-    }
-   ]
+   "failures": []
   },
   "expr (old-style)": {
-   "pass": 0,
+   "pass": 2,
    "total": 2,
-   "failures": [
-    {
-     "name": "expr-big"
-    },
-    {
-     "name": "expr-works"
-    }
-   ]
+   "failures": []
   },
   "factor": {
-   "pass": 1,
+   "pass": 13,
    "total": 13,
-   "failures": [
-    {
-     "name": "factor '  0'"
-    },
-    {
-     "name": "factor +1"
-    },
-    {
-     "name": "factor ' +2'"
-    },
-    {
-     "name": "factor 2^61-1"
-    },
-    {
-     "name": "factor 2^62-1"
-    },
-    {
-     "name": "factor 2^64-1"
-    },
-    {
-     "name": "factor $((2*3*5*7*11*13*17*19*23*29*31*37*41*43*47))"
-    },
-    {
-     "name": "factor 2 * 3037000493 * 3037000493"
-    },
-    {
-     "name": "factor 3 * 2479700513 * 2479700513"
-    },
-    {
-     "name": "factor 3 * 37831 * 37831 * 37831 * 37831"
-    },
-    {
-     "name": "factor 3 * 13^16"
-    },
-    {
-     "name": "factor 13^16"
-    }
-   ]
+   "failures": []
   },
   "false (old-style)": {
    "pass": 1,
@@ -466,28 +123,9 @@
    ]
   },
   "find": {
-   "pass": 5,
+   "pass": 11,
    "total": 11,
-   "failures": [
-    {
-     "name": "find -exec exitcode 1"
-    },
-    {
-     "name": "find -exec exitcode 2"
-    },
-    {
-     "name": "find -exec exitcode 3"
-    },
-    {
-     "name": "find / -maxdepth 0 -name /"
-    },
-    {
-     "name": "find // -maxdepth 0 -name /"
-    },
-    {
-     "name": "find ./// -name ."
-    }
-   ]
+   "failures": []
   },
   "find (old-style)": {
    "pass": 1,
@@ -495,34 +133,19 @@
    "failures": []
   },
   "fold": {
-   "pass": 1,
+   "pass": 3,
    "total": 3,
-   "failures": [
-    {
-     "name": "fold -s"
-    },
-    {
-     "name": "fold with NULs"
-    }
-   ]
+   "failures": []
   },
   "grep": {
-   "pass": 47,
+   "pass": 48,
    "total": 48,
-   "failures": [
-    {
-     "name": "grep -r on symlink to dir"
-    }
-   ]
+   "failures": []
   },
   "gunzip (old-style)": {
-   "pass": 0,
+   "pass": 1,
    "total": 1,
-   "failures": [
-    {
-     "name": "gunzip-reads-from-standard-input"
-    }
-   ]
+   "failures": []
   },
   "gzip (old-style)": {
    "pass": 3,
@@ -540,13 +163,9 @@
    "failures": []
   },
   "hostname (old-style)": {
-   "pass": 3,
+   "pass": 4,
    "total": 4,
-   "failures": [
-    {
-     "name": "hostname-d-works"
-    }
-   ]
+   "failures": []
   },
   "id (old-style)": {
    "pass": 4,
@@ -554,19 +173,9 @@
    "failures": []
   },
   "ln (old-style)": {
-   "pass": 3,
+   "pass": 6,
    "total": 6,
-   "failures": [
-    {
-     "name": "ln-creates-hard-links"
-    },
-    {
-     "name": "ln-force-creates-hard-links"
-    },
-    {
-     "name": "ln-preserves-soft-links"
-    }
-   ]
+   "failures": []
   },
   "ls": {
    "pass": 0,
@@ -574,22 +183,9 @@
    "failures": []
   },
   "ls (old-style)": {
-   "pass": 0,
+   "pass": 4,
    "total": 4,
-   "failures": [
-    {
-     "name": "ls-1-works"
-    },
-    {
-     "name": "ls-h-works"
-    },
-    {
-     "name": "ls-l-works"
-    },
-    {
-     "name": "ls-s-works"
-    }
-   ]
+   "failures": []
   },
   "md5sum": {
    "pass": 0,
@@ -597,13 +193,9 @@
    "failures": []
   },
   "md5sum (old-style)": {
-   "pass": 0,
+   "pass": 1,
    "total": 1,
-   "failures": [
-    {
-     "name": "md5sum-verifies-non-binary-file"
-    }
-   ]
+   "failures": []
   },
   "mkdir (old-style)": {
    "pass": 2,
@@ -611,124 +203,33 @@
    "failures": []
   },
   "mv (old-style)": {
-   "pass": 10,
+   "pass": 13,
    "total": 14,
    "failures": [
     {
-     "name": "mv-files-to-dir-2"
-    },
-    {
-     "name": "mv-moves-hardlinks"
-    },
-    {
      "name": "mv-preserves-hard-links"
-    },
-    {
-     "name": "mv-refuses-mv-dir-to-subdir"
     }
    ]
   },
   "nl": {
-   "pass": 0,
+   "pass": 3,
    "total": 3,
-   "failures": [
-    {
-     "name": "nl numbers all lines"
-    },
-    {
-     "name": "nl numbers non-empty lines"
-    },
-    {
-     "name": "nl numbers no lines"
-    }
-   ]
+   "failures": []
   },
   "od": {
-   "pass": 3,
+   "pass": 21,
    "total": 21,
-   "failures": [
-    {
-     "name": "od (little-endian)"
-    },
-    {
-     "name": "od -a (DESKTOP)"
-    },
-    {
-     "name": "od -B"
-    },
-    {
-     "name": "od -o (little-endian)"
-    },
-    {
-     "name": "od -b"
-    },
-    {
-     "name": "od -c"
-    },
-    {
-     "name": "od -d (little-endian)"
-    },
-    {
-     "name": "od -D (little-endian)"
-    },
-    {
-     "name": "od -f (little-endian)"
-    },
-    {
-     "name": "od -H (little-endian)"
-    },
-    {
-     "name": "od -X (little-endian)"
-    },
-    {
-     "name": "od -h (little-endian)"
-    },
-    {
-     "name": "od -x (little-endian)"
-    },
-    {
-     "name": "od -i (little-endian)"
-    },
-    {
-     "name": "od -O (little-endian)"
-    },
-    {
-     "name": "od -I (little-endian)"
-    },
-    {
-     "name": "od -L (little-endian)"
-    },
-    {
-     "name": "od -l (little-endian)"
-    }
-   ]
+   "failures": []
   },
   "paste (old-style)": {
-   "pass": 2,
+   "pass": 5,
    "total": 5,
-   "failures": [
-    {
-     "name": "paste-back-cuted-lines"
-    },
-    {
-     "name": "paste-multi-stdin"
-    },
-    {
-     "name": "paste-pairs"
-    }
-   ]
+   "failures": []
   },
   "patch": {
-   "pass": 4,
+   "pass": 6,
    "total": 6,
-   "failures": [
-    {
-     "name": "patch -R with nonexistent old_file"
-    },
-    {
-     "name": "patch FILE PATCH"
-    }
-   ]
+   "failures": []
   },
   "printf": {
    "pass": 20,
@@ -750,28 +251,9 @@
    ]
   },
   "realpath": {
-   "pass": 4,
+   "pass": 10,
    "total": 10,
-   "failures": [
-    {
-     "name": "realpath on non-existent absolute path 1"
-    },
-    {
-     "name": "realpath on non-existent absolute path 2"
-    },
-    {
-     "name": "realpath on non-existent absolute path 3"
-    },
-    {
-     "name": "realpath on non-existent local file 1"
-    },
-    {
-     "name": "realpath on link to non-existent file 1"
-    },
-    {
-     "name": "realpath on link to non-existent file 3"
-    }
-   ]
+   "failures": []
   },
   "rev": {
    "pass": 3,
@@ -802,22 +284,9 @@
    ]
   },
   "seq": {
-   "pass": 20,
+   "pass": 24,
    "total": 24,
-   "failures": [
-    {
-     "name": "seq one argument with padding"
-    },
-    {
-     "name": "seq two arguments with padding"
-    },
-    {
-     "name": "seq count down by 3 with padding"
-    },
-    {
-     "name": "seq count by .3 with padding 2"
-    }
-   ]
+   "failures": []
   },
   "sha1sum": {
    "pass": 0,
@@ -839,34 +308,9 @@
    "failures": []
   },
   "sort": {
-   "pass": 17,
+   "pass": 25,
    "total": 25,
-   "failures": [
-    {
-     "name": "sort key range with numeric option"
-    },
-    {
-     "name": "sort key range with numeric option and global reverse"
-    },
-    {
-     "name": "sort key range with multiple options"
-    },
-    {
-     "name": "sort -z outputs NUL terminated lines"
-    },
-    {
-     "name": "sort file in place"
-    },
-    {
-     "name": "sort -sr (stable and reverse) does NOT reverse 'stable' ordering"
-    },
-    {
-     "name": "sort -h"
-    },
-    {
-     "name": "sort -k2,2M"
-    }
-   ]
+   "failures": []
   },
   "strings (old-style)": {
    "pass": 0,
@@ -874,16 +318,9 @@
    "failures": []
   },
   "sum": {
-   "pass": 0,
+   "pass": 2,
    "total": 2,
-   "failures": [
-    {
-     "name": "sum -r file file does print both names"
-    },
-    {
-     "name": "sum -s file does print file's name"
-    }
-   ]
+   "failures": []
   },
   "tail": {
    "pass": 2,
@@ -896,49 +333,18 @@
    "failures": []
   },
   "tar": {
-   "pass": 1,
+   "pass": 5,
    "total": 6,
    "failures": [
     {
-     "name": "tar Two zeroed blocks is a ('truncated') empty tarball"
-    },
-    {
-     "name": "tar Twenty zeroed blocks is an empty tarball"
-    },
-    {
      "name": "tar --overwrite"
-    },
-    {
-     "name": "tar writing into read-only dir"
-    },
-    {
-     "name": "tar Symlinks and hardlinks coexist"
     }
    ]
   },
   "tar (old-style)": {
-   "pass": 8,
+   "pass": 14,
    "total": 14,
-   "failures": [
-    {
-     "name": "tar-complains-about-missing-file"
-    },
-    {
-     "name": "tar-extracts-from-standard-input"
-    },
-    {
-     "name": "tar-extracts-to-standard-output"
-    },
-    {
-     "name": "tar-handles-exclude-and-extract-lists"
-    },
-    {
-     "name": "tar-handles-multiple-X-options"
-    },
-    {
-     "name": "tar-handles-nested-exclude"
-    }
-   ]
+   "failures": []
   },
   "tee (old-style)": {
    "pass": 2,
@@ -956,63 +362,24 @@
    "failures": []
   },
   "tr": {
-   "pass": 3,
+   "pass": 5,
    "total": 5,
-   "failures": [
-    {
-     "name": "tr understands [:xdigit:]"
-    },
-    {
-     "name": "tr has correct xdigit sequence"
-    }
-   ]
+   "failures": []
   },
   "tr (old-style)": {
-   "pass": 4,
+   "pass": 5,
    "total": 5,
-   "failures": [
-    {
-     "name": "tr-works"
-    }
-   ]
+   "failures": []
   },
   "true (old-style)": {
-   "pass": 1,
+   "pass": 2,
    "total": 2,
-   "failures": [
-    {
-     "name": "true-is-silent"
-    }
-   ]
+   "failures": []
   },
   "tsort": {
-   "pass": 2,
+   "pass": 10,
    "total": 20,
    "failures": [
-    {
-     "name": "tsort"
-    },
-    {
-     "name": "tsort -"
-    },
-    {
-     "name": "tsort input"
-    },
-    {
-     "name": "tsort input (w/o eol)"
-    },
-    {
-     "name": "tsort /dev/null"
-    },
-    {
-     "name": "tsort empty"
-    },
-    {
-     "name": "tsort blank"
-    },
-    {
-     "name": "tsort blanks"
-    },
     {
      "name": "tsort empty2"
     },
@@ -1046,80 +413,19 @@
    ]
   },
   "unexpand": {
-   "pass": 0,
+   "pass": 17,
    "total": 17,
-   "failures": [
-    {
-     "name": "unexpand case 1"
-    },
-    {
-     "name": "unexpand case 2"
-    },
-    {
-     "name": "unexpand case 3"
-    },
-    {
-     "name": "unexpand case 4"
-    },
-    {
-     "name": "unexpand case 5"
-    },
-    {
-     "name": "unexpand case 6"
-    },
-    {
-     "name": "unexpand case 8"
-    },
-    {
-     "name": "unexpand flags "
-    },
-    {
-     "name": "unexpand flags -t8 --first-only"
-    },
-    {
-     "name": "unexpand flags -a"
-    },
-    {
-     "name": "unexpand flags -t8"
-    },
-    {
-     "name": "unexpand flags -a -t8"
-    },
-    {
-     "name": "unexpand flags -t4"
-    },
-    {
-     "name": "unexpand flags -a -t4"
-    },
-    {
-     "name": "unexpand flags -t4 -a"
-    },
-    {
-     "name": "unexpand flags -t4 --first-only"
-    },
-    {
-     "name": "unexpand flags --first-only -t4"
-    }
-   ]
+   "failures": []
   },
   "uniq": {
-   "pass": 9,
+   "pass": 12,
    "total": 14,
    "failures": [
-    {
-     "name": "uniq - (specify stdin)"
-    },
     {
      "name": "uniq input outfile (two files)"
     },
     {
      "name": "uniq (stdin) outfile"
-    },
-    {
-     "name": "uniq input - (specify stdout)"
-    },
-    {
-     "name": "uniq -f -s (skip fields and chars)"
     }
    ]
   },
@@ -1139,49 +445,14 @@
    "failures": []
   },
   "xargs": {
-   "pass": 1,
+   "pass": 11,
    "total": 11,
-   "failures": [
-    {
-     "name": "xargs -E _ stops on underscore"
-    },
-    {
-     "name": "xargs -E ''"
-    },
-    {
-     "name": "xargs -e without param"
-    },
-    {
-     "name": "xargs does not stop on underscore ('new' GNU behavior)"
-    },
-    {
-     "name": "xargs -s7 can take one-char input"
-    },
-    {
-     "name": "xargs -sNUM test 1"
-    },
-    {
-     "name": "xargs -sNUM test 2"
-    },
-    {
-     "name": "xargs -n1"
-    },
-    {
-     "name": "xargs -n2"
-    },
-    {
-     "name": "xargs -I skips empty lines and leading whitespace"
-    }
-   ]
+   "failures": []
   },
   "xargs (old-style)": {
-   "pass": 0,
+   "pass": 1,
    "total": 1,
-   "failures": [
-    {
-     "name": "xargs-works"
-    }
-   ]
+   "failures": []
   },
   "xxd": {
    "pass": 0,

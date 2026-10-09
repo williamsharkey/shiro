@@ -10,7 +10,7 @@
 import type { FileSystem } from '../filesystem';
 import {
   type KStat, EBADF, EMFILE, EINVAL, EISDIR, ESPIPE, ENOTTY, EAGAIN, EINTR,
-  O_ACCMODE, O_RDONLY, O_WRONLY, O_APPEND, O_NONBLOCK, OPEN_MAX,
+  O_ACCMODE, O_RDONLY, O_WRONLY, O_APPEND, O_NONBLOCK, O_DSYNC, OPEN_MAX,
   POLLIN, POLLOUT, SEEK_SET, SEEK_CUR, SEEK_END,
   S_IFCHR, S_IFREG, S_IFDIR, S_IFIFO, FIONREAD,
 } from './abi';
@@ -84,7 +84,13 @@ export function retain(file: OpenFile): OpenFile {
 /** Drop a reference; closes the description when the count reaches zero. */
 export async function release(file: OpenFile): Promise<void> {
   const n = (refs.get(file) ?? 1) - 1;
-  if (n > 0) { refs.set(file, n); return; }
+  if (n > 0) {
+    refs.set(file, n);
+    // what a process wrote is in the FileSystem once it has closed it (or
+    // exited), even when a forked child still holds the description
+    if (file instanceof RegularFile) await file.writeBack();
+    return;
+  }
   refs.delete(file);
   await file.close();
 }
@@ -92,6 +98,7 @@ export async function release(file: OpenFile): Promise<void> {
 /** release() when it needs no I/O (another reference remains, or the description closes synchronously); false = use release(). */
 export function releaseSync(file: OpenFile): boolean {
   const n = (refs.get(file) ?? 1) - 1;
+  if (n > 0 && file instanceof RegularFile && file.dirty) return false;
   if (n > 0) { refs.set(file, n); return true; }
   if (!file.closeSync?.()) return false;
   refs.delete(file);
@@ -450,10 +457,17 @@ class Inode {
   private flushing: Promise<void> | null = null;
   /** The path was unlinked while open: the data lives on for the open fds only. */
   unlinked = false;
+  /** Nanoseconds past mtimeMs; atime when set apart from mtime (null: follows it). See FSNode. */
+  mtimeNs = 0;
+  atimeMs: number | null = null;
+  atimeNs = 0;
 
-  constructor(public fs: FileSystem, public path: string, initial: Uint8Array, public mode: number, public mtimeMs: number, public ctimeMs: number) {
+  constructor(public fs: FileSystem, public path: string, initial: Uint8Array, public mode: number, public mtimeMs: number, public ctimeMs: number,
+    times?: { mtimeNs?: number; atime?: number; atimeNs?: number }) {
     this.data = initial;
     this.size = initial.length;
+    this.mtimeNs = times?.mtimeNs ?? 0;
+    if (times?.atime !== undefined) { this.atimeMs = times.atime; this.atimeNs = times.atimeNs ?? 0; }
   }
 
   ensure(cap: number) {
@@ -468,6 +482,7 @@ class Inode {
     if (!this.dirty) this.dirtySince = now;
     this.dirty = true;
     this.mtimeMs = this.lastWrite = now;
+    this.mtimeNs = 0;
     // Each flush writes the whole file: wait for a burst of writes to pause (a
     // program writing 64 KiB at a time used to store the file after every write)
     if (!this.flushTimer) this.armFlush(FLUSH_DELAY_MS);
@@ -496,7 +511,9 @@ class Inode {
     this.dirty = false;
     const snapshot = this.data.slice(0, this.size);
     // Paced by the IndexedDB commit: writes made meanwhile go into one later snapshot
-    this.flushing = this.fs.writeFile(this.path, snapshot).then(() => this.fs.flushed()).finally(() => { this.flushing = null; });
+    // With the times this inode reports (the last write's, or utimensat's), not the write-back's
+    const times = { mtime: this.mtimeMs, mtimeNs: this.mtimeNs, ...(this.atimeMs === null ? {} : { atime: this.atimeMs, atimeNs: this.atimeNs }) };
+    this.flushing = this.fs.writeFile(this.path, snapshot, { times }).then(() => this.fs.flushed()).finally(() => { this.flushing = null; });
     await this.flushing;
   }
 }
@@ -512,7 +529,8 @@ export async function openInode(fs: FileSystem, path: string): Promise<Inode> {
     const st = await fs.stat(path);
     const raw = await fs.readFile(path);
     const bytes = typeof raw === 'string' ? new TextEncoder().encode(raw) : raw;
-    ino = table.get(path) ?? new Inode(fs, path, bytes, st.mode, st.mtime.getTime(), st.ctime.getTime());
+    ino = table.get(path) ?? new Inode(fs, path, bytes, st.mode, st.mtime.getTime(), st.ctime.getTime(),
+      { mtimeNs: st.mtimeNs, atime: st.atimeMs === st.mtime.getTime() && st.atimeNs === st.mtimeNs ? undefined : st.atimeMs, atimeNs: st.atimeNs });
     table.set(path, ino);
   }
   ino.opens++;
@@ -520,13 +538,15 @@ export async function openInode(fs: FileSystem, path: string): Promise<Inode> {
 }
 
 /** openInode for a file whose node the FileSystem has in memory (FileSystem.lookupCached). */
-export function openInodeSync(fs: FileSystem, path: string, node: { content: Uint8Array | null; mode: number; mtime: number; ctime: number }): Inode {
+export function openInodeSync(fs: FileSystem, path: string, node: {
+  content: Uint8Array | null; mode: number; mtime: number; ctime: number; mtimeNs?: number; atime?: number; atimeNs?: number;
+}): Inode {
   let table = inodeTables.get(fs);
   if (!table) { table = new Map(); inodeTables.set(fs, table); }
   let ino = table.get(path);
   if (!ino) {
     // Like readFile: the cached node's bytes, null meaning empty
-    ino = new Inode(fs, path, node.content ?? new Uint8Array(0), node.mode, node.mtime, node.ctime);
+    ino = new Inode(fs, path, node.content ?? new Uint8Array(0), node.mode, node.mtime, node.ctime, node);
     table.set(path, ino);
   }
   ino.opens++;
@@ -585,12 +605,69 @@ export async function unlinkInode(fs: FileSystem, path: string): Promise<void> {
   await ino.flush();
 }
 
+/** Whether any file of `fs` is open (inodeStat can only answer then). */
+export function hasOpenInodes(fs: FileSystem): boolean {
+  return !!inodeTables.get(fs)?.size;
+}
+
+/**
+ * stat of an open inode for `path` (resolved) holding writes not yet in the
+ * FileSystem: its size and times are the newer ones until written back.
+ */
+export function inodeStat(fs: FileSystem, path: string): KStat | undefined {
+  const ino = inodeTables.get(fs)?.get(path);
+  return ino && (ino.dirty || ino.busy) ? inodeKStat(ino) : undefined;
+}
+
+function inodeKStat(ino: Inode): KStat {
+  return {
+    dev: 1, ino: inodeNumber(ino.path), mode: S_IFREG | (ino.mode & 0o7777), nlink: 1, uid: 1000, gid: 1000, rdev: 0,
+    size: ino.size, blksize: 4096, blocks: Math.ceil(ino.size / 512),
+    atimeMs: ino.atimeMs ?? ino.mtimeMs, mtimeMs: ino.mtimeMs, ctimeMs: ino.ctimeMs,
+    atimeNs: ino.atimeMs === null ? ino.mtimeNs : ino.atimeNs, mtimeNs: ino.mtimeNs,
+  };
+}
+
+/** Write back what an open inode for `path` holds (before reading the path's times from the FileSystem). */
+export async function flushInode(fs: FileSystem, path: string): Promise<void> {
+  await inodeTables.get(fs)?.get(path)?.flush();
+}
+
+/**
+ * utimensat on `path`: an open inode writes back what it holds first (so a
+ * later write-back doesn't stamp the current time over the new times) and
+ * then reports the new times. Call before FileSystem.utimes.
+ */
+export async function setInodeTimes(fs: FileSystem, path: string, t: { atimeMs: number; atimeNs: number; mtimeMs: number; mtimeNs: number }): Promise<void> {
+  const ino = inodeTables.get(fs)?.get(path);
+  if (!ino) return;
+  await ino.flush();
+  ino.mtimeMs = t.mtimeMs;
+  ino.mtimeNs = t.mtimeNs;
+  const same = t.atimeMs === t.mtimeMs && t.atimeNs === t.mtimeNs;
+  ino.atimeMs = same ? null : t.atimeMs;
+  ino.atimeNs = same ? 0 : t.atimeNs;
+}
+
 /** Stable small inode numbers for paths (the FileSystem has none). */
 const inoNumbers = new Map<string, number>();
+let nextIno = 2;
 export function inodeNumber(path: string): number {
   let n = inoNumbers.get(path);
-  if (!n) { n = inoNumbers.size + 2; inoNumbers.set(path, n); }
+  if (!n) { n = nextIno++; inoNumbers.set(path, n); }
   return n;
+}
+
+/**
+ * link() copies (no hard links), but the copy reports its source's inode
+ * number, as a hard link would: git's local clone checks that. A path that
+ * is removed or replaced gets a fresh number.
+ */
+export function shareInodeNumber(from: string, to: string): void {
+  inoNumbers.set(to, inodeNumber(from));
+}
+export function forgetInodeNumber(path: string): void {
+  inoNumbers.delete(path);
 }
 
 export class RegularFile implements OpenFile {
@@ -626,6 +703,8 @@ export class RegularFile implements OpenFile {
     if (end > ino.size) ino.size = end;
     this.pos = end;
     ino.touch();
+    // O_SYNC/O_DSYNC: start the write-back now rather than after the usual delay
+    if (this.flags & O_DSYNC) void ino.flush();
     return buf.length;
   }
 
@@ -676,6 +755,12 @@ export class RegularFile implements OpenFile {
     return 0;
   }
 
+  /** Unwritten data, or a write-back under way. */
+  get dirty(): boolean { return this.ino.dirty || this.ino.busy; }
+
+  /** Write pending data back to the FileSystem (not to IndexedDB, as sync does). */
+  async writeBack(): Promise<void> { if (this.ino.dirty) await this.ino.flush(); }
+
   // fsync: the inode's snapshot into the fs, then the fs's write-behind queue to IndexedDB
   async sync(): Promise<void> { await this.ino.flush(); await this.ino.fs.sync(); }
 
@@ -692,14 +777,7 @@ export class RegularFile implements OpenFile {
 
   async stat(): Promise<KStat> { return this.statSync(); }
 
-  statSync(): KStat {
-    const ino = this.ino;
-    return {
-      dev: 1, ino: inodeNumber(ino.path), mode: S_IFREG | (ino.mode & 0o7777), nlink: 1, uid: 1000, gid: 1000, rdev: 0,
-      size: ino.size, blksize: 4096, blocks: Math.ceil(ino.size / 512),
-      atimeMs: ino.mtimeMs, mtimeMs: ino.mtimeMs, ctimeMs: ino.ctimeMs,
-    };
-  }
+  statSync(): KStat { return inodeKStat(this.ino); }
 
   async close(): Promise<void> {
     if (this.closed) return;
@@ -743,7 +821,8 @@ export class DirFile implements OpenFile {
     return {
       dev: 1, ino: inodeNumber(this.path), mode: S_IFDIR | (st.mode & 0o7777), nlink: 2, uid: 1000, gid: 1000, rdev: 0,
       size: 4096, blksize: 4096, blocks: 8,
-      atimeMs: st.mtime.getTime(), mtimeMs: st.mtime.getTime(), ctimeMs: st.ctime.getTime(),
+      atimeMs: st.atimeMs ?? st.mtime.getTime(), mtimeMs: st.mtime.getTime(), ctimeMs: st.ctime.getTime(),
+      atimeNs: st.atimeNs, mtimeNs: st.mtimeNs,
     };
   }
   statSync(): KStat | undefined {
@@ -751,7 +830,8 @@ export class DirFile implements OpenFile {
     if (!hit || hit.node.type !== 'dir') return undefined;
     return {
       dev: 1, ino: inodeNumber(this.path), mode: S_IFDIR | (hit.node.mode & 0o7777), nlink: 2, uid: 1000, gid: 1000, rdev: 0,
-      size: 4096, blksize: 4096, blocks: 8, atimeMs: hit.node.mtime, mtimeMs: hit.node.mtime, ctimeMs: hit.node.ctime,
+      size: 4096, blksize: 4096, blocks: 8, atimeMs: hit.node.atime ?? hit.node.mtime, mtimeMs: hit.node.mtime, ctimeMs: hit.node.ctime,
+      atimeNs: hit.node.atime === undefined ? hit.node.mtimeNs : hit.node.atimeNs, mtimeNs: hit.node.mtimeNs,
     };
   }
   async close(): Promise<void> {}
