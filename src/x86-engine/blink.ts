@@ -53,6 +53,11 @@ function isNode(): boolean {
   return typeof nodeProcess()?.getBuiltinModule === 'function';
 }
 
+/** URL of one of the engine's files (blink.wasm, host.mjs) */
+export function blinkAssetUrl(name: string): string {
+  return new URL(name, defaultAssetBase()).href;
+}
+
 function defaultAssetBase(): string {
   if (assetBase) return assetBase;
   if (isNode()) {

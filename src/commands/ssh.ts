@@ -5,6 +5,8 @@
  *
  * Connects to a remote Shiro instance via its connection code
  * (from `remote start`) and provides an interactive terminal session.
+ * Anything else (options, user@host, host.name) is OpenSSH's: it runs
+ * /usr/bin/ssh when OpenSSH is installed, else prints how to install it.
  */
 
 import type { Command, CommandContext, TerminalLike } from './index';
@@ -27,6 +29,20 @@ export const sshCmd: Command = {
       ctx.stdout += '  ssh fluffy-cloud-shimutako\n';
       ctx.stdout += '  ssh mycode          # short codes work too\n';
       return args[0] === '--help' || args[0] === '-h' ? 0 : 1;
+    }
+
+    // OpenSSH usage (options, user@host, a host name with dots) goes to
+    // OpenSSH when it is installed; Shiro's tab-to-tab ssh takes peer codes
+    if (!isPeerCode(args)) {
+      const openssh = await findOpenSsh(ctx);
+      if (openssh) {
+        return ctx.shell.execute([openssh, ...args].map(shellQuote).join(' '),
+          (s) => { ctx.stdout += s.replace(/\r\n/g, '\n'); }, (s) => { ctx.stderr += s.replace(/\r\n/g, '\n'); }, false, ctx.terminal, true);
+      }
+      if (looksLikeOpenSsh(args)) {
+        ctx.stderr += OPENSSH_HINT;
+        return 255;
+      }
     }
 
     const terminal = ctx.terminal;
@@ -54,6 +70,36 @@ export const sshCmd: Command = {
     }
   },
 };
+
+export const OPENSSH_HINT =
+  "ssh: this is Shiro's tab-to-tab ssh (ssh CONNECTION-CODE from `remote start`).\n" +
+  'For OpenSSH: `pkg install openssh`, or `debian install && sudo apt install openssh-client`.\n';
+
+/** A connection code from `remote start` (fluffy-cloud-shimutako), or a short one: one bare word */
+function isPeerCode(args: string[]): boolean {
+  return args.length === 1 && /^[a-z0-9]+(-[a-z0-9]+)*$/i.test(args[0]);
+}
+
+/** Options, user@host, host:port, a dotted host name or a remote command */
+function looksLikeOpenSsh(args: string[]): boolean {
+  return args.length > 1 || args.some((a) => a.startsWith('-') || /[@.:]/.test(a));
+}
+
+/** OpenSSH's ssh, when installed: an ELF (pkg's link into /usr/lib/pkg, Debian's), not a `#!` shim back to this builtin */
+async function findOpenSsh(ctx: CommandContext): Promise<string | null> {
+  for (const path of ['/usr/bin/ssh', '/bin/ssh', '/usr/local/bin/ssh']) {
+    try {
+      const data = await ctx.fs.readFile(path);
+      const b = typeof data === 'string' ? new TextEncoder().encode(data.slice(0, 4)) : data;
+      if (b[0] === 0x7f && b[1] === 0x45 && b[2] === 0x4c && b[3] === 0x46) return path;
+    } catch { /* not there */ }
+  }
+  return null;
+}
+
+function shellQuote(s: string): string {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
+}
 
 async function runSSHSession(
   code: string,
