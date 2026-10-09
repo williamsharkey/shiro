@@ -16,6 +16,7 @@ import { createTestShell } from './helpers';
  *   AGENT_PROBE_ENV='HOME=/root,BUN_JSC_useJIT=0' AGENT_PROBE_TIMEOUT=600000 \
  *     npx vitest run --config vitest.config.ts tests/shiro-vitest/agent-cli-probe.test.ts
  *
+ * AGENT_PROBE_TRACE=1 logs every kernel syscall (with its path argument).
  * AGENT_PROBE_ENV_FROM=NAME,... copies those variables from the host env
  * without printing them. AGENT_PROBE_RELAY_PORTS=host:port,... starts a TCP
  * relay (server.mjs createTcpRelay, in a child process) that may dial those loopback ports, so a
@@ -102,10 +103,15 @@ srv.listen(0, '127.0.0.1', () => console.log(JSON.stringify({ port: srv.address(
   const counts = new Map<number, number>();
   const spent = new Map<number, number>();
   const origSys = kernel.syscall.bind(kernel);
+  const trace = process.env.AGENT_PROBE_TRACE === '1';
   (kernel as any).syscall = (proc: any, nr: number, args: any, data: any) => {
     counts.set(nr, (counts.get(nr) || 0) + 1);
     const t0 = performance.now();
+    // AGENT_PROBE_TRACE=1: every kernel syscall, with the path for the path-taking ones
+    const path = trace && (nr === 257 || nr === 262 || nr === 21 || nr === 4 || nr === 6 || nr === 89)
+      ? new TextDecoder().decode((data as Uint8Array).slice(0, 256)).split('\0')[0] : '';
     const r = origSys(proc, nr, args, data);
+    if (trace) r.then((v: number) => console.log(`[sys] ${proc.pid} ${nr}(${Array.from(args as ArrayLike<number>).slice(0, 4).join(',')}) = ${v} ${path}`), () => {});
     r.then((v: number) => {
       spent.set(nr, (spent.get(nr) || 0) + performance.now() - t0);
       if (v < 0 && v > -4096) { const k = `${nr}:${-v}`; fails.set(k, (fails.get(k) || 0) + 1); }

@@ -58,7 +58,11 @@ export async function installNativeClaude(ctx: CommandContext, target: string, v
   if (!version) {
     const r = await sh(curl(`${RELEASES}/latest`), true);
     version = r.out.trim();
-    if (r.code !== 0 || !/^\d+\.\d+\.\d+/.test(version)) return fail(`could not read ${RELEASES}/latest`);
+    if (r.code !== 0 || !/^\d+\.\d+\.\d+/.test(version)) {
+      return fail(`could not reach ${RELEASES}/latest (curl exit ${r.code}).\n`
+        + 'It downloads from inside the VM through the server\'s TCP relay; this server may not offer one\n'
+        + '(check with `curl -sI https://example.com`), or the network sign-in was declined.');
+    }
   }
   const m = await sh(curl(`${RELEASES}/${version}/manifest.json`), true);
   let entry: { checksum?: string; size?: number } | undefined;

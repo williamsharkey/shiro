@@ -265,4 +265,12 @@ describe('claude install --native', () => {
     expect(ctx.stderr).toContain('sha256 mismatch');
     expect(await fs.exists('/home/user/.local/bin/claude')).toBe(false);
   });
+
+  it('fails with a pointer to the relay when the guest has no network', async () => {
+    const { ctx } = await setup(new Uint8Array([1]), 'f'.repeat(64));
+    const { installNativeClaude } = await import('@shiro/commands/claude-native');
+    ctx.shell = { execute: async () => 7 };
+    expect(await installNativeClaude(ctx, '/home/user/.local/bin/claude')).toBe(1);
+    expect(ctx.stderr).toContain('TCP relay');
+  });
 });
