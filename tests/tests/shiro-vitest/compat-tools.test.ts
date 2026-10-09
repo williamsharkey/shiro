@@ -375,6 +375,8 @@ describe('git', () => {
       return r.out;
     };
     expect(await g('git --version')).toBe('git version 2.56.0\n');
+    // No detached `git maintenance run --auto` after commits: it burned CPU in the background
+    expect(await g('git config --show-origin --get maintenance.auto; git config --get gc.auto')).toBe('file:/etc/gitconfig\tfalse\n0\n');
     await g('git config --global user.name "Shiro Tester" && git config --global user.email t@shiro.computer && git config --global init.defaultBranch main');
     await g('mkdir repo && cd repo && git init -q && echo one > a.txt && git add a.txt && git commit -qm first');
     await sh('cd /home/user/w/repo');

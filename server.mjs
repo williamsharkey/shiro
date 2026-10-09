@@ -926,6 +926,9 @@ export function tcpRelayConfigFromEnv(env = process.env) {
     requireSignin: env.TABCOMPUTER_TCP_REQUIRE_SIGNIN === '1',
     trustProxy: env.TABCOMPUTER_TRUST_PROXY || 'loopback', // 'loopback' | 'always' | 'never'
     tokenTtlMs: envInt(env.TABCOMPUTER_TCP_TOKEN_TTL_MS, 10 * 60_000),
+    // Tie each token to the IP that fetched it. Clients whose outgoing IP changes per
+    // connection (proxy pools, iCloud Private Relay, dual-stack) fail with it on.
+    tokenBindIp: env.TABCOMPUTER_TCP_TOKEN_BIND_IP !== '0',
     maxConns: envInt(env.TABCOMPUTER_TCP_MAX_CONNS, 512),
     maxConnsPerIp: envInt(env.TABCOMPUTER_TCP_MAX_CONNS_PER_IP, 16),
     connectsPerMinute: envInt(env.TABCOMPUTER_TCP_CONNECTS_PER_MIN, 60),
@@ -1035,7 +1038,7 @@ export function createTcpRelay(config, { lookup, log = console.log, verifySignin
   };
 
   const verify = verifySignin || githubSigninVerifier();
-  const sign = (exp, ip) => createHmac('sha256', secret).update(`shiro-tcp.${exp}.${ip}`).digest('base64url');
+  const sign = (exp, ip) => createHmac('sha256', secret).update(`shiro-tcp.${exp}.${cfg.tokenBindIp ? ip : '*'}`).digest('base64url');
   const issueToken = (ip) => {
     const exp = Date.now() + cfg.tokenTtlMs;
     return { token: `${exp}.${sign(exp, ip)}`, expires: exp };
@@ -1048,7 +1051,7 @@ export function createTcpRelay(config, { lookup, log = console.log, verifySignin
     return want.length === got.length && timingSafeEqual(want, got);
   };
 
-  /** POST /tcp/token from an allowed Origin → { token, expires } bound to the caller's IP. */
+  /** POST /tcp/token from an allowed Origin → { token, expires }, bound to the caller's IP unless tokenBindIp is off. */
   function handleToken(req, res) {
     const origin = req.headers['origin'];
     const ok = originAllowed(origin, cfg.allowedOrigins);

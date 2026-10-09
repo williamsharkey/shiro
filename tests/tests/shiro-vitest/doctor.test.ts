@@ -31,6 +31,12 @@ async function doctor(name = 'doctor', fetchImpl?: (url: string, init?: any) => 
 }
 
 describe('doctor', () => {
+  it('warns when this tab was built from another commit than the server deployed (reload)', async () => {
+    vi.stubGlobal('__BUILD_SHA__', 'fedcba9876543210fedcba9876543210fedcba98');
+    const { out } = await doctor();
+    expect(out).toMatch(/^WARN\s+build\s+#\d+ · this tab fedcba987654, server 0123456789ab \(reload to update\)/m);
+  });
+
   it('prints one status line per check, never a token', async () => {
     const { out } = await doctor();
     const lines = out.trim().split('\n');

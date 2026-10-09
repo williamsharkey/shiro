@@ -84,7 +84,7 @@ describe('profile selection', () => {
 
   it('tests run as the default profile, with every shim on', () => {
     expect(activeProfile().id).toBe('tabcomputer');
-    expect(Object.values(activeProfile().shims)).toEqual(['npm', true, true, true, true, 'pyodide']);
+    expect(Object.values(activeProfile().shims)).toEqual(['native', true, true, true, true, 'pyodide']);
   });
 });
 
@@ -115,10 +115,27 @@ describe('shims a profile turns off', () => {
     shell.commands.register(claudeCmd);
     withShims({ claude: 'native' });
     const r = await run(shell, 'CLAUDE_NATIVE_PATH=/nowhere/claude claude --version');
-    expect(r.output).toContain('no native Claude Code binary at /nowhere/claude');
+    expect(r.output).toContain('no binary at /nowhere/claude');
     const ctx: any = { args: ['--npm', 'update'], env: {}, stdout: '', stderr: '', fs: null, shell };
     expect(await claudeCmd.exec(ctx)).toBe(0);
     expect(ctx.stdout).toContain('pinned');
+  });
+
+  it("claude 'native' (tabcomputer): install --npm and --npm update keep the npm build's answer; a missing binary points at both", async () => {
+    const { claudeCmd } = await import('@shiro/commands/claude');
+    const { shell } = await createTestShell();
+    shell.commands.register(claudeCmd);
+    expect(activeProfile().shims.claude).toBe('native');
+    const missing = await run(shell, 'CLAUDE_NATIVE_PATH=/nowhere/claude claude');
+    expect(missing.exitCode).toBe(1);
+    expect(missing.output).toContain('Run `claude install`');
+    expect(missing.output).toContain('`claude --npm`');
+    for (const cmd of ['claude install --npm', 'claude --npm install', 'claude --npm update', 'CLAUDE_NATIVE=0 claude install']) {
+      const r = await run(shell, cmd);
+      expect(r.exitCode, cmd).toBe(0);
+      expect(r.output, cmd).toContain('pinned');
+      expect(r.output, cmd).toContain('`claude --npm` runs this one');
+    }
   });
 
   it('debianOverlay off: the overlay defaults keep Debian\'s programs', async () => {

@@ -520,6 +520,8 @@ async function run(msg) {
   i32 = new Int32Array(msg.sab, 0, CH_DATA / 4);
   data = new Uint8Array(msg.sab, CH_DATA);
   const fail = (text, code) => {
+    // The page logs it to the kernel log (dmesg): an engine abort or out of memory
+    if (!exiting) post({ type: 'blink-abort', text: String(text) });
     if (!exiting) writeFd(2, enc.encode(`blink: ${text}\n`));
     exitGuest(code);
   };

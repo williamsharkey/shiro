@@ -3798,7 +3798,7 @@ export class Shell {
               const toCtxErr = (t: string) => { ctx.stderr += t.replace(/\r\n/g, '\n'); };
               exitCode = await this.executeScript(executable, cmdArgs, ctx,
                 outRedirected || i !== pipeline.length - 1 ? toCtxOut : writeStdout,
-                outRedirected ? toCtxErr : stderrWriter);
+                outRedirected ? toCtxErr : stderrWriter, effectiveCmdName);
             } catch (e: any) {
               ctx.stderr += e.message + '\n';
               exitCode = 1;
@@ -7584,6 +7584,8 @@ export class Shell {
     ctx: CommandContext,
     writeStdout: (s: string) => void,
     writeStderr: (s: string) => void,
+    /** argv[0] as the caller gave it (the command word); a symlink is followed for the binary only, as on Linux */
+    argv0: string = filePath,
   ): Promise<number> {
     // Only a shell script reads the shell's live fd 0 as it goes; anything else gets it as ctx.stdin
     const fillStdin = async () => {
@@ -7643,7 +7645,7 @@ export class Shell {
     if (content.charCodeAt(0) === 0x00 && content.charCodeAt(1) === 0x61 &&
         content.charCodeAt(2) === 0x73 && content.charCodeAt(3) === 0x6d) {
       await fillStdin();
-      return this.executeWasmBinary(resolvedPath, args, ctx, writeStdout, writeStderr);
+      return this.executeWasmBinary(resolvedPath, args, ctx, writeStdout, writeStderr, argv0);
     }
 
     // Check for #!wasi-pkg stub — load from package cache
@@ -7696,7 +7698,7 @@ export class Shell {
       return runElf(resolvedPath, args, {
         fs: this.fs, cwd: this.cwd, args, env: this.env, shell: this,
         stdin: ctx.stdin || '', writeStdout: writeStdout, writeStderr: writeStderr,
-      });
+      }, undefined, argv0);
     }
 
     // Reject other binary files (Mach-O, etc.) that can't be interpreted
@@ -7807,13 +7809,15 @@ export class Shell {
     ctx: CommandContext,
     writeStdout: (s: string) => void,
     writeStderr: (s: string) => void,
+    argv0: string = filePath,
   ): Promise<number> {
     try {
       const data = await this.fs.readFile(filePath) as Uint8Array;
       const image = new Uint8Array(data);
       const wasmModule = await WebAssembly.compile(image);
 
-      const programName = filePath.split('/').pop() || filePath;
+      // (the name the program was run by, not a symlink's target: multi-call binaries pick their applet by it)
+      const programName = argv0.split('/').pop() || argv0;
       const { runWasiProgram } = await import('./wasi/run-command');
       return await runWasiProgram(ctx, {
         module: wasmModule, image, argv: [programName, ...args], cwd: this.cwd, env: { ...this.env },

@@ -1,0 +1,6 @@
+{
+  "name": "fullstack-notes",
+  "private": true,
+  "description": "A Node server and a browser client in one tabcomputer sandbox",
+  "scripts": { "start": "node server.js", "test": "node test.js" }
+}

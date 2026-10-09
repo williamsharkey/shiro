@@ -52,6 +52,7 @@ export async function executeElf(
   path: string,
   args: string[],
   ctx: X86Context,
+  argv0: string = path,
 ): Promise<number> {
   // Read the ELF binary
   let elfData: Uint8Array;
@@ -74,8 +75,8 @@ export async function executeElf(
   const mem = new VirtualMemory();
   const decoder = new Decoder(cpu, mem);
 
-  // Build argv (program name + args)
-  const argv = [path, ...args];
+  // Build argv (the name it was run by + args)
+  const argv = [argv0, ...args];
 
   // Build envp from shell environment
   const envp = Object.entries(ctx.env).map(([k, v]) => `${k}=${v}`);

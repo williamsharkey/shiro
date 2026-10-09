@@ -165,7 +165,7 @@ describe('claude --native', () => {
     shell.commands.register(claudeCmd);
     const r = await run(shell, 'CLAUDE_NATIVE_PATH=/nowhere/claude claude --native --version');
     expect(r.exitCode).toBe(1);
-    expect(r.output).toContain('no native Claude Code binary at /nowhere/claude');
+    expect(r.output).toContain('no binary at /nowhere/claude');
     expect(r.output).toContain('linux-x64-musl');
   });
 
