@@ -339,7 +339,12 @@ Debian mode (`debian install`, a root shell) with
 `apt-get install -y --no-install-recommends PKG`, then a non-interactive
 smoke test, on 2026-10-09 (vitest, the mirror cache served by `server.mjs`).
 The install column is the whole `apt-get install` (download, unpack,
-maintainer scripts, triggers) in Blink.
+maintainer scripts, triggers) in Blink: about a minute even for jq, most
+of it apt's dependency resolution and dpkg-preconfigure (perf-fs-shell's
+profile: 14 s and 20 s for `hello`), which unix/perf-fs-shell is cutting.
+Debian's builds of the TUIs (tmux, nano, htop, ncdu, fzf, emacs -nw) have
+only had these non-interactive checks; Shiro's own `pkg` builds of them,
+in the table above, are the ones verified on the pty in Chromium.
 
 | Tool (package) | Version | Status | Install | Smoke test | Notes |
 | --- | --- | --- | --- | --- | --- |
@@ -350,7 +355,7 @@ maintainer scripts, triggers) in Blink.
 | fzf | 0.60 | works | 61 s | `fzf -f` filter | |
 | tmux | 3.5a | works | 80 s | `tmux -V` | |
 | less | 668 | works | 63 s | `less -F` | |
-| man (`man-db`) | 2.13 | broken | 138 s | `man -P cat 7 man`: "No manual entry" | the rootfs excludes `/usr/share/man` (dpkg `path-exclude`, as Docker's slim images do), so no package has pages; Shiro's own `pkg` man pages still work outside Debian mode |
+| man (`man-db`) | 2.13 | broken (fix in progress) | 138 s | `man -P cat 7 man`: "No manual entry" | the rootfs excluded `/usr/share/man` (dpkg `path-exclude`, as Docker's slim images do), so no package had pages; unix/debian is dropping the exclusion for packages installed from now on |
 | curl | 8.14.1 | works (local) | 113 s | `curl --version`, `file://` | network through Shiro's relay not tried here |
 | wget | 1.25 | works (local) | 59 s | `--version` | network not tried |
 | ssh, ssh-keygen (`openssh-client`) | 10.0p1 | works | 90 s | `ssh -V`, `ssh-keygen -t ed25519` | its postinst failed (`groupadd _ssh`: link count), fixed |
@@ -367,6 +372,13 @@ maintainer scripts, triggers) in Blink.
 | htop | 3.4.1 | works | 76 s | `--version` | |
 | git | 2.47.3 | works | 280 s | init + commit + log as root | "dubious ownership" as root, fixed |
 | sqlite3 | 3.46 | works | 102 s | `select 6*7` | |
+| bc | 1.07.1 | works | 76 s | `2^20` | |
+| gawk | 5.2.1 | works | 97 s | `BEGIN{print 6*7}` | |
+| xz, zstd (`xz-utils`, `zstd`) | 5.8.1, 1.5.7 | works | 106 s | compress + decompress through pipes | |
+| lsof | 4.99.4 | works | 135 s | `lsof -p` lists cwd, root, fds | |
+| nc (`netcat-openbsd`) | 1.229 | works (local) | 83 s | `nc -h` | connections not tried |
+| ps, pstree, free (`procps`, `psmisc`) | 4.0.4, 23.7 | works | 121 s | `ps -e`, `pstree`, `free -m` | memory figures are nominal |
+| python3 (`python3-minimal`) | 3.13.5 | works | 219 s | `python3 -c` | Debian's CPython in Blink (Shiro's own `python3` package is WASI) |
 
 Building and publishing one of these packages:
 
