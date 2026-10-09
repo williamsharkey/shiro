@@ -45,8 +45,7 @@
       "packages": [
         "default-jdk-headless"
       ],
-      "check": "javac -version",
-      "note": "Installs, but the JVM aborts at start in the x86 engine for now: glibc's sched_getcpu fails (Blink has no getcpu syscall) and HotSpot falls back to the legacy vsyscall page."
+      "check": "javac -version"
     },
     "classic": {
       "title": "Classic languages",
