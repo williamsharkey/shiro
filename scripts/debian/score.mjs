@@ -188,7 +188,7 @@ const installedStatus = async (m, names) => {
  */
 async function recover(m) {
   const out = (await m.run(`dpkg-query -W -f='\${Package} \${db:Status-Abbrev}\\n' 2>/dev/null`)).out;
-  const bad = out.split('\n').map((l) => l.trim().split(/\s+/)).filter(([n, st]) => n && st && st !== 'ii' && !st.startsWith('un') && st !== 'rc').map(([n]) => n);
+  const bad = out.split('\n').map((l) => l.trim().split(/\s+/)).filter(([n, st]) => n && st && /^[a-z][UHF]/.test(st)) /* unpacked, half-installed, half-configured; not trigger-pending (it, iW) */.map(([n]) => n);
   if (bad.length) await m.run(`sudo dpkg --purge --force-all ${bad.join(' ')} 2>&1`, 600);
   return bad;
 }
