@@ -1436,8 +1436,10 @@ export class Kernel {
         }
         case A.SYS_link:
         case A.SYS_linkat: {
-          // The filesystem has no hard links: link() makes an independent copy
-          // (with the source's inode number, see shareInodeNumber).
+          // The filesystem has no hard links (no inodes shared between names).
+          // EPERM, as Linux filesystems without them answer: programs fall back
+          // to copying (git clone of a local repo, cp -l), whereas a copy that
+          // claimed to be a link broke git's "same inode" check.
           const [od, ol, nd, nl] = nr === A.SYS_link ? [A.AT_FDCWD, args[0], A.AT_FDCWD, args[1]] : [args[0], args[1], args[2], args[3]];
           const from = at(od, 0, ol);
           const to = at(nd, ol, nl);
@@ -1445,11 +1447,8 @@ export class Kernel {
           if (typeof to === 'number') return to;
           const st = await this.statPath(proc, from, false);
           if (typeof st === 'number') return st;
-          if ((st.mode & A.S_IFMT) === A.S_IFDIR) return -A.EPERM;
           if (await fs().exists(to)) return -A.EEXIST;
-          await fs().writeFile(to, (await fs().readFile(from)) as Uint8Array, { mode: st.mode & 0o7777 });
-          shareInodeNumber(await fs().realpath(from), to);
-          return 0;
+          return -A.EPERM;
         }
         case A.SYS_readlink:
         case A.SYS_readlinkat: {
