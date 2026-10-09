@@ -41,6 +41,7 @@ if (SHOTS) mkdirSync(SHOTS, { recursive: true });
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || '/opt/pw-browsers/chromium', args: ['--no-sandbox'] });
 const page = await (await browser.newContext({ viewport: { width: 1280, height: 900 } })).newPage();
+await page.addInitScript(() => { try { localStorage.setItem('shiro-desktop-tour', '1'); } catch {} });
 await page.goto(`${APP}/?ui=desktop`);
 await page.waitForFunction(() => window.__shiro?.shell && window.__shiro.desktop, null, { timeout: 90000 });
 
@@ -98,7 +99,7 @@ for (const app of APPS) {
       last = await shotOf(app);
       const t = (last?.title || '').trim();
       // Both set the window title to the page's once it is parsed (NetSurf: "Title", Dillo: "Dillo: Title")
-      if (t && !/^(netsurf|dillo)$/i.test(t) && !/loading|^dillo:?\s*$/i.test(t)) { loaded = Date.now() - t1; break; }
+      if (t && !/^(netsurf|dillo)$/i.test(t) && !/^about:blank|loading|^dillo:?\s*$/i.test(t)) { loaded = Date.now() - t1; break; }
       if (Date.now() - t1 > LIMIT) break;
       await page.waitForTimeout(500);
     }
