@@ -1042,6 +1042,28 @@ Other measurements:
 - `codex --version` not measured: running that downloaded binary is not
   cleared in this session.
 
+### unix/perf-kernel, round 9: epoll_wakeup and pty_echo after a5e66fb → 7382bdc
+
+The coordinator's `ab.mjs a5e66fb 7382bdc` showed `kernel.epoll_wakeup`
+37.2 → 47.4 µs and `kernel.pty_echo.kernel` 0.13 → 0.14 ms.
+
+- **epoll_wakeup:** conformance's EPOLLEXCLUSIVE and fairness work added
+  three costs to every epoll_wait: a `.finally()` promise hop, a
+  reported-files array per collect, and a copy of the interest map per
+  scan. The waiter count is now kept in try/finally, and the array is
+  allocated only when something is reported. Rotation happens only when more
+  than one file is watched, and the map is scanned in place. A test covers
+  the rotation (a full events array still reports every ready fd).
+  - A/B against 7382bdc, 5 rounds: 109 → 87.5 µs (−23%, every round).
+- **pty_echo.kernel:** bisected along integration's first-parent merges
+  (5 rounds per step, against a5e66fb). Every merge was within ±2%
+  (p ≥ 0.18). The last one (7382bdc, a subshell change in shell.ts) was −4%
+  against its parent. No single merge carries the regression, and pty.ts
+  didn't change in the range.
+- **Both, a5e66fb → this branch, 5 rounds:** `epoll_wakeup` 100.1 → 96.8 µs
+  (−3%, p 0.41) and `pty_echo.kernel` 0.245 → 0.245 ms. Both are back
+  within noise.
+
 ### unix/perf-fs-shell 7 — 1d9582a → bb39a38 regressions: shell-stdio's per-command pass; ab.mjs decides on rounds
 
 The coordinator's `ab.mjs 1d9582a bb39a38 --suites boot,kernel,shell,wasm
