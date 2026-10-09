@@ -21,6 +21,7 @@ import { networkCredential, requireNetworkSignIn, setNetworkStatus } from '../ne
 import type { KStat } from './abi';
 import { retain, release, type FdTable, type OpenFile } from './fd';
 import type { Kernel } from './kernel';
+import { AF_NETLINK, KNetlinkSocket, netlinkSocket } from './netlink';
 import {
   EPERM, EINTR, EIO, EBADF, EAGAIN, EACCES, EFAULT, EINVAL, ENOTTY, EPIPE, ETIMEDOUT, EPROTO, ENOTSOCK, EDESTADDRREQ,
   EMSGSIZE, ENOPROTOOPT, EPROTONOSUPPORT, EOPNOTSUPP, EAFNOSUPPORT, EADDRINUSE, EADDRNOTAVAIL, ENETDOWN,
@@ -172,6 +173,14 @@ export function formatIpv6(groups: number[]): string {
 
 /** Encode a sockaddr_in / sockaddr_in6 (Linux layout, network byte order port) / sockaddr_un. */
 export function encodeSockaddr(sa: SockAddr): Uint8Array {
+  if (sa.family === AF_NETLINK) {
+    // sockaddr_nl: family, pad, nl_pid (port), nl_groups
+    const b = new Uint8Array(12);
+    const dv = new DataView(b.buffer);
+    dv.setUint16(0, AF_NETLINK, true);
+    dv.setUint32(4, sa.port, true);
+    return b;
+  }
   if (sa.family === AF_UNIX) {
     // sun_path NUL-terminated (an abstract name starts with its NUL)
     const path = new TextEncoder().encode(sa.address);
@@ -214,6 +223,10 @@ export function decodeSockaddr(b: Uint8Array): SockAddr | number {
       return { family, port: dv.getUint16(2, false), address: `::ffff:${g[6] >> 8}.${g[6] & 0xff}.${g[7] >> 8}.${g[7] & 0xff}` };
     }
     return { family, port: dv.getUint16(2, false), address: formatIpv6(g) };
+  }
+  if (family === AF_NETLINK) {
+    if (b.length < 12) return -EINVAL;
+    return { family, address: '', port: dv.getUint32(4, true) };
   }
   if (family === AF_UNIX) {
     const path = b.subarray(2, Math.min(b.length, SOCKADDR_UN_MAX));
@@ -953,7 +966,7 @@ export class NetStack {
     if ('portHost' in c) this.portHostPromise = null;
   }
 
-  socket(domain: number, type: number, protocol = 0): KSocket | KDatagramSocket | number {
+  socket(domain: number, type: number, protocol = 0): KSocket | KDatagramSocket | KNetlinkSocket | number {
     const base = type & 0xf;
     const flags = type & SOCK_NONBLOCK ? O_NONBLOCK : 0;
     // A type outside SOCK_STREAM..SOCK_PACKET (or unknown flag bits) is EINVAL, like Linux
@@ -963,6 +976,7 @@ export class NetStack {
       if (protocol !== 0) return -EPROTONOSUPPORT;
       return new KSocket(this, AF_UNIX, 0, flags);
     }
+    if (domain === AF_NETLINK) return netlinkSocket(type, protocol, flags);
     if (domain !== AF_INET && domain !== AF_INET6) return -EAFNOSUPPORT;
     if (base === SOCK_STREAM) {
       if (protocol !== 0 && protocol !== IPPROTO_TCP) return -EPROTONOSUPPORT;
@@ -1260,7 +1274,7 @@ export interface UnixOps {
 
 // ── Channel syscalls (docs/NETWORKING.md "Kernel syscalls") ──
 
-type AnySocket = KSocket | KDatagramSocket;
+type AnySocket = KSocket | KDatagramSocket | KNetlinkSocket;
 
 /**
  * Socket syscalls in the SAB-channel form of docs/KERNEL_ABI.md. `kernel.syscall`
@@ -1281,7 +1295,7 @@ export async function netSyscall(
   const sockOf = (fd: number): AnySocket | number => {
     const f = proc.fds.get(fd);
     if (!f) return -EBADF;
-    return f instanceof KSocket || f instanceof KDatagramSocket ? f : -ENOTSOCK;
+    return f instanceof KSocket || f instanceof KDatagramSocket || f instanceof KNetlinkSocket ? f : -ENOTSOCK;
   };
   const addrIn = (off: number, len: number) => decodeSockaddr(data.subarray(off, off + Math.min(len, SOCKADDR_UN_MAX)));
   /** Write `sa` at `off`; one that doesn't fit `room` (a long AF_UNIX path) goes out unnamed. */
@@ -1369,7 +1383,7 @@ export async function netSyscall(
       if (typeof s === 'number') return s;
       const len = Math.min(args[1] >>> 0, data.length);
       let n: number;
-      if (s instanceof KDatagramSocket) {
+      if (s instanceof KDatagramSocket || s instanceof KNetlinkSocket) {
         let to: SockAddr | null = null;
         if (args[3] > 0) {
           const sa = addrIn(len, args[3]);
@@ -1387,7 +1401,7 @@ export async function netSyscall(
       const s = sockOf(args[0]);
       if (typeof s === 'number') return s;
       const len = Math.min(args[1] >>> 0, Math.max(0, data.length - SOCKADDR_ROOM));
-      if (s instanceof KDatagramSocket) {
+      if (s instanceof KDatagramSocket || s instanceof KNetlinkSocket) {
         const r = await s.recvfrom(data.subarray(0, len), args[2], sig);
         if (typeof r === 'number') return r;
         data.fill(0, len, len + SOCKADDR_ROOM);
@@ -1426,7 +1440,7 @@ export async function netSyscall(
       }
       if (files.length && !(s instanceof KSocket && s.domain === AF_UNIX)) { for (const g of files) void release(g); return -EOPNOTSUPP; }
       let n: number;
-      if (s instanceof KDatagramSocket) {
+      if (s instanceof KDatagramSocket || s instanceof KNetlinkSocket) {
         let to: SockAddr | null = null;
         if (alen > 0) {
           const sa = addrIn(len, alen);
@@ -1447,7 +1461,7 @@ export async function netSyscall(
       const len = Math.min(args[1] >>> 0, Math.max(0, data.length - SOCKADDR_ROOM - 8 - cap));
       const meta = len + SOCKADDR_ROOM;
       data.fill(0, len, meta + 8);
-      if (s instanceof KDatagramSocket) {
+      if (s instanceof KDatagramSocket || s instanceof KNetlinkSocket) {
         const r = await s.recvfrom(data.subarray(0, len), args[2], sig);
         if (typeof r === 'number') return r;
         addrOut(r.from, len, SOCKADDR_ROOM);
