@@ -1390,6 +1390,55 @@ pkgcache.bin and srcpkgcache.bin (42.5 MB each). Options measured:
   It now refuses cleanly. Keeping lists compressed would need an lz4 encoder
   in the store method, for about −40 MiB; not done.
 
+### unix/perf-fs-shell 12 — file identity: persistent inode numbers, symlinked dirfds
+
+These are correctness fixes for native programs (Claude Code's Bun binary
+checks its temp and task directories by st_dev/st_ino and by realpath
+through `/proc/self/fd`). perf-kernel's f33e8f1 (`/proc/self/fd/N/NAME`
+resolution) fixes the main write path; these are the VFS side.
+
+- **Directories opened through a symlinked path** (O_DIRECTORY, O_PATH) kept
+  the unresolved path. Their fstat st_ino, getdents d_ino and
+  `/proc/self/fd/N` link disagreed with stat of the directory, and *at()
+  calls resolved against the symlink spelling. The DirFile now holds the
+  physical path, as on Linux.
+- **Inode numbers** were per-path counters in memory: new on every reload,
+  and the children of a renamed directory got new ones. Now:
+  - each node stores its number (`FSNode.ino`, random 52-bit at creation);
+  - writes, chmod, utimes and rename keep it, including the children of a
+    renamed directory;
+  - older nodes and rootfs placeholders use a 52-bit path hash, which rename
+    writes into the node;
+  - link() copies share the source's number;
+  - getdents writes all 64 bits of d_ino;
+  - `makeStat` (node programs, ls -i, find -inum) reports the kernel's dev 1
+    and ino instead of 0.
+
+Test: fixtures/x86/fileid.c under Blink (`file-identity.test.ts`). It checks:
+- stat/lstat/fstat on O_DIRECTORY and O_PATH fds, `AT_EMPTY_PATH`, statx,
+  newfstatat and getdents agree, also through a symlinked dir;
+- inodes follow renames and differ between files;
+- O_CREAT|O_EXCL (including on a dangling symlink), O_NOFOLLOW, O_TMPFILE,
+  renameat2 RENAME_NOREPLACE, linkat (nlink 2), mkdirat;
+- *at() on an O_PATH dirfd;
+- musl-style realpath via `/proc/self/fd`, getcwd after `cd` through a
+  symlink;
+- `/tmp/claude-1000` at 0700 reports uid 1000 and mode 0700;
+- the same dev:ino after a reload.
+
+Before the fix, the 4 symlinked-dir checks failed.
+
+`bench/ab.mjs origin/unix/integration HEAD --quick --rounds 3`:
+- 81 metrics the same; boot +1 KiB;
+- `node.e1` −4.9%;
+- `wasm.tree_create` was flagged +38% (11.3 → 15.7 ms, one sample per run).
+  A `crypto.getRandomValues` per created file was the likely part of it, so
+  numbers now come from `Math.random`. Re-run over 5 rounds it is
+  14.8 → 16.9 ms, CI −17..+43%, "same".
+
+`kernel-net` "dials through an upstream CONNECT proxy" fails about 3 runs in
+4 on origin/unix/integration too; it is not from this change.
+
 ## Results
 
 <!-- bench:table:begin -->
