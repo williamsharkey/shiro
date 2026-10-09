@@ -338,8 +338,18 @@ ncurses-based programs are linked against a static ncurses 6.5 with
 
 ## Claude Code native binary (unix/perf-kernel)
 
-Status: **not run yet** (static analysis only; running the downloaded
-binary under Blink needs the user's go-ahead in this environment).
+Status (2026-10-09, unix/agent-clis, see "Agent CLIs" below): with Blink's
+SSE4.1/4.2 (patch 0040) the **musl build runs**: `--version` in 2.1 s and
+`-p` reaches the Anthropic API. The glibc build still crashes in Bun's
+startup. Before patch 0040 both died of SIGILL on `pinsrq`.
+
+`claude --native ARGS` (or `CLAUDE_NATIVE=1 claude ARGS`) runs the native
+binary at `$CLAUDE_NATIVE_PATH`, default `~/.local/bin/claude`, through the
+shell's ELF path (Blink, with the terminal's pty); plain `claude` still runs
+the pinned npm build. Shiro doesn't download it: downloads.claude.ai and
+Alpine's CDN send no CORS headers, so fetching them would need a server
+proxy (an owner decision). Put the linux-x64-musl build there and musl's
+loader at `/lib/ld-musl-x86_64.so.1`; without a binary it says so.
 
 What the official native installer (`claude.ai/install.sh`) installs, as of
 2.1.295 (`downloads.claude.ai/claude-code-releases/<version>/<platform>/claude`,
@@ -381,6 +391,70 @@ To try it (once allowed): put the binary and the five glibc libraries plus
 the loader in the VFS (Blink loads the ELF interpreter from SHIROFS), then
 run `claude --version` and `claude -p "say hi"` with a dummy key, with and
 without `BUN_JSC_useJIT=0`.
+
+## Agent CLIs (unix/agent-clis)
+
+Popular AI coding-agent CLIs, run as Shiro would run them: native x86-64
+ELF builds in Blink as kernel processes, Node builds on Shiro's `node`. Run
+2026-10-09 with dummy API keys for the other vendors (a 401/400 from the
+vendor's API proves the network path).
+
+| Tool | Version | Kind | Install | `--version` | Network | Timings | Blockers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Claude Code (native) | 2.1.295 | ELF, Bun 1.4.3 single-file exe; glibc (256 MB) and musl (250 MB) builds, dynamic | `claude.ai/install.sh` (Shiro substitutes the npm install; fetch the binary from `downloads.claude.ai/claude-code-releases/<v>/linux-x64-musl/claude`, plus `/lib/ld-musl-x86_64.so.1`) | **musl: yes** (2.1 s); glibc: no | **musl: yes**: `-p "say hi"` reaches the Anthropic API through the kernel relay ("Invalid API key" for a dummy key) | musl `-p` to the API error: 118 s with the JIT, 108 s with `BUN_JSC_useJIT=0` (Node probe) | glibc build: Bun aborts at startup because glibc's `pthread_getattr_np` finds the main stack through `/proc/self/maps`, which Shiro doesn't provide (only Blink knows the guest's mappings; with a stand-in maps file it runs in native Blink). Bun also needs `/dev/urandom` (the kernel has it). Sent to perf-blink. Live-token test not run: `CLAUDE_CODE_OAUTH_TOKEN` is not in this container's environment. |
+| OpenAI Codex | 0.162.0 | ELF, Rust, static-pie musl (294 MB) | GitHub release `codex-x86_64-unknown-linux-musl.tar.gz` (`npm i -g @openai/codex` wraps the same binary) | **yes** | **yes**: `codex exec` reaches `wss://api.openai.com/v1/responses` and `https://…/responses` through the kernel's TCP relay, 401 | Chromium: `--version` 4.8 s, `exec` until the 401s end 59 s (it retries), renderer peak ~2.0 GB; Node probe: 7.9 s / 69 s | none for the request path. It warns about missing bubblewrap (its Linux sandbox) and `/proc/self/exe`; use `--sandbox danger-full-access` for tool calls in Shiro. |
+| Grok Build (xAI) | 1.0.50 | ELF, Rust, static-pie (183 MB) | `x.ai/cli/install.sh` → `x.ai/cli/grok-<v>-linux-x86_64` | **yes** | **yes** (Blink patch 0039): `grok -p` reaches `api.x.ai`, 400 for a bad key | Chromium: `--version` 1.8 s; Node probe: `--version` 5.1 s, `-p` to the API error 148 s | Before patch 0039 Blink's BSF/BSR wrote 0 to the destination for a zero source and `-p` panicked ("Span not found"). |
+| Antigravity CLI (`agy`, Google) | 1.3.2 | ELF, Go (`GOAMD64` v2, boringcrypto) + cgo/Rust, glibc dynamic (211 MB) | `antigravity.google/cli/install.sh` → manifest → `cli_linux_x64.tar.gz` (sha512) | **yes** (Blink patch 0040), 11 s | not tried (needs a Google sign-in) | — | Before patch 0040 it exited with "compiled with sse4.1 enabled, but this feature is not available". |
+| opencode | 1.18.35 | ELF, Bun 1.3.14 (baseline build), glibc dynamic (185 MB); a musl build needs libstdc++/libgcc_s | `npm i -g opencode-ai` (picks `opencode-linux-x64[-baseline\|-musl]`) | **no** | not reached | — | Same `/proc/self/maps` gap as the glibc Claude build (`Segmentation fault at address 0xBBADBEEF`, JSC's `CRASH()`); past it, native Blink lacks `timerfd_create` (`us_create_timer: returned null: 38`). |
+| Gemini CLI | 0.63.0 | Node (esbuild code-split ESM chunks with top-level await) | `npm i -g @google/gemini-cli` (1.5–2.6 s) | **yes** | **yes**: `gemini --skip-trust -p` reaches `generativelanguage.googleapis.com` through `/api/gemini/`, 400 "API key not valid" | `--version` 9.9 s, `-p` to the error 24 s (Chromium) | Fixed here (below). Left: a "Failed to release project registry lock" warning from proper-lockfile (harmless). |
+| Grok CLI (community, `@vibe-kit/grok-cli`) | 0.0.34 | Node | `npm i -g @vibe-kit/grok-cli` | not run | — | — | Superseded by xAI's own Grok Build (above); not tested. |
+| aider | 0.86.2 | Python | `pip install aider-chat` | not run | — | — | Pins ~80 packages, many native (numpy, scipy, pydantic-core, tiktoken, orjson, aiohttp, tree-sitter): out of reach of the WASI CPython's pure-Python `pip`. The plausible route is Debian mode (glibc CPython and manylinux wheels in Blink), not tried. |
+
+What was fixed in Shiro for these (tests: `agent-clis.test.ts`):
+
+- **Top-level await across modules**: an ES module whose body awaits runs
+  as an async function, so `require()` handed importers its exports before
+  its `export { … }` ran (`gemini` failed with `getScriptArgs is not a
+  function`). Static imports in async modules and `import()` now wait for
+  the imported module's body (`requireModule.ready`, `compileAsyncModule` in
+  `src/node-compat/require.ts`), skipping a wait that would close a cycle.
+- **Live bindings for esbuild chunks** (`src/commands/jseval/esm-live.ts`):
+  esbuild's split chunks export variables that lazy `__esm` initializers
+  assign later; importers read them through the exporter's namespace
+  (`ValueType` → `__shiro_live3.ValueType`) and exports are getters. Only
+  for modules that import esbuild's runtime helpers from a sibling chunk.
+- `node:dns/promises`; `fs.utimes`/`utimesSync`/`promises.utimes` set the
+  mtime (they were no-ops), and `stat` keeps the mtime it reports for a
+  path it hadn't seen written (it was `Date.now()` on every call, which
+  proper-lockfile took as a compromised lock).
+- `child_process.spawn(…, { env })` passes `env` to the child.
+- Gemini CLI relaunches itself under a child `node` only to raise V8's heap
+  limit; Shiro sets `GEMINI_CLI_NO_RELAUNCH=true` for it (export it empty
+  to override).
+- The node runner's 15 s/60 s script timeout and the 10 s wait after the
+  entry returns now end only an idle script (no fetch, fs work, timers or
+  new output); Gemini's entry awaits the whole run, and a model request
+  outlasted them (exit 124).
+- `server.mjs` proxies `/api/gemini/` to `generativelanguage.googleapis.com`
+  (its preflights reject Gemini CLI's headers); its Clearcut telemetry
+  (`play.googleapis.com/log`) is dropped like Claude's.
+- `curl -o FILE` (and the new `-O`, `--output`, `-fsSLo`) writes the
+  response bytes unchanged; it used to decode them as text and append a
+  newline, so a downloaded binary came out 58% larger and corrupt.
+
+How to reproduce the native runs: `tests/tests/shiro-vitest/agent-cli-probe.test.ts`
+(skipped unless `AGENT_PROBE_ROOT` is set) loads host directories into the
+test FS (the binary under `/opt/…`, plus `/lib64/ld-linux-x86-64.so.2`,
+`libc`, `libm`, `libpthread`, `libdl`, `librt`, `libresolv` and a CA
+bundle), runs one command line in Blink as a kernel process and prints wall
+time, peak RSS of the Node process (it includes the in-memory FS holding the
+binary, so ~1.5–3.8 GB here), failing kernel syscalls and the output.
+`AGENT_PROBE_RELAY_PORTS` starts `server.mjs`'s TCP relay in a child process
+so the guest can reach an HTTPS proxy (`HTTPS_PROXY=http://127.0.0.1:PORT`).
+Failing syscalls seen were all expected ones (ENOENT from `openat`/
+`newfstatat`, EINVAL from `readlink`, EEXIST from `mkdir`, EINPROGRESS from
+`connect`, EAGAIN, ENOTTY); Blink itself reports `rseq` (334) missing, which
+glibc tolerates.
 
 ## Linux GUI apps (unix/gui)
 

@@ -23,6 +23,27 @@ function fsError(code: string, message: string, syscall?: string, path?: string)
 }
 
 /**
+ * A path's mtime as stat reports it. Paths the shim hasn't seen written
+ * (directories, files from shell commands) get the time of their first stat,
+ * kept, so stat agrees with itself: proper-lockfile (Gemini CLI) compares a
+ * lock directory's mtime across stats and took a changing one as a
+ * compromised lock.
+ */
+export function stableMtime(fileMtimes: Map<string, number>, path: string): number {
+  let t = fileMtimes.get(path);
+  if (!t) { t = Date.now(); fileMtimes.set(path, t); }
+  return t;
+}
+
+/** fs time arguments (seconds, Date, numeric string) as milliseconds. */
+function timeMs(t: any): number {
+  if (t instanceof Date) return t.getTime();
+  if (typeof t === 'string' && t.trim() !== '' && !isNaN(Number(t))) return Number(t) * 1000;
+  if (typeof t === 'number' || typeof t === 'bigint') return Number(t) * 1000;
+  return Date.now();
+}
+
+/**
  * Per-process write bookkeeping, shared by fs and fs/promises (keyed by the
  * process's pendingPromises array): per-path write chains, and every write
  * still in flight. The drain loop empties pendingPromises as it awaits it, so
@@ -337,7 +358,7 @@ export function createFsModule(deps: FsDeps): any {
         if (opts?.throwIfNoEntry === false) return undefined;
         throw fsError('ENOENT', `ENOENT: no such file or directory, stat '${p}'`, 'stat', p);
       }
-      const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+      const mtime = new Date(stableMtime(fileMtimes, resolved));
       const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
       return {
         isFile: () => isFile,
@@ -569,7 +590,7 @@ export function createFsModule(deps: FsDeps): any {
         if (opts?.throwIfNoEntry === false) return undefined;
         throw fsError('ENOENT', `ENOENT: no such file or directory, lstat '${p}'`, 'lstat', p);
       }
-      const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+      const mtime = new Date(stableMtime(fileMtimes, resolved));
       const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
       return {
         isFile: () => isFile,
@@ -679,7 +700,11 @@ export function createFsModule(deps: FsDeps): any {
     },
     fsyncSync: () => {},
     fdatasyncSync: () => {},
-    utimesSync: () => {},
+    utimesSync: (p: string, atime: any, mtime: any) => {
+      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      fileMtimes.set(resolved, timeMs(mtime));
+      pendingPromises.push(ctx.fs.utimes(resolved, timeMs(atime), timeMs(mtime)).catch(() => {}));
+    },
     rmSync: (p: string, opts?: any) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       removePathFromCaches(resolved, !!opts?.recursive);
@@ -834,7 +859,7 @@ export function createFsModule(deps: FsDeps): any {
       const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
       const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || fsDirCached(resolved);
       if (isFile || isDir) {
-        const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+        const mtime = new Date(stableMtime(fileMtimes, resolved));
         const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
         queueMicrotask(() => callback?.(null, {
           isFile: () => isFile && !isDir, isDirectory: () => isDir,
@@ -857,7 +882,7 @@ export function createFsModule(deps: FsDeps): any {
       const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
       const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || fsDirCached(resolved);
       if (isFile || isDir) {
-        const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+        const mtime = new Date(stableMtime(fileMtimes, resolved));
         const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
         queueMicrotask(() => callback?.(null, {
           isFile: () => isFile && !isDir, isDirectory: () => isDir,
@@ -1128,7 +1153,11 @@ export function createFsModule(deps: FsDeps): any {
         .then(() => callback?.(null))
         .catch((e: any) => callback?.(e));
     },
-    utimes: (_p: string, _a: any, _m: any, cb?: any) => { cb?.(null); },
+    utimes: (p: string, atime: any, mtime: any, cb?: any) => {
+      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      fileMtimes.set(resolved, timeMs(mtime));
+      ctx.fs.utimes(resolved, timeMs(atime), timeMs(mtime)).then(() => cb?.(null), (e: any) => cb?.(e));
+    },
     futimes: (_fd: number, _a: any, _m: any, cb?: any) => { cb?.(null); },
     fstat: (fd: number, optsOrCb?: any, cb?: any) => {
       const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
@@ -1283,7 +1312,7 @@ export function createFsModule(deps: FsDeps): any {
         const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
         const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || fsDirCached(resolved);
         if (isFile || isDir) {
-          const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+          const mtime = new Date(stableMtime(fileMtimes, resolved));
           const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
           return { isFile: () => isFile && !isDir, isDirectory: () => isDir, isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false, size, mtime, ctime: mtime, atime: mtime, birthtime: mtime, mtimeMs: mtime.getTime(), ctimeMs: mtime.getTime(), atimeMs: mtime.getTime(), birthtimeMs: mtime.getTime(), dev: 0, ino: 0, nlink: 1, uid: 1000, gid: 1000, rdev: 0, blksize: 4096, blocks: Math.ceil(size / 512), mode: isDir ? 0o40755 : 0o100644 };
         }
@@ -1444,7 +1473,7 @@ export function createFsPromisesModule(deps: FsDeps): any {
       const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
       const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || fsDirCached(resolved);
       if (isFile || isDir) {
-        const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+        const mtime = new Date(stableMtime(fileMtimes, resolved));
         const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
         return {
           isFile: () => isFile && !isDir, isDirectory: () => isDir,
@@ -1484,7 +1513,7 @@ export function createFsPromisesModule(deps: FsDeps): any {
       const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
       const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || fsDirCached(resolved);
       if (isFile || isDir) {
-        const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+        const mtime = new Date(stableMtime(fileMtimes, resolved));
         const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
         return {
           isFile: () => isFile && !isDir, isDirectory: () => isDir,
@@ -1546,7 +1575,11 @@ export function createFsPromisesModule(deps: FsDeps): any {
       fileCache.delete(resolved + '/.');
       await ctx.fs.rmdir(resolved);
     },
-    utimes: async () => {},
+    utimes: async (p: string, atime: any, mtime: any) => {
+      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      fileMtimes.set(resolved, timeMs(mtime));
+      await ctx.fs.utimes(resolved, timeMs(atime), timeMs(mtime));
+    },
     mkdtemp: async (prefix: string) => {
       const dir = `${prefix}${Math.random().toString(36).slice(2)}`;
       await ctx.fs.mkdir(dir, { recursive: true });

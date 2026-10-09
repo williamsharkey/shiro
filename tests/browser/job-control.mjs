@@ -47,6 +47,18 @@ const promptBack = (s) => /\$\s*$/.test(s.trimEnd());
 const run = async (page, cmd) => { await typeKeys(page, cmd); await page.keyboard.press('Enter'); };
 /** The last `n` non-empty lines */
 const tail = (s, n) => s.split('\n').filter((l) => l.trim()).slice(-n).join('\n');
+/**
+ * Escape out of insert mode and wait until vim has taken it: vim reads keys
+ * raw (no ISIG) and suspends itself on ^Z, and a ^Z inside its escape-sequence
+ * timeout after Esc is swallowed. (Under Blink, vim sometimes leaves the last
+ * typed key undrawn until the next one, so the text is checked after Esc.)
+ */
+const leaveInsert = async (page) => {
+  await until(page, (s) => /-- INSERT --/.test(s), 'insert mode');
+  await page.keyboard.press('Escape');
+  await until(page, (s) => !/-- INSERT --/.test(s), 'vim back in normal mode');
+  await page.waitForTimeout(300);
+};
 const vimBuffer = (s) => (s.match(/^~\s*$/gm) ?? []).length > 5;
 const htopUp = (s) => /Load average/.test(s) && /F10Quit/.test(s);
 
@@ -55,7 +67,7 @@ const CASES = [
     await run(page, 'vim /tmp/jc.txt');
     await until(page, vimBuffer, "vim's empty buffer");
     await typeKeys(page, 'ihello');
-    await page.keyboard.press('Escape');
+    await leaveInsert(page);
     await until(page, (s) => s.includes('hello'), 'typed text');
     await page.keyboard.press('Control+z');
     await until(page, (s) => /Stopped/.test(tail(s, 3)) && promptBack(s), 'the prompt after Ctrl-Z');
@@ -117,7 +129,7 @@ const CASES = [
     await run(page, 'vim /tmp/k.txt');
     await until(page, vimBuffer, 'vim in the window');
     await typeKeys(page, 'iinside');
-    await page.keyboard.press('Escape');
+    await leaveInsert(page);
     await until(page, (s) => s.includes('inside'), 'typed text');
     await page.keyboard.press('Control+z');
     await until(page, (s) => /\[1\]\+\s+Stopped\s+vim/.test(s) && promptBack(s), 'vim stopped, the window shell prompting');
