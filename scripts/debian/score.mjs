@@ -137,7 +137,9 @@ async function newMachine(browser, base, log) {
 async function smoke(m, pkg) {
   const list = (await m.run(`dpkg -L ${pkg} 2>/dev/null`)).out.split('\n').filter(Boolean);
   const diverted = (await m.run(`dpkg-divert --list 2>/dev/null`)).out;
-  const bins = list.filter((f) => /^\/(?:usr\/)?s?bin\/[^/]+$/.test(f) && !diverted.includes(`of ${f} `));
+  // A diverted program (the overlay's Shiro default) runs by its path as Shiro's: test that side
+  const bins = list.filter((f) => /^\/(?:usr\/)?s?bin\/[^/]+$/.test(f));
+  const who = (bin) => (diverted.includes(`of ${bin} `) ? ' [Shiro\'s]' : '');
   // The program named like the package first, then the rest
   bins.sort((a, b) => (b.endsWith('/' + pkg) ? 1 : 0) - (a.endsWith('/' + pkg) ? 1 : 0));
   const tried = [];
@@ -153,10 +155,10 @@ async function smoke(m, pkg) {
       const r = await m.run(`timeout 120 ${bin} ${flagArg} </dev/null 2>&1`, 180);
       const crashed = /terminating due to SIG|Segmentation fault|Illegal instruction|SCORE-TIMEOUT/.test(r.out) || r.code >= 128 || r.code === 124;
       tried.push(`${bin} ${flagArg}: exit ${r.code}`);
-      if (r.code === 0 && r.out.trim()) return { ok: true, how: `${bin} ${flagArg}`, ms: r.ms, sample: r.out.trim().split('\n')[0].slice(0, 100) };
+      if (r.code === 0 && r.out.trim()) return { ok: true, how: `${bin} ${flagArg}${who(bin)}`, ms: r.ms, sample: r.out.trim().split('\n')[0].slice(0, 100) };
       // Tools without --version print their usage and exit 1 or 2: it ran, which is what we check
       const broken = /error while loading shared libraries|Exec format error|cannot execute|not found|Can't locate|No such file/i.test(r.out);
-      if (r.code > 0 && r.code < 126 && !broken && /usage|version|options|--help/i.test(r.out)) return { ok: true, how: `${bin} ${flagArg} (usage, exit ${r.code})`, ms: r.ms, sample: r.out.trim().split('\n')[0].slice(0, 100) };
+      if (r.code > 0 && r.code < 126 && !broken && /usage|version|options|--help/i.test(r.out)) return { ok: true, how: `${bin} ${flagArg} (usage, exit ${r.code})${who(bin)}`, ms: r.ms, sample: r.out.trim().split('\n')[0].slice(0, 100) };
       if (crashed) return { ok: false, how: `${bin} ${flagArg}`, category: r.code === 124 ? 'timeout' : 'engine-crash', error: firstError(r.out) || `exit ${r.code}` };
       // helpztags exits 0 printing nothing; select-editor wants a terminal
       if (!ran && !broken && (r.code === 0 || (r.code < 3 && r.out.trim()))) ran = { bin, flagArg, r };
