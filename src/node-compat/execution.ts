@@ -108,6 +108,10 @@ export async function executeNodeScript(
   const _baseCT = PAGE_CLEAR_TIMEOUT;
 
   const { activity, trackAsync, trackModule } = createActivity();
+  // Cleanup for resources a script holds until it ends (fs watchers)
+  const exitHooks: (() => void)[] = [];
+  const atExit = (fn: () => void) => { exitHooks.push(fn); };
+  const runExitHooks = () => { for (const fn of exitHooks.splice(0)) { try { fn(); } catch { /* ignore */ } } };
 
   // Shared mutable state
   const _st: SharedState = {
@@ -176,12 +180,12 @@ export async function executeNodeScript(
         case 'node:path': return createPathModule(ctx);
         case 'fs':
         case 'node:fs': {
-          const fsMod = createFsModule({ ctx, fileCache, fileMtimes, pendingPromises, tickSyncOps, FakeBuffer, getBuiltinModule, homeDir, trackAsync });
+          const fsMod = createFsModule({ ctx, fileCache, fileMtimes, pendingPromises, tickSyncOps, FakeBuffer, getBuiltinModule, homeDir, trackAsync, atExit });
           fsMod.promises = trackModule(fsMod.promises);
           return fsMod;
         }
         case 'fs/promises':
-        case 'node:fs/promises': return trackModule(createFsPromisesModule({ ctx, fileCache, fileMtimes, pendingPromises, tickSyncOps, FakeBuffer, getBuiltinModule, homeDir }));
+        case 'node:fs/promises': return trackModule(createFsPromisesModule({ ctx, fileCache, fileMtimes, pendingPromises, tickSyncOps, FakeBuffer, getBuiltinModule, homeDir, trackAsync, atExit }));
         case 'child_process':
         case 'node:child_process': return createChildProcessModule({ ctx, fileCache, fileMtimes, pendingPromises, FakeBuffer, getProcess: () => fakeProcess });
         case 'os':
@@ -511,6 +515,7 @@ export async function executeNodeScript(
     let _timersResolve: (() => void) | null = null;
     let _timersDone: Promise<void> | null = null;
     const _timerIds = new Set<any>();
+    const _intervalIds = new Set<any>();
     if (code.length <= 500000) {
       const settle = () => { if (_activeTimers <= 0 && _timersResolve) { _timersResolve(); _timersResolve = null; _timersDone = null; } };
       globalThis.setTimeout = _st.installedSetTimeout = function(fn: any, ms?: number, ...args: any[]) {
@@ -552,9 +557,20 @@ export async function executeNodeScript(
       };
       // Intervals never kept a script alive here; they still answer unref() etc.
       globalThis.setInterval = _st.installedSetInterval = function(fn: any, ms?: number, ...args: any[]) {
-        return nodeTimer(PAGE_SET_INTERVAL(fn, ms, ...args), {});
+        const raw = PAGE_SET_INTERVAL(fn, ms, ...args);
+        _intervalIds.add(raw);
+        return nodeTimer(raw, {});
       } as typeof setInterval;
-      globalThis.clearInterval = _st.installedClearInterval = function(id: any) { PAGE_CLEAR_INTERVAL(rawTimer(id)); };
+      globalThis.clearInterval = _st.installedClearInterval = function(id: any) { _intervalIds.delete(rawTimer(id)); PAGE_CLEAR_INTERVAL(rawTimer(id)); };
+      // When the script ends its timers go with it, as with a process: an
+      // interval left running fired into the next script and, through that
+      // script's setTimeout, kept it from ever going idle
+      atExit(() => {
+        for (const raw of _intervalIds) PAGE_CLEAR_INTERVAL(raw);
+        _intervalIds.clear();
+        for (const t of _timerIds) _baseCT(rawTimer(t));
+        _timerIds.clear();
+      });
     }
 
     // Script execution timeout — scale up for large bundles (e.g. TypeScript ~5MB)
@@ -739,6 +755,7 @@ export async function executeNodeScript(
       setTimeout(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000);
     }
     restoreGlobals(true);
+    runExitHooks();
 
     return _st.exitCode;
   } catch (e: any) {
@@ -748,6 +765,7 @@ export async function executeNodeScript(
       setTimeout(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000);
     }
     restoreGlobals(true);
+    runExitHooks();
     const msg = e.message || String(e);
     console.error('[node] Script error:', e);
     ctx.stderr += `Error: ${msg}\n`;

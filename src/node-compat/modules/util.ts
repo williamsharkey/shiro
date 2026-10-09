@@ -1,3 +1,7 @@
+import { createAssertModule } from './assert';
+
+let deepStrict: ((a: any, b: any) => boolean) | undefined;
+
 export function createUtilModule(): any {
   const _inspect = (obj: any, opts?: any): string => {
     if (obj === null) return 'null';
@@ -117,7 +121,7 @@ export function createUtilModule(): any {
     isUndefined: (obj: any) => obj === undefined,
     isNullOrUndefined: (obj: any) => obj == null,
     isPrimitive: (obj: any) => obj === null || (typeof obj !== 'object' && typeof obj !== 'function'),
-    isDeepStrictEqual: (a: any, b: any) => JSON.stringify(a) === JSON.stringify(b),
+    isDeepStrictEqual: (a: any, b: any) => (deepStrict ??= createAssertModule().isDeepStrictEqual)(a, b),
     debuglog: (_section: string) => Object.assign((..._args: any[]) => {}, { enabled: false }),
     debug: (_section: string) => Object.assign((..._args: any[]) => {}, { enabled: false }),
     getSystemErrorName: (err: number) => `ERRNO_${err}`,

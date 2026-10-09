@@ -132,6 +132,27 @@ Shell and platform fixes these needed (all with tests in the same file):
   `require` resolves a package behind a symlink from its real directory.
 - Node: `child_process.spawn` with inherited stdio (`'inherit'`, `[0,1,2]`)
   writes the child's output to the parent's and has `stdout === null`.
+- Node: `fs.watch` (files, directories, `recursive`), `fs.watchFile` /
+  `unwatchFile` and `fs.promises.watch` work, on the filesystem's change
+  hook, so writes from any process reach them (the shell, other scripts,
+  kernel programs). They were inert, so nodemon, vite HMR, jest --watch and
+  chokidar never saw a change. Events follow Linux: a new file is `rename`
+  then `change`, a removal or either side of a rename is `rename`; a
+  persistent watcher keeps the script alive until `close()`/`unref()`. A
+  script's cached copy of a file follows other processes' writes (a
+  watcher's re-read got the contents from when the script started).
+  chokidar 3 reports add/change/unlink/addDir.
+- Node: a script's timers and intervals end with it. An interval left by a
+  script that called `process.exit()` kept firing in the page, and its
+  `setTimeout`s became the next script's timers, so that script never went
+  idle (10-minute hang).
+- Node: `node:assert` and `node:assert/strict` are complete: `match`,
+  `doesNotMatch`, `rejects`, `doesNotReject`, `ifError`, real deep equality
+  (prototypes, Map/Set, Date/RegExp, typed arrays, cycles, NaN, -0; it
+  compared JSON), `throws` checking classes, RegExps, validation functions
+  and objects (it accepted any throw), and `AssertionError` with `code`,
+  `actual`, `expected`, `operator`, `generatedMessage`. `util.isDeepStrictEqual`
+  uses the same comparison.
 - Node, for yarn: `fs.open` of a missing file to read is ENOENT (yarn took
   a tarball cache it never wrote for a hit and fetched nothing),
   `fs.copyFile` copies what the script sees, as bytes (copies out of its
