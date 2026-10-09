@@ -101,22 +101,6 @@ function pathIno(path: string): number {
   return ((a >>> 0) & 0xfffff) * 0x100000000 + (b >>> 0) || 3;
 }
 
-/**
- * Content dropped from the in-memory cache (FileSystem._trimContent): the node
- * keeps its metadata and reads load the bytes from IndexedDB again. Never
- * stored (a write needs the node from _get, which reloads it).
- */
-const EVICTED: LazyRef = { src: '\0evicted', chunk: '', off: 0 };
-
-/**
- * Files whose content may leave the cache once stored: apt's lists, its
- * pkgcache.bin/srcpkgcache.bin and the .debs it downloads (~250 MB held for
- * the session otherwise), which only kernel programs read. Node programs read
- * files synchronously from the cache (src/node-compat), so nothing else is.
- */
-const EVICTABLE = /^\/var\/(?:cache\/apt|lib\/apt\/lists)\//;
-const EVICT_MIN_BYTES = 64 << 10;
-
 /** A fresh random 52-bit inode number (unique enough; not a secret, so no crypto: one per created file) */
 function newIno(): number {
   return Math.floor(Math.random() * 0x10000000000000) || 3;
@@ -532,11 +516,6 @@ export class FileSystem {
    */
   private _full = false;
   private _fullListeners: Set<(full: boolean) => void> = new Set();
-  /** Evictable cached content (EVICTABLE), least recently used first: path → bytes. */
-  private _lru: Map<string, number> = new Map();
-  private _lruBytes = 0;
-  /** Bytes of evictable content kept in memory. */
-  contentBudget = 32 << 20;
   /** Bytes written this page load, for onBigWrite. */
   private _bytesWritten = 0;
   private _bigWrite: { bytes: number; fn: () => void } | null = null;
@@ -556,8 +535,7 @@ export class FileSystem {
   /** Give the node at canonical `path` inode number `ino` (link(), which copies, makes the copy share its source's). */
   setIno(path: string, ino: number): void {
     const node = this.cache.get(path);
-    if (node?.lazy === EVICTED) void this._get(path).then((n) => { if (n && n.ino !== ino) this._putNow({ ...n, ino }); });
-    else if (node && node.ino !== ino) this._putNow({ ...node, ino });
+    if (node && node.ino !== ino) this._putNow({ ...node, ino });
   }
 
   /** Browser storage is full (see _full). */
@@ -796,8 +774,6 @@ export class FileSystem {
         try {
           await this._commit(batch, durability);
           this._setFull(false);
-          // Content kept while it waited to be stored may leave the cache now
-          if (this._lruBytes > this.contentBudget) this._trimContent();
         } catch (e) {
           if (FileSystem._isQuotaError(e)) {
             // Requeue it under the writes made meanwhile (newer wins) and
@@ -881,8 +857,7 @@ export class FileSystem {
 
   private async _get(path: string): Promise<FSNode | undefined> {
     if (this.cache.has(path)) {
-      const hit = this.cache.get(path);
-      return hit?.lazy === EVICTED ? this._reload(hit) : hit;
+      return this.cache.get(path);
     }
     // The key index is complete once loaded: a path not in it doesn't exist
     // (creating a file then needs no IndexedDB read for the "existing" check)
@@ -895,44 +870,7 @@ export class FileSystem {
     // A write or delete made while the read was pending is newer than what it returned
     if (this.cache.has(path)) return this.cache.get(path);
     this.cache.set(path, result);
-    this._account(path, result);
     return result;
-  }
-
-  /** The stored node of an evicted one (its content back in the cache). */
-  private async _reload(stub: FSNode): Promise<FSNode | undefined> {
-    const path = stub.path;
-    const full = await this._request('readonly', store => store.get(path) as IDBRequest<FSNode | undefined>);
-    const now = this.cache.get(path);
-    if (now !== stub) return now?.lazy === EVICTED ? this._reload(now) : now; // written, renamed or deleted meanwhile
-    if (!full) return stub;
-    this.cache.set(path, full);
-    this._account(path, full);
-    return full;
-  }
-
-  /** Track evictable content in the LRU (most recent last) and trim it to the budget. */
-  private _account(path: string, node: FSNode | undefined): void {
-    if (!EVICTABLE.test(path)) return;
-    const old = this._lru.get(path);
-    if (old !== undefined) { this._lru.delete(path); this._lruBytes -= old; }
-    const n = node?.content?.byteLength ?? 0;
-    if (n < EVICT_MIN_BYTES || node?.lazy) return;
-    this._lru.set(path, n);
-    this._lruBytes += n;
-    if (this._lruBytes > this.contentBudget) this._trimContent();
-  }
-
-  /** Drop the least recently used evictable content that is stored (not waiting to be written). */
-  private _trimContent(): void {
-    for (const [path, n] of this._lru) {
-      if (this._lruBytes <= this.contentBudget) break;
-      if (this._dirty.has(path) || this._inflight?.has(path)) continue;
-      this._lru.delete(path);
-      this._lruBytes -= n;
-      const node = this.cache.get(path);
-      if (node?.content) this.cache.set(path, { ...node, content: null, lazy: EVICTED });
-    }
   }
 
   /**
@@ -1119,10 +1057,8 @@ export class FileSystem {
       this._bigWrite = null;
       try { fn(); } catch {}
     }
-    if (node.lazy === EVICTED) throw new Error(`internal: evicted node '${node.path}' written back`);
     if (node.type === 'symlink' || this.cache.get(node.path)?.type === 'symlink') this._canonDirs.clear();
     this.cache.set(node.path, node);
-    this._account(node.path, node);
     this._noteKey(node.path, true);
     this._queue(node.path, node);
   }
@@ -1131,7 +1067,6 @@ export class FileSystem {
     this._canonDirs.clear();
     // Remember the miss: IndexedDB still has the node until the flush commits
     this.cache.set(path, undefined);
-    this._account(path, undefined);
     this._noteKey(path, false);
     this._queue(path, null);
   }
@@ -1266,8 +1201,6 @@ export class FileSystem {
   /** Clear the in-memory cache (useful after external DB modifications) */
   clearCache(): void {
     this.cache.clear();
-    this._lru.clear();
-    this._lruBytes = 0;
     this._canonDirs.clear();
     this._allKeys = null;
     this._allKeysArr = null;
@@ -1365,7 +1298,6 @@ export class FileSystem {
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, open '${path}'`);
     if (node.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, read '${path}'`);
     if (node.lazy) node = await this._materialize(node);
-    else if (node.content && this._lru.has(node.path)) this._account(node.path, node); // recently used
     const data = node.content || new Uint8Array(0);
     // Byte-exact: invalid UTF-8 survives a round trip through the string (src/utils/byte-text.ts)
     if (encoding === 'utf8') return decodeBytes(data);
@@ -1573,7 +1505,6 @@ export class FileSystem {
     const cached = this.cache.get(path);
     const done = cached ? this._unlinkNode(path, cached) : this.unlink(path);
     this.cache.set(path, undefined);
-    this._account(path, undefined);
     this._canonDirs.clear();
     this._noteKey(path, false);
     return done;
