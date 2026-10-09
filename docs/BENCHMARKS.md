@@ -306,6 +306,13 @@ composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts,
 a few MiB each. The terminal UI's +19 KiB is /dom, the sign-in hook and the
 other integration changes since db9f698, not desktop code.
 
+### unix/shell-stdio 3 — fd copies keep their stream; programs inherit fds 3-9
+
+`node bench/ab.mjs origin/unix/integration HEAD --suites shell,kernel --quick`
+(b8834c7 → 501fe88, 3 rounds × 5 runs, alpha 0.01): no regression. 22
+metrics unchanged; shell.echo improved (0.12 → 0.074 ms, every round);
+shell.redirect_append_100 moved −29% but not in every round (inconsistent).
+
 ### unix/shell-stdio 2 — POSIX shell fixes (smoosh suite)
 
 Signals to the shell, $$/$PPID/$!, exported vs unexported variables,
