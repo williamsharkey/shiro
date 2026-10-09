@@ -618,6 +618,22 @@ medians 1240 and 1215 proc/s, base 1200. One of those passes stalled at
 ≈10 proc/s for its last 11 samples and did not recur in two more; worth
 watching if it shows up on other branches.
 
+### unix/perf-blink 9 — shared pages in a hash table
+
+Blink patch 0068. Same-instance fork shares a process's MAP_SHARED pages
+with the child through a registry of shared host pages. That registry was
+an array searched end to end on every share and unshare, so it was
+quadratic in the pages shared (PostgreSQL's 128 MiB of shared buffers are
+32768 pages). It is now a hash table. A static program that maps 128 MiB
+MAP_SHARED, touches it, then forks and waits three times, run in Node
+(vitest; the full suite was running alongside):
+
+| | before | after |
+|---|---:|---:|
+| first fork | 2679 ms | 812 ms |
+| later forks | 1286–1346 ms | 12–14 ms |
+| whole program | 9.2 s | 4.0 s |
+
 ### unix/perf-blink 8 — the page keeps blink.wasm compiled
 
 unix/bench bisected a startup regression to patch 0053 (go_hello +62%,

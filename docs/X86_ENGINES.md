@@ -632,6 +632,18 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    family 6, model 0x5e (OpenCV reads the family before the feature bits).
    An ELF whose name ends in `.bin` loads as an ELF, not a flat binary
    (LibreOffice's `soffice.bin`).
+68. The host pages several processes map (MAP_SHARED across a same-instance
+   fork) are counted in a hash table, not an array searched end to end:
+   forking a process with 128 MiB of shared memory went from 1.3 s per fork
+   to ~13 ms.
+69. System V shared memory: shmget and shmctl go to the kernel, which keeps
+   the segments (ids, permissions, attach counts, 1013/1014). shmat maps one
+   set of host pages per shmid, shared by every attacher in the instance, so
+   a same-instance fork child inherits the attachment and its bytes. shmdt
+   unmaps, and exec and exit drop a process's attachments. A segment's pages
+   go once the kernel has destroyed it. Processes in other Blink instances
+   (a separate worker) can't share a segment. Test: fixtures/x86/sysvshm.c
+   (with POSIX shm across fork).
 
 The page compiles blink.wasm once and gives the `WebAssembly.Module` to every
 Blink worker (src/x86-engine/blink.ts `blinkWasmModule`, host.mjs
