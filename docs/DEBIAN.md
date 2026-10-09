@@ -242,6 +242,17 @@ sudo bash scripts/debian/build-layers.sh c python   # some
 TABCOMPUTER_DEBIAN_LAYERS=$PWD/.toolchain-build/layers PORT=5299 STATIC_DIR=$PWD/dist node server.mjs
 ```
 
+The builder runs in its own mount namespace with every mount private. It
+mounts a fresh sysfs and one-level binds of `/dev`, `/dev/pts` and
+`/dev/shm` (never `--rbind`), and it fails if the caller's or PID 1's mount
+table changed during the build. An earlier version rbind-mounted `/sys` and
+`/dev` and unmounted them with `umount -l`. On a systemd host (shared
+propagation) that unmounted the host's own `/sys/fs/cgroup`, and systemd
+could start no unit afterwards. `scripts/debian/check-layer-mounts.sh`
+reproduces that setting: it runs a one-package build in a namespace with
+shared propagation and fails if the mount table changes. Run it after
+changing the builder; it caught the old version.
+
 Behind a TLS-intercepting proxy, pass its CA as `CA_BUNDLE=...`
 (`HTTPS_PROXY` is passed on to apt).
 

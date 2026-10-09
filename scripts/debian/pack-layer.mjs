@@ -85,6 +85,7 @@ const isMerged = (p) => MERGED.has(p) || (p.startsWith('/var/lib/dpkg/triggers/'
 // Never carried: locks, dpkg's scratch files, files the page provides
 const IGNORE = (p) => /^\/var\/lib\/dpkg\/(lock|lock-frontend|available|status|triggers\/Lock|triggers\/Unincorp)$/.test(p)
   || p.startsWith('/var/lib/dpkg/updates/') || p === '/var/cache/apt/archives/lock' || p === '/var/lib/apt/lists/lock'
+  || p === '/var/cache/ldconfig/aux-cache' // ldconfig's inode/ctime cache: differs every build, rebuilt on demand
   || p.startsWith('/dev/') || p.startsWith('/proc/') || p.startsWith('/sys/') || p === '/.complete';
 
 function walk(root) {
