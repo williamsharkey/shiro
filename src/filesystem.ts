@@ -716,6 +716,39 @@ export class FileSystem {
    */
   lookupCached(path: string, follow = true): { path: string; node: FSNode } | null | undefined {
     for (const vp of this.virtualProviders) if (vp.handles(path)) return undefined;
+    // Fast path: the parent directory's canonical path is memoized, so only the
+    // last component needs a lookup (rg, find and ls stat thousands of names
+    // in a few directories)
+    const slash = path.lastIndexOf('/');
+    const name = path.slice(slash + 1);
+    if (slash >= 0 && name && name !== '.' && name !== '..') {
+      const dir = slash === 0 ? '/' : path.slice(0, slash);
+      let cdir = this._canonDirs.get(dir);
+      if (cdir === undefined) {
+        const d = this._lookupWalk(dir, true);
+        if (d && d.node.type === 'dir') {
+          if (this._canonDirs.size > 20000) this._canonDirs.clear();
+          this._canonDirs.set(dir, cdir = d.path);
+        }
+      }
+      if (cdir !== undefined) {
+        const full = cdir === '/' ? '/' + name : cdir + '/' + name;
+        const node = this._getCached(full);
+        if (!node) return node;
+        if (node.type !== 'symlink' || !follow) return { path: full, node };
+      }
+    }
+    return this._lookupWalk(path, follow);
+  }
+
+  /**
+   * Canonical paths of directories lookupCached walked (as given → real).
+   * Cleared whenever a symlink is written or anything is deleted or renamed,
+   * the only changes that can move a directory's canonical path.
+   */
+  private _canonDirs = new Map<string, string>();
+
+  private _lookupWalk(path: string, follow: boolean): { path: string; node: FSNode } | null | undefined {
     // Symlinks in directory components are followed, as _canon does
     const parts = path.split('/').filter(Boolean);
     let cur = '';
@@ -783,12 +816,14 @@ export class FileSystem {
 
   /** Synchronous part of a put: cache + key index now, IndexedDB on the next flush. */
   private _putNow(node: FSNode): void {
+    if (node.type === 'symlink' || this.cache.get(node.path)?.type === 'symlink') this._canonDirs.clear();
     this.cache.set(node.path, node);
     this._noteKey(node.path, true);
     this._queue(node.path, node);
   }
 
   private _deleteNow(path: string): void {
+    this._canonDirs.clear();
     // Remember the miss: IndexedDB still has the node until the flush commits
     this.cache.set(path, undefined);
     this._noteKey(path, false);
@@ -920,6 +955,7 @@ export class FileSystem {
   /** Clear the in-memory cache (useful after external DB modifications) */
   clearCache(): void {
     this.cache.clear();
+    this._canonDirs.clear();
     this._allKeys = null;
     this._allKeysArr = null;
     this._children = null;
@@ -1156,6 +1192,7 @@ export class FileSystem {
     const cached = this.cache.get(path);
     const done = cached ? this._unlinkNode(path, cached) : this.unlink(path);
     this.cache.set(path, undefined);
+    this._canonDirs.clear();
     this._noteKey(path, false);
     return done;
   }

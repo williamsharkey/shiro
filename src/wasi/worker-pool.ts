@@ -13,7 +13,10 @@
  * (a guest killed while computing never does, and is really terminated
  * after IDLE_TIMEOUT_MS). Up to MAX_IDLE Workers wait in the pool while
  * processes are being spawned, and one is started ahead of time after each
- * lease so the next spawn finds one; TRIM_AFTER_MS after the last spawn the
+ * lease so the next spawn finds one. A Worker whose process just ended
+ * counts as available while it unwinds: a spawn that finds none idle waits
+ * for it (up to RETURN_WAIT_MS) rather than starting another, and no spare is
+ * started meanwhile. TRIM_AFTER_MS after the last spawn the
  * pool keeps only KEEP_WARM (terminating Workers is work too, so it happens
  * when nothing is spawning).
  */
@@ -28,6 +31,8 @@ const MAX_IDLE = 8;
 const KEEP_WARM = 2;
 const TRIM_AFTER_MS = 10_000;
 const IDLE_TIMEOUT_MS = 1000;
+/** How long a spawn waits for a returning Worker before starting a new one. */
+const RETURN_WAIT_MS = 250;
 
 interface Slot {
   w: GuestWorker;
@@ -40,11 +45,16 @@ interface Slot {
 }
 
 interface Lease {
-  slot: Slot;
+  /** null until a Worker is bound (the lease waits for a returning one). */
+  slot: Slot | null;
+  /** Messages posted before the Worker was bound. */
+  queued: unknown[];
   msgs: ((m: unknown) => void)[];
   errs: ((e: unknown) => void)[];
   exits: ((code: number) => void)[];
   ended: boolean;
+  proc: Process;
+  timer: ReturnType<typeof setTimeout> | undefined;
 }
 
 export interface WorkerPool {
@@ -97,21 +107,53 @@ export function createWorkerPool(factory: (proc: Process) => GuestWorker): Worke
     return s;
   };
 
+  /** Released Workers that haven't reported idle yet. */
+  let returning = 0;
+  /** Leases waiting for a returning Worker. */
+  const waiting: Lease[] = [];
+
+  const bind = (lease: Lease, s: Slot) => {
+    lease.slot = s;
+    s.lease = lease;
+    s.idle = false;
+    for (const m of lease.queued.splice(0)) s.w.postMessage(m);
+  };
+
+  /** A Worker for the oldest waiting lease (a returning one came back, or one was lost). */
+  const serveWaiting = (s: Slot | null, proc?: Process) => {
+    while (waiting.length && waiting[0].ended) waiting.shift();
+    const lease = waiting.shift();
+    if (!lease) return false;
+    clearTimeout(lease.timer);
+    bind(lease, s ?? create(proc ?? lease.proc));
+    return true;
+  };
+
   const release = (s: Slot) => {
     s.lease = null;
     if (s.dead) return;
+    let counted = false;
     const keep = () => {
       s.onIdle = null;
       clearTimeout(timer);
+      if (counted) { counted = false; returning--; }
       if (s.dead || s.lease) return;
+      if (serveWaiting(s)) return;
       if (idle.length >= MAX_IDLE) kill(s);
       else idle.push(s);
     };
     // The guest unwinds when its channel closes; one still computing never reports idle
-    const timer = setTimeout(() => { if (!s.idle) kill(s); }, IDLE_TIMEOUT_MS);
+    const timer = setTimeout(() => {
+      if (s.idle) return;
+      s.onIdle = null;
+      if (counted) { counted = false; returning--; }
+      kill(s);
+      // A spawn was counting on this one
+      if (waiting.length > returning) serveWaiting(null);
+    }, IDLE_TIMEOUT_MS);
     (timer as any)?.unref?.();
     if (s.idle) keep();
-    else s.onIdle = keep;
+    else { counted = true; returning++; s.onIdle = keep; }
   };
 
   let trimTimer: ReturnType<typeof setTimeout> | null = null;
@@ -124,11 +166,14 @@ export function createWorkerPool(factory: (proc: Process) => GuestWorker): Worke
     (trimTimer as any)?.unref?.();
   };
 
-  /** Start a Worker now so the next spawn doesn't wait for one. */
+  /** Start a Worker now so the next spawn doesn't wait for one (unless one is on its way back). */
+  let prewarming = false;
   const prewarm = (proc: Process) => {
-    if (idle.length > 0 || slots.size >= MAX_IDLE * 2) return;
+    if (prewarming || idle.length > 0 || returning > waiting.length || slots.size >= MAX_IDLE * 2) return;
+    prewarming = true;
     const t = setTimeout(() => {
-      if (idle.length === 0) idle.push(create(proc));
+      prewarming = false;
+      if (idle.length === 0 && returning <= waiting.length) idle.push(create(proc));
     }, 0);
     (t as any)?.unref?.();
   };
@@ -137,18 +182,30 @@ export function createWorkerPool(factory: (proc: Process) => GuestWorker): Worke
     acquire(proc: Process): GuestWorker {
       let s = idle.pop();
       while (s && s.dead) s = idle.pop();
-      if (!s) s = create(proc);
-      s.idle = false;
-      const lease: Lease = { slot: s, msgs: [], errs: [], exits: [], ended: false };
-      s.lease = lease;
+      const lease: Lease = { slot: null, queued: [], msgs: [], errs: [], exits: [], ended: false, proc, timer: undefined };
+      if (s) bind(lease, s);
+      else if (returning > waiting.length) {
+        // A Worker is unwinding from the process that just ended: take it rather than start another
+        waiting.push(lease);
+        lease.timer = setTimeout(() => {
+          const i = waiting.indexOf(lease);
+          if (i >= 0 && !lease.ended) { waiting.splice(i, 1); bind(lease, create(proc)); }
+        }, RETURN_WAIT_MS);
+        (lease.timer as any)?.unref?.();
+      } else bind(lease, create(proc));
       prewarm(proc);
       scheduleTrim();
       return {
-        postMessage: (m) => { if (!lease.ended) s!.w.postMessage(m); },
+        postMessage: (m) => {
+          if (lease.ended) return;
+          if (lease.slot) lease.slot.w.postMessage(m);
+          else lease.queued.push(m);
+        },
         terminate: () => {
           if (lease.ended) return;
           lease.ended = true;
-          release(s!);
+          clearTimeout(lease.timer);
+          if (lease.slot) release(lease.slot);
         },
         onMessage: (cb) => { lease.msgs.push(cb); },
         onError: (cb) => { lease.errs.push(cb); },
@@ -159,6 +216,7 @@ export function createWorkerPool(factory: (proc: Process) => GuestWorker): Worke
     get idleCount() { return idle.length; },
     drain() {
       if (trimTimer) { clearTimeout(trimTimer); trimTimer = null; }
+      for (const l of waiting.splice(0)) { clearTimeout(l.timer); if (!l.ended) bind(l, create(l.proc)); }
       for (const s of [...idle]) kill(s);
     },
   };

@@ -93,6 +93,8 @@ const enc = new TextEncoder();
 const SHELL_PROGRAMS = new Set(['echo', 'printf', 'test', '[', 'true', 'false', 'pwd', 'kill']);
 
 function normalize(path: string): string {
+  // Already normal (absolute, no empty, . or .. segments, no trailing slash): most paths
+  if (path.charCodeAt(0) === 47 && !/\/\/|\/\.\.?(?:\/|$)|.\/$/.test(path)) return path;
   const stack: string[] = [];
   for (const part of path.split('/')) {
     if (part === '' || part === '.') continue;
@@ -1009,18 +1011,17 @@ export class Kernel {
     return f.tryWrite && (args[1] >>> 0) <= A.PIPE_BUF ? f : undefined;
   }
 
-  async syscall(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): Promise<number> {
+  syscall(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): Promise<number> {
     // Time inside syscalls is time the process isn't computing (/proc CPU estimate)
     const t0 = Date.now();
     proc.syscalls++;
     // While in a syscall the process counts as sleeping (S in /proc/PID/stat)
     proc.inSyscall++;
-    try {
-      return await this.syscallImpl(proc, nr, args, data);
-    } finally {
-      proc.inSyscall--;
-      proc.kernelMs += Date.now() - t0;
-    }
+    const done = () => { proc.inSyscall--; proc.kernelMs += Date.now() - t0; };
+    // The caller awaits the call itself: the bookkeeping adds no await hop to it
+    const p = this.syscallImpl(proc, nr, args, data);
+    p.then(done, done);
+    return p;
   }
 
   private async syscallImpl(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): Promise<number> {
