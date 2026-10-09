@@ -901,6 +901,7 @@ export class Kernel {
     if (SHELL_NAMES.has(cmd.name) || SHELL_NAMES.has(proc.argv[0]?.slice(proc.argv[0].lastIndexOf('/') + 1))) {
       stdio = new KernelStdio(this, proc);
       shell.kernelStdio = stdio;
+      stdio.adoptFds(shell);
       shell.kernelStdinLive = true;
     }
     const lazy = !stdio;
@@ -970,6 +971,7 @@ export class Kernel {
     }
     const stdio = new KernelStdio(this, proc);
     shell.kernelStdio = stdio;
+    stdio.adoptFds(shell);
     // A script read from stdin has none left
     let live = true;
     if (script === undefined) {
@@ -1051,6 +1053,7 @@ export class Kernel {
     // The shell uses this process's fds as its stdio (src/shell-stdio.ts)
     const stdio = new KernelStdio(this, proc);
     shell.kernelStdio = stdio;
+    stdio.adoptFds(shell);
     shell.kernelStdinLive = true;
     const code = await shell.execute(line, stdio.out, stdio.err, false, undefined, true);
     await stdio.flush();

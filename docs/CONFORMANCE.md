@@ -8,7 +8,7 @@ conformance work started (fc0af54).
 |---|---|---|
 | [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1411/1567 (90.0%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1412/1567 (90.1%)** |
-| [Shell: smoosh POSIX tests](#shell-smoosh-posix-tests) | 111/162 (68.5%) | **157/162 (96.9%)** |
+| [Shell: smoosh POSIX tests](#shell-smoosh-posix-tests) | 111/162 (68.5%) | **158/162 (97.5%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **625/635 (98.4%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **148/320 (46.3%)** |
 | [Syscalls: wasi-testsuite (wasm32-wasip1)](#syscalls-wasi-testsuite-wasm32-wasip1) | — | **71/72 (98.6%)** |
@@ -259,14 +259,14 @@ POSIX sh cases from [smoosh](https://github.com/mgree/smoosh) (tests/shell), jud
 | Area | Before | Now | Failing |
 |---|---|---|---|
 | benchmark | 0/2 | 2/2 | 0 |
-| builtin | 38/59 | 57/59 | 2 |
+| builtin | 38/59 | 58/59 | 1 |
 | parse | 2/3 | 3/3 | 0 |
 | semantics | 67/91 | 89/91 | 2 |
 | sh | 4/7 | 6/7 | 1 |
 
 <details><summary>Failing cases</summary>
 
-- **builtin**: builtin.exec.modernish.mkfifo.loop — stdout differs; builtin.readonly.assign.interactive — stdout differs
+- **builtin**: builtin.exec.modernish.mkfifo.loop — stdout differs
 - **semantics**: semantics.dot.glob — stdout differs; semantics.evalorder.fun — status 1, want 0
 - **sh**: sh.monitor.bg — status 3, want 0
 
