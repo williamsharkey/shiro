@@ -26,7 +26,7 @@ Blink engine.
 | go | `pkg install go` (wasip1) / Debian `golang-go` | builds and runs / fails: link step (Blink `fallocate`, reported) |
 | clang, make, ninja, cmake | `pkg install llvm make ninja cmake` | works (zlib's own build, CMake → Ninja/Make, CTest) |
 | gcc, make (Debian) | `apt install build-essential` | works: hello.c with gcc and through make |
-| node (Debian) | `apt install nodejs` | fails: SIGSEGV in Blink (reported); `builtin node` runs Shiro's |
+| node (Debian) | `apt install nodejs` | fails until perf-blink e74504e lands (Blink `pop m64` bug, fixed there); `builtin node` runs Shiro's |
 | sqlite | `pkg install sqlite` | works |
 | git | `pkg install git` (x86-64 in Blink) | works for local workflows, file:// clone/push |
 | php | — | owned by unix/wasix |
@@ -80,7 +80,7 @@ the page (`apt-get update` ≈2m20s first).
 | `pip3 install --user --break-system-packages six` + import | pass (after fixes) | 1m30s install, 2.8s import | needs the TCP relay. Fixed on the way: socket `ioctl(FIONBIO)` was EINVAL (CPython's `setblocking(False)`), and glibc's parallel A+AAAA lookup fails in Blink (`sendmmsg` → EBADF, sent to perf-blink), so `debian install` sets `options single-request`. In this sandbox pip also needed `--cert` for its TLS-intercepting egress proxy, which a normal deployment doesn't have |
 | `sudo apt-get install -y nodejs` | installs | 2m25s | Debian's node 20.19.2 |
 | node: which wins | Debian's | — | in Debian mode a program file on PATH replaces the builtin of that name, so `node` is `/usr/bin/node` once nodejs is installed; `builtin node` still runs Shiro's (v20 shim, 0.2s) |
-| `/usr/bin/node -e 1` | **fail** (Blink) | ~9s to SIGSEGV | `--version` works; any script segfaults, also `--jitless --single-threaded`; repro sent to perf-blink (V8 sees BMI2 without BMI1/SSE4.1). Until then `builtin node` runs Shiro's |
+| `/usr/bin/node -e 1` | **fail** (Blink) | ~9s to SIGSEGV | `--version` works; any script segfaults, also `--jitless --single-threaded`; cause: Blink computed `pop m64`'s `rsp`-relative destination before the pop (V8's CEntry return address overwritten); fixed on unix/perf-blink e74504e (patches 0046–0047, `node -e` ≈11 s per run), not yet in integration. Until it lands `builtin node` runs Shiro's |
 | `sudo apt-get install -y golang-go` | installs | 5m05s–10m40s | go1.24.4 linux/amd64 |
 | `go run hello.go` | **fail** (Blink) | 35m to the link step | the compile of `fmt` and its std dependencies under Blink finishes (into GOCACHE, kept for later runs), then cmd/link stops: "mapping output file failed: function not implemented" (Blink answers `fallocate` with ENOSYS; Go tolerates only EOPNOTSUPP; sent to perf-blink). Shiro's own `pkg install go` (wasip1 toolchain) builds and runs Go programs |
 
