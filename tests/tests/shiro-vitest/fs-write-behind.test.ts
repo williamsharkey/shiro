@@ -120,3 +120,34 @@ describe('FileSystem write-behind', () => {
     expect(await onDisk('/tmp/wb-sync.txt')).toBe('durable\n');
   });
 });
+
+// apt's big files leave the in-memory cache once stored (FileSystem.contentBudget)
+describe('FileSystem content eviction', () => {
+  it('drops stored apt content over the budget and reads it back from IndexedDB', async () => {
+    const fs = new FileSystem();
+    await fs.init();
+    fs.contentBudget = 300 << 10;
+    await fs.mkdir('/var/cache/apt/archives', { recursive: true });
+    const blob = (i: number) => Uint8Array.from({ length: 200 << 10 }, (_, k) => (k * 31 + i) & 0xff);
+    for (let i = 0; i < 4; i++) await fs.writeFile(`/var/cache/apt/archives/p${i}.deb`, blob(i));
+    // waiting to be stored: kept
+    expect(fs.readBytesCached('/var/cache/apt/archives/p0.deb')).toBeDefined();
+    await fs.sync();
+    const cached = [0, 1, 2, 3].filter((i) => fs.readBytesCached(`/var/cache/apt/archives/p${i}.deb`) !== undefined);
+    expect(cached.length).toBe(1); // 200 KiB fits in 300 KiB; the others were dropped
+    expect((await fs.stat('/var/cache/apt/archives/p0.deb')).size).toBe(200 << 10);
+    expect(await fs.readFile('/var/cache/apt/archives/p0.deb')).toEqual(blob(0));
+    // changing an evicted file keeps its content
+    await fs.chmod('/var/cache/apt/archives/p1.deb', 0o600);
+    await fs.rename('/var/cache/apt/archives/p2.deb', '/var/cache/apt/archives/q2.deb');
+    await fs.sync();
+    expect(await fs.readFile('/var/cache/apt/archives/p1.deb')).toEqual(blob(1));
+    expect(await fs.readFile('/var/cache/apt/archives/q2.deb')).toEqual(blob(2));
+    const ino = fs.inoOf('/var/cache/apt/archives/p3.deb');
+    expect(ino).toBeGreaterThan(0);
+    // files elsewhere are never dropped (node programs read them synchronously)
+    await fs.writeFile('/tmp/big.bin', blob(9));
+    await fs.sync();
+    expect(fs.readBytesCached('/tmp/big.bin')).toEqual(blob(9));
+  });
+});
