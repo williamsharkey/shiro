@@ -309,21 +309,9 @@
    ]
   },
   "redirect": {
-   "pass": 32,
+   "pass": 35,
    "total": 39,
    "failures": [
-    {
-     "i": 10,
-     "name": "Named file descriptor"
-    },
-    {
-     "i": 24,
-     "name": ">&word redirects stdout and stderr when word is not a number or -"
-    },
-    {
-     "i": 26,
-     "name": "1>&2- to move file descriptor"
-    },
     {
      "i": 27,
      "name": "1>&2- (Bash bug: fail to restore closed fd)"
@@ -500,20 +488,12 @@
    ]
   },
   "builtin-trap": {
-   "pass": 26,
+   "pass": 29,
    "total": 33,
    "failures": [
     {
      "i": 16,
      "name": "exit 1 when trap code string is invalid"
-    },
-    {
-     "i": 17,
-     "name": "trap EXIT calling exit"
-    },
-    {
-     "i": 20,
-     "name": "trap EXIT with PARSE error and explicit exit"
     },
     {
      "i": 24,
@@ -526,10 +506,6 @@
     {
      "i": 26,
      "name": "trap USR1, sleep, SIGINT: non-interactively"
-    },
-    {
-     "i": 29,
-     "name": "Remove trap with an unsigned integer"
     }
    ]
   },
@@ -614,7 +590,7 @@
    ]
   },
   "builtin-vars": {
-   "pass": 31,
+   "pass": 33,
    "total": 38,
    "failures": [
     {
@@ -632,14 +608,6 @@
     {
      "i": 10,
      "name": "Exporting a parent func variable (dynamic scope)"
-    },
-    {
-     "i": 22,
-     "name": "Unset a function without -f"
-    },
-    {
-     "i": 24,
-     "name": "Unset and scope (bug #653)"
     },
     {
      "i": 38,
@@ -1132,33 +1100,9 @@
    ]
   },
   "sh-options": {
-   "pass": 25,
+   "pass": 31,
    "total": 32,
    "failures": [
-    {
-     "i": 0,
-     "name": "$- with -c"
-    },
-    {
-     "i": 3,
-     "name": "$- with interactive shell"
-    },
-    {
-     "i": 6,
-     "name": "pass shopt options like sh -O nullglob"
-    },
-    {
-     "i": 8,
-     "name": "vi and emacs are mutually exclusive"
-    },
-    {
-     "i": 9,
-     "name": "interactive shell starts with emacs mode on"
-    },
-    {
-     "i": 12,
-     "name": "-n for no execution (useful with --ast-output)"
-    },
     {
      "i": 20,
      "name": "noclobber on <>"

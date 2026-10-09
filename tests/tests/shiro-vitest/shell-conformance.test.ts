@@ -610,4 +610,27 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe('*\n*\n*\nfoobar\nx y\n12\nxs y\nd e c\nr o\nab\nfoo<foo\n');
   });
+
+  it('>& word, >&file (stdout and stderr), N>&M- moves a descriptor', async () => {
+    const r = await script([
+      'cd /tmp; exec {fd}> n.txt; echo a >&$fd; echo b >& $fd; cat n.txt',
+      'ls /nonexist >&both.txt; grep -c nonexist both.txt',
+      'exec 5> f5.txt; echo hello5 >&5; exec 6>&5-; echo world5 >&5; echo world6 >&6; exec 6>&-; cat f5.txt',
+    ].join('\n'));
+    expect(r.out).toBe('a\nb\n1\nhello5\nworld6\n');
+  });
+
+  it('sh -c/-i/-O and $-, vi/emacs, set -n; exit in an EXIT trap; trap -1; unset scopes', async () => {
+    const r = await script([
+      "sh -o nounset -c 'echo $-'; sh -i -c 'echo $-' | grep -c i",
+      "sh -O nullglob -c 'echo foo *.none bar'",
+      'set -o vi; shopt -o -p emacs vi; set -o emacs; shopt -o -p vi',
+      "sh -c 'trap \"exit 42\" EXIT'; echo trap=$?",
+      "sh -e -c 'trap -1 EXIT; echo bad'; echo st=$?",
+      'f() { echo f; }; unset f; type f >/dev/null 2>&1 || echo nof',
+      'unlocal() { unset "$@"; }; l2() { local h=yy; unlocal h; echo l2=$h; }; l1() { local h=xx; l2; unlocal h; echo l1=$h; }; h=g; l1',
+      'echo 1; set -n; echo 2',
+    ].join('\n'));
+    expect(r.out).toBe('huBc\n1\nfoo bar\nset +o emacs\nset -o vi\nset +o vi\ntrap=42\nst=2\nnof\nl2=xx\nl1=g\n1\n');
+  });
 });

@@ -232,15 +232,22 @@ export const shCmd: Command = {
     // Options before the command string / script: -c, -e, -u, -x, -v, -f, -o NAME, and combined (-ec, -lc)
     const shortOpts: Record<string, string> = { e: 'errexit', u: 'nounset', x: 'xtrace', v: 'verbose', n: 'noexec', f: 'noglob' };
     const options: string[] = [];
+    const shopts: [string, boolean][] = [];
     let commandMode = false;
+    let interactive = false;
     let i = 0;
     for (; i < ctx.args.length; i++) {
       const a = ctx.args[i];
       if (a === '--' || a === '-') { i++; break; }
       if (a === '-o' || a === '+o') { if (a === '-o' && ctx.args[i + 1]) options.push(ctx.args[i + 1]); i++; continue; }
+      // -O NAME / +O NAME: shopt options
+      if (a === '-O' || a === '+O') { if (ctx.args[i + 1]) shopts.push([ctx.args[i + 1], a === '-O']); i++; continue; }
+      if (a === '--rcfile' || a === '--init-file') { i++; continue; }
+      if (/^--(norc|noprofile|posix)$/.test(a)) continue;
       if (!/^[-+][a-zA-Z]+$/.test(a)) break;
       for (const ch of a.slice(1)) {
         if (ch === 'c') commandMode = true;
+        else if (ch === 'i' && a[0] === '-') interactive = true;
         else if (a[0] === '-' && shortOpts[ch]) options.push(shortOpts[ch]);
       }
     }
@@ -281,6 +288,10 @@ export const shCmd: Command = {
     const child = ctx.shell.fork();
     child.setPositional(positional, argv0);
     for (const o of options) child.options.add(o);
+    for (const [o, on] of shopts) { if (on) child.shoptopts.add(o); else child.shoptopts.delete(o); }
+    child.commandStringFlag = commandMode;
+    // An interactive shell starts in emacs editing mode
+    if (interactive) { child.interactiveFlag = true; child.options.add('emacs'); }
     // `sh -c` reads the caller's stdin; a script read from stdin has none left
     if (commandMode || rest.length > 0) child.setInjectedStdin(ctx.stdin || '');
     let stdout = '';

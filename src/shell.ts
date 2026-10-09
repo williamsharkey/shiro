@@ -727,10 +727,10 @@ export class Shell {
       if (e instanceof ExitSignal && depth === 0 && this.sourcing === 0) {
         this.executeDepth = 0;
         this.exited = true;
-        await this.runExitTrap(writeStdout, writeStderr || writeStdout, terminalOverride);
-        this.lastExitCode = e.code;
-        this.env['?'] = String(e.code);
-        return e.code;
+        const code = (await this.runExitTrap(writeStdout, writeStderr || writeStdout, terminalOverride)) ?? e.code;
+        this.lastExitCode = code;
+        this.env['?'] = String(code);
+        return code;
       }
       throw e;
     } finally {
@@ -798,8 +798,13 @@ export class Shell {
     const order: [string, string][] = [['allexport', 'a'], ['notify', 'b'], ['errexit', 'e'], ['noglob', 'f'], ['hashall', 'h'],
       ['monitor', 'm'], ['noexec', 'n'], ['nounset', 'u'], ['verbose', 'v'], ['xtrace', 'x'], ['braceexpand', 'B'],
       ['noclobber', 'C'], ['errtrace', 'E'], ['histexpand', 'H'], ['physical', 'P'], ['functrace', 'T']];
-    return order.filter(([o]) => this.options.has(o)).map(([, c]) => c).join('') + (this.scriptShell ? '' : 'i');
+    return order.filter(([o]) => this.options.has(o)).map(([, c]) => c).join('') + (this.scriptShell && !this.interactiveFlag ? '' : 'i')
+      + (this.commandStringFlag ? 'c' : '');
   }
+
+  /** sh -i: $- has i; sh -c: $- has c */
+  interactiveFlag = false;
+  commandStringFlag = false;
 
   /** trap [-lp] [[ACTION] SIGNAL...] */
   private trapBuiltin(args: string[], writeStdout: (s: string) => void, writeStderr: (s: string) => void, subshell = false): number {
@@ -816,6 +821,10 @@ export class Shell {
         writeStdout(`trap -- '${cmd.replace(/'/g, "'\\''")}' ${SIGNALS.includes(k) && k !== 'EXIT' ? 'SIG' + k : k}\r\n`);
       }
     };
+    if (args[0] && /^-./.test(args[0]) && args[0] !== '-p') {
+      writeStderr(`shiro: trap: ${args[0]}: invalid option\r\ntrap: usage: trap [-lp] [[arg] signal_spec ...]\r\n`);
+      return 2;
+    }
     if (args.length === 0 || args[0] === '-p') {
       const keys = args.length > 1 ? args.slice(1).map(trapKey).filter((k): k is string => !!k)
         : [...SIGNALS.filter(Boolean), 'DEBUG', 'ERR', 'RETURN'];
@@ -844,17 +853,26 @@ export class Shell {
   }
 
   /** Run and clear the EXIT trap */
-  async runExitTrap(writeStdout: (s: string) => void, writeStderr: (s: string) => void, terminal?: any): Promise<void> {
-    if (!this.traps.has('EXIT')) return;
+  /** Run the EXIT trap; returns the status of an `exit N` in it (which becomes the shell's) */
+  async runExitTrap(writeStdout: (s: string) => void, writeStderr: (s: string) => void, terminal?: any): Promise<number | undefined> {
+    if (!this.traps.has('EXIT')) return undefined;
     const exitCmd = this.traps.get('EXIT')!;
     this.traps.delete('EXIT'); // prevent re-entry
     const saved = this.lastExitCode;
+    // (run nested, so an `exit` in it unwinds to here)
+    const depth = this.executeDepth;
+    this.executeDepth++;
     try {
       await this.execute(exitCmd, writeStdout, writeStderr, false, terminal, true);
     } catch (e) {
       if (!(e instanceof ExitSignal)) throw e;
+      this.lastExitCode = e.code;
+      return e.code;
+    } finally {
+      this.executeDepth = depth;
     }
     this.lastExitCode = saved;
+    return undefined;
   }
 
   /** >0 while running a context where `set -e` doesn't apply (if/while/until conditions) */
@@ -1162,6 +1180,9 @@ export class Shell {
         this.errexitSuppressed++;
         suppressing = true;
       }
+
+      // set -n: a script reads the rest without running it
+      if (this.scriptShell && !this.interactiveFlag && this.options.has('noexec')) break;
 
       // `cmd &` before more commands on the line
       if (/[^&]&$/.test(compound.command) && compounds.length > 1) {
@@ -2495,10 +2516,24 @@ export class Shell {
                 stderrWriter(`unset: ${name}: cannot unset: readonly variable\r\n`);
                 exitCode = 1;
               } else {
+                // A local of a calling function (not the current one) is popped:
+                // the value it shadowed comes back (bash's dynamic unset)
+                let k = this.localVarStack.length - 1;
+                while (k >= 0 && !this.localVarStack[k].has(name)) k--;
+                const saved = k >= 0 && k < this.localVarStack.length - 1 ? this.localVarStack[k].get(name)! : null;
+                const isVar = name in this.env || this.arrays.has(name) || this.assocArrays.has(name);
                 delete this.env[name];
                 this.namerefs.delete(name);
                 this.arrays.delete(name);
                 this.assocArrays.delete(name);
+                if (saved) {
+                  this.localVarStack[k].delete(name);
+                  if (saved.env !== undefined) this.env[name] = saved.env;
+                  if (saved.arr) this.arrays.set(name, saved.arr);
+                  if (saved.assoc) this.assocArrays.set(name, saved.assoc);
+                }
+                // unset NAME with no such variable unsets the function NAME
+                else if (!isVar && k < 0 && this.functions[name]) delete this.functions[name];
               }
             }
           }
@@ -2633,6 +2668,8 @@ export class Shell {
                   if (mapped) {
                     if (arg === '-o') this.options.add(mapped);
                     else this.options.delete(mapped);
+                    // vi and emacs editing modes exclude each other
+                    if (arg === '-o' && (mapped === 'vi' || mapped === 'emacs')) this.options.delete(mapped === 'vi' ? 'emacs' : 'vi');
                   } else {
                     stderrWriter(`set: ${optName}: invalid option name\r\n`);
                     exitCode = 1;
@@ -4653,7 +4690,7 @@ export class Shell {
         redirects.push({ type: '2>&1', target: '' });
         continue;
       }
-      const m = /^(\d*|\{[A-Za-z_][A-Za-z0-9_]*\})(>>|>\||>|<>|<)(?:&(\d+|-))?$/.exec(tok);
+      const m = /^(\d*|\{[A-Za-z_][A-Za-z0-9_]*\})(>>|>\||>|<>|<)(?:&(\d+-?|-))?$/.exec(tok);
       if (!m || (m[3] === undefined && i + 1 >= tokens.length)) { args.push(tok); continue; }
       const op = m[2];
       let fd = m[1] !== '' ? parseInt(m[1], 10) : op === '<' || op === '<>' ? 0 : 1;
@@ -4672,11 +4709,26 @@ export class Shell {
       let target = '';
       if (dupOf === undefined) {
         target = unmark(tokens[++i]);
-        // `> &2` / `>& 2` written apart, or bash's `>&file` (= &> file)
-        const t = /^&(\d+|-)$/.exec(target);
+        // `>& 2` / `>& $fd` written apart
+        if (target === '&' && i + 1 < tokens.length) target = '&' + unmark(tokens[++i]);
+        const t = /^&(\d+-?|-)$/.exec(target);
         if (t) dupOf = t[1];
+        else if (target.startsWith('&') && op === '>' && m[1] === '') {
+          // bash's `>&file` / `>& file`: stdout and stderr to the file (= &>)
+          redirects.push({ type: '>', target: target.slice(1) });
+          redirects.push({ type: '2>&1', target: '' });
+          continue;
+        }
       }
       if (dupOf === '-') { redirects.push({ type: '>&-', target: '', fd }); continue; }
+      // N>&M- moves M to N: a dup, then M closes
+      const move = dupOf !== undefined && dupOf.endsWith('-');
+      if (move) dupOf = dupOf!.slice(0, -1);
+      if (move && parseInt(dupOf!, 10) !== fd) {
+        redirects.push({ type: 'dup', fd, target: dupOf! });
+        redirects.push({ type: '>&-', target: '', fd: parseInt(dupOf!, 10) });
+        continue;
+      }
       if (dupOf !== undefined) {
         const to = parseInt(dupOf, 10);
         if (fd === 1 && to === 2 && op !== '<') {
@@ -4868,7 +4920,7 @@ export class Shell {
         let op = '>';
         i++;
         if (input[i] === '>') { op = '>>'; i++; } else if (input[i] === '|') { op = '>|'; i++; }
-        const dup = input[i] === '&' ? /^&(\d+|-)/.exec(input.slice(i)) : null;
+        const dup = input[i] === '&' ? /^&(\d+-?|-)/.exec(input.slice(i)) : null;
         if (dup && op !== '>|') { tokens.push(fdPrefix + op + dup[0]); i += dup[0].length; continue; }
         tokens.push(fdPrefix + op);
         continue;
@@ -7065,6 +7117,8 @@ export class Shell {
     try {
       for (const stmt of groupStatements(stripComments(content))) {
         if (this.abortController?.signal.aborted) { exitCode = 130; break; }
+        // set -n (noexec): a non-interactive shell reads the rest without running it
+        if (this.options.has('noexec') && !this.interactiveFlag) break;
         this.currentLine = stmt.line;
         this.env['LINENO'] = String(stmt.line);
         exitCode = await this.execute(stmt.text, writeStdout, writeStderr, false, terminal, true);
@@ -7079,7 +7133,8 @@ export class Shell {
     }
     this.lastExitCode = exitCode;
     this.env['?'] = String(exitCode);
-    await this.runExitTrap(writeStdout, writeStderr, terminal);
+    const trapExit = await this.runExitTrap(writeStdout, writeStderr, terminal);
+    if (trapExit !== undefined) { exitCode = trapExit; this.env['?'] = String(exitCode); }
     return exitCode;
   }
 

@@ -6,7 +6,7 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1363/1567 (87.0%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1377/1567 (87.9%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1275/1567 (81.4%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **612/635 (96.4%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **172/320 (53.8%)** |
@@ -36,7 +36,7 @@ How each suite runs, and what is and isn't scored, is described in
 | arith | 2/71 | 65/71 | 6 |
 | command-sub | 0/28 | 26/28 | 2 |
 | here-doc | 0/32 | 29/32 | 3 |
-| redirect | 3/39 | 32/39 | 7 |
+| redirect | 3/39 | 35/39 | 4 |
 | if_ | 0/5 | 5/5 | 0 |
 | loop | 1/28 | 26/28 | 2 |
 | case_ | 0/13 | 12/13 | 1 |
@@ -47,12 +47,12 @@ How each suite runs, and what is and isn't scored, is described in
 | builtin-read | 0/64 | 64/64 | 0 |
 | builtin-eval-source | 0/23 | 19/23 | 4 |
 | builtin-getopts | 0/30 | 26/30 | 4 |
-| builtin-trap | 0/33 | 26/33 | 7 |
+| builtin-trap | 0/33 | 29/33 | 4 |
 | builtin-bracket | 0/50 | 46/50 | 4 |
 | builtin-cd | 3/28 | 26/28 | 2 |
 | builtin-special | 1/12 | 7/12 | 5 |
 | builtin-type | 0/6 | 3/6 | 3 |
-| builtin-vars | 0/38 | 31/38 | 7 |
+| builtin-vars | 0/38 | 33/38 | 5 |
 | dbracket | 1/49 | 44/49 | 5 |
 | dparen | 0/14 | 13/14 | 1 |
 | assign | 2/43 | 38/43 | 5 |
@@ -78,7 +78,7 @@ How each suite runs, and what is and isn't scored, is described in
 | regex | 1/37 | 35/37 | 2 |
 | temp-binding | 0/4 | 4/4 | 0 |
 | background | 3/27 | 21/27 | 6 |
-| sh-options | 0/32 | 25/32 | 7 |
+| sh-options | 0/32 | 31/32 | 1 |
 | command-parsing | 0/2 | 2/2 | 0 |
 
 <details><summary>Failing cases</summary>
@@ -96,7 +96,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **arith**: Arith sub with word parts; Backticks within arith sub; Integer constant validation; Comma operator (borrowed from C); Logical Ops; Bitwise ops
 - **command-sub**: Making keyword out of command sub should NOT work; Syntax errors with double quotes within backticks
 - **here-doc**: Here doc with bad comsub delimiter; Here doc with line continuation, then pipe.  Syntax error.; Function def and execution with here doc
-- **redirect**: Named file descriptor; \>&word redirects stdout and stderr when word is not a number or -; 1\>&2- to move file descriptor; 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes; xtrace not affected by redirects
+- **redirect**: 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes; xtrace not affected by redirects
 - **loop**: while in pipe with subshell; bad arg to break
 - **case_**: case \n bug regression
 - **func-parsing**: Hard case, function with } token in it; = in function name; Function name with $; Function name with command sub; Function name with !; Break after ) is OK.
@@ -104,12 +104,12 @@ How each suite runs, and what is and isn't scored, is described in
 - **builtin-printf**: printf with no args; printf %c unicode - prints the first BYTE of a string - it does not respect UTF-8; printf invalid format; bash truncates long strftime string at 128; printf positive integer overflow; printf negative integer overflow
 - **builtin-eval-source**: eval usage; eval YSH block with 'break continue return error'; Source with syntax error; Eval with syntax error
 - **builtin-getopts**: getopts with invalid variable name; OPTIND; OPTIND after multiple getopts with same spec; OPTIND after multiple getopts with different spec
-- **builtin-trap**: exit 1 when trap code string is invalid; trap EXIT calling exit; trap EXIT with PARSE error and explicit exit; exit codes for traps are isolated; traps are cleared in subshell (started with &); trap USR1, sleep, SIGINT: non-interactively; Remove trap with an unsigned integer
+- **builtin-trap**: exit 1 when trap code string is invalid; exit codes for traps are isolated; traps are cleared in subshell (started with &); trap USR1, sleep, SIGINT: non-interactively
 - **builtin-bracket**: -k for sticky bit; test -p named pipe; -ef; test -c
 - **builtin-cd**: pwd in symlinked dir on shell initialization; Survey of getcwd() syscall
 - **builtin-special**: Prefix assignments persist after special builtins, like : (set -o posix); Prefix assignments persist after readonly, but NOT exported (set -o posix); Prefix binding for exec is a special case (versus e.g. readonly); bash 'type' gets confused - says 'function', but runs builtin; command, builtin - both can be redefined, not special (regression)
 - **builtin-type**: type -\> alias external; type of relative path; more special builtins
-- **builtin-vars**: Export sets a global variable that persists after export -n; Export a local that shadows a global; Unset exported variable, then define it again.  It's NOT still exported.; Exporting a parent func variable (dynamic scope); Unset a function without -f; Unset and scope (bug #653); local after readonly
+- **builtin-vars**: Export sets a global variable that persists after export -n; Export a local that shadows a global; Unset exported variable, then define it again.  It's NOT still exported.; Exporting a parent func variable (dynamic scope); local after readonly
 - **dbracket**: [[ regex syntax error; [[ at runtime doesn't work; [[ with env prefix doesn't work; tilde expansion with =~ (confusing); [[ ]] with redirect
 - **dparen**: (( )) with redirect
 - **assign**: Env binding can use preceding bindings, but not subsequent ones; Trying to run keyword 'for'; Test above without 'local' (which is not POSIX); aliased assignment doesn't split; "declare -a arr" and "readonly -a a" creates an empty array (OSH)
@@ -129,7 +129,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **process-sub**: Process sub from shell to stdin; Non-linear pipeline with \>(); status code is available; shopt -s process_sub_fail; process subs and pipelines together
 - **regex**: Unquoted { is a regex parse error; make a lisp example
 - **background**: wait -n with arguments - arguments are respected; wait with invalid arg; Wait for job and PIPESTATUS - cat; YSH wait --all; YSH wait --verbose; Signal message for killed background job
-- **sh-options**: $- with -c; $- with interactive shell; pass shopt options like sh -O nullglob; vi and emacs are mutually exclusive; interactive shell starts with emacs mode on; -n for no execution (useful with --ast-output); noclobber on \<\>
+- **sh-options**: noclobber on \<\>
 
 </details>
 
