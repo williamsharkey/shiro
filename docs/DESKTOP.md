@@ -19,6 +19,11 @@ classic full-page terminal of shiro.computer is still there behind a flag.
 
 All changes are additive. Nothing below renames or removes an earlier name.
 
+- **2026-10-09 (unix/desktop), v1.1.** Quarters: `WindowState` gains
+  `'snapped-top-left' | 'snapped-top-right' | 'snapped-bottom-left' |
+  'snapped-bottom-right'` (every snapped state still starts with `snapped-`),
+  and `snap()` takes `SnapSide` (`'left' | 'right' | 'top-left' | 'top-right' |
+  'bottom-left' | 'bottom-right'`). `snapZone(px, py, w, h)` is exported.
 - **2026-10-09 (unix/desktop), v1.** First version: `DesktopAPI`,
   `DesktopWindow`, `Surface`, content kinds `dom`, `iframe`, `terminal`,
   `surface`, apps, desktop events, `/dom`, `requireNetworkSignIn`.
@@ -73,7 +78,32 @@ destroyed), and the next Terminal window adopts it again.
   | Alt+Shift+↑ / ↓ | zoom / restore (or minimize) |
   | Alt+Shift+← / → | tile left / right |
   | Alt+\` (Alt+Shift+\`) | cycle windows |
+  | Ctrl+Alt+U / I / J / K | top-left / top-right / bottom-left / bottom-right quarter |
+  | Ctrl+Space (Cmd+Space, Alt+Shift+Space) | search: apps, commands, recent commands, files |
   | Alt+Shift+F / Alt+Shift+, | Files / Settings |
+  | Cmd+N / Cmd+W / Cmd+\` | new terminal / close / cycle, when the browser passes them on (installed app, fullscreen) |
+
+- **Snapping**: drag a title bar to the left/right edge for a half, to an
+  edge within 64 px of a corner for that quarter, to the top for maximized.
+- **Search** (Ctrl+Space or the magnifier in the menu bar, `spotlight.ts`,
+  loaded on first use): fuzzy matching over apps, builtins and programs on
+  PATH, the last 200 lines of `~/.bash_history`, and up to 3000 files under
+  `/home/user` (4 levels, skipping `node_modules`, `.git`, caches). Enter
+  opens an app or file, or runs the command in a new Terminal window; the
+  last entry always runs what you typed. Ctrl+Space no longer reaches the
+  terminal (Ctrl+@ still sends NUL, e.g. for Emacs' set-mark).
+- **Layout after a reload** (`session.ts`): Terminal (its working
+  directory), Files (its folder), Settings (its pane), Activity and About
+  windows come back where they were, maximized/snapped/minimized as they
+  were (localStorage `shiro-desktop-session`). The main terminal gets its
+  geometry at boot; the others reopen once the page is idle. Program windows
+  (Vim, htop, X11 apps) are not reopened: that would run them again.
+- **First visit**: three short cards in the corner (what this is, real Linux
+  programs and `debian install`, where files live), shown once per browser
+  (localStorage `shiro-desktop-tour`); Help → Welcome Tour shows them again.
+- **About This Computer** lists measured status with the document that
+  records each number (`STATUS` in `apps/about.ts`: keep it in step with
+  DEBIAN_SCORE.md and X86_ENGINES.md), and what is real, emulated and absent.
 
 - **Themes**: light, dark, or match the system (View menu, the sun/moon icon
   in the menu bar, or Settings → Appearance). Saved in localStorage
@@ -139,12 +169,13 @@ interface DesktopWindow {
   readonly body: HTMLElement;         // client area
   readonly titlebarExtra: HTMLElement | null;   // put title-bar buttons here
   readonly options: Readonly<WindowOptions>;
-  title: string; readonly state: 'normal' | 'minimized' | 'maximized' | 'snapped-left' | 'snapped-right' | 'closed';
+  title: string; readonly state: 'normal' | 'minimized' | 'maximized' | 'snapped-left' | 'snapped-right'
+    | 'snapped-top-left' | 'snapped-top-right' | 'snapped-bottom-left' | 'snapped-bottom-right' | 'closed';
   readonly focused: boolean;
   readonly iframe?: HTMLIFrameElement; readonly surface?: Surface; readonly content?: unknown;
   setTitle(t): void; geometry(): Geometry;      // {x, y} of the frame, {width, height} of the client area
   move(x, y): void; resize(w, h): void; setGeometry(partial): void;
-  focus(): void; minimize(): void; restore(): void; maximize(): void; zoom(): void; snap('left' | 'right'): void;
+  focus(): void; minimize(): void; restore(): void; maximize(): void; zoom(): void; snap(side: SnapSide): void;   // halves and quarters
   close(force?): boolean;                        // false when onClose vetoed it
   beginMove(ev: PointerEvent): void;             // client-side decorations start a move...
   beginResize(ev: PointerEvent, edges: string): void;   // ...or a resize ('n','se','w',...)
