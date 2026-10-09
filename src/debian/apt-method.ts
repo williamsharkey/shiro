@@ -21,7 +21,7 @@ const enc = new TextEncoder();
 type Message = { code: number; fields: Map<string, string> };
 
 /** Read apt's messages (a status line, header fields, a blank line) from fd 0. */
-class MessageReader {
+export class MessageReader {
   private buf = '';
   private eof = false;
   private readonly chunk = new Uint8Array(16384);
@@ -66,7 +66,7 @@ async function digestHex(alg: string, data: Uint8Array): Promise<string> {
   return s;
 }
 
-async function hashFields(data: Uint8Array): Promise<string> {
+export async function hashFields(data: Uint8Array): Promise<string> {
   const [sha1, sha256, sha512] = await Promise.all([digestHex('SHA-1', data), digestHex('SHA-256', data), digestHex('SHA-512', data)]);
   const md5 = md5Hex(data);
   return `MD5-Hash: ${md5}\nMD5Sum-Hash: ${md5}\nSHA1-Hash: ${sha1}\nSHA256-Hash: ${sha256}\nSHA512-Hash: ${sha512}\n`;

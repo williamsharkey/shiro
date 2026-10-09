@@ -79,6 +79,13 @@ Debian's apt and dpkg run unmodified. What Shiro provides around them:
   apt still verifies InRelease with sqv and every index and .deb hash, so the
   mirror is untrusted. `Acquire::Shiro::Mirror` (apt.conf) or
   `$SHIRO_DEBIAN_MIRROR` point it elsewhere.
+- **Index decompression.** apt's `store` method (it turns each downloaded
+  `Packages.xz` into `Packages` and hashes it) is diverted the same way to
+  `#!/usr/bin/shiro-apt-store` (`src/debian/apt-store.ts`): the xz/gz/bz2/
+  zstd codecs and hashes run in the page. Under the x86 engine the original
+  spent ~33 s of a ~72 s `apt-get update` decoding trixie's 56 MB index.
+  apt checks the result's hashes against the signed Release file as before;
+  `shiro-alternatives --set /usr/lib/apt/methods/store debian` restores it.
 
 ### Package mirror: what the operator hosts
 
@@ -134,16 +141,9 @@ Debian's.
 
 ## Known gaps
 
-- `apt install` sometimes stops for good after dpkg-preconfigure prints
-  "Preconfiguring packages ...", when the set includes a package with a
-  debconf `config` script (adduser, ucf). Running the same confmodule script
-  under `debconf`, or a perl/sh pipe pair, works; the scoreboard records
-  these as `harness` (the batch's machine stopped answering). Same-instance
-  fork (`BLINK_SAME_INSTANCE_FORK=1`) does not change it.
-- `/etc/apt/apt.conf.d/91shiro-engine` sets `Dpkg::Use-Pty "false"`: in apt
-  runs, the child's `ioctl(TIOCSCTTY)` on its pty is sometimes refused with
-  EPERM. The same sequence (fork, close master, setsid, open slave,
-  TIOCSCTTY) works standalone, with and without a shared mapping.
+- systemd's postinst (systemd-sysusers, pulled in by cron, udev, logrotate)
+  fails with "Failed to backup /etc/group: Bad address": Blink's `sendfile`
+  rejects a NULL offset (reported to unix/perf-blink).
 - `open(dir, O_TMPFILE)` fails (EISDIR); programs that try it fall back to a
   named temporary file.
 - One guest thread runs at a time (Blink's GIL); apt and dpkg are

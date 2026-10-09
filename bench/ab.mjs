@@ -136,6 +136,34 @@ export function mannWhitney(x, y) {
   return Math.min(1, 2 * (1 - normalCdf(Math.max(0, z))));
 }
 
+/**
+ * Hierarchical bootstrap of the median shift (percent of the base median, +
+ * is worse): resample rounds with replacement, then samples within each
+ * chosen round, so the interval carries the round-to-round variation that
+ * pooled tests ignore. Deterministic (seeded by the metric name).
+ */
+export function bootstrapCi(rounds, baseMedian, higher, alpha, seedText = '', iterations = 2000) {
+  if (!rounds.length || !baseMedian) return [-Infinity, Infinity];
+  let seed = 2166136261;
+  for (const c of seedText) seed = Math.imul(seed ^ c.charCodeAt(0), 16777619);
+  const rand = () => { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const pick = (xs) => xs[Math.floor(rand() * xs.length)];
+  const out = [];
+  for (let b = 0; b < iterations; b++) {
+    const bs = [], ns = [];
+    for (let r = 0; r < rounds.length; r++) {
+      const rd = pick(rounds);
+      for (let i = 0; i < rd.base.length; i++) bs.push(pick(rd.base));
+      for (let i = 0; i < rd.new.length; i++) ns.push(pick(rd.new));
+    }
+    const d = ((median(ns) - median(bs)) / Math.abs(baseMedian)) * 100;
+    out.push(higher ? -d : d);
+  }
+  out.sort((x, y) => x - y);
+  const q = (f) => out[Math.min(out.length - 1, Math.max(0, Math.floor(f * out.length)))];
+  return [q(alpha / 2), q(1 - alpha / 2)];
+}
+
 /** Hodges–Lehmann shift: median of all pairwise new − base differences. */
 const hlShift = (base, next) => median(base.flatMap((b) => next.map((n) => n - b)));
 
@@ -184,9 +212,15 @@ export function analyze(rounds, { alpha, minEffect }) {
     const dirs = m.perRound.filter(Boolean).map((p) => Math.sign(median(p.new) - median(p.base)));
     const consistent = dirs.length > 0 && dirs.every((d) => d !== 0 && d === dirs[0]);
     const p = mannWhitney(m.base, m.new);
-    Object.assign(row, { shiftPct: worsePct, p, rounds: dirs.map((d) => (d > 0 ? '+' : d < 0 ? '-' : '=')).join('') });
-    if (p < alpha && consistent && Math.abs(worsePct) >= minEffect) row.status = worsePct > 0 ? 'regressed' : 'improved';
-    else if (p < alpha && Math.abs(worsePct) >= minEffect) row.status = 'inconsistent';
+    const rounds = m.perRound.filter((r) => r && r.base.length && r.new.length);
+    const ci = bootstrapCi(rounds, bMed, higher, alpha, m.key);
+    Object.assign(row, { shiftPct: worsePct, p, ci, rounds: dirs.map((d) => (d > 0 ? '+' : d < 0 ? '-' : '=')).join('') });
+    // Decided on the round-level bootstrap interval, not the pooled p: samples
+    // within one run share a page and the machine's state at that moment, so
+    // pooling them overstates significance (an A/A run "found" 25% shifts)
+    const excludesZero = ci[0] > 0 || ci[1] < 0;
+    if (excludesZero && consistent && Math.abs(worsePct) >= minEffect) row.status = worsePct > 0 ? 'regressed' : 'improved';
+    else if (excludesZero && Math.abs(worsePct) >= minEffect) row.status = 'inconsistent';
     else row.status = 'same';
     rows.push(row);
   }
@@ -197,12 +231,12 @@ function report(rows, a, sides, log) {
   const order = { regressed: 0, inconsistent: 1, improved: 2, changed: 3, new: 3, gone: 3, same: 4, 'n/a': 5 };
   rows.sort((x, y) => order[x.status] - order[y.status] || x.metric.localeCompare(y.metric));
   log(`\n[ab] ${sides.base.label} → ${sides.new.label}; ${a.rounds} rounds × ${a.runs} runs, alpha ${a.alpha}, min effect ${a.minEffect}%`);
-  log('     shift = Hodges–Lehmann estimate, + is worse; rounds = direction of new vs base per round');
+  log(`     shift = Hodges–Lehmann estimate, + is worse; CI = ${Math.round((1 - a.alpha) * 100)}% round-level bootstrap interval of the median shift; rounds = direction per round`);
   for (const r of rows) {
     if (r.status === 'same' && !process.env.AB_ALL) continue;
     const head = `${r.status.padEnd(12)} ${r.metric.padEnd(48)} ${fmt(r.base).padStart(8)} → ${fmt(r.new).padStart(8)} ${(r.unit || '').padEnd(6)}`;
     if (r.exact) log(`${head} exact (Δ ${fmt(r.delta)}, ${(r.shiftPct >= 0 ? '+' : '') + fmt(r.shiftPct)}%)`);
-    else if (r.p != null) log(`${head} shift ${(r.shiftPct >= 0 ? '+' : '') + fmt(r.shiftPct)}%  p=${r.p.toPrecision(2)}  rounds ${r.rounds}  n=${r.nBase}/${r.nNew}`);
+    else if (r.p != null) log(`${head} shift ${(r.shiftPct >= 0 ? '+' : '') + fmt(r.shiftPct)}%  CI [${fmt(r.ci[0])}, ${fmt(r.ci[1])}]%  rounds ${r.rounds}  p(pooled)=${r.p.toPrecision(2)}  n=${r.nBase}/${r.nNew}`);
     else log(head);
   }
   const counts = {};

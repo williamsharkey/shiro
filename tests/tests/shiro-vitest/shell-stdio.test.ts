@@ -196,7 +196,7 @@ describe('fds 3-9 are inherited as they are', () => {
 
   it('exec 3>file and exec 4>&1 1>/dev/null reach programs the shell starts', async () => {
     let out = '';
-    const st = await shell.execute('exec 3>/tmp/fd3.txt; fdwrite 3 c; fdwrite 3 d; cat /tmp/fd3.txt; exec 4>&1 1>/dev/null; fdwrite 4 e; echo hidden',
+    const st = await shell.execute('exec 3>/tmp/fd3.txt; fdwrite 3 c; fdwrite 3 d; cat /tmp/fd3.txt; exec 4>&1 1>/dev/null; fdwrite 4 e; echo hidden; exec 1>&4 3>&- 4>&-',
       (t) => { out += t; }, () => {});
     expect(out.replace(/\r\n/g, '\n')).toBe('c\nd\ne\n');
     expect(st).toBe(0);
@@ -248,4 +248,45 @@ describe('the debconf confmodule protocol through a kernel-run sh', () => {
     expect(commands).toEqual(['GET adduser/homedir-permission', 'INPUT low adduser/x', 'result 30 question skipped']);
     expect(err).toBe('stderr: true\n');
   }, 30_000);
+});
+
+describe('named pipes opened with exec', () => {
+  it('exec 3>fifo in a background subshell: a child sh and a kernel program write through it; the reader sees EOF', async () => {
+    let out = '';
+    const st = await withTimeout(shell.execute(
+      "mkdir -p /tmp/fifo3 && cd /tmp/fifo3 && mkfifo p\n(exec 3>p; sh -c 'echo x >&3'; fdwrite 3 kern; echo y >&3) &\ncat < p",
+      (t) => { out += t; }, () => {}), 20_000);
+    expect(out.replace(/\r\n/g, '\n').replace(/^\[\d+\] \d+\n/gm, '')).toBe('x\nkern\ny\n');
+    expect(st).toBe(0);
+  }, 30_000);
+});
+
+describe('scripts that do nothing do not wait on stdin', () => {
+  // dpkg-preconfigure runs ucf's empty config script with stdin on a pipe it keeps open
+  it('an empty file without #!, `sh FILE` and `sh -c ""` exit without reading a live stdin', async () => {
+    await fs.writeFile('/tmp/empty.cfg', '');
+    await fs.chmod?.('/tmp/empty.cfg', 0o755);
+    for (const argv of [['/tmp/empty.cfg', 'configure', ''], ['sh', '/tmp/empty.cfg'], ['sh', '-c', ''], ['sh', '-c', 'true']]) {
+      const [r] = createPipe(); // the write end is never closed
+      const p = await spawn(argv, { 0: r, 1: new SinkFile(() => {}), 2: new SinkFile(() => {}) });
+      expect(await withTimeout(p.wait(), 5_000)).toBe(0);
+    }
+  }, 30_000);
+});
+
+describe('background kernel programs in a kernel-run sh', () => {
+  it('prog & is a kernel process: $! is its pid, its stdin is /dev/null, no [N] line', async () => {
+    const r = await run(['sh', '-c', 'readloop & p=$!; wait $p; echo "st $? $([ -n "$p" ] && [ "$p" -lt 40000 ] && echo kpid)"'], 'never read\n');
+    expect(r.out).toBe('lines: 0\nst 0 kpid\n');
+  });
+
+  it('set -m: its own process group; kill -STOP shows in jobs -l; kill ends it', async () => {
+    const [rd, wr] = createPipe(); // a live stdin that never ends: the job keeps reading it
+    let out = '';
+    const p = await spawn(['sh', '-c', 'set -m; readloop & p=$!; read a b c d e f < /proc/$p/stat; [ "$e" = "$p" ] && [ "$e" != $$ ] && echo own-group; kill -STOP $p; sleep 0.1; jobs -l; kill -CONT $p; kill $p; wait $p; echo "st $?"'],
+      { 0: rd, 1: new SinkFile((t) => { out += t; }), 2: new SinkFile((t) => { out += t; }) });
+    expect(await withTimeout(p.wait(), 10_000)).toBe(0);
+    void wr.close();
+    expect(out).toMatch(/^\[1\] \d+\nown-group\n\[1\]\+ \d+ Stopped\s+readloop\nst 143\n$/);
+  });
 });

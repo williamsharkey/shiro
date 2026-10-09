@@ -137,11 +137,14 @@ async function newMachine(browser, base, log) {
 async function smoke(m, pkg) {
   const list = (await m.run(`dpkg -L ${pkg} 2>/dev/null`)).out.split('\n').filter(Boolean);
   const diverted = (await m.run(`dpkg-divert --list 2>/dev/null`)).out;
-  const bins = list.filter((f) => /^\/(?:usr\/)?s?bin\/[^/]+$/.test(f) && !diverted.includes(`of ${f} `));
+  // A diverted program (the overlay's Shiro default) runs by its path as Shiro's: test that side
+  const bins = list.filter((f) => /^\/(?:usr\/)?s?bin\/[^/]+$/.test(f));
+  const who = (bin) => (diverted.includes(`of ${bin} `) ? ' [Shiro\'s]' : '');
   // The program named like the package first, then the rest
   bins.sort((a, b) => (b.endsWith('/' + pkg) ? 1 : 0) - (a.endsWith('/' + pkg) ? 1 : 0));
   const tried = [];
   let ran; // a run that loaded and exited normally without printing a version or usage
+  let undeclared; // a perl program needing a module no installed package has (dh_bash-completion: debhelper)
   // Shells have no --version (dash): run a command instead
   const shell = bins.find((b) => /\/(?:da|ba|z|k|mk|c|tc|fi)?sh$/.test(b));
   if (shell) {
@@ -151,18 +154,21 @@ async function smoke(m, pkg) {
   for (const bin of bins.slice(0, 3)) {
     for (const flagArg of ['--version', '--help', '-V', '-h']) {
       const r = await m.run(`timeout 120 ${bin} ${flagArg} </dev/null 2>&1`, 180);
-      const crashed = /terminating due to SIG|Segmentation fault|Illegal instruction|SCORE-TIMEOUT/.test(r.out) || r.code >= 128 || r.code === 124;
+      const crashed = /terminating due to SIG|Segmentation fault|Illegal instruction|SCORE-TIMEOUT/.test(r.out) || (r.code >= 128 && r.code < 255) || r.code === 124; // 255: exit(-1), an ordinary error (ip --version)
       tried.push(`${bin} ${flagArg}: exit ${r.code}`);
-      if (r.code === 0 && r.out.trim()) return { ok: true, how: `${bin} ${flagArg}`, ms: r.ms, sample: r.out.trim().split('\n')[0].slice(0, 100) };
+      if (r.code === 0 && r.out.trim()) return { ok: true, how: `${bin} ${flagArg}${who(bin)}`, ms: r.ms, sample: r.out.trim().split('\n')[0].slice(0, 100) };
       // Tools without --version print their usage and exit 1 or 2: it ran, which is what we check
       const broken = /error while loading shared libraries|Exec format error|cannot execute|not found|Can't locate|No such file/i.test(r.out);
-      if (r.code > 0 && r.code < 126 && !broken && /usage|version|options|--help/i.test(r.out)) return { ok: true, how: `${bin} ${flagArg} (usage, exit ${r.code})`, ms: r.ms, sample: r.out.trim().split('\n')[0].slice(0, 100) };
+      if (r.code > 0 && r.code < 126 && !broken && /usage|version|options|--help/i.test(r.out)) return { ok: true, how: `${bin} ${flagArg} (usage, exit ${r.code})${who(bin)}`, ms: r.ms, sample: r.out.trim().split('\n')[0].slice(0, 100) };
       if (crashed) return { ok: false, how: `${bin} ${flagArg}`, category: r.code === 124 ? 'timeout' : 'engine-crash', error: firstError(r.out) || `exit ${r.code}` };
+      const mod = /Can't locate (\S+\.pm) in @INC/.exec(r.out)?.[1];
+      if (mod && !undeclared && !(await m.run(`dpkg -S '*/${mod}' 2>/dev/null`)).out.trim()) undeclared = { bin, mod };
       // helpztags exits 0 printing nothing; select-editor wants a terminal
       if (!ran && !broken && (r.code === 0 || (r.code < 3 && r.out.trim()))) ran = { bin, flagArg, r };
     }
   }
   if (ran) return { ok: true, how: `${ran.bin} ${ran.flagArg} (ran, exit ${ran.r.code}${ran.r.out.trim() ? '' : ', no output'})`, ms: ran.r.ms, sample: ran.r.out.trim().split('\n')[0].slice(0, 100) };
+  if (undeclared) return { ok: true, how: `installed; ${undeclared.bin} needs ${undeclared.mod}, which no dependency provides (as on Debian)`, ms: 0 };
   if (bins.length) return { ok: false, how: tried.join('; '), category: 'smoke-failed', error: tried[0] };
   const libs = list.filter((f) => /^\/usr\/lib\/x86_64-linux-gnu\/(?:[\w.+-]+\/)?[^/]+\.so(\.\d+)*$/.test(f));
   if (libs.length) {
@@ -280,8 +286,9 @@ async function main() {
         next += batch.length;
         try {
           // A dpkg left half-configured by an earlier failure fails everything after it
-          if (m && (await m.run('dpkg --audit 2>&1')).out.trim()) {
-            log('dpkg --audit reports problems; new machine');
+          // ("dpkg was interrupted": its journal, /var/lib/dpkg/updates, isn't empty)
+          if (m && (await m.run('dpkg --audit 2>&1; ls -A /var/lib/dpkg/updates 2>/dev/null')).out.trim()) {
+            log('dpkg --audit reports problems (or dpkg was interrupted); new machine');
             await m.context.close().catch(() => {});
             m = null;
           }

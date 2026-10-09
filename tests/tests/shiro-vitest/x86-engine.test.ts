@@ -15,6 +15,13 @@ import { join, resolve } from 'node:path';
 import { createTestShell, run } from './helpers';
 import * as Abi from '@shiro/kernel/abi';
 
+// fixtures/x86/strops.c on an x86-64 host
+const NATIVE_STROPS = 'size 1 4255477d8be3a17c\nsize 2 5ec6f1695a3da52b\nsize 4 98b24faa8cdc2e47\nsize 8 0ecf036ebe70d8d0\n';
+// fixtures/x86/sse4.c on an x86-64 host (Intel)
+const NATIVE_SSE4 = 'blendv     e4abc65e766ee19d\nptest      7ba00a6efd7a4874\npmovx      b625e06221fbec95\nint        9681ac88d1b48510\nround      15342966be7d2f10\nblend      1772b0668d5f0605\ninsext     1ed641595d55738e\ninsertps   07a824bc4eee852a\ndp         b92c2b618267d645\nmpsadbw    732e9d86324c3735\ncrc32      ed946d3299e3b67d\npcmpestr   f9d8e2fd9893018c\npcmpistr   97a98d5fb234df8d\npcmpstr64  1141d2a07ff9295d\npinsrq 1\npcmpestri 5\ncrc32 0x1900b8ca\n';
+// fixtures/x86/bitscan.c on an x86-64 host
+const NATIVE_BITSCAN = 'bsf  zero64   reg dst=0x1122334455667788 zf=1\nbsf  zero64   mem dst=0x1122334455667788 zf=1\nbsr  zero64   reg dst=0x1122334455667788 zf=1\nbsr  zero64   mem dst=0x1122334455667788 zf=1\nbsf  val64    reg dst=0x8 zf=0\nbsf  val64    mem dst=0x8 zf=0\nbsr  val64    reg dst=0x34 zf=0\nbsr  val64    mem dst=0x34 zf=0\nbsf  zero32   reg dst=0x1122334455667788 zf=1\nbsf  zero32   mem dst=0x1122334455667788 zf=1\nbsr  zero32   reg dst=0x1122334455667788 zf=1\nbsr  zero32   mem dst=0x1122334455667788 zf=1\nbsf  val32    reg dst=0x8 zf=0\nbsf  val32    mem dst=0x8 zf=0\nbsr  val32    reg dst=0x14 zf=0\nbsr  val32    mem dst=0x14 zf=0\nbsf  zero16   reg dst=0x1122334455667788 zf=1\nbsf  zero16   mem dst=0x1122334455667788 zf=1\nbsr  zero16   reg dst=0x1122334455667788 zf=1\nbsr  zero16   mem dst=0x1122334455667788 zf=1\nbsf  val16    reg dst=0x1122334455660004 zf=0\nbsf  val16    mem dst=0x1122334455660004 zf=0\nbsr  val16    reg dst=0x1122334455660008 zf=0\nbsr  val16    mem dst=0x1122334455660008 zf=0\nclz64(0)=64 clz64(1)=63 clz64(1<<40)=23\nloop sum=5953906\n';
+
 const FIX = resolve(__dirname, 'fixtures/x86');
 
 function tryBuild(cmd: string, args: string[], env: Record<string, string> = {}): boolean {
@@ -32,6 +39,8 @@ const httpBin = join(out, 'nethttp');
 const glibcBin = join(out, 'hello-glibc');
 const goExe = existsSync('/usr/local/go/bin/go') ? '/usr/local/go/bin/go' : 'go';
 const haveGo = tryBuild(goExe, ['build', '-ldflags=-s', '-o', goBin, 'hello.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
+const goV2Bin = join(out, 'hello-go-v2');
+const haveGoV2 = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', goV2Bin, 'hello.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOAMD64: 'v2', GOCACHE: join(out, 'gocache') });
 const haveHttp = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', httpBin, 'nethttp.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const tcpBin = join(out, 'tcpecho');
 const haveTcp = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', tcpBin, 'tcpecho.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
@@ -60,6 +69,20 @@ const forkSharedBin = join(out, 'forkshared');
 const haveForkShared = tryBuild('gcc', ['-static', '-O1', '-o', forkSharedBin, 'forkshared.c']);
 const mremapBin = join(out, 'mremap');
 const haveMremap = tryBuild('gcc', ['-static', '-O1', '-o', mremapBin, 'mremap.c']);
+const timerfdBin = join(out, 'timerfd');
+const haveTimerfd = tryBuild('gcc', ['-static', '-O1', '-o', timerfdBin, 'timerfd.c']);
+const mapsBin = join(out, 'maps');
+const haveMaps = tryBuild('gcc', ['-static', '-O1', '-o', mapsBin, 'maps.c']);
+const mmsgBin = join(out, 'mmsg');
+const haveMmsg = tryBuild('gcc', ['-static', '-O1', '-o', mmsgBin, 'mmsg.c']);
+const sendfileBin = join(out, 'sendfile');
+const haveSendfile = tryBuild('gcc', ['-static', '-O1', '-o', sendfileBin, 'sendfile.c']);
+const stropsBin = join(out, 'strops');
+const haveStrops = tryBuild('gcc', ['-static', '-O1', '-o', stropsBin, 'strops.c']);
+const sse4Bin = join(out, 'sse4');
+const haveSse4 = tryBuild('gcc', ['-static', '-O1', '-msse4.2', '-o', sse4Bin, 'sse4.c']);
+const bitscanBin = join(out, 'bitscan');
+const haveBitscan = tryBuild('gcc', ['-static', '-O1', '-o', bitscanBin, 'bitscan.c']);
 const mkfifoBin = join(out, 'mkfifo');
 const haveMkfifo = tryBuild('gcc', ['-static', '-O1', '-o', mkfifoBin, 'mkfifo.c']);
 const prctlcapBin = join(out, 'prctlcap');
@@ -70,6 +93,8 @@ const ssecmpBin = join(out, 'ssecmp');
 const haveSsecmp = tryBuild('gcc', ['-static', '-O1', '-o', ssecmpBin, 'ssecmp.c', '-lm']);
 const brkmapBin = join(out, 'brkmap');
 const haveBrkmap = tryBuild('gcc', ['-static', '-O1', '-o', brkmapBin, 'brkmap.c']);
+const bigfileBin = join(out, 'bigfile');
+const haveBigfile = tryBuild('gcc', ['-static', '-O1', '-o', bigfileBin, 'bigfile.c']);
 const getgroupsBin = join(out, 'getgroups');
 const haveGetgroups = tryBuild('gcc', ['-static', '-O1', '-o', getgroupsBin, 'getgroups.c']);
 const fionbioBin = join(out, 'fionbio');
@@ -403,6 +428,18 @@ describe.skipIf(!haveTcp)('Blink engine: real TCP through the kernel relay', () 
     expect(r.exitCode).toBe(0);
   }, 120_000);
 
+  // glibc's resolver sends its A and AAAA queries with sendmmsg (pip, apt)
+  it.skipIf(!haveMmsg)('sendmmsg/recvmmsg on a kernel UDP socket (DNS over DoH)', async () => {
+    const { shell } = await setup(readFileSync(mmsgBin));
+    const r = await run(shell, './prog');
+    const out = r.output.replace(/\r\n/g, '\n');
+    expect(out).toContain('sendmmsg=2 lens 27 27');
+    expect(out).toContain('answer 0x11 rcode 0 answers 1 len>12 1');
+    expect(out).toContain('answer 0x22 rcode 3 answers 0 len>12 1');
+    expect(out).toContain('got 2 ids 3');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+
   it('resolves a name over UDP 53 (kernel DoH) and dials it', async () => {
     const { shell } = await setup(readFileSync(tcpBin));
     const r = await run(shell, `./prog echo.test:${ports.echoPort}`);
@@ -527,6 +564,25 @@ describe('Blink engine: CPU and syscall fixes', () => {
     expect(r.exitCode).toBe(0);
   }, 60_000);
 
+  // SHIROFS reads and maps big files through pread instead of loading them whole
+  it.skipIf(!haveBigfile)('reads, maps and writes a 3 MiB file (pread, SEEK_END, private/shared mmap, sequential read)', async () => {
+    const { fs, shell } = await setup(readFileSync(bigfileBin));
+    const size = 3 * 1048576 + 77;
+    const big = new Uint8Array(size);
+    for (let i = 0; i < size; i++) big[i] = (i * 7 + (i >> 12)) & 255;
+    await fs.writeFile('/home/user/work/big.bin', big);
+    await fs.writeFile('/home/user/work/trunc.bin', new Uint8Array(2_000_000).fill(0x71));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'size 3145805\npread 16 1225\ntail 10 6623\nprivate 2258754268\nshared 238244316\nread 3145805 4238872649\n');
+    expect(r.exitCode).toBe(0);
+    const after = await fs.readFile('/home/user/work/big.bin') as Uint8Array;
+    expect(after.length).toBe(size);
+    expect(new TextDecoder().decode(after.subarray(size - 4))).toBe('WXYZ');
+    expect(Buffer.compare(after.subarray(0, size - 4), big.subarray(0, size - 4))).toBe(0);
+    expect((await fs.readFile('/home/user/work/trunc.bin') as Uint8Array).length).toBe(1);
+  }, 60_000);
+
   // LTP futex_wake02, futex_wait_bitset01
   it.skipIf(!haveFutexwake)('FUTEX_WAKE wakes at most count waiters; bitset timeouts end by their own clock', async () => {
     const { shell } = await setup(readFileSync(futexwakeBin));
@@ -535,6 +591,59 @@ describe('Blink engine: CPU and syscall fixes', () => {
       'wake(2)=2 woken=2\nwake(1)=1 woken=3\nwake(100)=3 woken=6\nwake(none)=0\n' +
       'monotonic bitset wait=-1 timedout=1 early=0\nrealtime bitset wait=-1 timedout=1 early=0\n');
     expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  // musl's memcpy/memset (rep movsq/stosq) go a page at a time (patch 0041)
+  it.skipIf(!haveStrops)('rep movs/stos of every size match native: overlaps, page straddles, DF=1', async () => {
+    const { shell } = await setup(readFileSync(stropsBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(NATIVE_STROPS);
+  }, 120_000);
+
+  // x86-64-v2: Bun (Claude Code's native build, opencode), GOAMD64=v2 Go
+  it.skipIf(!haveSse4)('SSE4.1 and SSE4.2 match native', async () => {
+    const { shell } = await setup(readFileSync(sse4Bin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(NATIVE_SSE4);
+    expect(r.exitCode).toBe(0);
+  }, 120_000);
+
+  it.skipIf(!haveGoV2)('runs Go built for x86-64-v2 (GOAMD64=v2)', async () => {
+    const { shell } = await setup(readFileSync(goV2Bin));
+    const r = await run(shell, './prog a b');
+    expect(r.output).toContain('args: [a b]');
+    expect(r.output).toContain('goroutines=344015.127');
+    expect(r.exitCode).toBe(0);
+  }, 120_000);
+
+  // Rust's leading_zeros (LLVM: mov $127,%r8; bsr %rax,%r8): xAI's grok CLI
+  it.skipIf(!haveBitscan)('bsf/bsr with a zero source leave the destination unchanged', async () => {
+    const { shell } = await setup(readFileSync(bitscanBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(NATIVE_BITSCAN);
+  }, 60_000);
+
+  // uSockets' us_create_timer (Bun: opencode)
+  it.skipIf(!haveTimerfd)('timerfd: relative, interval and absolute timers, poll and epoll', async () => {
+    const { shell } = await setup(readFileSync(timerfdBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('create 1\nunarmed read EAGAIN 1\nsettime 1\ngettime armed 1 interval 1\npoll 1 after>=45ms 1\nread 1 count>=1 1\ninterval count>=3 1\ndisarmed 1\nabs epoll 1 after>=20ms 1 read 1 1\npast expires 1\nbad nsec EINVAL 1\n');
+  }, 60_000);
+
+  // glibc's pthread_getattr_np reads the main stack from here (glibc Bun: Claude Code, opencode)
+  it.skipIf(!haveMaps)('/proc/self/maps lists the guest mappings', async () => {
+    const { shell } = await setup(readFileSync(mapsBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'lines>4 1 well-formed 1 stack 2 text-x 1 mprotect-split 1 getattr 0 inside 1\n');
+  }, 60_000);
+
+  // systemd's copy_bytes (sysusers backing up /etc/group): sendfile(out, in, NULL, n)
+  it.skipIf(!haveSendfile)('sendfile with a NULL offset uses the file position', async () => {
+    const { shell } = await setup(readFileSync(sendfileBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'null off: 15 pos 21\noff: 5 off 5 pos 21\nzero: 0\nout: sendfile world\nhello');
   }, 60_000);
 
   // mkfifo for shell-stdio; needs the kernel's FIFOs (mknodat, unix/perf-kernel)

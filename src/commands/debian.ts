@@ -146,6 +146,20 @@ export const shiroAlternativesCmd: Command = {
   },
 };
 
+/** apt's `store` method (decompress + hash downloaded indexes) run natively (src/debian/apt-store.ts). */
+export const shiroAptStoreCmd: Command = {
+  name: 'shiro-apt-store',
+  description: "apt's store method (index decompression), run natively",
+  async exec(ctx) {
+    ctx.stderr += 'shiro-apt-store: apt runs this as /usr/lib/apt/methods/store; it speaks apt\'s method protocol on stdin/stdout\n';
+    return 100;
+  },
+  async program(proc, kernel) {
+    const { aptStoreProgram } = await import('../debian/apt-store');
+    return aptStoreProgram(proc, kernel);
+  },
+};
+
 /** apt's http/https transport (src/debian/apt-method.ts); apt runs it through the stub its method path holds. */
 export const shiroAptMethodCmd: Command = {
   name: 'shiro-apt-method',

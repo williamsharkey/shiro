@@ -208,6 +208,8 @@ function installWasiSyscalls(kernel: Kernel): void {
   kernel.registerSyscalls([A.SYS_stat, A.SYS_lstat, A.SYS_newfstatat, A.SYS_access, A.SYS_faccessat], Object.assign(binCommandStat, { passSync: binCommandPasses }));
 }
 
+// The paths SYS_shiro_execve runs a Shiro command by (not /usr/local/...: a
+// PATH search must move on from there to a real file a package installed)
 const BIN_DIR = /^\/(?:usr\/)?s?bin\/([^/]+)$/;
 
 /** binCommandStat will pass the call on: it isn't about a Shiro command's /bin path (kernel.syscallSync may answer it). */
@@ -240,8 +242,12 @@ async function binCommandStat(proc: Process, nr: number, args: ArrayLike<number>
   const p = kernel.resolvePath(proc, A.decodeText(data.subarray(0, len)), at ? args[0] : A.AT_FDCWD);
   const m = typeof p === 'string' ? BIN_DIR.exec(p) : null;
   if (!m || !kernel.shell?.commands.get(m[1])) return undefined;
-  // Exactly the paths exec runs the command by (not past a real file on PATH)
-  if ((await kernel.statPath(proc, p as string, false)) !== -A.ENOENT || !(await kernel.isBuiltinProgramPath(proc, p as string))) return undefined;
+  if ((await kernel.statPath(proc, p as string, false)) !== -A.ENOENT) return undefined;
+  // A real /bin/NAME or /usr/bin/NAME (Debian's cat) is what execve runs: a
+  // stat of /usr/sbin/cat claiming a file would stop bash's PATH search there
+  for (const real of [`/bin/${m[1]}`, `/usr/bin/${m[1]}`]) {
+    if (real !== p && typeof (await kernel.statPath(proc, real)) !== 'number') return undefined;
+  }
   if (nr === A.SYS_access || nr === A.SYS_faccessat) return 0;
   const now = Date.now();
   A.encodeStat({

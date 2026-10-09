@@ -350,6 +350,28 @@ describe('kernel processes', () => {
     await kernel.exit(proc, 0);
   });
 
+  it("link() counts names in st_nlink (shadow's lock: link(group.PID, group.lock), then nlink == 2)", async () => {
+    const proc = kernel.spawn({ path: 'holder', cwd: '/tmp', run: () => new Promise<number>(() => {}) });
+    const enc = new TextEncoder();
+    const call = (nr: number, paths: string[]) => {
+      const data = new Uint8Array(4096);
+      let off = 0;
+      const lens = paths.map((p) => { const b = enc.encode(p); data.set(b, off); off += b.length; return b.length; });
+      return kernel.syscall(proc, nr, lens, data);
+    };
+    const nlink = async (p: string) => ((await kernel.statPath(proc, p)) as { nlink: number }).nlink;
+    await fs.writeFile('/tmp/group.123', '123');
+    expect(await nlink('/tmp/group.123')).toBe(1);
+    expect(await call(A.SYS_link, ['/tmp/group.123', '/tmp/group.lock'])).toBe(0);
+    expect(await nlink('/tmp/group.123')).toBe(2);
+    expect(await nlink('/tmp/group.lock')).toBe(2);
+    expect(await call(A.SYS_rename, ['/tmp/group.lock', '/tmp/group.lck'])).toBe(0);
+    expect(await nlink('/tmp/group.123')).toBe(2);
+    expect(await call(A.SYS_unlink, ['/tmp/group.123'])).toBe(0);
+    expect(await nlink('/tmp/group.lck')).toBe(1);
+    await kernel.exit(proc, 0);
+  });
+
   it('open: files, O_CREAT|O_EXCL, O_APPEND, O_TRUNC, directories, /dev', async () => {
     const proc = kernel.spawn({ path: 'holder', cwd: '/tmp', run: () => new Promise<number>(() => {}) });
     const f = await kernel.open(proc, 'kopen.txt', A.O_CREAT | A.O_RDWR | A.O_TRUNC);
@@ -529,29 +551,18 @@ describe('kernel processes', () => {
     kernel.kill(proc.pid, A.SIGKILL);
   });
 
-  it("link() counts as a link (shadow's lock files); files are the stat caller's own (root's git)", async () => {
-    const proc = kernel.spawn({ path: 'ln', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
+  it("files are the stat caller's own: no owner is stored (root's git checks)", async () => {
+    const proc = kernel.spawn({ path: 'own', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
     const data = new Uint8Array(4096);
-    const enc = (...ss: string[]) => { let o = 0; const ls = ss.map((s) => { const b = new TextEncoder().encode(s); data.set(b, o); o += b.length; return b.length; }); return ls; };
     const stat = async (p: string) => {
-      const [n] = enc(p);
-      const r = await kernel.syscall(proc, A.SYS_stat, [n], data);
+      const b = new TextEncoder().encode(p); data.set(b);
+      expect(await kernel.syscall(proc, A.SYS_stat, [b.length], data)).toBe(0);
       const dv = new DataView(data.buffer);
-      return r < 0 ? r : { ino: dv.getUint32(8, true), nlink: dv.getUint32(16, true), uid: dv.getUint32(28, true), gid: dv.getUint32(32, true) };
+      return { uid: dv.getUint32(28, true), gid: dv.getUint32(32, true) };
     };
-    await fs.writeFile('/tmp/group.123', 'x');
-    // shadow's lckpwdf: link(file.PID, file.lock), then st_nlink of file.PID must be 2
-    expect(await kernel.syscall(proc, A.SYS_link, enc('/tmp/group.123', '/tmp/group.lock'), data)).toBe(0);
-    const a = await stat('/tmp/group.123'), b = await stat('/tmp/group.lock');
-    expect(a).toMatchObject({ nlink: 2 });
-    expect(b).toMatchObject({ nlink: 2, ino: (a as any).ino });
-    expect(await kernel.syscall(proc, A.SYS_unlink, enc('/tmp/group.123'), data)).toBe(0);
-    expect(await stat('/tmp/group.lock')).toMatchObject({ nlink: 1 });
-    expect(await kernel.syscall(proc, A.SYS_unlink, enc('/tmp/group.lock'), data)).toBe(0);
-    // No owners are stored: the default user's files are root's to root
-    expect(await stat('/tmp')).toMatchObject({ uid: 1000, gid: 1000 });
+    expect(await stat('/tmp')).toEqual({ uid: 1000, gid: 1000 });
     proc.uid = 0; proc.gid = 0;
-    expect(await stat('/tmp')).toMatchObject({ uid: 0, gid: 0 });
+    expect(await stat('/tmp')).toEqual({ uid: 0, gid: 0 });
     kernel.kill(proc.pid, A.SIGKILL);
   });
 

@@ -1,0 +1,148 @@
+From fb49718660adc4b8119d7902fa231b820037e62b Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 10:37:04 +0000
+Subject: [PATCH 44/44] Shiro: /proc/self/maps (and the process's own
+ /proc/<pid>/maps) from the guest page table
+
+---
+ blink/shiro.inc | 119 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 119 insertions(+)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 432e2f1..ca9d70e 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -258,11 +258,130 @@ static i64 ShiroPathCall(struct Machine *m, int nr, i64 path, int a1, int a2,
+   return ShiroCall(m, nr, A12(n, a1, a2, a3), buf, n, 0, true, true);
+ }
+ 
++// /proc/self/maps (and /proc/<own pid>/maps): only Blink knows the guest's
++// mappings, so it formats them like Linux, writes them into a kernel pipe
++// and hands out the read end. glibc's pthread_getattr_np finds the main
++// thread's stack here (Bun, through WebKit's stack bounds, aborts without it).
++struct ShiroMaps {
++  char *b;
++  int n, cap;
++  bool on;
++  i64 start;
++  u64 flags;
++  struct FileMap *fm;
++  i64 limit;  // where the file mapping (or the gap before the next) ends
++  i64 *starts;
++  int nstarts;
++};
++
++static void ShiroMapsEnd(struct ShiroMaps *u, i64 end) {
++  int k;
++  if (!u->on) return;
++  u->on = false;
++  if (u->cap - u->n < 400) return;  // the pipe's capacity: drop the rest
++  k = snprintf(u->b + u->n, u->cap - u->n,
++               "%08" PRIx64 "-%08" PRIx64 " %c%c%cp %08" PRIx64 " 00:00 0",
++               u->start, end, (u->flags & PAGE_U) ? 'r' : '-',
++               (u->flags & PAGE_RW) ? 'w' : '-', (u->flags & PAGE_XD) ? '-' : 'x',
++               u->fm && u->fm->offset > 0 ? u->fm->offset + (u->start - u->fm->virt) : 0);
++  u->n += k;
++  if (u->fm && u->fm->path) {  // Linux pads the name to column 73
++    u->n += snprintf(u->b + u->n, u->cap - u->n, "%*s%.256s", MAX(1, 73 - k), "",
++                     u->fm->path);
++  }
++  u->b[u->n++] = '\n';
++}
++
++static void ShiroMapsPage(struct System *s, struct ShiroMaps *u, i64 addr, u64 entry) {
++  u64 flags = entry & (PAGE_U | PAGE_RW | PAGE_XD);
++  int i;
++  if (u->on && (flags != u->flags || addr >= u->limit)) ShiroMapsEnd(u, addr);
++  if (!u->on) {
++    u->on = true;
++    u->start = addr;
++    u->flags = flags;
++    u->fm = GetFileMap(s, addr);
++    if (u->fm) {
++      u->limit = u->fm->virt + u->fm->size;
++    } else {
++      for (u->limit = INT64_MAX, i = 0; i < u->nstarts; ++i) {
++        if (u->starts[i] > addr && u->starts[i] < u->limit) u->limit = u->starts[i];
++      }
++    }
++  }
++}
++
++static void ShiroMapsWalk(struct System *s, struct ShiroMaps *u, u64 table, int level, i64 base) {
++  u8 *pt = GetPageAddress(s, table, level == 0);
++  i64 addr, span = (i64)1 << (39 - 9 * level);
++  u64 entry;
++  int i, n = level ? 512 : 256;  // the lower half only
++  for (i = 0; i < n; ++i) {
++    addr = base + i * span;
++    entry = LoadPte(pt + i * 8);
++    if (!(entry & PAGE_V)) {
++      ShiroMapsEnd(u, addr);
++    } else if (level == 3 || (entry & PAGE_PS)) {
++      ShiroMapsPage(s, u, addr, entry);
++    } else {
++      ShiroMapsWalk(s, u, entry, level + 1, addr);
++    }
++  }
++}
++
++static bool ShiroIsOwnMaps(struct Machine *m, const char *p, int n) {
++  char own[40];
++  if (n == 15 && !memcmp(p, "/proc/self/maps", 15)) return true;
++  if (n == 22 && !memcmp(p, "/proc/thread-self/maps", 22)) return true;
++  snprintf(own, sizeof(own), "/proc/%d/maps", m->system->pid);
++  return n == (int)strlen(own) && !memcmp(p, own, n);
++}
++
++static i64 ShiroMapsFd(struct Machine *m, int oflags) {
++  struct System *s = m->system;
++  struct ShiroMaps u = {0};
++  struct Dll *e;
++  u8 fds[8];
++  int rfd, wfd, off, k;
++  i64 r;
++  u.cap = 65536 - 512;
++  if (!(u.b = (char *)malloc(u.cap))) return -ENOMEM_LINUX;
++  for (e = dll_first(s->filemaps); e; e = dll_next(s->filemaps, e)) ++u.nstarts;
++  if (u.nstarts && !(u.starts = (i64 *)malloc(u.nstarts * sizeof(i64)))) {
++    free(u.b);
++    return -ENOMEM_LINUX;
++  }
++  u.nstarts = 0;
++  for (e = dll_first(s->filemaps); e; e = dll_next(s->filemaps, e)) {
++    u.starts[u.nstarts++] = FILEMAP_CONTAINER(e)->virt;
++  }
++  if (s->cr3) ShiroMapsWalk(s, &u, s->cr3, 0, 0);
++  ShiroMapsEnd(&u, (i64)1 << 47);
++  free(u.starts);
++  // O_CLOEXEC is 02000000 for open and pipe2 alike
++  r = ShiroCall(m, 293, A12(oflags & 02000000), fds, 0, 8, false, false);
++  if (r < 0) {
++    free(u.b);
++    return r;
++  }
++  rfd = Read32(fds);
++  wfd = Read32(fds + 4);
++  for (off = 0; off < u.n; off += k) {
++    k = MIN(u.n - off, 16384);
++    if ((r = ShiroCall(m, 1, A12(wfd, k), u.b + off, k, 0, false, false)) <= 0) break;
++    k = r;
++  }
++  KS(m, 3, A12(wfd));
++  free(u.b);
++  return rfd;
++}
++
+ static i64 ShiroAtCall(struct Machine *m, int nr, int dirfd, i64 path, int a2,
+                        int a3) {
+   char *buf = (char *)ShiroAlloc(m, 4096);
+   int n = ShiroPath(m, path, buf, 0);
+   if (n < 0) return n;
++  if (nr == 257 && ShiroIsOwnMaps(m, buf, n)) return ShiroMapsFd(m, a2);
+   return ShiroCall(m, nr, A12(dirfd, n, a2, a3), buf, n, 0, true, true);
+ }
+ 
+-- 
+2.43.0
+

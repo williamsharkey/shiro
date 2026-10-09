@@ -101,7 +101,9 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
     case 'node:zlib': return createZlibModule(getBuiltinModule);
 
     case 'dns':
-    case 'node:dns': {
+    case 'node:dns':
+    case 'dns/promises':
+    case 'node:dns/promises': {
       const dnsModule: any = {
         lookup: (hostname: string, opts: any, cb?: Function) => {
           if (typeof opts === 'function') { cb = opts; opts = {}; }
@@ -121,8 +123,10 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
         resolve: async (hostname: string) => ['127.0.0.1'],
         resolve4: async (hostname: string) => ['127.0.0.1'],
         resolve6: async (hostname: string) => ['::1'],
+        setServers: () => {},
+        getServers: () => ['8.8.8.8'],
       };
-      return dnsModule;
+      return name.endsWith('/promises') ? dnsModule.promises : dnsModule;
     }
 
     case 'perf_hooks':
@@ -195,7 +199,7 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
         },
         builtinModules: [
           'assert', 'async_hooks', 'buffer', 'child_process', 'constants', 'crypto',
-          'diagnostics_channel', 'dns', 'events', 'fs', 'fs/promises', 'http', 'https',
+          'diagnostics_channel', 'dns', 'dns/promises', 'events', 'fs', 'fs/promises', 'http', 'https',
           'module', 'net', 'os', 'path', 'perf_hooks', 'process', 'querystring',
           'readline', 'stream', 'stream/consumers', 'stream/promises', 'string_decoder', 'timers', 'timers/promises', 'tls',
           'tty', 'url', 'util', 'v8', 'worker_threads', 'zlib',

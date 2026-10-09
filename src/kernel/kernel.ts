@@ -21,9 +21,10 @@ import {
   shareInodeNumber, forgetInodeNumber, linkCount,
 } from './fd';
 import { createPipe, Pipe, PipeEnd, FifoRdWr } from './pipe';
+import type { PtyFile } from './pty';
 import { Process } from './process';
 import { EpollFile, waitReady } from './epoll';
-import { EventFile } from './fd';
+import { EventFile, TimerFile } from './fd';
 
 /** Runs a process to completion; resolves with its exit code (or nothing if it exited through the kernel). */
 export type Runner = (proc: Process, kernel: Kernel) => Promise<number | void>;
@@ -121,13 +122,10 @@ function shellQuote(s: string): string {
 /**
  * A stat as `proc` sees it. Files keep no owner (chown isn't stored), so one
  * reported as the default user's is the caller's: root's git and ssh find
- * their own files theirs. link() copies count as links.
+ * their own files theirs.
  */
 function statFor(proc: Process, st: A.KStat): A.KStat {
-  const own = st.uid === 1000 && proc.uid !== 1000;
-  const reg = st.dev === 1 && (st.mode & A.S_IFMT) === A.S_IFREG;
-  if (!own && !reg) return st;
-  return { ...st, ...(own ? { uid: proc.uid, gid: proc.gid } : {}), ...(reg ? { nlink: linkCount(st.ino) } : {}) };
+  return st.uid === 1000 && proc.uid !== 1000 ? { ...st, uid: proc.uid, gid: proc.gid } : st;
 }
 
 export class Kernel {
@@ -286,11 +284,14 @@ export class Kernel {
     let head: string;
     try {
       const st = await fs.stat(abs);
-      if (st.type !== 'file' || st.size < 3) return null;
+      if (st.type !== 'file') return null;
       const raw = await fs.readFile(abs);
       const bytes = typeof raw === 'string' ? enc.encode(raw.slice(0, 256)) : raw.subarray(0, 256);
-      if (bytes[0] !== 0x23 || bytes[1] !== 0x21) return null;
-      head = A.decodeText(bytes);
+      if (bytes[0] === 0x7f && bytes[1] === 0x45 && bytes[2] === 0x4c && bytes[3] === 0x46) return null;
+      // No #! line (an empty file too): ENOEXEC, on which execvp, posix_spawnp,
+      // perl and the shells run the file with /bin/sh. debconf runs a
+      // package's empty config this way, with its stdin a pipe left open.
+      head = bytes[0] === 0x23 && bytes[1] === 0x21 ? A.decodeText(bytes) : '#!/bin/sh';
     } catch {
       return null;
     }
@@ -848,7 +849,7 @@ export class Kernel {
     if (open) { A.encodeStat(statFor(proc, { ...open, ino: inodeNumber(hit.path) }), data); return 0; }
     const type = n.type === 'dir' ? A.S_IFDIR : n.type === 'symlink' ? A.S_IFLNK : n.special === 'fifo' ? A.S_IFIFO : A.S_IFREG;
     A.encodeStat(statFor(proc, {
-      dev: 1, ino: inodeNumber(hit.path), mode: type | (n.mode & 0o7777), nlink: n.type === 'dir' ? 2 : 1,
+      dev: 1, ino: inodeNumber(hit.path), mode: type | (n.mode & 0o7777), nlink: n.type === 'dir' ? 2 : linkCount(hit.path),
       uid: 1000, gid: 1000, rdev: 0, size: n.size, blksize: 4096, blocks: Math.ceil(n.size / 512),
       atimeMs: n.atime ?? n.mtime, mtimeMs: n.mtime, ctimeMs: n.ctime,
       atimeNs: n.atime === undefined ? n.mtimeNs : n.atimeNs, mtimeNs: n.mtimeNs,
@@ -892,7 +893,7 @@ export class Kernel {
       const open = type === A.S_IFREG && hasOpenInodes(fs) ? inodeStat(fs, real) : undefined;
       if (open) return { ...open, ino: inodeNumber(real) };
       return {
-        dev: 1, ino: inodeNumber(real), mode: type | (st.mode & 0o7777), nlink: st.isDirectory() ? 2 : 1,
+        dev: 1, ino: inodeNumber(real), mode: type | (st.mode & 0o7777), nlink: st.isDirectory() ? 2 : linkCount(real),
         uid: 1000, gid: 1000, rdev: 0, size: st.size, blksize: 4096, blocks: Math.ceil(st.size / 512),
         atimeMs: st.atimeMs ?? st.mtime.getTime(), mtimeMs: st.mtime.getTime(), ctimeMs: st.ctime.getTime(),
         atimeNs: st.atimeNs, mtimeNs: st.mtimeNs,
@@ -1064,6 +1065,13 @@ export class Kernel {
     const out = (fd: number) => (s: string) => {
       chain = chain.then(async () => { if (!proc.exiting) await this.writeAll(proc, fd, enc.encode(s.replace(/\r\n/g, '\n'))); });
     };
+    // Jobs get process groups of their own and the terminal while they run (Ctrl-Z, fg, bg, jobs)
+    const f0 = proc.fds.get(0);
+    if (f0?.kind === 'pty') {
+      const { ProcessTty } = await import('./pty');
+      shell.kernelTty = { tty: new ProcessTty(proc, (f0 as PtyFile).pty), writeOutput: out(2) };
+      shell.options.add('monitor');
+    }
     const prompt = () => {
       const home = shell.env.HOME || '/home/user';
       const cwd = shell.cwd === home ? '~' : shell.cwd.startsWith(home + '/') ? '~' + shell.cwd.slice(home.length) : shell.cwd;
@@ -1115,7 +1123,11 @@ export class Kernel {
     if (!base) throw new Error('kernel has no shell attached');
     const shell = base.fork();
     shell.cwd = proc.cwd;
-    shell.env = { ...proc.env, PWD: proc.cwd };
+    shell.env = { ...proc.env, PWD: proc.cwd, 0: proc.argv[0] ?? proc.path };
+    shell.localVars = new Set(['0']); // $0 is not exported
+    // $$, $PPID and $BASHPID are the process's
+    shell.shellPid = shell.bashPid = proc.pid;
+    shell.parentPid = proc.ppid;
     shell.uid = proc.uid;
     // Its fds are the process's (KernelStdio, adoptFds), not whatever exec did in the page's shell
     shell.userFds = new Map();
@@ -1424,6 +1436,39 @@ export class Kernel {
           const flags = nr === A.SYS_eventfd2 ? args[1] : 0;
           if (flags & ~(A.O_NONBLOCK | A.O_CLOEXEC | A.EFD_SEMAPHORE)) return -A.EINVAL;
           return fds.alloc(new EventFile(args[0], A.O_RDWR | (flags & A.O_NONBLOCK), !!(flags & A.EFD_SEMAPHORE)), 0, !!(flags & A.O_CLOEXEC));
+        }
+        case A.SYS_timerfd_create: {
+          const clock = args[0], flags = args[1];
+          if (![0, 1, 7, 8, 9].includes(clock)) return -A.EINVAL;  // REALTIME, MONOTONIC, BOOTTIME (+_ALARM)
+          if (flags & ~(A.O_NONBLOCK | A.O_CLOEXEC)) return -A.EINVAL;
+          return fds.alloc(new TimerFile(clock, A.O_RDONLY | (flags & A.O_NONBLOCK)), 0, !!(flags & A.O_CLOEXEC));
+        }
+        case A.SYS_timerfd_settime:
+        case A.SYS_timerfd_gettime: {
+          const f = fds.get(args[0]);
+          if (!f) return -A.EBADF;
+          if (!(f instanceof TimerFile)) return -A.EINVAL;
+          if (data.length < 32) return -A.EFAULT;
+          const dv = new DataView(data.buffer, data.byteOffset, 32);
+          if (nr === A.SYS_timerfd_gettime) {
+            const [v, i] = f.get();
+            dv.setFloat64(0, v, true);
+            dv.setFloat64(8, i, true);
+            return 0;
+          }
+          if (args[1] & ~A.TFD_TIMER_ABSTIME) return -A.EINVAL;
+          let value = dv.getFloat64(0, true);
+          const interval = dv.getFloat64(8, true);
+          if (!(value >= 0) || !(interval >= 0)) return -A.EINVAL;
+          if (value > 0 && args[1] & A.TFD_TIMER_ABSTIME) {
+            // absolute on the timer's clock; at or before now expires at once
+            const now = dv.getFloat64(f.clockid === 0 || f.clockid === 8 ? 16 : 24, true);
+            value = Math.max(value - now, 1e-6);
+          }
+          const [ov, oi] = f.set(value, interval);
+          dv.setFloat64(0, ov, true);
+          dv.setFloat64(8, oi, true);
+          return 0;
         }
         case A.SYS_close_range: {
           const first = args[0] >>> 0;
@@ -2129,26 +2174,20 @@ export class Kernel {
   }
 
   /** SYS_shiro_execve (see abi.ts). */
-  /**
-   * A Shiro command with no file anywhere (sh, env, ls) runs as /bin/NAME,
-   * /usr/bin/NAME and the sbin ones, so it is there for exec and for the
-   * PATH searches that stat or access each entry first (make, dash, bash).
-   * Not /usr/local/bin/NAME: execvp tries that first and must move on to a
-   * real /usr/bin/NAME a package installed. `path` must be missing itself.
-   */
-  async isBuiltinProgramPath(proc: Process, path: string): Promise<boolean> {
-    const m = /^\/(?:usr\/)?s?bin\/([^/]+)$/.exec(path);
-    if (!m || !(this.shell?.commands.get(m[1]) || SHELL_PROGRAMS.has(m[1]))) return false;
-    return typeof (await this.statPath(proc, `/bin/${m[1]}`)) === 'number' &&
-      typeof (await this.statPath(proc, `/usr/bin/${m[1]}`)) === 'number';
-  }
-
   private async sysExecve(proc: Process, req: { path: string; argv?: string[]; env?: string[]; inproc?: boolean }, data: Uint8Array): Promise<number> {
     if (!req || typeof req.path !== 'string' || !req.path) return -A.ENOENT;
     const path = this.resolvePath(proc, req.path);
     if (typeof path === 'number') return path;
     const st = await this.statPath(proc, path);
-    const builtin = st === -A.ENOENT && await this.isBuiltinProgramPath(proc, path);
+    // A Shiro command under /bin, /usr/bin, ... (sh, env, ls) has no file but runs
+    // A Shiro command with no file anywhere runs as /bin/NAME and /usr/bin/NAME.
+    // (Not /usr/local/bin/NAME: execvp tries that first and must move on to
+    // a real /usr/bin/NAME a package installed.)
+    const base = path.slice(path.lastIndexOf('/') + 1);
+    const builtin = st === -A.ENOENT && /^\/(usr\/)?s?bin\/[^/]+$/.test(path) &&
+      (!!this.shell?.commands.get(base) || SHELL_PROGRAMS.has(base)) &&
+      typeof (await this.statPath(proc, `/bin/${base}`)) === 'number' &&
+      typeof (await this.statPath(proc, `/usr/bin/${base}`)) === 'number';
     if (typeof st === 'number' && !builtin) return st;
     if (typeof st !== 'number' && (st.mode & A.S_IFMT) !== A.S_IFREG) return -A.EACCES;
     const argv = Array.isArray(req.argv) ? req.argv.map(String) : [req.path];

@@ -66,6 +66,12 @@ Worker), in Chromium on a cross-origin isolated page, three runs each. The
 | `gh --version`, GitHub CLI 2.62 (59 MB static Go): first run in the page | 5.0 s | 26.7 s | — | 71–79 ms | — |
 | same, later runs (V8 reuses the compiled regions) | 2.5 s | 26.6 s | 20.3–20.9 s | | |
 | same, Node (`run.mjs`-style host, no kernel), wall / peak RSS | 3.2–3.6 s / 374 MB | 28.5 s / 278 MB | 32.7 s / 999 MB | | |
+| Vim 9.2 (static) opening a C file: `vim --not-a-term -c qa x.c`, later runs (defaults.vim: filetype, syntax) | 1.51 s (1.66 s before patch 0041) | ~3.0 s | — | 41 ms | — |
+
+The Vim row is from `bench/ab.mjs` on 2026-10-09 (medians of 15 runs;
+the interpreter-only figure is compat-tools' Chromium measurement with
+`BLINK_WJIT=0`); the first Vim run after a page load still pays about
+1 s more while V8 tiers up the new JIT modules.
 
 The JIT column was re-measured on 2026-10-08 after the third JIT round
 (mul/div/bit ops inline, a larger decode cache; the previous build, run back
@@ -432,6 +438,48 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    makes FIFOs (and regular files) and refuses devices; with a kernel
    that has no `mknodat` they stay EPERM. Test: `fixtures/x86/mkfifo.c`
    (runs once the kernel defines `SYS_mknodat`).
+39. `bsf`/`bsr` with a zero source leave the destination unchanged, all 64
+   bits at every operand size, as hardware does (Blink wrote 0); LLVM's
+   `ctlz`/`cttz` rely on it (`mov $127,%r8; bsr %rax,%r8; xor $63,%r8`),
+   so Rust's `0u64.leading_zeros()` was 63 and xAI's grok CLI panicked.
+   Interpreter, Blink's path JIT and the wasm JIT. Test:
+   `fixtures/x86/bitscan.c` (native output).
+40. SSE4.1 and SSE4.2 (legacy encodings, `blink/sse4.c`): blendv*,
+   ptest, pmovsx/zx, pmuldq, pcmpeqq/gtq, packusdw, pmin/pmax*,
+   phminposuw, round*, blend*, pinsr*/pextr*, insertps/extractps,
+   dpps/dppd, mpsadbw, pcmpestri/estrm/istri/istrm, and crc32's r/m16
+   form; CPUID advertises SSE4.1/4.2 (x86-64-v2 with popcnt and cx16).
+   Bun (Claude Code's native build, opencode) and `GOAMD64=v2` Go need
+   them. They run in the interpreter (the wasm JIT calls them). Tests:
+   `fixtures/x86/sse4.c` (random operands, every immediate; hashes equal
+   to native), a `GOAMD64=v2` Go program.
+41. The wasm JIT compiles instructions that straddle a 4 KB page when
+   both pages are read-only code (it ended the region before one and the
+   interpreter ran up to the next taken branch, every time: 218k times in
+   one Vim function); `rep movs`/`rep stos` of words, dwords and qwords
+   (musl's memcpy and memset) go a page at a time going up. Test:
+   `fixtures/x86/strops.c` (native output).
+42. Under Shiro `sendfile` with a NULL offset reads at the input's file
+   position (it read `*NULL`: EFAULT); systemd-sysusers' backup of
+   `/etc/group` failed with it, and with that the postinst of systemd,
+   cron, udev and logrotate. Test: `fixtures/x86/sendfile.c`.
+43. Under Shiro `sendmmsg`/`recvmmsg` go to the kernel as one
+   `sendmsg`/`recvmsg` per message (Blink's own failed with EBADF on kernel
+   sockets, and glibc's resolver, which sends its A and AAAA queries with
+   `sendmmsg`, gave up: pip couldn't resolve PyPI). Test:
+   `fixtures/x86/mmsg.c` (two DNS queries over the kernel's DoH).
+44. Under Shiro `/proc/self/maps` (and `/proc/thread-self/maps`, and the
+   process's own `/proc/<pid>/maps`) come from the guest page table and
+   Blink's file maps, in Linux's format, through a kernel pipe (up to 64
+   KB): glibc's `pthread_getattr_np` finds the main stack there, and glibc
+   builds of Bun (Claude Code, opencode) aborted without it. Test:
+   `fixtures/x86/maps.c`.
+45. `timerfd_create`/`timerfd_settime`/`timerfd_gettime` (they were ENOSYS;
+   uSockets' timers in glibc Bun builds such as opencode) go to a kernel
+   timerfd (`TimerFile` in `src/kernel/fd.ts`): readable through
+   read/poll/epoll when it expires, counting interval expirations. Blink
+   passes milliseconds and its own realtime/monotonic "now", so absolute
+   times are read on the timer's clock. Test: `fixtures/x86/timerfd.c`.
 
 Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.

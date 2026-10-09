@@ -36,7 +36,7 @@ const onMessage = (fn) => (isNode ? port.on('message', fn) : port.addEventListen
 // ── Kernel channel (docs/KERNEL_ABI.md; constants from src/kernel/abi.ts) ──
 const CH_STATE = 0, CH_SYSNO = 1, CH_RESULT = 2, CH_SIGNAL = 3, CH_ARGS = 4, CH_NARGS = 12, CH_DATA = 64;
 const SYS = {
-  read: 0, write: 1, close: 3, lstat: 6, poll: 7, rt_sigaction: 13, rt_sigreturn: 15, ioctl: 16, getpid: 39, kill: 62, rename: 82, mkdir: 83, rmdir: 84,
+  read: 0, write: 1, close: 3, lstat: 6, pread64: 17, poll: 7, rt_sigaction: 13, rt_sigreturn: 15, ioctl: 16, getpid: 39, kill: 62, rename: 82, mkdir: 83, rmdir: 84,
   unlink: 87, readlink: 89, getdents64: 217, exit_group: 231, openat: 257,
 };
 // Negative Linux errno → emscripten's (WASI) errno numbering.
@@ -54,6 +54,9 @@ const TCGETS = 0x5401, TIOCGWINSZ = 0x5413;
 const O_RDONLY = 0, O_WRONLY = 1, O_CREAT = 0o100, O_TRUNC = 0o1000, O_DIRECTORY = 0o200000, AT_FDCWD = -100;
 const POLLIN = 1, POLLOUT = 4;
 const S_IFMT = 0o170000, S_IFDIR = 0o040000, S_IFREG = 0o100000, S_IFLNK = 0o120000;
+const MAP_SHARED = 1, PROT_WRITE = 2;
+/** Files at least this big are read and mapped through pread, not loaded whole (see SHIROFS). */
+const DIRECT_MIN = 1 << 20;
 
 let i32 = null, data = null, debug = false, debugPid = 0, progPath = '';
 const enc = new TextEncoder();
@@ -141,26 +144,30 @@ function readDir(path) {
   }
   return names;
 }
-function readWhole(path) {
+function readWhole(path, sizeHint = -1) {
   const fd = openPath(path, O_RDONLY);
   if (fd < 0) return fd;
-  const chunks = [];
+  // Into one buffer of the expected size (a 60 MB binary used to sit in 1 MiB
+  // chunks and again in the joined copy); grows only if the file did
+  let buf = new Uint8Array(sizeHint > 0 ? sizeHint : 65536);
   let total = 0;
   try {
     for (;;) {
       const n = sys(SYS.read, fd, data.length);
       if (n < 0) return n;
       if (n === 0) break;
-      chunks.push(data.slice(0, n));
+      if (total + n > buf.length) {
+        const next = new Uint8Array(Math.max(total + n, buf.length * 2));
+        next.set(buf.subarray(0, total));
+        buf = next;
+      }
+      buf.set(data.subarray(0, n), total);
       total += n;
     }
   } finally {
     sys(SYS.close, fd);
   }
-  const buf = new Uint8Array(total);
-  let p = 0;
-  for (const c of chunks) { buf.set(c, p); p += c.length; }
-  return buf;
+  return total === buf.length ? buf : buf.slice(0, total);
 }
 function writeFd(fd, bytes) {
   let off = 0;
@@ -185,7 +192,7 @@ function writeWhole(path, bytes, mode) {
 }
 
 // ── SHIROFS: MEMFS nodes faulted in from the kernel ─────────────────────────
-function makeShiroFS(FS) {
+function makeShiroFS(FS, M) {
   const MEMFS = FS.filesystems.MEMFS;
   const err = (res) => new FS.ErrnoError(wasiErrno(res));
   const check = (res) => { if (typeof res === 'number' && res < 0) throw err(res); return res; };
@@ -195,7 +202,7 @@ function makeShiroFS(FS) {
 
   function ensureLoaded(node) {
     if (!node.shiroLazy) return;
-    const buf = check(readWhole(pathOf(node)));
+    const buf = check(readWhole(pathOf(node), node.shiroSize ?? -1));
     node.contents = buf;
     node.usedBytes = buf.length;
     node.shiroLazy = false;
@@ -282,24 +289,105 @@ function makeShiroFS(FS) {
       return a;
     },
     setattr(node, attr) {
+      if (attr.size === 0 && node.shiroLazy) { node.shiroLazy = false; node.contents = null; node.usedBytes = 0; }
       if (attr.size !== undefined) { ensureLoaded(node); node.shiroDirty = true; }
       base.file.node.setattr(node, attr);
       if (attr.size !== undefined) writeBack(node);
     },
   };
 
+  // A file is loaded whole (into node.contents) only when a program reads
+  // through it or writes it. Reads that peek (an ELF header, a section) and
+  // mappings go to the kernel with pread: Blink running a 50 MB binary used to
+  // hold it twice, once in JS and once copied into wasm memory.
+  const kfds = new WeakMap(); // stream → kernel fd for its pread calls
+  function kfdOf(stream) {
+    let fd = kfds.get(stream);
+    if (fd === undefined) {
+      fd = check(openPath(pathOf(stream.node), O_RDONLY));
+      kfds.set(stream, fd);
+    }
+    return fd;
+  }
+  function dropKfd(stream) {
+    const fd = kfds.get(stream);
+    if (fd === undefined) return;
+    kfds.delete(stream);
+    sys(SYS.close, fd);
+  }
+  /** pread [position, position + length) of a lazy file into `dest` at `at`; the bytes read. */
+  function preadInto(stream, dest, at, length, position) {
+    const fd = kfdOf(stream);
+    let done = 0;
+    while (done < length) {
+      const off = position + done;
+      const n = check(sys(SYS.pread64, fd, Math.min(length - done, data.length), off % 0x100000000, Math.floor(off / 0x100000000)));
+      if (n === 0) break;
+      // dest may be a view of wasm memory that grew: take it fresh each time
+      (typeof dest === 'function' ? dest() : dest).set(data.subarray(0, n), at + done);
+      done += n;
+    }
+    return done;
+  }
+
   const fileStreamOps = {
     ...base.file.stream,
-    open(stream) { ensureLoaded(stream.node); },
     write(stream, buffer, offset, length, position) {
+      ensureLoaded(stream.node);
       stream.node.shiroDirty = true;
       return base.file.stream.write(stream, buffer, offset, length, position, false);
     },
-    mmap(stream, length, position, prot, flags) {
-      ensureLoaded(stream.node);
-      return base.file.stream.mmap(stream, length, position, prot, flags);
+    llseek(stream, offset, whence) {
+      const node = stream.node;
+      if (whence === 2 && node.shiroLazy) { // SEEK_END: MEMFS would read usedBytes
+        const pos = node.shiroSize + offset;
+        if (pos < 0) throw new FS.ErrnoError(28);
+        return pos;
+      }
+      return base.file.stream.llseek(stream, offset, whence);
     },
-    close(stream) { writeBack(stream.node); },
+    read(stream, buffer, offset, length, position) {
+      const node = stream.node;
+      if (node.shiroLazy && node.shiroSize >= DIRECT_MIN) {
+        const n = preadInto(stream, buffer, offset, Math.max(0, Math.min(length, node.shiroSize - position)), position);
+        // A program reading through the file gets it loaded (one syscall per read is the slow way)
+        stream.shiroRead = (stream.shiroRead || 0) + n;
+        if (stream.shiroRead >= DIRECT_MIN) { dropKfd(stream); ensureLoaded(node); }
+        return n;
+      }
+      ensureLoaded(node);
+      return base.file.stream.read(stream, buffer, offset, length, position);
+    },
+    mmap(stream, length, position, prot, flags) {
+      const node = stream.node;
+      const sharedWrite = (flags & MAP_SHARED) && (prot & PROT_WRITE);
+      if (node.shiroLazy && !sharedWrite && node.shiroSize >= DIRECT_MIN) {
+        // A fresh (zeroed) block from MEMFS, filled straight from the kernel
+        node.contents = new Uint8Array(0);
+        let r;
+        try { r = base.file.stream.mmap(stream, length, position, prot, flags); } finally { node.contents = null; }
+        preadInto(stream, () => M.HEAPU8, r.ptr, Math.max(0, Math.min(length, node.shiroSize - position)), position);
+        return r;
+      }
+      ensureLoaded(node);
+      const r = base.file.stream.mmap(stream, length, position, prot, flags);
+      // MEMFS copied the bytes into wasm memory: a big clean file's JS copy is
+      // now a duplicate, so let it go; a later read or mapping goes to the
+      // kernel again. Shared writable mappings keep it (msync).
+      if (r.allocated && !sharedWrite && !node.shiroDirty && node.usedBytes >= DIRECT_MIN) {
+        node.shiroSize = node.usedBytes;
+        node.contents = null;
+        node.usedBytes = 0;
+        node.shiroLazy = true;
+      }
+      return r;
+    },
+    msync(stream, buffer, offset, length, mmapFlags) {
+      ensureLoaded(stream.node);
+      stream.node.shiroDirty = true;
+      return base.file.stream.msync(stream, buffer, offset, length, mmapFlags);
+    },
+    close(stream) { dropKfd(stream); writeBack(stream.node); },
     fsync(stream) { writeBack(stream.node); return 0; },
   };
 
@@ -419,9 +507,10 @@ function exitGuest(code) {
   if (exiting) return;
   exiting = true;
   sys(SYS.exit_group, code & 255);
-  // The kernel terminates this worker; park until it does.
-  const park = new Int32Array(new SharedArrayBuffer(4));
-  for (;;) Atomics.wait(park, 0, 0, 1000);
+  // The kernel terminates this worker. Unwind out of Blink back to the event
+  // loop rather than park: Chromium takes 2 s to terminate a Worker blocked in
+  // a wait, and only then starts on Blink's thread Workers (another 2 s).
+  throw 'unwind';
 }
 
 async function run(msg) {
@@ -482,7 +571,8 @@ async function run(msg) {
     }
   };
   onMessage((m) => {
-    if (!m) return;
+    // Once the guest has exited this worker only waits to be terminated
+    if (!m || exiting) return;
     if (m.type === 'blink-done') {
       const ch = pool[m.ch];
       if (!ch || Atomics.load(ch.i32, CH_STATE) !== 2) return;
@@ -562,7 +652,7 @@ async function run(msg) {
       preRun: [(M) => {
         const FS = M.FS;
         FS.init(() => null, () => {}, () => {});
-        const SHIROFS = makeShiroFS(FS);
+        const SHIROFS = makeShiroFS(FS, M);
         for (const dir of msg.mounts || []) {
           if (!/^\/[^/]+$/.test(dir) || dir === '/dev' || dir === '/proc') continue;
           rmTree(FS, dir);
@@ -575,6 +665,16 @@ async function run(msg) {
       }],
     });
     blinkModule = M;
+    // Diagnostics (memory work, devtools): the wasm memory and the SHIROFS file copies
+    globalThis.__blinkStats = () => {
+      let files = 0;
+      const walk = (node) => {
+        if (node.contents instanceof Uint8Array) files += node.contents.byteLength;
+        else if (node.contents && typeof node.contents === 'object') for (const c of Object.values(node.contents)) walk(c);
+      };
+      try { walk(M.FS.root); } catch { /* best effort */ }
+      return { wasmBytes: M.HEAPU8.buffer.byteLength, fileBytes: files };
+    };
     if (pool.length) M._blink_shiro_enable(msg.pid, chunk, ignLo >>> 0, ignHi >>> 0);
     if (msg.restore) {
       // This process is a fork(): Blink rebuilds the parent's snapshot instead of loading the program
@@ -589,8 +689,12 @@ async function run(msg) {
     // Blink's own log goes to the in-memory root, not the guest's cwd.
     M.callMain([...(msg.debug && msg.env?.SHIRO_BLINK_STRACE ? ['-s', '-e'] : []), '-L', '/blink.log', '-0', msg.path || argv[0], argv[0], ...argv.slice(1)]);
   } catch (e) {
-    if (e && e.name === 'ExitStatus') exitGuest(e.status);
-    else if (e !== 'unwind') fail(String((e && e.stack) || e), 134);
+    try {
+      if (e && e.name === 'ExitStatus') exitGuest(e.status);
+      else if (e !== 'unwind') fail(String((e && e.stack) || e), 134);
+    } catch (e2) {
+      if (e2 !== 'unwind') throw e2;
+    }
   }
 }
 
