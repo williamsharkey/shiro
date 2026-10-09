@@ -221,7 +221,8 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
     ? new SinkFile((t) => { stderr += t; })
     : slave ?? hostFd(2) ?? new SinkFile((t) => opts.writeStderr(t)));
 
-  const env = { ...opts.env };
+  // The shell's internal variables (__PIPE_STDIN: piped input being read) aren't the program's
+  const env = Object.fromEntries(Object.entries(opts.env).filter(([k]) => !k.startsWith('__')));
   if (tty) {
     env.TERM ??= 'xterm-256color';
     // Programs ask the tty for its size; stale exported values would override it

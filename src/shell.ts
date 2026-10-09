@@ -6011,6 +6011,7 @@ export class Shell {
     writeStdout: (s: string) => void, writeStderr?: (s: string) => void,
   ): Promise<number> {
     this.injectedStdin = stdin;
+    this.env['__PIPE_STDIN'] = stdin; // read takes it record by record, in any statement
     this.kernelStdinLive = false;
     return this.execute(line, writeStdout, writeStderr, false, undefined, true);
   }
@@ -7524,12 +7525,14 @@ export class Shell {
       const m = /^#!\s*(\S+)(?:\s+(?:-S\s+)?(\S+))?/.exec(content);
       const base = (p?: string) => p?.slice(p.lastIndexOf('/') + 1) ?? '';
       const interp = m ? (base(m[1]) === 'env' ? base(m[2]) : base(m[1])) : '';
-      if (!((interp === 'sh' || interp === 'bash') && !packageShadows(this.fs).has(interp))) await fillStdin();
+      // No #! line: a shell script (the default below) unless it turns out to be WASM or JavaScript
+      if (m && !((interp === 'sh' || interp === 'bash') && !packageShadows(this.fs).has(interp))) await fillStdin();
     }
 
     // Check if this is a WASM binary — run through WASI runtime
     if (content.charCodeAt(0) === 0x00 && content.charCodeAt(1) === 0x61 &&
         content.charCodeAt(2) === 0x73 && content.charCodeAt(3) === 0x6d) {
+      await fillStdin();
       return this.executeWasmBinary(resolvedPath, args, ctx, writeStdout, writeStderr);
     }
 
@@ -7578,6 +7581,7 @@ export class Shell {
     if (content.charCodeAt(0) === 0x7f && content.charCodeAt(1) === 0x45 /* E */ &&
         content.charCodeAt(2) === 0x4c /* L */ && content.charCodeAt(3) === 0x46 /* F */) {
       // Blink (wasm) when the page can run it, else the built-in src/x86.
+      await fillStdin();
       const { runElf } = await import('./x86-engine');
       return runElf(resolvedPath, args, {
         fs: this.fs, cwd: this.cwd, args, env: this.env, shell: this,
@@ -7622,6 +7626,7 @@ export class Shell {
         (trimmedContent.endsWith('.js') || trimmedContent.endsWith('.mjs') || trimmedContent.endsWith('.ts'))) {
       try {
         const targetContent = await this.fs.readFile(trimmedContent, 'utf8') as string;
+        await fillStdin();
         return this.executeNodeScript(trimmedContent, targetContent, args, ctx, writeStdout, writeStderr);
       } catch (e: any) {
         // Target doesn't exist, fall through
@@ -7634,6 +7639,7 @@ export class Shell {
         content.trimStart().startsWith('import ') ||
         content.trimStart().startsWith('var ') ||
         content.trimStart().startsWith('let ')) {
+      await fillStdin();
       return this.executeNodeScript(resolvedPath, content, args, ctx, writeStdout, writeStderr);
     }
 
@@ -7778,6 +7784,9 @@ export class Shell {
   /** Stdin for the next command this shell runs (`… | sh -c CMD`) */
   setInjectedStdin(stdin: string): void {
     this.injectedStdin = stdin;
+    // `read` in any statement takes it record by record (a script's first
+    // statement isn't always the one that reads: `exec 3>&1; read x`)
+    this.env['__PIPE_STDIN'] = stdin;
     this.kernelStdinLive = false;
   }
 
