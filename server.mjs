@@ -6,6 +6,7 @@
 
 import { createServer } from 'node:http';
 import { readFile, writeFile, stat, readdir, unlink, mkdir, rename } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, extname } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { randomBytes, createHmac, createHash, timingSafeEqual } from 'node:crypto';
@@ -578,6 +579,50 @@ async function handleSignaling(req, res, pathname) {
 }
 
 // --- Git CORS proxy (for isomorphic-git clone) ---
+// --- Debian package files (GUI apps, src/gui/apps.ts, docs/GUI.md) ---
+// GET /debian/pool/... serves .deb files from the Debian mirror, which sends no
+// CORS headers. Pool files never change under a name, so they are cached on
+// disk here and in the browser (immutable). A file a point release removed from
+// the mirror comes from snapshot.debian.org instead. The page checks sha256.
+const DEBIAN_MIRROR = process.env.SHIRO_DEBIAN_MIRROR || 'https://deb.debian.org/debian/';
+const DEBIAN_SNAPSHOT = process.env.SHIRO_DEBIAN_SNAPSHOT || 'https://snapshot.debian.org/archive/debian/20260712T000000Z/';
+const DEBIAN_CACHE = process.env.SHIRO_DEB_CACHE || join(tmpdir(), 'shiro-debs');
+const DEBIAN_PATH = /^pool\/(main|contrib|non-free|non-free-firmware)\/[a-z0-9]{1,4}\/[a-z0-9][a-z0-9.+-]*\/[A-Za-z0-9.+~_%-]+\.deb$/;
+const debianInflight = new Map();
+
+async function handleDebian(req, res, rel) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end(); }
+  rel = decodeURIComponent(rel);
+  if (!DEBIAN_PATH.test(rel) || rel.includes('..')) { res.writeHead(403); return res.end('not a Debian pool file'); }
+  const file = join(DEBIAN_CACHE, rel.replace(/\//g, '_'));
+  const send = (buf) => {
+    res.writeHead(200, { 'content-type': 'application/vnd.debian.binary-package', 'content-length': buf.length,
+      'cache-control': 'public, max-age=31536000, immutable', 'cross-origin-resource-policy': 'same-origin' });
+    res.end(req.method === 'HEAD' ? undefined : buf);
+  };
+  try { return send(await readFile(file)); } catch { /* not cached yet */ }
+  let p = debianInflight.get(rel);
+  if (!p) {
+    p = (async () => {
+      for (const base of [DEBIAN_MIRROR, DEBIAN_SNAPSHOT]) {
+        const r = await upstreamFetch(base + rel).catch(() => null);
+        if (r && r.ok) {
+          const buf = Buffer.from(await r.arrayBuffer());
+          await mkdir(DEBIAN_CACHE, { recursive: true }).catch(() => {});
+          await writeFile(file + '.tmp', buf).then(() => rename(file + '.tmp', file)).catch(() => {});
+          return buf;
+        }
+      }
+      return null;
+    })().finally(() => debianInflight.delete(rel));
+    debianInflight.set(rel, p);
+  }
+  const buf = await p;
+  if (!buf) { res.writeHead(404); return res.end('not found on the Debian mirror or snapshot'); }
+  console.log(`[debian] ${rel} ${buf.length} bytes`);
+  return send(buf);
+}
+
 async function handleGitProxy(req, res, targetUrl) {
   const origin = req.headers['origin'];
   const cors = corsHeaders(origin, req.headers['access-control-request-headers']);
@@ -1191,6 +1236,9 @@ const server = createServer(async (req, res) => {
 
   if (pathname.startsWith('/api/')) {
     return handleProxy(req, res, pathname.slice(5));
+  }
+  if (pathname.startsWith('/debian/')) {
+    return handleDebian(req, res, pathname.slice('/debian/'.length));
   }
   // Git CORS proxy: /git-proxy/github.com/... or /git-proxy/https://github.com/...
   // isomorphic-git strips the protocol, sending just "github.com/..." as the path.

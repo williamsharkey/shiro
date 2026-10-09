@@ -324,6 +324,10 @@ async function main() {
     () => import('./commands/gh').then(m => m.ghCmd)), 'src/commands/gh.ts');
   registerCommand(commands, lazyCommand('x86', 'Run x86-64 ELF binaries',
     () => import('./commands/x86').then(m => m.x86Cmd)), 'src/commands/x86.ts');
+  registerCommand(commands, lazyCommand('gui', 'Linux GUI apps (xterm, GTK, Qt) from Debian, streamed on first use',
+    () => import('./commands/gui').then(m => m.guiCmd)), 'src/commands/gui.ts');
+  registerCommand(commands, lazyCommand('xserver', 'In-page X11 display server (Xshiro): status, start, stop',
+    () => import('./commands/xserver').then(m => m.xserverCmd)), 'src/commands/xserver.ts');
   registerCommand(commands, mkTempCmd, 'src/commands/mktemp.ts');
   registerCommand(commands, lazyCommand('jq', 'JSON processor',
     () => import('./commands/jq').then(m => m.jqCmd)), 'src/commands/jq.ts');
@@ -480,6 +484,10 @@ async function main() {
   void import('./x86-engine/blink').then(m => m.registerBlinkLoader(kernel));
   // Signals and job control for kernel processes; /dev/ptmx and /dev/pts/N
   attachKernelTty(kernel);
+  // X11 display :0 (src/x11, docs/GUI.md): `Xshiro :0` listens on /tmp/.X11-unix/X0 now;
+  // the server and its fonts load on the first client, windows open on the desktop
+  shell.env['DISPLAY'] ??= ':0';
+  void import('./x11/display').then(m => m.startDisplay(kernel, 0)).catch(e => console.warn('[Xshiro]', e));
 
   // Populate API keys from localStorage so `claude` CLI picks them up
   const storedAnthropicKey = localStorage.getItem('shiro_anthropic_key') || localStorage.getItem('shiro_api_key');
@@ -525,6 +533,8 @@ async function main() {
   // Connect terminal to shell for interactive commands (vi, etc.)
   shell.setTerminal(terminal);
   desktop?.attachMainTerminal(terminal);
+  // Debian GUI apps (xterm, GTK, Qt) in the dock, installed on first click (src/gui/apps.ts)
+  if (desktop) void import('./gui/desktop-apps').then(m => m.registerGuiApps(desktop.wm, fs, kernel)).catch(e => console.warn('[gui]', e));
   performance.mark('shiro:terminal:ready');
 
   // Listen for font size changes from parent (seed snippet)
