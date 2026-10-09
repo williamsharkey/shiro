@@ -427,6 +427,19 @@ describe('kernel processes', () => {
     kernel.kill(proc.pid, A.SIGKILL);
   });
 
+  it('uname(2) reports the kernel hostname', async () => {
+    const proc = kernel.spawn({ path: 'un', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
+    const data = new Uint8Array(4096).fill(0xff);
+    const field = (i: number) => new TextDecoder().decode(data.subarray(i * 65, i * 65 + 65)).replace(/\0.*$/s, '');
+    expect(await kernel.syscall(proc, A.SYS_uname, [], data)).toBe(0);
+    expect([field(0), field(1), field(5)]).toEqual(['Linux', 'shiro', '(none)']);
+    kernel.hostname = 'box';
+    expect(await kernel.syscall(proc, A.SYS_uname, [], data)).toBe(0);
+    expect(field(1)).toBe('box');
+    expect(await kernel.syscall(proc, A.SYS_uname, [], new Uint8Array(100))).toBe(-A.EFAULT);
+    kernel.kill(proc.pid, A.SIGKILL);
+  });
+
   it('an open file follows rename(2); an unlinked or replaced one is not written back', async () => {
     const proc = kernel.spawn({ path: 'rn', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
     const data = new Uint8Array(4096);

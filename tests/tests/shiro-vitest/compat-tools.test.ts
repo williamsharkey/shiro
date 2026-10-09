@@ -591,6 +591,8 @@ describe('tmux', () => {
     expect(term.screen).toContain('[detached (from session main)]');
     // Scripted: the server kept running
     expect((await sh("tmux list-panes -t main -F '#{pane_index}'")).out).toBe('0\n1\n');
+    // uname's nodename is the kernel's hostname (Blink patch 0025), not emscripten's
+    expect((await sh("tmux display -p -t main '#{host}'")).out).toBe('shiro\n');
     await sh("tmux send-keys -t main.0 'echo scripted > /home/user/w/from-tmux.txt' Enter");
     for (let i = 0; i < 200 && !(await fs.exists('/home/user/w/from-tmux.txt')); i++) await new Promise((r) => setTimeout(r, 50));
     expect(await fs.readFile('/home/user/w/from-tmux.txt', 'utf8')).toBe('scripted\n');

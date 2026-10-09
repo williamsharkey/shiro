@@ -1,0 +1,40 @@
+From 236484644ceeede12a64f0c69351da924257faee Mon Sep 17 00:00:00 2001
+From: shiro <build@shiro>
+Date: Fri, 9 Oct 2026 01:14:27 +0000
+Subject: [PATCH] emscripten: Shiro uname takes the kernel's host and domain
+ names
+
+---
+ blink/shiro.inc | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 7033d10..1891aef 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -1287,6 +1287,22 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+     }
+   }
+   switch (nr) {
++    case 0x03F:                                                       // uname
++      // Blink's answer (the kernel version glibc checks, x86_64) with the
++      // Shiro kernel's host and domain names (emscripten's are "emscripten")
++      {
++        struct utsname_linux k;
++        r = 0;
++        if (SysUname(m, a) == -1 ||
++            (ShiroCall(m, 63, A12(0), &k, 0, sizeof(k), false, false) == 0 &&
++             (CopyToUserWrite(m, a + offsetof(struct utsname_linux, nodename),
++                              k.nodename, sizeof(k.nodename)) == -1 ||
++              CopyToUserWrite(m, a + offsetof(struct utsname_linux, domainname),
++                              k.domainname, sizeof(k.domainname)) == -1))) {
++          r = -EFAULT_LINUX;
++        }
++      }
++      break;
+     case 0x0E4:                                                       // clock_gettime
+       // CLOCK_BOOTTIME counts from the kernel's boot (procps' uptime and
+       // process start times, like /proc); the other clocks stay local
+-- 
+2.43.0
+

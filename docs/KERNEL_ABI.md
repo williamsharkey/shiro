@@ -85,6 +85,13 @@ All changes so far are additive; nothing below renames or removes an earlier nam
   - `sh` as a kernel process with no script on a terminal (or `-i`) runs
     an interactive read-eval loop (`Shell.exited` marks `exit`).
   - `link(2)` copies report the source's inode number.
+  - `SYS_uname` (63) writes a `struct utsname` whose nodename is
+    `Kernel.hostname` ("shiro"); Blink takes the host and domain names
+    from it. Constant `UTSNAME_FIELD`.
+  - `TtySession.onJobForeground`: called when a job takes the terminal; the
+    page's terminals hand it the keys typed while the command was starting.
+  - AF_UNIX socket paths decode from a shared syscall buffer (browsers'
+    `TextDecoder` refuses one; tmux failed with EIO in the browser).
   - Closing one reference to a regular file (or exiting) writes its data
     back to the FileSystem even while another process — a forked child —
     still holds the description.

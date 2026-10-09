@@ -113,6 +113,8 @@ export class Kernel {
   socketPaths?: Set<string>;
   /** The page's shell: builtins run in forks of it. */
   shell?: Shell;
+  /** uname(2) nodename (the prompt's \h). */
+  hostname = 'shiro';
   readonly procs = new Map<number, Process>();
   readonly init: Process;
   private loaders: Loader[] = [];
@@ -1537,6 +1539,13 @@ export class Kernel {
           const dv = new DataView(data.buffer, data.byteOffset, 16);
           dv.setBigInt64(0, BigInt(Math.floor(ms / 1000)), true);
           dv.setBigInt64(8, BigInt(Math.floor((ms % 1000) * 1e6)), true);
+          return 0;
+        }
+        case A.SYS_uname: { // → struct utsname (engines that report their own machine take the names from here)
+          if (data.length < A.UTSNAME_FIELD * 6) return -A.EFAULT;
+          const fields = ['Linux', this.hostname, '6.1.0-shiro', '#1 Shiro', 'wasm32', '(none)'];
+          data.fill(0, 0, A.UTSNAME_FIELD * 6);
+          fields.forEach((f, i) => data.set(enc.encode(f).subarray(0, A.UTSNAME_FIELD - 1), i * A.UTSNAME_FIELD));
           return 0;
         }
         case A.SYS_getdents64:

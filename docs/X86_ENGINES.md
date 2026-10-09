@@ -353,8 +353,10 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    without it — and `RLIMIT_STACK` reads 8 MiB.
 24. `mlock`/`munlock`/`mlockall`/`munlockall` succeed (WebAssembly memory
    is never paged out; GnuPG warned about insecure memory).
+25. Shiro `uname`: Blink's answer with the kernel's host and domain names
+   (`SYS_uname`; emscripten's nodename is "emscripten").
 
-Patches 13, 15–21 and 23–24 come from unix/compat-tools (15 also from
+Patches 13, 15–21 and 23–25 come from unix/compat-tools (15 also from
 unix/conformance); unix/integration is where the series is kept.
 
 Native Blink's own exit path (`KillOtherThreads`) still hangs after

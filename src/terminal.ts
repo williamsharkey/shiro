@@ -216,6 +216,13 @@ export class ShiroTerminal {
       // Through writeOutput, so secret masking applies to kernel programs too
       onOutput: (bytes) => this.writeOutput(ttyDecoder.decode(bytes, { stream: true })),
     });
+    // Keys typed while a command was starting belong to the job that takes the tty
+    this.tty.onJobForeground = () => {
+      if (this.stdinPassthrough || this.userInputCallback || !this.pendingStdinInput.length) return;
+      const pending = this.pendingStdinInput;
+      this.pendingStdinInput = [];
+      for (const d of pending) this.tty.pty.input(d);
+    };
 
     // Refit on window resize
     const refit = () => {

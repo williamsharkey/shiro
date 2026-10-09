@@ -141,6 +141,16 @@ releases (pinned sha256), installed with `pkg install` and run in Blink, so
 they need a cross-origin isolated page (`"needs": ["x86"]`). Rows marked
 WASI/WASIX are WASM packages run as kernel processes in workers.
 
+Browser checks: `scripts/browser-tui.mjs` drives the built app in headless
+Chromium (cross-origin isolated) through xterm.js's own keyboard input and
+reads the rendered screen. Verified there on 2026-10-09: vim (insert, `:wq`,
+type-ahead), nano (`^O`, `^X`), less (paging, `/` search, type-ahead), htop,
+top, tmux (split, detach, `ls`), screen (detach), fzf (filter, pick), nvim
+(edit, `:help`), emacs -nw (edit, C-x C-s), man (through less), gpg
+(pinentry-curses dialog). Two bugs only the browser showed are fixed: keys
+typed while a command started were dropped, and AF_UNIX connect failed with
+EIO (the browser's `TextDecoder` refuses the shared syscall buffer).
+
 | Software | Version | Route | Status | Tested | Known issues |
 | --- | --- | --- | --- | --- | --- |
 | less | 710 | pkg (Blink) | works | pages a file on the tty (alternate screen), `/search`, `G`, `q`; `seq \| less` reads the pipe and takes keys from /dev/tty; plain output when piped | |
