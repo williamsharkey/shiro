@@ -1,14 +1,14 @@
 /**
  * A first-visit tour: three short cards in the corner (what this is, Debian,
  * where files live). Non-blocking, dismissible, shown once per browser
- * (localStorage `shiro-desktop-tour`).
+ * (localStorage `tabcomputer-desktop-tour`).
  */
 
 import { BRAND } from '../brand';
 import { GLYPHS } from './icons';
 import type { AppContext } from './index';
 
-export const TOUR_KEY = 'shiro-desktop-tour';
+export const TOUR_KEY = 'tabcomputer-desktop-tour';
 
 interface Card { title: string; body: string; action?: { label: string; run: (ctx: AppContext) => void } }
 

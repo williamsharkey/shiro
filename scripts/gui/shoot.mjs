@@ -35,12 +35,12 @@ const page = await (await browser.newContext({ viewport: { width: 1440, height: 
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 page.on('console', (m) => { const t = m.text(); if (/\[gui\]|\[Xshiro\]|Gtk-|Qt|error/i.test(t)) console.log('[console]', t.slice(0, 600)); });
 await page.goto(url + (url.includes('?') ? '&' : '?') + 'ui=desktop');
-await page.waitForFunction(() => window.__shiro && window.__shiro.shell && window.__shiro.desktop, null, { timeout: 90000 });
+await page.waitForFunction(() => window.__tabcomputer && window.__tabcomputer.shell && window.__tabcomputer.desktop, null, { timeout: 90000 });
 console.log('crossOriginIsolated =', await page.evaluate(() => crossOriginIsolated));
 
 const sh = (cmd) => page.evaluate(async (cmd) => {
   let o = '';
-  const s = window.__guiShell ??= Object.assign(window.__shiro.shell.fork(), { terminal: null });
+  const s = window.__guiShell ??= Object.assign(window.__tabcomputer.shell.fork(), { terminal: null });
   const t0 = performance.now();
   const code = await s.execute(cmd, (x) => { o += x; }, (x) => { o += x; });
   return { code, out: o, ms: Math.round(performance.now() - t0) };
@@ -48,10 +48,10 @@ const sh = (cmd) => page.evaluate(async (cmd) => {
 
 /** Launch and wait for a desktop window of the app whose canvas has drawn something. */
 const diag = () => page.evaluate(() => {
-  const k = window.__shiro.kernel;
+  const k = window.__tabcomputer.kernel;
   const x = window.__shiroX;
   const procs = k ? [...(k.procs?.values?.() ?? [])].map((p) => `${p.pid}:${p.comm}:${p.state}:sys=${p.syscalls}:in=${p.inSyscall}`) : [];
-  return { procs, desk: window.__shiro.desktop.windows().map((w) => w.appId + ':' + !!w.surface), xclients: x?.server.clients.size, windows: x?.rootless?.windows(), last: window.__guiLast?.output().slice(-300) };
+  return { procs, desk: window.__tabcomputer.desktop.windows().map((w) => w.appId + ':' + !!w.surface), xclients: x?.server.clients.size, windows: x?.rootless?.windows(), last: window.__guiLast?.output().slice(-300) };
 });
 
 async function launch(app) {
@@ -63,9 +63,9 @@ async function launch(app) {
 }
 
 async function waitApp(app, t0) {
-  const mapped = await page.waitForFunction((app) => window.__shiro.desktop.windows().some((w) => w.appId === app && w.surface), app, { timeout: waitMs, polling: 100 }).then(() => Date.now() - t0);
+  const mapped = await page.waitForFunction((app) => window.__tabcomputer.desktop.windows().some((w) => w.appId === app && w.surface), app, { timeout: waitMs, polling: 100 }).then(() => Date.now() - t0);
   const drawn = await page.waitForFunction((app) => {
-    const w = window.__shiro.desktop.windows().find((w) => w.appId === app && w.surface);
+    const w = window.__tabcomputer.desktop.windows().find((w) => w.appId === app && w.surface);
     if (!w) return false;
     const c = w.surface.canvas, ctx = c.getContext('2d');
     const d = ctx.getImageData(0, 0, c.width, c.height).data;
@@ -80,8 +80,8 @@ async function waitApp(app, t0) {
 }
 
 async function closeApp(app) {
-  await page.evaluate((app) => { for (const w of window.__shiro.desktop.windows()) if (w.appId === app) w.close(); }, app);
-  await page.waitForFunction((app) => !window.__shiro.desktop.windows().some((w) => w.appId === app), app, { timeout: 30000 }).catch(() => {});
+  await page.evaluate((app) => { for (const w of window.__tabcomputer.desktop.windows()) if (w.appId === app) w.close(); }, app);
+  await page.waitForFunction((app) => !window.__tabcomputer.desktop.windows().some((w) => w.appId === app), app, { timeout: 30000 }).catch(() => {});
   await page.waitForTimeout(500);
 }
 
@@ -92,7 +92,7 @@ for (const app of apps) {
   const first = await launch(app);
   await page.waitForTimeout(2500);
   if (types[app]) {
-    const box = await page.evaluate((app) => { const w = window.__shiro.desktop.windows().find((w) => w.appId === app && w.surface); const r = w.surface.canvas.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }, app);
+    const box = await page.evaluate((app) => { const w = window.__tabcomputer.desktop.windows().find((w) => w.appId === app && w.surface); const r = w.surface.canvas.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }, app);
     await page.mouse.click(box.x, box.y);
     const t0 = Date.now();
     await page.keyboard.type(types[app].replace(/\\n/g, '\n'), { delay: 30 });
@@ -117,7 +117,7 @@ for (const app of apps) {
 if (finalShot) {
   // --at APP=x,y places windows (frame, work-area coordinates) for the final shot, in argument order
   for (const [app, [x, y]] of Object.entries(at)) {
-    await page.evaluate(([app, x, y]) => { const w = window.__shiro.desktop.windows().filter((w) => w.appId === app).pop(); if (w) { w.move(x, y); w.focus(); } }, [app, x, y]);
+    await page.evaluate(([app, x, y]) => { const w = window.__tabcomputer.desktop.windows().filter((w) => w.appId === app).pop(); if (w) { w.move(x, y); w.focus(); } }, [app, x, y]);
   }
   await page.waitForTimeout(1500);
   await page.screenshot({ path: `${out}/${finalShot}.png` });

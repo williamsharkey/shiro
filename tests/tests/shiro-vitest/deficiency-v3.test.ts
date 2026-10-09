@@ -263,9 +263,9 @@ describe('Deficiency v3 fixes', () => {
       expect(num).toBeLessThan(32768);
     });
 
-    it('$HOSTNAME returns shiro', async () => {
+    it('$HOSTNAME is the profile hostname', async () => {
       const { output } = await run(shell, 'echo $HOSTNAME');
-      expect(output.trim()).toBe('shiro');
+      expect(output.trim()).toBe('tabcomputer');
     });
 
     it('$BASH_VERSION returns 5.0.0', async () => {

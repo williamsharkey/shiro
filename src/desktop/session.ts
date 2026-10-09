@@ -1,14 +1,14 @@
 /**
  * Window layout across reloads: which desktop apps were open, where, and in
  * what state (a terminal's working directory, Files' folder, Settings' pane).
- * Saved to localStorage `shiro-desktop-session` as windows change; restored
+ * Saved to localStorage `tabcomputer-desktop-session` as windows change; restored
  * after the first prompt (the main terminal's own geometry is applied at boot).
  * Program windows (vim, htop, X11 apps) aren't restored: that would run them.
  */
 
 import type { DesktopWindow, Geometry, WindowManager, WindowState } from './wm';
 
-export const SESSION_KEY = 'shiro-desktop-session';
+export const SESSION_KEY = 'tabcomputer-desktop-session';
 const RESTORABLE = new Set(['terminal', 'files', 'settings', 'activity', 'about']);
 
 export interface SavedWindow {

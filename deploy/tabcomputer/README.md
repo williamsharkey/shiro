@@ -1,6 +1,6 @@
 # tabcomputer.com
 
-The Unix edition of Shiro (desktop UI, see `src/ui-mode.ts`) runs on its own
+tabcomputer (desktop UI, see `src/ui-mode.ts`) runs on its own
 DigitalOcean droplet, `tabcomputer` (s-1vcpu-2gb-amd, nyc1; the plain
 s-1vcpu-2gb size is retired). shiro.computer and its
 droplet are not involved.
@@ -12,8 +12,8 @@ droplet are not involved.
 - **Settings and build steps** live in this directory: `release.sh` builds a
   release and `profiles/tabcomputer/server.env` is the server's environment (TCP relay on, GitHub
   sign-in off for now). Both ship with the commit, so changing them is a push.
-- **Deploy:** push a commit to the `deploy/tabcomputer` branch:
-  `git push origin <commit>:refs/heads/deploy/tabcomputer`. Within about 2
+- **Deploy:** push a commit to the `deploy` branch of github.com/williamsharkey/tabcomputer:
+  `git push origin <commit>:refs/heads/deploy`. Within about 2
   minutes the droplet notices, runs `npm ci && npm run build`, and switches
   `/opt/tabcomputer/current` to the new release; building takes several
   minutes on this size. `https://tabcomputer.com/deployed.txt` shows the live

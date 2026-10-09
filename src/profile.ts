@@ -7,7 +7,7 @@
  * the hostname.
  *
  * Chosen by host (profiles/select.mjs, shared with server.mjs). `?profile=ID`
- * picks one and remembers it (localStorage `shiro-profile`); `?profile=` with
+ * picks one and remembers it (localStorage `tabcomputer-profile`); `?profile=` with
  * no value forgets it.
  */
 import { pickProfile } from '../profiles/select.mjs';
@@ -33,6 +33,10 @@ export interface ProfileShims {
 
 export interface Profile {
   id: string;
+  /** The product's name in messages, help and banners ("tabcomputer" is always lowercase) */
+  name: string;
+  /** The machine's hostname: the prompt's \h, uname, /etc/hostname, os.hostname() */
+  hostname: string;
   description: string;
   /** Host patterns this profile serves ("example.com", "*.example.com") */
   hosts: string[];
@@ -50,7 +54,7 @@ export interface Profile {
 
 export const PROFILES: readonly Profile[] = [shiro as Profile, tabcomputer as Profile];
 
-export const PROFILE_KEY = 'shiro-profile';
+export const PROFILE_KEY = 'tabcomputer-profile';
 
 /** The profile for `loc` (default: this page), honoring and remembering ?profile=. */
 export function selectProfile(loc: Pick<Location, 'search' | 'hostname'> | null = typeof location !== 'undefined' ? location : null): Profile {

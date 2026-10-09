@@ -31,9 +31,9 @@ if (shots) mkdirSync(shots, { recursive: true });
 
 /** The focused window's active terminal, as text rows. */
 const screenOf = (page) => page.evaluate(() => {
-  const wm = window.__shiro.desktop;
+  const wm = window.__tabcomputer.desktop;
   const view = wm?.focused()?.content;
-  const terms = view?.terminals?.() ?? [window.__shiro.terminal];
+  const terms = view?.terminals?.() ?? [window.__tabcomputer.terminal];
   const t = (view?.activeTerminal?.() ?? terms[terms.length - 1]).term;
   const b = t.buffer.active;
   const rows = [];
@@ -54,7 +54,7 @@ async function until(page, cond, what, ms = LIMIT) {
 /** Click the banner link whose text is `text` (an OSC 8 link in the main terminal). */
 async function clickBannerLink(page, text) {
   const box = await page.evaluate((text) => {
-    const t = window.__shiro.terminal.term;
+    const t = window.__tabcomputer.terminal.term;
     const b = t.buffer.active;
     for (let y = 0; y < t.rows; y++) {
       const line = b.getLine(b.viewportY + y)?.translateToString(true) ?? '';
@@ -91,7 +91,7 @@ const promptBack = (s) => /\$\s*$/.test(s.trimEnd());
 
 /** Type a command at the main terminal's prompt. */
 async function typeCommand(page, cmd) {
-  await page.evaluate(() => window.__shiro.terminal.term.focus());
+  await page.evaluate(() => window.__tabcomputer.terminal.term.focus());
   await typeKeys(page, cmd + '\r');
 }
 
@@ -176,10 +176,10 @@ const DESKTOP_CASES = [
   { name: 'resize: htop follows a zoomed window', run: async (page) => {
     await clickDock(page, 'htop');
     await until(page, (s) => /F10Quit/.test(s), 'htop');
-    const cols = () => page.evaluate(() => window.__shiro.desktop.focused().content.terminals().at(-1).term.cols);
+    const cols = () => page.evaluate(() => window.__tabcomputer.desktop.focused().content.terminals().at(-1).term.cols);
     const before = await cols();
     await page.locator('.sd-zoom').last().click(); // the green light of the focused window
-    await page.waitForFunction((n) => window.__shiro.desktop.focused().content.terminals().at(-1).term.cols > n, before, { timeout: 10_000 });
+    await page.waitForFunction((n) => window.__tabcomputer.desktop.focused().content.terminals().at(-1).term.cols > n, before, { timeout: 10_000 });
     const after = await cols();
     // htop redraws at the new width: its CPU meter spans it
     await until(page, (s) => s.split('\n').some((l) => /CPU\[/.test(l) && l.length > before + 5), `htop redrawn at ${after} columns (was ${before})`);
@@ -216,14 +216,14 @@ for (const c of CASES) {
   try {
     await page.goto(url);
     if (terminalUi) {
-      await page.waitForFunction(() => window.__shiro?.terminal?.term && window.__shiro.uiMode === 'terminal', null, { timeout: 60_000 });
+      await page.waitForFunction(() => window.__tabcomputer?.terminal?.term && window.__tabcomputer.uiMode === 'terminal', null, { timeout: 60_000 });
       await until(page, (s) => /help/.test(s) && promptBack(s), 'the HUD and prompt', 30_000);
     } else {
-      await page.waitForFunction(() => window.__shiro?.terminal?.term && window.__shiro.desktop, null, { timeout: 60_000 });
+      await page.waitForFunction(() => window.__tabcomputer?.terminal?.term && window.__tabcomputer.desktop, null, { timeout: 60_000 });
       await until(page, (s) => s.includes('try:') && promptBack(s), 'the welcome banner and prompt', 30_000);
     }
     // The desktop switches the terminal to its own font when it has loaded (cells change size)
-    await page.waitForFunction(() => /JetBrains/.test(window.__shiro.terminal.term.options.fontFamily ?? ''), null, { timeout: 10_000 }).catch(() => {});
+    await page.waitForFunction(() => /JetBrains/.test(window.__tabcomputer.terminal.term.options.fontFamily ?? ''), null, { timeout: 10_000 }).catch(() => {});
     await page.waitForTimeout(300);
     const t1 = Date.now();
     await c.run(page);

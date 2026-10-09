@@ -91,7 +91,7 @@ export const ffmpegCmd: Command = {
 
     if (args.length === 0) {
       ctx.stdout = [
-        'ffmpeg (Shiro) — powered by ffmpeg.wasm',
+        'ffmpeg (tabcomputer) — powered by ffmpeg.wasm',
         '',
         'Usage: ffmpeg [options] [[infile options] -i infile]... {[outfile options] outfile}...',
         '',

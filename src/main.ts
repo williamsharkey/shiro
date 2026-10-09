@@ -1,3 +1,4 @@
+// Legacy shiro-… storage keys copied to their tabcomputer-… names, before anything reads them
 // Console capture - must be first before any other code runs (bounded ring buffer)
 import { toolkitScaleEnv } from './gui/display-scale';
 import { queryConsole, clearConsoleLog } from './console-log';
@@ -115,7 +116,7 @@ function registerCommand(commands: CommandRegistry, cmd: Command, sourcePath?: s
 const PERSIST_AFTER_BYTES = 64 << 20;
 
 async function main() {
-  console.log(`[shiro] Starting... (build #${buildNumber.trim()})`);
+  console.log(`[tabcomputer] Starting... (build #${buildNumber.trim()})`);
   logIsolationStatus();
 
   // The desktop (src/desktop) is its own chunk: shiro.computer's terminal UI
@@ -146,7 +147,7 @@ async function main() {
     await fs.writeFile('/home/user/CLAUDE.md', CLAUDE_MD);
     await writeRuntimeContextFiles(fs, runtimeContext);
   } catch {}
-  console.log('[shiro] Filesystem initialized');
+  console.log('[tabcomputer] Filesystem initialized');
 
   // Initialize file associations (extension → command mappings for `open`)
   initFileAssociations();
@@ -276,7 +277,9 @@ async function main() {
     () => import('./commands/upload').then(m => m.uploadCmd)), 'src/commands/upload.ts');
   registerCommand(commands, lazyCommand('download', 'Download files from virtual filesystem to host machine',
     () => import('./commands/upload').then(m => m.downloadCmd)), 'src/commands/upload.ts');
-  registerCommand(commands, lazyCommand('shiro', 'Shiro OS configuration',
+  registerCommand(commands, lazyCommand('tabcomputer', 'tabcomputer configuration',
+    () => import('./commands/upload').then(m => m.shiroConfigCmd)), 'src/commands/upload.ts');
+  registerCommand(commands, lazyCommand('shiro', 'Old name of the tabcomputer command',
     () => import('./commands/upload').then(m => m.shiroConfigCmd)), 'src/commands/upload.ts');
   registerCommand(commands, sourceCmd, 'src/commands/source.ts');
   registerCommand(commands, dotCmd, 'src/commands/source.ts');
@@ -293,10 +296,10 @@ async function main() {
     () => import('./commands/termcast').then(m => m.termcastCmd)), 'src/commands/termcast.ts');
   registerCommand(commands, serveCmd, 'src/commands/serve.ts');
   registerCommand(commands, serversCmd, 'src/commands/serve.ts');
-  registerCommand(commands, lazyCommand('image', 'Manage shiro images (filesystem snapshots)',
+  registerCommand(commands, lazyCommand('image', 'Manage tabcomputer images (filesystem snapshots)',
     () => import('./commands/image').then(m => m.imageCmd)), 'src/commands/image.ts');
   registerCommand(commands, clipReportCmd, 'src/commands/clip-report.ts');
-  registerCommand(commands, lazyCommand('seed', 'Export Shiro state (seed [blob|gif|html] [subdomain])',
+  registerCommand(commands, lazyCommand('seed', 'Export tabcomputer state (seed [blob|gif|html] [subdomain])',
     () => import('./commands/seed').then(m => m.seedCmd)), 'src/commands/seed.ts');
   registerCommand(commands, lazyCommand('remote', 'Start/stop remote development session for external Claude Code access',
     () => import('./commands/remote').then(m => m.remoteCmd)), 'src/commands/remote.ts');
@@ -410,7 +413,9 @@ async function main() {
     () => import('./commands/pkg').then(m => m.aptGetCmd)), 'src/commands/pkg.ts');
   registerCommand(commands, lazyCommand('debian', 'Install and manage the streamed Debian system',
     () => import('./commands/debian').then(m => m.debianCmd)), 'src/commands/debian.ts');
-  registerCommand(commands, lazyCommand('shiro-alternatives', "Choose Shiro's or Debian's implementation of a program",
+  registerCommand(commands, lazyCommand('tabcomputer-alternatives', "Choose tabcomputer's or Debian's implementation of a program",
+    () => import('./commands/debian').then(m => m.shiroAlternativesCmd)), 'src/commands/debian.ts');
+  registerCommand(commands, lazyCommand('shiro-alternatives', 'Old name of tabcomputer-alternatives',
     () => import('./commands/debian').then(m => m.shiroAlternativesCmd)), 'src/commands/debian.ts');
   registerCommand(commands, shiroAptMethodCmd, 'src/commands/debian.ts');
   registerCommand(commands, shiroAptStoreCmd, 'src/commands/debian.ts');
@@ -460,7 +465,7 @@ async function main() {
     () => import('./commands/cron').then(m => m.crontabCmd)), 'src/commands/cron.ts');
   registerCommand(commands, lazyCommand('journalctl', 'Query the journal',
     () => import('./commands/cron').then(m => m.journalctlCmd)), 'src/commands/cron.ts');
-  registerCommand(commands, lazyCommand('ssh', 'Connect to remote Shiro via WebRTC',
+  registerCommand(commands, lazyCommand('ssh', 'Connect to remote tabcomputer via WebRTC',
     () => import('./commands/ssh').then(m => m.sshCmd)), 'src/commands/ssh.ts');
   registerCommand(commands, lazyCommand('doctor', 'Check this tab (deploy, browser, engine, network, sign-ins, storage) for a bug report',
     () => import('./commands/doctor').then(m => m.doctorCmd)), 'src/commands/doctor.ts');
@@ -490,8 +495,8 @@ async function main() {
     const ov = await import('./debian/overlay');
     await ov.enableDebianShadows(fs, (n) => !!commands.get(n));
     for (const [k, v] of Object.entries(m.DEBIAN_ENV)) shell.env[k] ??= v;
-    console.log(`[shiro] Debian ${st.version} (${st.suite}) rootfs ${st.id}`);
-  }).catch((e) => { console.warn('[shiro] Debian boot failed:', e); void createPathShims(fs).catch(() => {}); });
+    console.log(`[tabcomputer] Debian ${st.version} (${st.suite}) rootfs ${st.id}`);
+  }).catch((e) => { console.warn('[tabcomputer] Debian boot failed:', e); void createPathShims(fs).catch(() => {}); });
 
   // Create shell
   const shell = new Shell(fs, commands);
@@ -511,13 +516,13 @@ async function main() {
   void startDisplay(kernel, 0).catch(e => console.warn('[Xshiro]', e));
 
   // Populate API keys from localStorage so `claude` CLI picks them up
-  const storedAnthropicKey = localStorage.getItem('shiro_anthropic_key') || localStorage.getItem('shiro_api_key');
+  const storedAnthropicKey = localStorage.getItem('tabcomputer_anthropic_key') || localStorage.getItem('tabcomputer_api_key');
   if (storedAnthropicKey) shell.env['ANTHROPIC_API_KEY'] = storedAnthropicKey;
-  const storedOpenaiKey = localStorage.getItem('shiro_openai_key');
+  const storedOpenaiKey = localStorage.getItem('tabcomputer_openai_key');
   if (storedOpenaiKey) shell.env['OPENAI_API_KEY'] = storedOpenaiKey;
-  const storedGoogleKey = localStorage.getItem('shiro_google_key');
+  const storedGoogleKey = localStorage.getItem('tabcomputer_google_key');
   if (storedGoogleKey) shell.env['GOOGLE_API_KEY'] = storedGoogleKey;
-  const storedGithubToken = localStorage.getItem('shiro_github_token');
+  const storedGithubToken = localStorage.getItem('tabcomputer_github_token');
   if (storedGithubToken) shell.env['GITHUB_TOKEN'] = storedGithubToken;
 
   // Extra terminals (panes, desktop windows) get fresh shells with this one's env and cwd
@@ -540,7 +545,7 @@ async function main() {
       desktop = bootDesktop({ fs, shell, kernel, makeShell, terminalEl: container });
     } catch (e) {
       // A chunk that fails to load leaves the full-page terminal, which always works
-      console.error('[shiro] desktop failed to load; using the terminal UI', e);
+      console.error('[tabcomputer] desktop failed to load; using the terminal UI', e);
       document.body.classList.remove('sd-active');
     }
   }
@@ -584,7 +589,7 @@ async function main() {
   });
 
   // Expose global for test automation and programmatic access
-  (window as any).__shiro = {
+  (window as any).__tabcomputer = {
     fs,
     shell,
     terminal,
@@ -677,7 +682,7 @@ async function main() {
 
     // ?unbecome escape hatch — clear become config and show terminal
     if (params.has('unbecome')) {
-      localStorage.removeItem('shiro-become');
+      localStorage.removeItem('tabcomputer-become');
       document.body.classList.remove('become-active');
       history.replaceState({}, '', '/');
     } else if (pathname === '/' + becomeConfig.slug) {
@@ -692,9 +697,9 @@ async function main() {
         }
       if (startResult !== 0) {
         // Server failed to start — clear become config and show terminal
-        localStorage.removeItem('shiro-become');
+        localStorage.removeItem('tabcomputer-become');
         document.body.classList.remove('become-active');
-        console.warn('[shiro] Become mode: server failed to start, falling back to terminal');
+        console.warn('[tabcomputer] Become mode: server failed to start, falling back to terminal');
       }
     } else {
       // Pathname doesn't match slug — show terminal (stale config)
@@ -815,7 +820,7 @@ async function main() {
   // Skip only if become mode is actually active (not just config in localStorage)
   if (!document.body.classList.contains('become-active')) {
     // getPersistedRemoteCode() without loading commands/remote unless there is one
-    const persistedCode = localStorage.getItem('shiro-remote-code');
+    const persistedCode = localStorage.getItem('tabcomputer-remote-code');
     if (persistedCode) {
       void import('./commands/remote').then(m => m.startRemoteWithCode(persistedCode, terminal));
     }
@@ -825,8 +830,8 @@ async function main() {
   // list). Waits a few seconds so the 18 MB tarball download doesn't compete with boot.
   if (profile.preinstall.includes('claude-code')) setTimeout(() => {
     ensureClaudeCodeInstalled(fs)
-      .then(() => console.log('[shiro] Claude Code ready'))
-      .catch((e) => console.warn('[shiro] Claude Code background install failed:', e?.message || e));
+      .then(() => console.log('[tabcomputer] Claude Code ready'))
+      .catch((e) => console.warn('[tabcomputer] Claude Code background install failed:', e?.message || e));
   }, 3000);
 }
 

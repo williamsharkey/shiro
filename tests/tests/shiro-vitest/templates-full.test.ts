@@ -109,7 +109,7 @@ describe('Classic Templates: Full Execution with Serve', () => {
     expect(resp.status).toBe(200);
     const body = typeof resp.body === 'string' ? resp.body : new TextDecoder().decode(resp.body as Uint8Array);
     expect(body).toContain('<!DOCTYPE html>');
-    expect(body).toContain('Hello from Shiro');
+    expect(body).toContain('Hello from tabcomputer');
     expect(body).toContain('<style>');
   });
 

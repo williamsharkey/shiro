@@ -3,7 +3,7 @@
  *
  * A harness process (fixtures/tcp-relay-harness.mjs) runs a TCP echo server,
  * relays built from server.mjs's createTcpRelay, and server.mjs itself with
- * SHIRO_TCP_RELAY=1. The kernel side runs here with Node's WebSocket/fetch.
+ * TABCOMPUTER_TCP_RELAY=1. The kernel side runs here with Node's WebSocket/fetch.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
@@ -326,7 +326,7 @@ describe('kernel sockets over the TCP relay', () => {
     const store = new Map<string, string>();
     (globalThis as any).localStorage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); }, removeItem: (k: string) => { store.delete(k); } };
     try {
-      store.set('shiro_github_token', 'good-token');
+      store.set('tabcomputer_github_token', 'good-token');
       const s2 = stream(stackFor(P.relayD));
       expect(await s2.connect(v4('127.0.0.1', P.echoPort))).toBe(0);
       await s2.write(enc.encode('hi'));

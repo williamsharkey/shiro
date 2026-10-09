@@ -1,7 +1,7 @@
 # Toward full Unix compatibility
 
-Goal: anything that runs on Linux/macOS/WSL installs and runs in Shiro. This
-note records where Shiro stands, what blocks that goal, and the order to fix it.
+Goal: anything that runs on Linux/macOS/WSL installs and runs in tabcomputer. This
+note records where tabcomputer stands, what blocks that goal, and the order to fix it.
 Written 2026-10-07, after the `port-agy` attempt to run Google's `agy` CLI.
 
 ## What the `port-agy` attempt found
@@ -67,7 +67,7 @@ cross-origin embedding, server windows, OAuth popups (COOP severs
 `window.opener`). Behind a flag until the audit is green. When the page is
 not isolated, fall back to JSPI (`WebAssembly.Suspending`) for WASM guests.
 Status (branch `unix/isolation`): done in `server.mjs` and `vite.config.ts`,
-on by default, `SHIRO_ISOLATION=0` to disable. Verified in Chromium:
+on by default, `TABCOMPUTER_ISOLATION=0` to disable. Verified in Chromium:
 `crossOriginIsolated` is true, `Atomics.wait` works in a worker, and boot,
 Pyodide, npm install, esbuild-wasm and the Claude Code install all work. Carve-outs are listed
 in AGENTS.md ("Cross-origin isolation").
@@ -111,5 +111,5 @@ map onto the existing virtual-server and `serve` machinery.
 ## Running `agy` specifically
 Phases 1, 2, 4 and an engine from phase 5 that handles Go threads and
 signals. Its network calls go to Google APIs over TLS, so they need the TCP
-relay. Until then, `agy` can't run in Shiro by any route; there is no source
+relay. Until then, `agy` can't run in tabcomputer by any route; there is no source
 for the WASM option.

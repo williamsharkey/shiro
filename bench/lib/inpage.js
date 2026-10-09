@@ -32,7 +32,7 @@
 
   // First prompt: the terminal's cursor line ends in "$ " after boot
   const poll = setInterval(() => {
-    const t = window.__shiro && window.__shiro.terminal;
+    const t = window.__tabcomputer && window.__tabcomputer.terminal;
     if (!t || !t.term) return;
     if (!B.marks.shiroReady) B.marks.shiroReady = performance.now();
     const buf = t.term.buffer.active;
@@ -47,7 +47,7 @@
   const enc = new TextEncoder();
   /** Run a command line in the page shell; output captured. */
   B.sh = async (cmd, opts = {}) => {
-    const shell = opts.shell || window.__shiro.shell;
+    const shell = opts.shell || window.__tabcomputer.shell;
     let out = '', err = '';
     const t0 = performance.now();
     // Kernel programs write a terminal's tty directly unless it asks for their
@@ -60,7 +60,7 @@
   };
   /** sh() with a deadline: on timeout, SIGKILL every kernel process started since the call. */
   B.shLimit = async (cmd, ms) => {
-    const k = window.__shiro.kernel;
+    const k = window.__tabcomputer.kernel;
     const before = new Set(k.procs.keys());
     let timedOut = false;
     const run = B.sh(cmd);
@@ -87,15 +87,15 @@
     for (const m of String(text).matchAll(/^(\w+)=(\S+)$/gm)) o[m[1]] = isNaN(+m[2]) ? m[2] : +m[2];
     return o;
   };
-  B.writeFile = (path, data, mode) => window.__shiro.fs.writeFile(path, typeof data === 'string' ? enc.encode(data) : data, mode ? { mode } : undefined);
+  B.writeFile = (path, data, mode) => window.__tabcomputer.fs.writeFile(path, typeof data === 'string' ? enc.encode(data) : data, mode ? { mode } : undefined);
   /** Copy a file the bench server publishes under /__bench/ into Shiro's filesystem. */
   B.fetchInto = async (url, path, mode = 0o755) => {
     const r = await fetch(url);
     if (!r.ok) throw new Error(`${url}: ${r.status}`);
     const bytes = new Uint8Array(await r.arrayBuffer());
     const dir = path.slice(0, path.lastIndexOf('/')) || '/';
-    await window.__shiro.fs.mkdir(dir, { recursive: true }).catch(() => {});
-    await window.__shiro.fs.writeFile(path, bytes, { mode });
+    await window.__tabcomputer.fs.mkdir(dir, { recursive: true }).catch(() => {});
+    await window.__tabcomputer.fs.writeFile(path, bytes, { mode });
     return bytes.length;
   };
   B.resources = () => {
@@ -111,11 +111,11 @@
   B.SYS = SYS;
   B.lab = () => {
     if (B._lab && B._lab.state !== 'zombie') return B._lab;
-    const k = window.__shiro.kernel;
+    const k = window.__tabcomputer.kernel;
     B._lab = k.spawn({ path: 'bench-lab', argv: ['bench-lab'], fds: {}, run: () => new Promise((r) => { B._labExit = r; }) });
     return B._lab;
   };
-  B.sys = (nr, args = [], data = new Uint8Array(0)) => window.__shiro.kernel.syscall(B.lab(), nr, args, data);
+  B.sys = (nr, args = [], data = new Uint8Array(0)) => window.__tabcomputer.kernel.syscall(B.lab(), nr, args, data);
   B.pipe = async () => {
     const d = new Uint8Array(8);
     const r = await B.sys(SYS.pipe2, [0], d);
@@ -138,7 +138,7 @@
     return new TextDecoder().decode(out);
   };
   B.devnull = async () => {
-    const f = await window.__shiro.kernel.open(B.lab(), '/dev/null', 2);
+    const f = await window.__tabcomputer.kernel.open(B.lab(), '/dev/null', 2);
     if (typeof f === 'number') throw new Error('open /dev/null: ' + f);
     return f;
   };
@@ -148,7 +148,7 @@
    * exit codes and wall time from spawn to the last wait.
    */
   B.runProcs = async (stages, { cwd = '/home/user' } = {}) => {
-    const k = window.__shiro.kernel, lab = B.lab();
+    const k = window.__tabcomputer.kernel, lab = B.lab();
     const out = await B.pipe();
     const nul = await B.devnull();
     const links = [];
@@ -170,7 +170,7 @@
 
   /** Keystroke → echo latency on the main terminal: until parsed into the buffer, and until the next frame. */
   B.echoLatency = async (count) => {
-    const t = window.__shiro.terminal.term;
+    const t = window.__tabcomputer.terminal.term;
     const parsed = [], frame = [];
     for (let i = 0; i < count; i++) {
       const ch = String.fromCharCode(97 + (i % 26));
@@ -188,7 +188,7 @@
   };
 
   B.kernelStats = () => {
-    const k = window.__shiro.kernel;
+    const k = window.__tabcomputer.kernel;
     let fds = 0, zombies = 0, live = 0;
     for (const p of k.procs.values()) {
       if (p.state === 'zombie') zombies++; else live++;

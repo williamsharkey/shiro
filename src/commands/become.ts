@@ -6,7 +6,7 @@ import { Command, CommandContext } from './index';
 import { getActiveServers, injectIframeScripts } from './serve';
 import { iframeServer } from '../iframe-server';
 
-const STORAGE_KEY = 'shiro-become';
+const STORAGE_KEY = 'tabcomputer-become';
 
 export interface BecomeConfig {
   directory: string;
@@ -62,7 +62,7 @@ export async function activateBecomeMode(config: BecomeConfig): Promise<void> {
     iframe.srcdoc = `<html><body style="color:#fff;background:#1a1a2e;font-family:monospace;padding:2em">
       <h2>Failed to load app</h2>
       <p>${err instanceof Error ? err.message : 'Unknown error'}</p>
-      <p>Run <code>__shiro.unbecome()</code> in browser console to return to terminal.</p>
+      <p>Run <code>__tabcomputer.unbecome()</code> in browser console to return to terminal.</p>
     </body></html>`;
   }
 
@@ -140,7 +140,7 @@ export function deactivateBecomeMode(): void {
   document.title = window.location.hostname || 'shiro';
 
   // Focus terminal
-  const shiro = (window as any).__shiro;
+  const shiro = (window as any).__tabcomputer;
   if (shiro?.terminal?.term) {
     shiro.terminal.term.focus();
   }
@@ -201,7 +201,7 @@ export const becomeCmd: Command = {
 
     await activateBecomeMode(config);
     ctx.stdout = `Became "${config.slug}" — full-screen app mode\n`;
-    ctx.stdout += `Run __shiro.unbecome() in browser console to return.\n`;
+    ctx.stdout += `Run __tabcomputer.unbecome() in browser console to return.\n`;
     return 0;
   },
 };

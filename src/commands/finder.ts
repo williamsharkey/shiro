@@ -110,8 +110,8 @@ export const finderCmd: Command = {
           } else {
             // Open file in vi editor
             const filePath = currentPath === '/' ? '/' + entry.name : currentPath + '/' + entry.name;
-            const shell = (window as any).__shiro?.shell;
-            const term = (window as any).__shiro?.terminal;
+            const shell = (window as any).__tabcomputer?.shell;
+            const term = (window as any).__tabcomputer?.terminal;
             if (shell && term) {
               term.term.writeln('');
               shell.execute(
@@ -167,8 +167,8 @@ export const finderCmd: Command = {
       items.push({ label: 'Open', action: () => {
         if (entry.type === 'dir') navigateTo(filePath);
         else {
-          const shell = (window as any).__shiro?.shell;
-          const term = (window as any).__shiro?.terminal;
+          const shell = (window as any).__tabcomputer?.shell;
+          const term = (window as any).__tabcomputer?.terminal;
           if (shell && term) {
             term.term.writeln('');
             shell.execute(`vi "${filePath}"`, (s: string) => term.term.write(s), (s: string) => term.term.write(`\x1b[31m${s}\x1b[0m`)).then(() => term.showPrompt?.());
@@ -318,8 +318,8 @@ export const finderCmd: Command = {
       if (names.length < 2) return;
       const zipName = prompt('Zip file name:', 'archive.zip');
       if (!zipName) return;
-      const shell = (window as any).__shiro?.shell;
-      const term = (window as any).__shiro?.terminal;
+      const shell = (window as any).__tabcomputer?.shell;
+      const term = (window as any).__tabcomputer?.terminal;
       if (!shell || !term) return;
       const paths = names.map(n => `"${joinPath(currentPath, n)}"`).join(' ');
       term.term.writeln('');

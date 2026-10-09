@@ -787,7 +787,7 @@ describe('x86-64 Syscalls', () => {
     await sc.handleSyscall();
 
     expect(mem.readString(0x2000n)).toBe('Linux');
-    expect(mem.readString(0x2000n + 65n)).toBe('shiro');
+    expect(mem.readString(0x2000n + 65n)).toBe('tabcomputer');
   });
 });
 

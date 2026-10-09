@@ -9,7 +9,7 @@
  * The key bar: the keys the iOS keyboard makes awkward, in two rows of nine
  * that fit a 375 px screen. Ctrl and Alt are one-shot modifiers that also
  * apply to the next letter typed on the system keyboard. Mode (localStorage
- * `shiro-keybar`): 'auto' (shown, hides while the keyboard is open), 'pinned'
+ * `tabcomputer-keybar`): 'auto' (shown, hides while the keyboard is open), 'pinned'
  * (also above the keyboard), 'off'. The menu bar's keyboard button toggles it.
  *
  * Loaded only on touch devices; the classic terminal UI keeps
@@ -20,7 +20,7 @@ import { getActiveTerminal } from '../active-terminal';
 import type { AppContext, DesktopLayout } from './index';
 
 export type KeybarMode = 'auto' | 'pinned' | 'off';
-export const KEYBAR_KEY = 'shiro-keybar';
+export const KEYBAR_KEY = 'tabcomputer-keybar';
 const KEYBOARD_MIN = 120; // px of viewport lost before we call it a keyboard
 
 export function keybarMode(): KeybarMode {
@@ -58,7 +58,7 @@ export const KEY_ROWS: Key[][] = [
 ];
 
 function inject(data: string): void {
-  (getActiveTerminal() ?? (globalThis as any).__shiro?.terminal)?.injectInput?.(data);
+  (getActiveTerminal() ?? (globalThis as any).__tabcomputer?.terminal)?.injectInput?.(data);
 }
 
 /** A control character for a letter (Ctrl+C → \x03); other characters unchanged. */

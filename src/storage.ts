@@ -24,7 +24,7 @@ export function requestPersistentStorage(reason: string): Promise<boolean> {
       if (!s?.persist) return false;
       if (await s.persisted?.().catch(() => false)) return true;
       const granted = await s.persist().catch(() => false);
-      console.log(`[shiro] persistent storage ${granted ? 'granted' : 'not granted'} (${reason})`);
+      console.log(`[tabcomputer] persistent storage ${granted ? 'granted' : 'not granted'} (${reason})`);
       return granted;
     })();
   }

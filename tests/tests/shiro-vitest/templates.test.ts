@@ -284,7 +284,7 @@ describe('Template Full Command Execution', () => {
     await run(shell, template.cmd.split('\n').filter(l => !l.trim().startsWith('serve ')).join('\n'));
     const content = await fs.readFile('/tmp/mypage/index.html', 'utf8') as string;
     expect(content).toContain('<!DOCTYPE html>');
-    expect(content).toContain('Hello from Shiro');
+    expect(content).toContain('Hello from tabcomputer');
     expect(content).toContain('<style>');
     expect(content).toContain('onclick=');
   });

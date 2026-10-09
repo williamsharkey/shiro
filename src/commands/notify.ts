@@ -12,7 +12,7 @@ export const notifyCmd: Command = {
 
     const { values, positional } = parseArgs(ctx.args, ['t', 'title']);
 
-    const title = values.t || values.title || 'Shiro';
+    const title = values.t || values.title || 'tabcomputer';
 
     // Body from args or stdin
     let body = positional.join(' ');

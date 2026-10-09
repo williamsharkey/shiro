@@ -60,7 +60,7 @@ describe('C Compiler (cc/gcc)', () => {
       expect(exitCode).toBe(0);
       expect(output).toContain('xcc');
       expect(output).toContain('wcc');
-      expect(output).toContain('Shiro');
+      expect(output).toContain('tabcomputer');
     });
 
     it('should show version with -v', async () => {
