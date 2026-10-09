@@ -120,13 +120,15 @@ describe('netlink sockets', () => {
 
   it("a connected UDP socket reports the route's source address (glibc getaddrinfo's RFC 3484 sort)", async () => {
     const { data, sys } = setup();
-    const fd = await sys(A.SYS_socket, [A.AF_INET6, A.SOCK_DGRAM, 0]);
     const name = async (dest: string) => {
+      const fd = await sys(A.SYS_socket, [A.AF_INET6, A.SOCK_DGRAM, 0]);
       data.set(encodeSockaddr({ family: A.AF_INET6, address: dest, port: 53 }));
       expect(await sys(A.SYS_connect, [fd, 28])).toBe(0);
       const n = await sys(A.SYS_getsockname, [fd]);
       const sa = decodeSockaddr(data.slice(0, n));
-      return typeof sa === 'number' ? sa : sa.address;
+      if (typeof sa === 'number') return sa;
+      expect(sa.port).toBeGreaterThan(0); // an ephemeral port, as Linux binds on connect
+      return sa.address;
     };
     // getaddrinfo asserts a v4-mapped source for a v4-mapped destination
     expect(await name('::ffff:93.184.216.34')).toBe('::ffff:10.0.2.15');
