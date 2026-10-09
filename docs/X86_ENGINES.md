@@ -536,6 +536,13 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    `clock_nanosleep` and `pause` sleep in slices and end on a handled
    signal (with the time left: LTP nanosleep02). Test:
    `fixtures/x86/sleepintr.c`.
+54. Sleeps keep time on `CLOCK_MONOTONIC` (emscripten's `CLOCK_REALTIME`
+   counts whole ms, and glibc's `nanosleep` is
+   `clock_nanosleep(CLOCK_REALTIME)`; an absolute realtime deadline is
+   converted), and patch 50's sleeping mark is only taken for sleeps over
+   5 ms, with its kernel round trips inside the sleep (off 3 ms before the
+   deadline). LTP nanosleep01 and clock_nanosleep02 pass all rows again
+   (they slept 0.4-1.3 ms too long).
 
 The guest's kernel calls go over a pool of channels (`src/x86-engine/blink.ts`
 → `public/engines/blink/host.mjs`). It starts at 6, and host.mjs asks the

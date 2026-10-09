@@ -1,0 +1,150 @@
+From 5016052183613dac11ba01598545f9e0a93b1a4a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 14:56:17 +0000
+Subject: [PATCH 54/54] Shiro: nanosleep keeps time on CLOCK_MONOTONIC; the
+ sleeping mark's round trips go inside the sleep
+
+Blink's nanosleep measured its deadline with CLOCK_REALTIME, which
+emscripten reads from Date.now() in whole ms: sleeps ended up to 1 ms
+late (or early, against the guest's CLOCK_MONOTONIC). And patch 0050's
+sleeping mark made two blocking kernel calls, the second after the
+deadline (clock_nanosleep's first before it was computed). LTP
+nanosleep01, clock_nanosleep02 and epoll_wait02 slept too long. Now
+nanosleep uses CLOCK_MONOTONIC, sleeps of 5 ms or less aren't marked, and
+the mark is taken off 3 ms before the deadline.
+---
+ blink/syscall.c | 52 ++++++++++++++++++++++++++++++++++++++-----------
+ 1 file changed, 41 insertions(+), 11 deletions(-)
+
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 81611e2..3d33ee2 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -705,6 +705,7 @@ static int LoadTimespecRW(struct Machine *m, i64 addr, struct timespec *ts) {
+ 
+ #ifdef __EMSCRIPTEN__
+ static void ShiroSleeping(struct Machine *, int);
++static double ShiroRealtime(void);
+ #else
+ #define ShiroSleeping(m, n) (void)0
+ #endif
+@@ -4225,7 +4226,7 @@ static int SysNanosleep(struct Machine *m, i64 req, i64 rem) {
+   struct timespec_linux gt;
+   const struct timespec_linux *gtp;
+   struct timespec ts, now, deadline;
+-  now = GetTime();
++  now = GetMonotonic();
+   if ((rem && !IsValidMemory(m, rem, sizeof(gtp), PROT_WRITE)) ||
+       !(gtp = (const struct timespec_linux *)SchlepR(m, req, sizeof(*gtp)))) {
+     return -1;
+@@ -4236,11 +4237,19 @@ static int SysNanosleep(struct Machine *m, i64 req, i64 rem) {
+   if (!(0 <= ts.tv_nsec && ts.tv_nsec < 1000000000)) return einval();
+   deadline = AddTime(now, ts);
+   // the kernel shows the process sleeping (state S) meanwhile
+-  sleeping = CompareTime(ts, FromMilliseconds(2)) >= 0;
++  sleeping = CompareTime(ts, FromMilliseconds(5)) > 0;
+   if (sleeping) ShiroSleeping(m, 1);
+   for (;;) {
+     if (CompareTime(now, deadline) >= 0) break;
+     ts = SubtractTime(deadline, now);
++    // the kernel round trips go inside the sleep, not after its deadline
++    // (LTP nanosleep01 allows ~0.5 ms over)
++    if (sleeping && CompareTime(ts, FromMilliseconds(3)) <= 0) {
++      ShiroSleeping(m, -1);
++      sleeping = false;
++      now = GetMonotonic();
++      continue;
++    }
+ #ifdef __EMSCRIPTEN__
+     // emscripten's nanosleep is a wait nothing interrupts: sleep in slices,
+     // and between them look for the guest's signals and for its process
+@@ -4250,6 +4259,7 @@ static int SysNanosleep(struct Machine *m, i64 req, i64 rem) {
+       errno = EINTR;
+       return -1;
+     }
++    if (sleeping) ts = SubtractTime(ts, FromMilliseconds(3));  // unmark before the end
+     if (CompareTime(ts, FromMilliseconds(10)) > 0) ts = FromMilliseconds(10);
+     if ((m->signals & ~m->sigmask) || nanosleep(&ts, 0)) {
+ #else
+@@ -4262,7 +4272,7 @@ static int SysNanosleep(struct Machine *m, i64 req, i64 rem) {
+         // a signal was delivered or is about to be delivered
+         if (rem) {
+           // rem is only updated when -1 w/ eintr is returned
+-          now = GetTime();
++          now = GetMonotonic();
+           if (CompareTime(now, deadline) < 0) {
+             ts = SubtractTime(deadline, now);
+           } else {
+@@ -4277,7 +4287,7 @@ static int SysNanosleep(struct Machine *m, i64 req, i64 rem) {
+     }
+     // sleep apis aren't nearly as fast and reliable as time apis
+     // even if nanosleep() claims it slept the full time we check
+-    now = GetTime();
++    now = GetMonotonic();
+   }
+   if (sleeping) ShiroSleeping(m, -1);
+   return 0;
+@@ -4296,19 +4306,37 @@ static int SysClockNanosleep(struct Machine *m, int clock, int flags,
+   }
+   req.tv_sec = Read64(gtimespec.sec);
+   req.tv_nsec = Read64(gtimespec.nsec);
+-  ShiroSleeping(m, 1);
+ #ifdef __EMSCRIPTEN__
+   // in slices, as SysNanosleep: signals interrupt it (with rem for a
+-  // relative sleep), and so does the process ending
++  // relative sleep), and so does the process ending; the sleeping mark's
++  // kernel round trips go inside the sleep
+   {
++    bool sleeping;
+     struct timespec now, deadline, ts;
+-    if (clock_gettime(sysclock, &now)) {
+-      ShiroSleeping(m, -1);
+-      return -1;
++    // timed on CLOCK_MONOTONIC: emscripten's CLOCK_REALTIME counts whole
++    // ms (glibc's nanosleep is clock_nanosleep(CLOCK_REALTIME)); an
++    // absolute realtime deadline becomes a monotonic one
++    if (!(flags & TIMER_ABSTIME_LINUX)) {
++      deadline = AddTime(GetMonotonic(), req);
++      sysclock = CLOCK_MONOTONIC;
++    } else if (sysclock == CLOCK_REALTIME) {
++      double left = req.tv_sec * 1e3 + req.tv_nsec / 1e6 - ShiroRealtime();
++      deadline = GetMonotonic();
++      if (left > 0) deadline = AddTime(deadline, FromNanoseconds((i64)(left * 1e6)));
++      sysclock = CLOCK_MONOTONIC;
++    } else {
++      deadline = req;
+     }
+-    deadline = (flags & TIMER_ABSTIME_LINUX) ? req : AddTime(now, req);
++    unassert(!clock_gettime(sysclock, &now));
++    sleeping = CompareTime(SubtractTime(deadline, now), FromMilliseconds(5)) > 0;
++    if (sleeping) ShiroSleeping(m, 1);
+     for (;;) {
+       unassert(!clock_gettime(sysclock, &now));
++      if (sleeping && CompareTime(SubtractTime(deadline, now), FromMilliseconds(3)) <= 0) {
++        ShiroSleeping(m, -1);
++        sleeping = false;
++        continue;
++      }
+       if (CompareTime(now, deadline) >= 0) {
+         rc = 0;
+         break;
+@@ -4330,13 +4358,15 @@ static int SysClockNanosleep(struct Machine *m, int clock, int flags,
+         break;
+       }
+       ts = SubtractTime(deadline, now);
++      if (sleeping) ts = SubtractTime(ts, FromMilliseconds(3));  // unmark before the end
+       if (CompareTime(ts, FromMilliseconds(10)) > 0) ts = FromMilliseconds(10);
+       nanosleep(&ts, 0);
+     }
+-    ShiroSleeping(m, -1);
++    if (sleeping) ShiroSleeping(m, -1);
+     return rc;
+   }
+ #endif
++  ShiroSleeping(m, 1);
+ TryAgain:
+ #if defined(TIMER_ABSTIME) && !defined(__OpenBSD__)
+   flags = flags & TIMER_ABSTIME_LINUX ? TIMER_ABSTIME : 0;
+-- 
+2.43.0
+
