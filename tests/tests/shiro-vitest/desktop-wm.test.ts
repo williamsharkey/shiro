@@ -203,6 +203,20 @@ describe('brand (profiles/tabcomputer/profile.json)', () => {
     expect(shiro).toBe('<head><title>shiro</title></head>');
     expect(sub).toBe('<head><title>shiro</title></head>');
   });
+
+  it('server.mjs shows the brand mark (its favicon, inline, in currentColor) while loading', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const server = new URL('../../../server.mjs', import.meta.url).href;
+    const out = execFileSync('node', ['--input-type=module', '-e',
+      `const m = await import(${JSON.stringify(server)}); const h = '<head><title>shiro</title></head><body></body>';
+       console.log(JSON.stringify([m.brandAppShell(h, 'tabcomputer.com'), m.brandAppShell(h, 'shiro.computer')])); process.exit(0);`,
+    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const [tab, shiro] = JSON.parse(out.trim().split('\n').pop()!);
+    const mark = tab.match(/<div id="boot-mark" aria-hidden="true">(<svg[\s\S]*?<\/svg>)<\/div>/)?.[1];
+    expect(mark).toContain('stroke="currentColor"');
+    expect(mark).not.toMatch(/<style|<svg[^>]*\scolor=/);
+    expect(shiro).not.toContain('boot-mark');
+  });
 });
 
 describe('"Use my own connection" (net-signin)', () => {

@@ -5,7 +5,7 @@
  */
 
 import { BRAND } from '../brand';
-import { GLYPHS } from './icons';
+import { GLYPHS, ICONS } from './icons';
 import type { AppContext } from './index';
 
 export const TOUR_KEY = 'tabcomputer-desktop-tour';
@@ -54,7 +54,7 @@ export function showTour(ctx: AppContext): void {
     const last = i === CARDS.length - 1;
     box.innerHTML = `
       <button class="sd-tour-x" type="button" aria-label="Close" data-act="close">${GLYPHS.x}</button>
-      <h3>${c.title}</h3>${c.body}
+      ${i === 0 ? `<div class="sd-brand-mark" style="width:36px;margin-bottom:8px">${ICONS.logo}</div>` : ''}<h3>${c.title}</h3>${c.body}
       <div class="sd-tour-foot">
         <span class="sd-tour-dots">${CARDS.map((_, n) => `<i class="${n === i ? 'sd-on' : ''}"></i>`).join('')}</span>
         ${c.action ? `<button class="sd-btn" type="button" data-act="action">${c.action.label}</button>` : ''}

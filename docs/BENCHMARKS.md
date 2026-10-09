@@ -171,6 +171,12 @@ desktop chunk.
 (0fa56a5 vs this, desktop page, desktop pointer): no timing metric changed;
 boot transfer 1548 → 1554 KiB (+6 KiB, +0.4%), DOM nodes 329 → 330.
 
+Again after the otter logo (integration c4d0e2a vs this; the inline boot
+mark comes from server.mjs, so the bench page doesn't carry it): timings
+unchanged, transfer +1 KiB, DOM nodes 342 → 334 and renderer RSS −5%
+(240 → 229 MiB, lower in all 4 rounds). The base lacks this branch's phone
+commit too; which change moved nodes and RSS was not traced.
+
 ### unix/desktop 3 — the terminal's first layout: system font lookups
 
 perf-fs-shell's cold-boot profile showed `new ShiroTerminal` dominated by

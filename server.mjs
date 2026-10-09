@@ -362,7 +362,26 @@ export function brandAppShell(html, host, brand = profileFor(host)?.brand) {
   ].join('\n  ');
   let out = html.replace(/<title>[^<]*<\/title>/, `<title>${esc(brand.name)}</title>\n  ${tags}`);
   if (brand.favicon) out = out.replace(/href="\/favicon\.svg"/, `href="${esc(brand.favicon)}"`);
+  // The brand's mark, centered while the app loads (inline: no extra request).
+  // main.ts removes #boot-mark once the terminal exists.
+  const mark = brand.favicon && bootMark(brand.favicon);
+  if (mark) out = out.replace(/<body>/, `<body>\n  <div id="boot-mark" aria-hidden="true">${mark}</div>`);
   return out;
+}
+
+/** An SVG favicon as an inline mark in currentColor (its own color and dark-mode style dropped) */
+const bootMarks = new Map();
+function bootMark(favicon) {
+  if (!/^\/[\w.-]+\.svg$/.test(favicon)) return '';
+  if (bootMarks.has(favicon)) return bootMarks.get(favicon);
+  let svg = '';
+  for (const at of [new URL('./public' + favicon, import.meta.url), join(STATIC_DIR, favicon)]) {
+    try { svg = readFileSync(at, 'utf8'); break; } catch {}
+  }
+  svg = svg.replace(/<style>[\s\S]*?<\/style>/g, '').replace(/(<svg\b[^>]*?)\s+color="[^"]*"/, '$1').trim();
+  if (!/^<svg\b[\s\S]*<\/svg>$/.test(svg) || /<script|\son\w+=/i.test(svg)) svg = '';
+  bootMarks.set(favicon, svg);
+  return svg;
 }
 
 // --- Static file server ---
