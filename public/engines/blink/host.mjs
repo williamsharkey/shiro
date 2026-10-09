@@ -520,6 +520,8 @@ async function run(msg) {
   i32 = new Int32Array(msg.sab, 0, CH_DATA / 4);
   data = new Uint8Array(msg.sab, CH_DATA);
   const fail = (text, code) => {
+    // The page logs it to the kernel log (dmesg): an engine abort or out of memory
+    if (!exiting) post({ type: 'blink-abort', text: String(text) });
     if (!exiting) writeFd(2, enc.encode(`blink: ${text}\n`));
     exitGuest(code);
   };
@@ -719,7 +721,7 @@ async function run(msg) {
     // blink -0 PROGRAM ARGV0 ARGS...: load PROGRAM (the resolved path, never
     // a PATH search of argv[0]) and give the guest argv[0] as invoked.
     // Blink's own log goes to the in-memory root, not the guest's cwd.
-    M.callMain([...(msg.debug && msg.env?.SHIRO_BLINK_STRACE ? ['-s', '-e'] : []), '-L', '/blink.log', '-0', msg.path || argv[0], argv[0], ...argv.slice(1)]);
+    M.callMain([...(msg.debug && msg.env?.TABCOMPUTER_BLINK_STRACE ? ['-s', '-e'] : []), '-L', '/blink.log', '-0', msg.path || argv[0], argv[0], ...argv.slice(1)]);
   } catch (e) {
     try {
       if (e && e.name === 'ExitStatus') exitGuest(e.status);

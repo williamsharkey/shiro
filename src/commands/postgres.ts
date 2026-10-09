@@ -112,7 +112,7 @@ export const psqlCmd: Command = {
 
     if (args.includes('--help') || args.includes('-h')) {
       ctx.stdout = [
-        'psql (Shiro) — PostgreSQL powered by PGlite',
+        'psql (tabcomputer) — PostgreSQL powered by PGlite',
         '',
         'Usage:',
         '  psql "SELECT 1+1;"                         Run a query (in-memory)',

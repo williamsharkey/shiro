@@ -93,19 +93,19 @@ export async function startShiroServer({ staticDir, isolated = true, tcpPorts = 
     PORT: String(port),
     STATIC_DIR: staticDir,
     SEED_DIR: join(staticDir, '..', '.bench-seeds'),
-    SHIRO_ISOLATION: isolated ? '1' : '0',
-    SHIRO_TCP_RELAY: '1',
-    SHIRO_TCP_ORIGINS: origin,
-    SHIRO_TCP_PORTS: ['80', '443', ...tcpPorts.map(String)].join(','),
-    SHIRO_TCP_ALLOW_CIDRS: allowCidrs.join(','),
+    TABCOMPUTER_ISOLATION: isolated ? '1' : '0',
+    TABCOMPUTER_TCP_RELAY: '1',
+    TABCOMPUTER_TCP_ORIGINS: origin,
+    TABCOMPUTER_TCP_PORTS: ['80', '443', ...tcpPorts.map(String)].join(','),
+    TABCOMPUTER_TCP_ALLOW_CIDRS: allowCidrs.join(','),
     // Measure the stack, not the abuse limits
-    SHIRO_TCP_BYTES_PER_SEC: String(1024 ** 3),
-    SHIRO_TCP_BYTE_BURST: String(1024 ** 3),
-    SHIRO_TCP_CONNECTS_PER_MIN: '100000',
-    SHIRO_TCP_MAX_CONNS_PER_IP: '512',
+    TABCOMPUTER_TCP_BYTES_PER_SEC: String(1024 ** 3),
+    TABCOMPUTER_TCP_BYTE_BURST: String(1024 ** 3),
+    TABCOMPUTER_TCP_CONNECTS_PER_MIN: '100000',
+    TABCOMPUTER_TCP_MAX_CONNS_PER_IP: '512',
     // Debian package mirror (suites/debian.mjs): served from a disk cache after the first run
-    SHIRO_DEBIAN_CACHE: process.env.SHIRO_DEBIAN_CACHE || join(ROOT, '.debian-build', 'mirror-cache'),
-    SHIRO_DEBIAN_INDEX_TTL: process.env.SHIRO_DEBIAN_INDEX_TTL || String(30 * 24 * 3600),
+    TABCOMPUTER_DEBIAN_CACHE: process.env.TABCOMPUTER_DEBIAN_CACHE || join(ROOT, '.debian-build', 'mirror-cache'),
+    TABCOMPUTER_DEBIAN_INDEX_TTL: process.env.TABCOMPUTER_DEBIAN_INDEX_TTL || String(30 * 24 * 3600),
   };
   const child = spawn(process.execPath, [join(ROOT, 'server.mjs')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   const lines = [];

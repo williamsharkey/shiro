@@ -10,8 +10,14 @@ npm run build
 rel=$root/releases/$sha
 rm -rf "$rel"; mkdir -p "$rel/public"
 rsync -a dist/ "$rel/public/"
+# Tabs opened before this deploy still import the old hashed chunks, so keep
+# the live release's assets (themselves carried forward) for a week.
+if [ -d "$root/current/public/assets" ]; then
+  (cd "$root/current/public/assets" && find . -type f -mtime -7 -print0) |
+    rsync -a --ignore-existing --from0 --files-from=- "$root/current/public/assets/" "$rel/public/assets/"
+fi
 cp server.mjs "$rel/server.mjs"
-cp deploy/tabcomputer/server.env "$rel/server.env"
+cp profiles/tabcomputer/server.env "$rel/server.env"
 echo "$sha" > "$rel/DEPLOYED_SHA"
 echo "$sha" > "$rel/public/deployed.txt"
 ln -sfn "$rel" "$root/current.new" && mv -T "$root/current.new" "$root/current"

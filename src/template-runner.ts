@@ -56,7 +56,7 @@ function wrapGuideHtml(html: string, templateId: string, checkpoints: Checkpoint
   var checkpoints = ${JSON.stringify(checkpoints)};
 
   // Load saved progress (stored in parent's localStorage via postMessage)
-  var progressKey = 'shiro-template-progress-' + templateId;
+  var progressKey = 'tabcomputer-template-progress-' + templateId;
   var completed = {};
 
   // Expose to guide page

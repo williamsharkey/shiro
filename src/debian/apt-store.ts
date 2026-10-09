@@ -69,6 +69,8 @@ export async function aptStoreProgram(proc: Process, kernel: Kernel): Promise<nu
       const raw = await fs.readFile(src) as Uint8Array;
       const inExt = extOf(src), outExt = extOf(dest);
       let out: Uint8Array;
+      // A destination in a format this method can't write (GzipIndexes asks for .lz4): fail rather than store plain data under that name
+      if (!outExt && /\.(lz4|lz|zstd|Z)$/.test(dest)) { await fail(`shiro-apt-store: compressing to ${dest} is not supported (Acquire::GzipIndexes)`); continue; }
       if (compressMode && inExt !== outExt) { await fail(`shiro-apt-store: compressing to ${dest} is not supported`); continue; }
       if (outExt) {
         // GzipIndexes-style: the list stays compressed; only a same-format copy is supported
@@ -83,6 +85,6 @@ export async function aptStoreProgram(proc: Process, kernel: Kernel): Promise<nu
       await fail(`${src}: ${e?.message ?? e}`);
     }
   }
-  await fs.flushed();
+  await fs.flushed().catch(() => {}); // storage full: the writes above already reported ENOSPC
   return 0;
 }

@@ -12,7 +12,7 @@
 //   shot:FILE   PNG screenshot of the page
 //   screen      print the screen
 //   sleep:MS
-// SHOW_CONSOLE=1 prints the page's console (SHIRO_BLINK_DEBUG=1 traces go there).
+// SHOW_CONSOLE=1 prints the page's console (TABCOMPUTER_BLINK_DEBUG=1 traces go there).
 // Needs playwright (NODE_PATH=/opt/node-tools/node_modules in the cloud
 // containers) and Chromium (CHROMIUM, default /opt/pw-browsers/chromium).
 import { createRequire } from 'node:module';
@@ -28,11 +28,11 @@ const page = await (await browser.newContext({ viewport: { width: 1100, height: 
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 if (process.env.SHOW_CONSOLE) page.on('console', (m) => console.log('[console]', m.text().slice(0, 400)));
 await page.goto(url);
-await page.waitForFunction(() => window.__shiro?.terminal?.term, null, { timeout: 90_000 });
+await page.waitForFunction(() => window.__tabcomputer?.terminal?.term, null, { timeout: 90_000 });
 console.log('crossOriginIsolated =', await page.evaluate(() => crossOriginIsolated));
 
 const screen = () => page.evaluate(() => {
-  const t = window.__shiro.terminal.term;
+  const t = window.__tabcomputer.terminal.term;
   const b = t.buffer.active;
   const rows = [];
   for (let y = 0; y < t.rows; y++) rows.push(b.getLine(b.viewportY + y)?.translateToString(true) ?? '');
@@ -47,7 +47,7 @@ const until = async (cond, what) => {
 };
 const unescape = (s) => JSON.parse('"' + s.replace(/"/g, '\\"').replace(/\\x([0-9a-fA-F]{2})/g, '\\u00$1') + '"');
 const typeKeys = async (text) => {
-  await page.evaluate(() => window.__shiro.terminal.term.focus());
+  await page.evaluate(() => window.__tabcomputer.terminal.term.focus());
   // printable runs as text input, control characters as their keys
   for (const part of text.match(/[\x20-\x7e]+|[^\x20-\x7e]/g) ?? []) {
     const c = part.charCodeAt(0);
@@ -69,7 +69,7 @@ try {
     const [op, arg] = i < 0 ? [step, ''] : [step.slice(0, i), step.slice(i + 1)];
     const t0 = Date.now();
     if (op === 'run') {
-      await page.evaluate(() => window.__shiro.terminal.term.clear());
+      await page.evaluate(() => window.__tabcomputer.terminal.term.clear());
       await typeKeys(arg + '\r');
       // the line holding the command no longer ends in "$": a later one does
       // (whitespace ignored: a long command line wraps)

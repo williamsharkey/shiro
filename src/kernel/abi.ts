@@ -51,6 +51,8 @@ export const SYS_getsid = 124;
 export const SYS_getdents64 = 217;
 export const SYS_clock_gettime = 228;
 export const SYS_uname = 63;
+/** syslog(2): args [type, len]; the read actions write text to the data area (klog.ts). */
+export const SYS_syslog = 103;
 /** struct utsname: six NUL-padded 65-byte fields */
 export const UTSNAME_FIELD = 65;
 export const SYS_exit_group = 231;

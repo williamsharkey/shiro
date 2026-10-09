@@ -4,7 +4,7 @@
  * from the display server on unix/gui). Contract: docs/DESKTOP.md. Keep it
  * additive: new options and methods are fine, renames and removals are not.
  *
- * The page reaches it as `window.__shiro.desktop` (also
+ * The page reaches it as `window.__tabcomputer.desktop` (also
  * `globalThis.__shiroDesktop`), or by importing `getDesktop()`.
  *
  * Content kinds a window can hold:
@@ -196,6 +196,13 @@ export interface AppDescriptor {
   menus?: () => MenuSpec[];
   /** Dock group (a stack that opens on tap) this app belongs to, see registerGroup. */
   group?: string;
+  /**
+   * The app's glyph for the icon sets other than Classic (docs/DESKTOP.md "Icon
+   * sets"): SVG path data on a 24-unit grid, drawn with round strokes. Without
+   * one (and without a built-in glyph) the app gets a monogram. `icon` stays
+   * what Classic shows.
+   */
+  glyph?: string;
 }
 
 /**
@@ -293,7 +300,7 @@ export class WindowManager implements DesktopAPI {
     this.snapPreview.className = 'sd-snap-preview';
     this.layer.appendChild(this.snapPreview);
     let pref: string | null = null;
-    try { pref = localStorage.getItem('shiro-desktop-theme'); } catch {}
+    try { pref = localStorage.getItem('tabcomputer-desktop-theme'); } catch {}
     this.themePref = pref === 'light' || pref === 'dark' ? pref : 'system';
     this.applyTheme();
     if (typeof matchMedia === 'function') {
@@ -402,7 +409,7 @@ export class WindowManager implements DesktopAPI {
 
   setTheme(pref: 'light' | 'dark' | 'system'): void {
     this.themePref = pref;
-    try { localStorage.setItem('shiro-desktop-theme', pref); } catch {}
+    try { localStorage.setItem('tabcomputer-desktop-theme', pref); } catch {}
     this.applyTheme();
   }
 

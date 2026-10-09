@@ -175,7 +175,6 @@ export function answer(protocol: number, req: Uint8Array, portid: number): Uint8
 
 // ── The socket ──
 
-let nextPortid = 1 << 20;
 let nextIno = 1 << 24;
 
 export class KNetlinkSocket implements OpenFile {
@@ -198,15 +197,17 @@ export class KNetlinkSocket implements OpenFile {
   }
 
   bind(addr: { port: number }): number {
-    // nl_pid 0: the kernel picks one (programs read it back with getsockname)
-    this.portid = addr.port || this.portid || nextPortid++;
+    // nl_pid 0 stays 0 (Linux picks one, but programs only compare what
+    // getsockname says with the replies' nlmsg_pid; a Blink that hands back
+    // an empty sockaddr_nl leaves glibc expecting 0, and a getaddrinfo()
+    // that skips every reply waits forever)
+    this.portid = addr.port || this.portid;
     return 0;
   }
   connect(_addr: unknown): number { return 0; }
 
   async sendto(buf: Uint8Array, _flags: number, _to: unknown): Promise<number> {
     if (this.closed) return -EBADF;
-    if (!this.portid) this.portid = nextPortid++;
     const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
     // A datagram can carry several requests
     for (let off = 0; off + 16 <= buf.length;) {

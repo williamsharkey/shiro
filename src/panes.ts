@@ -9,7 +9,7 @@
  * extra pane's prompt closes it. The layout (not the content) is saved in
  * localStorage and rebuilt on reload with fresh shells.
  *
- * The first pane is always #terminal, the main terminal (window.__shiro.terminal).
+ * The first pane is always #terminal, the main terminal (window.__tabcomputer.terminal).
  */
 
 import { ShiroTerminal } from './terminal';
@@ -41,7 +41,7 @@ type PaneNode = Leaf | Split;
 
 type Saved = { s: 'main' | 'shell' } | { d: Dir; r: number; a: Saved; b: Saved };
 
-const STORAGE_KEY = 'shiro-panes';
+const STORAGE_KEY = 'tabcomputer-panes';
 const MIN_PANE_PX = 40;      // smallest a pane can be dragged to
 const KEEP_PANE_PX = 80;     // a new pane released smaller than this is discarded
 const DRAG_THRESHOLD_PX = 6; // movement before a corner drag picks a direction
@@ -81,16 +81,16 @@ body.shiro-pane-drag.column, body.shiro-pane-drag.column * { cursor: row-resize 
 
 export function initPanes(mainTerminal: ShiroTerminal, shellFactory: () => Shell): void {
   const terminalEl = document.getElementById('terminal');
-  if (!terminalEl?.parentElement || document.getElementById('shiro-panes')) return;
+  if (!terminalEl?.parentElement || document.getElementById('tabcomputer-panes')) return;
   makeShell = shellFactory;
 
   const style = document.createElement('style');
-  style.id = 'shiro-panes-style';
+  style.id = 'tabcomputer-panes-style';
   style.textContent = CSS;
   document.head.appendChild(style);
 
   host = document.createElement('div');
-  host.id = 'shiro-panes';
+  host.id = 'tabcomputer-panes';
   terminalEl.parentElement.insertBefore(host, terminalEl);
 
   terminalEl.classList.add('shiro-pane');

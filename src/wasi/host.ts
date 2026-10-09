@@ -29,6 +29,7 @@ import { packageShadows } from '../pkg-manager';
 import { createWorkerPool, type WorkerPool } from './worker-pool';
 import { dylinkLayout, readDylink } from './dylink';
 import { readFuncSigs, type FuncSigs } from './dyncall';
+import { activeProfile } from '../profile';
 
 // ── Workers and mode ─────────────────────────────────────────────────
 
@@ -206,7 +207,10 @@ function installWasiSyscalls(kernel: Kernel): void {
     data.set(text);
     return text.length;
   });
-  kernel.registerSyscalls([A.SYS_stat, A.SYS_lstat, A.SYS_newfstatat, A.SYS_access, A.SYS_faccessat], Object.assign(binCommandStat, { passSync: binCommandPasses }));
+  // Shiro builtins stat as executables in /bin, /usr/bin (the profile's binCommandStat shim)
+  if (activeProfile().shims.binCommandStat) {
+    kernel.registerSyscalls([A.SYS_stat, A.SYS_lstat, A.SYS_newfstatat, A.SYS_access, A.SYS_faccessat], Object.assign(binCommandStat, { passSync: binCommandPasses }));
+  }
 }
 
 // The paths SYS_shiro_execve runs a Shiro command by (not /usr/local/...: a
@@ -523,6 +527,7 @@ function runWorkers(
     w.onMessage((m) => { if (m !== SYS_MESSAGE) onGuestMessage(m, false); });
     w.onError((err) => {
       if (proc.exiting) return;
+      kernel.reportFatal(proc, String((err as Error)?.message ?? err));
       void kernel.writeAll(proc, 2, new TextEncoder().encode(`${proc.comm}: ${(err as Error)?.message ?? err}\n`))
         .finally(() => kernel.exit(proc, A.W_TERMSIG(A.SIGABRT)));
     });
@@ -568,6 +573,7 @@ async function runJspi(kernel: Kernel, proc: Process, module: WebAssembly.Module
   } catch (e) {
     if (e instanceof ProcExit || proc.exiting) return;
     const msg = e instanceof Error ? e.message : String(e);
+    kernel.reportFatal(proc, `wasm trap: ${msg}`);
     await kernel.writeAll(proc, 2, new TextEncoder().encode(`wasm trap: ${msg}\n`));
     await kernel.exit(proc, A.W_TERMSIG(A.SIGABRT));
   }

@@ -10,6 +10,8 @@
 
 // Inlined into this chunk and injected at boot: one request fewer than a CSS file
 import desktopCss from './desktop.css?inline';
+import iconsetsCss from './iconsets.css?inline';
+import { appIconIn, ensureIconDefs, iconSet, setAppGlyph, loadLiveEngine, paintPixelTiles, savedIconSet, saveIconSet, type IconSetId, type LiveIconEngine } from './iconsets';
 import type { FileSystem } from '../filesystem';
 import type { Shell } from '../shell';
 import { ShiroTerminal } from '../terminal';
@@ -38,6 +40,12 @@ export interface AppContext {
   shell: Shell;
   kernel: Kernel;
   openTerminal: (opts?: { command?: string; cwd?: string; title?: string; appId?: string }) => DesktopWindow | null;
+  /** The dock's icon set (iconsets.ts) */
+  iconSet(): IconSetId;
+  /** Switch icon sets: no layout change, a 0.3 s crossfade; resolves once shown */
+  setIconSet(id: IconSetId): Promise<void>;
+  /** Called after each icon set change */
+  onIconSet(cb: (id: IconSetId) => void): () => void;
 }
 
 /** Phone layout inputs (src/desktop/mobile.ts sets them from the visual viewport) */
@@ -57,8 +65,16 @@ export interface Desktop {
   wm: WindowManager;
   /** Hand over the main terminal once main.ts has created it in terminalEl */
   attachMainTerminal(term: ShiroTerminal): void;
+  /**
+   * Keep the desktop hidden until `p` settles (at most REVEAL_CAP_MS after
+   * attach): the first frame shows the final layout. No-op once revealed.
+   */
+  holdReveal(p: Promise<unknown>): void;
   ctx: AppContext;
 }
+
+/** The longest the desktop stays hidden waiting for fonts, the dock's contents and the session */
+const REVEAL_CAP_MS = 1500;
 
 /** Programs shown in the dock as terminal apps (installed or one click from it) */
 const FEATURED_PACKAGES: { pkg: string; cmd: string; name: string }[] = [
@@ -90,15 +106,15 @@ function injectFonts(): void {
   const style = el('style');
   style.id = 'sd-fonts';
   style.textContent = `
-@font-face { font-family: 'Inter'; font-style: normal; font-weight: 100 900; font-display: swap; src: url('/fonts/inter-latin-wght.woff2') format('woff2'); }
-@font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 100 800; font-display: swap; src: url('/fonts/jetbrains-mono-latin-wght.woff2') format('woff2'); }`;
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 100 900; font-display: block; src: url('/fonts/inter-latin-wght.woff2') format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 100 800; font-display: block; src: url('/fonts/jetbrains-mono-latin-wght.woff2') format('woff2'); }`;
   document.head.appendChild(style);
 }
 
 export function bootDesktop(deps: DesktopDeps): Desktop {
   const style = el('style');
   style.id = 'sd-style';
-  style.textContent = desktopCss;
+  style.textContent = desktopCss + iconsetsCss;
   document.head.appendChild(style);
   injectFonts();
   document.body.classList.add('sd-active');
@@ -108,8 +124,13 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
   const meta = document.querySelector('meta[name="theme-color"]');
   const statusBarMeta = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
 
-  const root = el('div', 'sd-desktop');
+  const root = el('div', 'sd-desktop sd-booting');
   root.id = 'shiro-desktop';
+  // Until the reveal: the dock's contents, fonts and the session settle out of sight
+  const holds: Promise<unknown>[] = [];
+  let revealed = false;
+  const hold = (p: Promise<unknown>) => { if (!revealed) holds.push(p.catch(() => {})); };
+  const fontsAtBoot = typeof document.fonts?.check === 'function' && document.fonts.check('14px "JetBrains Mono"');
   root.append(el('div', 'sd-wallpaper'));
   const wordmark = el('div', 'sd-wordmark', BRAND.name);
   document.title = BRAND.name;
@@ -134,6 +155,8 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
   // ── Dock ──
   const dockWrap = el('div', 'sd-dock-wrap');
   const dock = el('nav', 'sd-dock');
+  dock.dataset.iconset = savedIconSet();
+  ensureIconDefs();
   dock.setAttribute('aria-label', 'Dock');
   dockWrap.append(dock);
   // The menu bar and dock join the page right after the main terminal is created
@@ -187,7 +210,18 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
       content: { kind: 'terminal', command: opts.command, cwd: opts.cwd, adoptMain, title: opts.title },
     });
   };
-  const ctx: AppContext = { wm, fs: deps.fs, shell: deps.shell, kernel: deps.kernel, openTerminal };
+  // Icon sets: the dock's attribute picks the material; a live set's engine draws behind the glyphs
+  let iconSetId: IconSetId = savedIconSet();
+  let liveEngine: LiveIconEngine | null = null;
+  const iconSetListeners = new Set<(id: IconSetId) => void>();
+  const ctx: AppContext = {
+    wm, fs: deps.fs, shell: deps.shell, kernel: deps.kernel, openTerminal,
+    iconSet: () => iconSetId,
+    setIconSet: (id) => switchIconSet(id),
+    onIconSet: (cb) => { iconSetListeners.add(cb); return () => { iconSetListeners.delete(cb); }; },
+  };
+  // Tests and the console: the app context (icon sets: __shiroDesktopCtx.setIconSet('pearl'))
+  (globalThis as any).__shiroDesktopCtx = ctx;
 
   // Terminals start in the desktop's palette and font (no re-theme, re-measure later)
   ShiroTerminal.optionOverrides = { theme: terminalTheme(wm.theme()), fontFamily: TERMINAL_FONT };
@@ -252,7 +286,7 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     registerPackages();
   };
   registerPackages();
-  void refreshInstalled();
+  hold(refreshInstalled());
   deps.fs.onChange((_ev, path) => { if (path === PKG_STATUS) void refreshInstalled(); });
 
   // ── Dock rendering ──
@@ -269,9 +303,12 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     closeStack();
     const running = new Set(wm.windows().filter(w => w.state !== 'closed' && !w.options.override && !w.options.skipTaskbar).map(w => w.appId));
     const all = wm.apps();
+    for (const a of all) setAppGlyph(a.id, a.glyph);
     const docked = all.filter(a => a.dock !== false);
     const extra = [...running].filter(id => id && !all.some(a => a.id === id && a.dock !== false));
-    const iconHtml = (id: string, icon: string | undefined) => icon?.trim().startsWith('<') ? icon : icon ? `<img src="${icon}" alt="">` : appIcon(id);
+    // Each dock tile's place in the row (sets whose hue or sky runs along the dock)
+    let tileN = 0;
+    const iconHtml = (id: string, name: string, icon: string | undefined, i = tileN) => appIconIn(iconSetId, id, name, icon, i, wm.app(id)?.glyph);
     const activate = (id: string, launch: () => void, b?: HTMLElement) => {
       const wins = wm.visibleOrder().filter(w => w.appId === id);
       if (wins.length) {
@@ -287,7 +324,8 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
       const b = el('button', 'sd-dock-item');
       b.dataset.app = id;
       b.setAttribute('aria-label', name);
-      b.innerHTML = iconHtml(id, icon) + `<span class="sd-dock-tip">${name}</span>`;
+      b.innerHTML = iconHtml(id, name, icon) + `<span class="sd-dock-tip">${name}</span>`;
+      tileN++;
       if (running.has(id)) b.classList.add('sd-running');
       if (FEATURED_PACKAGES.some(p => p.pkg === id) && !installed.has(id)) {
         b.classList.add('sd-not-installed');
@@ -312,14 +350,16 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
       b.dataset.group = g.id;
       b.setAttribute('aria-label', `${g.name} (${members.length})`);
       b.setAttribute('aria-haspopup', 'true');
-      b.innerHTML = `<span class="sd-stack-grid">${members.slice(0, 4).map(m => `<span>${iconHtml(m.id, m.icon)}</span>`).join('')}</span><span class="sd-dock-tip">${g.name}</span>`;
+      b.innerHTML = `<span class="sd-stack-grid">${members.slice(0, 4).map((m, k) => `<span>${iconHtml(m.id, m.name, m.icon, tileN + k / 4)}</span>`).join('')}</span><span class="sd-dock-tip">${g.name}</span>`;
       if (members.some(m => running.has(m.id))) b.classList.add('sd-running');
+      tileN++;
       b.addEventListener('click', (e) => {
         e.stopPropagation();
         if (openStackEl?.dataset.group === g.id) { closeStack(); return; }
         closeStack();
         const pop = el('div', 'sd-stack');
         pop.dataset.group = g.id;
+        pop.dataset.iconset = iconSetId;
         pop.setAttribute('role', 'dialog');
         pop.setAttribute('aria-label', g.name);
         pop.innerHTML = `<div class="sd-stack-title">${g.name}</div><div class="sd-stack-items"></div>`;
@@ -327,13 +367,14 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
         items.style.setProperty('--sd-stack-cols', String(Math.min(4, members.length)));
         for (const m of members) {
           const it = el('button', 'sd-stack-item');
-          it.innerHTML = `<span class="sd-stack-icon">${iconHtml(m.id, m.icon)}</span><span class="sd-stack-name"></span>`;
+          it.innerHTML = `<span class="sd-stack-icon">${iconHtml(m.id, m.name, m.icon, members.indexOf(m))}</span><span class="sd-stack-name"></span>`;
           it.querySelector('.sd-stack-name')!.textContent = m.name;
           if (running.has(m.id)) it.classList.add('sd-running');
           it.addEventListener('click', () => { closeStack(); activate(m.id, () => void wm.openApp(m.id)); });
           items.append(it);
         }
         root.append(pop);
+        if (iconSetId === 'pixel') paintPixelTiles(pop, wm.theme(), appName);
         const r = b.getBoundingClientRect();
         const w = pop.offsetWidth;
         pop.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, r.left + r.width / 2 - w / 2))}px`;
@@ -372,6 +413,66 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
         add(id!, w?.title || id!, w?.options.icon, () => w?.focus());
       }
     }
+    dock.style.setProperty('--n', String(Math.max(2, tileN)));
+    if (iconSetId === 'pixel') paintPixelTiles(dock, wm.theme(), appName);
+    liveEngine?.attach([...dock.querySelectorAll<HTMLElement>(':scope > .sd-dock-item > .sd-ic')]);
+  };
+  const appName = (id: string) => wm.app(id)?.name ?? id;
+
+  /** Swap the icon set: one attribute on the dock, crossfaded (live sets: once their first frame is drawn) */
+  let swapping: Promise<void> = Promise.resolve();
+  const switchIconSet = (id: IconSetId): Promise<void> => (swapping = swapping.then(async () => {
+    const next = iconSet(id);
+    const upgrade = next.kind === 'live' && !liveEngine; // a live set shown as its still (at boot)
+    if (next.id === iconSetId && !upgrade) return;
+    // A live set's chunk and first frame are ready before anything on screen changes
+    const engine = next.kind === 'live' ? await loadLiveEngine(next.id, dock, wm.theme()).catch((e) => { console.warn('[iconset]', e); return null; }) : null;
+    // Its first frame, for the apps the dock shows, is drawn before the crossfade starts
+    engine?.prepare([...dock.querySelectorAll<HTMLElement>(':scope > .sd-dock-item:not(.sd-stack-tile)')]
+      .map(b => ({ id: b.dataset.app ?? '', name: b.getAttribute('aria-label') ?? '' })));
+    // The outgoing live set holds its last frame through the crossfade, and is released after it
+    const outgoing = liveEngine;
+    outgoing?.freeze();
+    engine?.hold(true);
+    // Preparation ends here: let the browser paint before the crossfade begins
+    if (engine) await new Promise(r => setTimeout(r));
+    const apply = () => {
+      liveEngine = engine;
+      iconSetId = next.id;
+      dock.dataset.iconset = next.id;
+      saveIconSet(next.id);
+      renderDock();
+    };
+    await crossfadeDock(apply);
+    engine?.hold(false);
+    outgoing?.dispose();
+    for (const cb of iconSetListeners) cb(next.id);
+  }));
+  /**
+   * Run `fn` under a 0.3 s crossfade of the dock: a copy of the old dock, in
+   * place over the new one, fades out (opacity only: the compositor's work, no
+   * layout or paint per frame; a View Transition's capture cost 60–80 ms frames
+   * without a GPU). Instant with reduced motion.
+   */
+  const crossfadeDock = async (fn: () => void): Promise<void> => {
+    performance.mark('shiro:iconset:swap-start');
+    if (prefersReducedMotion() || !revealed) { fn(); performance.mark('shiro:iconset:swap-end'); return; }
+    const r = dock.getBoundingClientRect(), rr = root.getBoundingClientRect();
+    const ghost = dock.cloneNode(true) as HTMLElement;
+    ghost.classList.add('sd-dock-ghost');
+    ghost.setAttribute('aria-hidden', 'true');
+    ghost.removeAttribute('aria-label');
+    ghost.style.cssText = `left:${r.left - rr.left}px;top:${r.top - rr.top}px;width:${r.width}px;height:${r.height}px`;
+    // A live set's tiles: canvas pixels don't clone
+    const from = dock.querySelectorAll('canvas'), to = ghost.querySelectorAll('canvas');
+    from.forEach((c, i) => { try { to[i]?.getContext('2d')?.drawImage(c, 0, 0); } catch {} });
+    root.append(ghost);
+    fn();
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    ghost.classList.add('sd-out');
+    await new Promise<void>(r => { ghost.addEventListener('transitionend', () => r(), { once: true }); setTimeout(r, 400); });
+    ghost.remove();
+    performance.mark('shiro:iconset:swap-end');
   };
   document.addEventListener('pointerdown', (e) => {
     if (openStackEl && !openStackEl.contains(e.target as Node) && !(e.target as HTMLElement).closest?.('.sd-stack-tile')) closeStack();
@@ -394,7 +495,7 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     const keysBtn = el('button', 'sd-mb-item sd-mb-status sd-mb-keys', GLYPHS.keyboard);
     keysBtn.title = 'Extra keys';
     menubar.insertBefore(keysBtn, searchBtn);
-    void import('./mobile').then((m) => {
+    hold(import('./mobile').then((m) => {
       const paint = (mode: string) => {
         keysBtn.classList.toggle('sd-on', mode !== 'off');
         keysBtn.setAttribute('aria-pressed', String(mode !== 'off'));
@@ -410,7 +511,7 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
       m.onKeybarMode(paint);
       paint(m.keybarMode());
       m.initMobile(ctx, layout);
-    });
+    }));
   }
 
   // ── Menu bar behaviour ──
@@ -428,7 +529,7 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     { label: 'Settings…', shortcut: 'Alt+Shift+,', action: () => void wm.openApp('settings') },
     { label: 'Activity', action: () => void wm.openApp('activity') },
     'separator',
-    { label: 'Classic Terminal', action: () => { try { localStorage.setItem('shiro-ui', 'terminal'); } catch {} location.reload(); } },
+    { label: 'Classic Terminal', action: () => { try { localStorage.setItem('tabcomputer-ui', 'terminal'); } catch {} location.reload(); } },
     { label: 'Restart', action: () => location.reload() },
   ] });
   const termView = (): TerminalView | null => {
@@ -473,7 +574,7 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
       { label: 'Welcome Tour', action: () => showTour(ctx) },
       { label: 'Getting Started', action: () => openTerminal({ command: 'help' }) },
       { label: 'Keyboard Shortcuts', action: () => showToast(root, SHORTCUTS_HTML, 9000) },
-      { label: 'Desktop & /dom docs', action: () => window.open('https://github.com/williamsharkey/shiro/blob/main/docs/DESKTOP.md', '_blank', 'noopener') },
+      { label: 'Desktop & /dom docs', action: () => window.open('https://github.com/williamsharkey/tabcomputer/blob/main/docs/DESKTOP.md', '_blank', 'noopener') },
     ] };
     return [file, edit, view, windowMenu, ...(focusedApp()?.menus?.() ?? []), help];
   };
@@ -571,8 +672,13 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     themeBtn.setAttribute('aria-label', themeBtn.title);
     // The browser chrome and status bar match the (solid, on phones) menu bar
     meta?.setAttribute('content', t === 'dark' ? THEME_COLOR.dark : THEME_COLOR.light);
+    // The page behind the desktop (seen before it appears) matches too
+    document.documentElement.classList.toggle('sd-theme-light', t === 'light');
     statusBarMeta?.setAttribute('content', t === 'dark' ? 'black-translucent' : 'default');
     applyTerminalTheme(t, mainTerm ? [mainTerm] : []);
+    // One-bit's bitmaps carry their ink; a live set redraws in the new palette
+    if (iconSetId === 'pixel') queueDock();
+    liveEngine?.setTheme(t);
   };
   themeBtn.addEventListener('click', () => wm.setTheme(wm.theme() === 'dark' ? 'light' : 'dark'));
   wm.on('theme-changed', paintTheme);
@@ -617,6 +723,10 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
   const openSpotlight = () => { void import('./spotlight').then(m => m.toggleSpotlight(ctx)); };
   searchBtn.addEventListener('click', (e) => { e.stopPropagation(); openSpotlight(); });
 
+  deps.fs.onStorageFull((full) => {
+    if (full) showToast(root, '<b>Storage is full</b><div class="sd-small">The browser refused to save more. Delete files (or apt clean) to free space; Settings → Storage shows usage.</div>', 12000);
+  });
+
   return {
     wm,
     ctx,
@@ -625,19 +735,45 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
       mainTerm = term;
       term.banner = (t) => drawWelcome(t);
       first.view.attachMain(term);
-      // After boot settles: the swap re-measures every terminal (a forced layout)
-      const idle = (window as any).requestIdleCallback ?? ((f: () => void) => setTimeout(f, 200));
-      idle(() => useMonoFont(() => [...new Set([term, ...allTerminalViews().flatMap(v => v.terminals())])]), { timeout: 1500 });
-      // Focusing forces a layout of the whole desktop: do it with the first frame
-      requestAnimationFrame(() => term.term.focus());
-      // Last time's other windows, then keep the session saved; a first visit gets the tour
-      idle(() => {
-        void restoreSession(wm, session, openTerminal).finally(() => {
-          trackSession(wm);
-          setTimeout(() => maybeShowTour(ctx), 1200);
-        });
-      }, { timeout: 2000 });
+      // One draw: the desktop stays hidden (the page's boot mark shows) until
+      // the fonts, the dock's contents, the phone layer and last session's
+      // windows are in place, then appears in a single frame. Nothing moves after.
+      const terms = () => [...new Set([term, ...allTerminalViews().flatMap(v => v.terminals())])];
+      if (document.fonts?.load) {
+        hold(Promise.all([document.fonts.load('13px Inter'), document.fonts.load('14px "JetBrains Mono"')])
+          // xterm measured the fallback if the font arrived after it was created
+          .then(() => fontsAtBoot ? undefined : useMonoFont(terms)));
+      }
+      hold(restoreSession(wm, session, openTerminal).finally(() => {
+        // The main terminal keeps focus (and the menu bar its app name)
+        first.win.focus();
+        trackSession(wm);
+      }));
+      const reveal = () => {
+        if (revealed) return;
+        revealed = true;
+        // Windows opened while hidden appear in place, without their open animation
+        for (const w of root.querySelectorAll('.sd-opening')) w.classList.remove('sd-opening');
+        void root.offsetHeight; // settle those styles while transitions are still off
+        root.classList.remove('sd-booting');
+        document.getElementById('boot-mark')?.remove();
+        term.term.focus();
+        performance.mark('shiro:desktop:revealed');
+        // A first visit gets the tour
+        setTimeout(() => maybeShowTour(ctx), 1200);
+        // A live icon set showed its still so far: bring it to life (crossfaded)
+        if (iconSet(iconSetId).kind === 'live') void switchIconSet(iconSetId);
+      };
+      const cap = new Promise<void>(r => setTimeout(r, REVEAL_CAP_MS));
+      // holds can add holds (a restored window loading its app): wait until they stop growing
+      const settle = async (): Promise<void> => {
+        const n = holds.length;
+        await Promise.all(holds);
+        if (holds.length !== n) return settle();
+      };
+      void Promise.race([settle(), cap]).then(() => requestAnimationFrame(reveal));
     },
+    holdReveal: hold,
   };
 }
 

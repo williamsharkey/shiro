@@ -8,7 +8,7 @@ import type { FileSystem } from '@shiro/filesystem';
 import { Kernel } from '@shiro/kernel/kernel';
 import type { Process } from '@shiro/kernel/process';
 import * as A from '@shiro/kernel/abi';
-import { NetStack, installNet } from '@shiro/kernel/net';
+import { NetStack, installNet, encodeSockaddr } from '@shiro/kernel/net';
 
 describe('kernel syscalls found by LTP', () => {
   let fs: FileSystem;
@@ -297,6 +297,25 @@ describe('kernel syscalls found by LTP', () => {
     off();
   });
 
+  it('paths below /proc/self/fd/N (and /dev/fd/N) name entries of that open directory', async () => {
+    await fs.mkdir('/tmp/kc/pinned', { recursive: true });
+    const dfd = await open('/tmp/kc/pinned', A.O_PATH | A.O_DIRECTORY | A.O_NOFOLLOW);
+    expect(dfd).toBeGreaterThanOrEqual(0);
+    const via = `/proc/self/fd/${dfd}`;
+    expect(await call(A.SYS_mkdir, [L(`${via}/sub`), 0o700], `${via}/sub`)).toBe(0);
+    expect((await fs.stat('/tmp/kc/pinned/sub')).isDirectory()).toBe(true);
+    const f = await open(`/dev/fd/${dfd}/sub/new.tmp`, A.O_WRONLY | A.O_CREAT | A.O_EXCL);
+    expect(f).toBeGreaterThanOrEqual(0);
+    await kernel.syscall(proc, A.SYS_close, [f], new Uint8Array(8));
+    const from = `${via}/sub/new.tmp`, to = `/proc/${proc.pid}/fd/${dfd}/sub/new.txt`;
+    expect(await call(A.SYS_rename, [L(from), L(to)], from, to)).toBe(0);
+    expect(await fs.exists('/tmp/kc/pinned/sub/new.txt')).toBe(true);
+    expect(await call(A.SYS_stat, [L('/proc/self/fd/999/x')], '/proc/self/fd/999/x')).toBe(-A.ENOENT);
+    const file = await open('file', A.O_RDONLY);
+    expect(await call(A.SYS_stat, [L(`/proc/self/fd/${file}/x`)], `/proc/self/fd/${file}/x`)).toBe(-A.ENOTDIR);
+    for (const fd of [dfd, file]) await kernel.syscall(proc, A.SYS_close, [fd], new Uint8Array(8));
+  });
+
   it('epoll_wait: a full events array rotates, so every ready fd gets reported (no starvation)', async () => {
     const ep = await call(A.SYS_epoll_create1, [0]);
     const reads: number[] = [];
@@ -313,5 +332,47 @@ describe('kernel syscalls found by LTP', () => {
       seen.push(new DataView(ev.buffer).getUint32(4, true));
     }
     expect(seen.sort()).toEqual([0, 1, 2]);
+  });
+
+  it('Redis: [::]:port with IPV6_V6ONLY shares the port with 0.0.0.0:port; without it, EADDRINUSE (bindv6only=0)', async () => {
+    const stack = new NetStack();
+    stack.configure({ relayUrl: null, tokenUrl: null, dohUrl: null, portHost: null });
+    const off = installNet(kernel, stack);
+    const d = new Uint8Array(256);
+    const sys = (nr: number, args: number[]) => kernel.syscall(proc, nr, args, d);
+    const bindTo = (fd: number, family: number, address: string) => {
+      d.fill(0); d.set(encodeSockaddr({ family, address, port: 6379 }));
+      return sys(A.SYS_bind, [fd, family === A.AF_INET6 ? 28 : 16]);
+    };
+    const v4 = await sys(A.SYS_socket, [A.AF_INET, A.SOCK_STREAM, 0]);
+    expect(await bindTo(v4, A.AF_INET, '0.0.0.0')).toBe(0);
+    expect(await sys(A.SYS_listen, [v4, 8])).toBe(0);
+    // without IPV6_V6ONLY, [::] takes IPv4 too: the port is in use
+    const dual = await sys(A.SYS_socket, [A.AF_INET6, A.SOCK_STREAM, 0]);
+    expect(await bindTo(dual, A.AF_INET6, '::')).toBe(-A.EADDRINUSE);
+    const v6 = await sys(A.SYS_socket, [A.AF_INET6, A.SOCK_STREAM, 0]);
+    expect(await sys(A.SYS_setsockopt, [v6, A.IPPROTO_IPV6, A.IPV6_V6ONLY, 1])).toBe(0);
+    expect(await bindTo(v6, A.AF_INET6, '::')).toBe(0);
+    expect(await sys(A.SYS_listen, [v6, 8])).toBe(0);
+    // each family's connection reaches its own listener
+    const reach = async (family: number, address: string, listener: number) => {
+      const c = await sys(A.SYS_socket, [family, A.SOCK_STREAM, 0]);
+      d.fill(0); d.set(encodeSockaddr({ family, address, port: 6379 }));
+      expect(await sys(A.SYS_connect, [c, family === A.AF_INET6 ? 28 : 16])).toBe(0);
+      const a = await sys(A.SYS_accept4, [listener, A.SOCK_NONBLOCK]);
+      expect(a).toBeGreaterThanOrEqual(0);
+      for (const fd of [a, c]) await call(A.SYS_close, [fd]);
+    };
+    await reach(A.AF_INET, '127.0.0.1', v4);
+    await reach(A.AF_INET6, '::1', v6);
+    // a second v4 wildcard still conflicts
+    const v4b = await sys(A.SYS_socket, [A.AF_INET, A.SOCK_STREAM, 0]);
+    expect(await bindTo(v4b, A.AF_INET, '0.0.0.0')).toBe(-A.EADDRINUSE);
+    for (const fd of [v4, dual, v6, v4b]) await call(A.SYS_close, [fd]);
+    // once the v4 listener is gone, a dual-stack [::] can have the port
+    const dual2 = await sys(A.SYS_socket, [A.AF_INET6, A.SOCK_STREAM, 0]);
+    expect(await bindTo(dual2, A.AF_INET6, '::')).toBe(0);
+    await call(A.SYS_close, [dual2]);
+    off();
   });
 });

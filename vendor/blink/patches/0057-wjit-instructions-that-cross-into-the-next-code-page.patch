@@ -1,0 +1,55 @@
+From d72469c06917495ca4156e7a171c5a8d2b041744 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 17:18:31 +0000
+Subject: [PATCH 57/57] wjit: instructions that cross into the next code page
+ go to the interpreter again (BLINK_WJIT_STRADDLE=1 decodes them)
+
+Patch 0041's straddle decoding made a forked child that decodes .xz with
+liblzma's multithreaded decoder crash in glibc's _int_free or report
+corrupt data (Debian mode's dpkg-deb, ~50% of apt installs of git), for
+one binary layout and not another. Bisecting by code address and by
+straddle site needs lzma_decode's three straddling instructions
+(0x408ffe, 0x409ffe, 0x40affc in the repro) together; each one alone
+runs right in a micro test. Until that is understood, straddling
+instructions end the region as before 0041.
+---
+ blink/wjit.c | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/blink/wjit.c b/blink/wjit.c
+index ba3b880..3b63002 100644
+--- a/blink/wjit.c
++++ b/blink/wjit.c
+@@ -80,6 +80,12 @@ static int g_wj_off;    // BLINK_WJIT_OFF: bitmask of categories to not inline
+ static long g_wj_max;   // BLINK_WJIT_MAX: stop compiling after this many
+ static long g_wj_dump = -1;
+ static int g_wj_maxblk = 64;  // BLINK_WJIT_BLOCKS (at most kMaxBlocks)
++// BLINK_WJIT_STRADDLE=1: decode instructions that cross into the next code
++// page (patch 0041). Off: with it, a forked child decoding .xz with
++// liblzma's threads crashed in malloc or produced corrupt data (dpkg-deb
++// in Debian mode), in one binary layout out of two, though each of the
++// straddling instructions involved runs right on its own
++static bool g_wj_straddle;
+ static long g_wj_lo = -1, g_wj_hi = -1;  // BLINK_WJIT_BISECT=lo:hi (pc range)
+ static _Atomic(unsigned) g_wj_epoch;
+ 
+@@ -3082,7 +3088,7 @@ static bool DecodeBlock(struct Cg *g, i64 pc) {
+       // an instruction may continue on the next page: fine when that page
+       // can't change either (a change to either drops all compiled code),
+       // else the interpreter runs it (it would end the region every time)
+-      if ((next = CodePage(m, page + 4096))) {
++      if (g_wj_straddle && (next = CodePage(m, page + 4096))) {
+         memcpy(buf, p, len);
+         memcpy(buf + len, next, 15 - len);
+         p = buf;
+@@ -3538,6 +3544,7 @@ void WjInit(void) {
+     if (g_wj_maxblk < 1) g_wj_maxblk = 1;
+     if (g_wj_maxblk > kMaxBlocks) g_wj_maxblk = kMaxBlocks;
+   }
++  g_wj_straddle = (s = getenv("BLINK_WJIT_STRADDLE")) && *s == '1';
+   if ((s = getenv("BLINK_WJIT_BISECT"))) {
+     g_wj_lo = strtol(s, 0, 0);
+     g_wj_hi = strchr(s, ':') ? strtol(strchr(s, 58) + 1, 0, 0) : -1;
+-- 
+2.43.0
+

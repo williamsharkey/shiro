@@ -1,12 +1,12 @@
 # Compatibility scoreboard
 
-What popular Unix software runs in Shiro, by which route, and how it was
+What popular Unix software runs in tabcomputer, by which route, and how it was
 checked. Each row has an automated smoke test; sections are owned by the
 workstream named in their heading, so append rows to your own section.
 
 Routes: **pkg** = `pkg install` of a WASM build (recipe under
 `scripts/pkgbuild/`, sha256-pinned), run as a kernel process; **builtin** =
-implemented in Shiro (TypeScript); **Blink** = static x86-64 Linux ELF in the
+implemented in tabcomputer (TypeScript); **Blink** = static x86-64 Linux ELF in the
 Blink engine.
 
 ## Languages and toolchains (unix/compat-dev)
@@ -26,7 +26,7 @@ Blink engine.
 | go | `pkg install go` (wasip1) / Debian `golang-go` | builds and runs / fails: link step (Blink `fallocate`, reported) |
 | clang, make, ninja, cmake | `pkg install llvm make ninja cmake` | works (zlib's own build, CMake → Ninja/Make, CTest) |
 | gcc, make (Debian) | `apt install build-essential` | works: hello.c with gcc and through make |
-| node (Debian) | `apt install nodejs` | works (Blink patch 0047), 22–26 s per script; `builtin node` runs Shiro's |
+| node (Debian) | `apt install nodejs` | works (Blink patch 0047), 22–26 s per script; `builtin node` runs tabcomputer's |
 | sqlite | `pkg install sqlite` | works |
 | git | `pkg install git` (x86-64 in Blink) | works for local workflows, file:// clone/push |
 | php | — | owned by unix/wasix |
@@ -42,19 +42,19 @@ built app in headless Chromium, cross-origin isolated.
 | Software | Version | Route | Status | Tested | Known issues |
 | --- | --- | --- | --- | --- | --- |
 | python3 (CPython) | 3.13.7 | pkg `python3` (`python3.sh`: upstream WASI port + zlib + sqlite3; stdlib as a 4.3 MB zip of .pyc) | works | `-c`, `--version`, zlib/sqlite3/json/hashlib/decimal, `#!/usr/bin/env python3` scripts with argv/stdin/files, a package + `python -m unittest -v`; in Chromium: start-up ≈0.25 s | no subprocess, sockets, ssl, ctypes, threads (WASI preview1); REPL needs blocking stdin |
-| pip | Shiro (pip-compatible CLI) | builtin `pip`/`pip3`/`python3 -m pip` | works for pure-Python wheels | resolver with PEP 440/508 (specifiers, markers, extras, pre-releases), console scripts, `-r`, `--target`, `-U`, uninstall/list/freeze/show/download, sha256 check; fake index in vitest, real PyPI in Chromium (`six`, `attrs`, `requests` + deps) | no sdists (needs a build backend run), no native wheels, no `-e` |
+| pip | tabcomputer (pip-compatible CLI) | builtin `pip`/`pip3`/`python3 -m pip` | works for pure-Python wheels | resolver with PEP 440/508 (specifiers, markers, extras, pre-releases), console scripts, `-r`, `--target`, `-U`, uninstall/list/freeze/show/download, sha256 check; fake index in vitest, real PyPI in Chromium (`six`, `attrs`, `requests` + deps) | no sdists (needs a build backend run), no native wheels, no `-e` |
 | GNU make | 4.4.1 | pkg `make` (`make.sh` + the process shim `compat/wasi-proc.c`) | works | shell recipes, `$(shell)`, `$(wildcard)`, pattern rules, `-C`, up-to-date checks after `touch`, recipes running clang and llvm-ar; zlib's Makefile | no jobserver (`-j` runs jobs one at a time), no `-O` output sync, no load average |
 | clang / clang++ / wasm-ld / llvm-ar, nm, objdump... | LLVM 21.1.4 | pkg `llvm`: YoWASP's LLVM for WASI (npm `@yowasp/clang`, preview1 multi-call binary + wasi-libc sysroot, taken from the tarball by sha256) and a driver built here (`compat/clang-driver.c`) | works, targets wasm32-wasip1 | compile + link + run C; `cc -c`, static libraries, `-L/-l`, compile errors with locations; **zlib 1.3.1 built with its own Makefile passes its test suite** (vitest and Chromium: 13 s for the library, `example` and `minigzip`) | each driver step is a separate kernel process (the 72 MB module is compiled once and cached); no native target, no C++ exceptions/threads |
 | Go (go, gofmt, compile, link, asm, vet) | 1.24.7 | pkg `go` (`go.sh`: upstream source + `go/wasip1-processes.patch`, cross-built to wasip1; GOROOT with std sources and a prebuilt std build cache, 44 MB) | works, builds GOOS=wasip1 | `go version/env`, `gofmt`, `go build` of a two-package module, `go vet`, `go run`, `go test`; the built program spawns commands with `os/exec`; Chromium: install 8.7 s, first build of a small program seconds (std from the shipped cache), net/http-sized programs ~2 min the first time | no network for the go command (`GOPROXY=off`: vendor modules or use `replace`); std packages outside the shipped cache compile on first use |
 | Ruby (ruby, irb, gem, rake, bundle) | 3.4.1 | pkg `ruby` (`ruby.sh`: the official ruby.wasm wasip1 "full" CLI build, repacked; stdlib mounted at its /usr/local prefix) | works | `-e` with json/set/digest/time, `#!/usr/bin/env ruby` scripts with argv/stdin/files, minitest, rake with task dependencies, `gem list`, `gem build` + `gem install --local` + require | no sockets (`gem install` from rubygems.org, net/http connections fail; a `socket.rb` stub lets them load), no threads (minitest runs serially: `MT_CPU=0`), irb needs blocking stdin |
 | Perl | 5.40.0 | pkg `perl` (`perl.sh`: static x86-64 glibc build, all core XS linked in, `NO_LOCALE`) run in Blink — new package ABI `x86_64-linux` | works | `-e` with List::Util/Data::Dumper/POSIX, `#!/usr/bin/env perl` scripts with stdin/argv/files/regexes, backticks, `system()`, `open "-\|"`, Test::More (TAP), `prove t`, IPC::Open3, fork without exec (since Blink's real fork) | interpreted: ~1 s start, POSIX loads in seconds; no XS loading, no pods |
-| Git | 2.47.1 | pkg `git` (`git.sh`: static x86-64 glibc build, no curl) run in Blink; replaces Shiro's built-in (isomorphic-git) `git` while installed | works for local workflows | init/add/commit with combined flags, branch, merge, rebase, stash, blame, tags/describe, a pre-commit hook, `git clone file://` and `git push` (upload-pack/receive-pack over pipes) | no http(s) remotes (uninstall it for Shiro's built-in GitHub clone/push); `git clone /path` stops at "hardlink different from source" (the kernel's `link()` copies; use `file://` or `--no-hardlinks`) |
+| Git | 2.47.1 | pkg `git` (`git.sh`: static x86-64 glibc build, no curl) run in Blink; replaces tabcomputer's built-in (isomorphic-git) `git` while installed | works for local workflows | init/add/commit with combined flags, branch, merge, rebase, stash, blame, tags/describe, a pre-commit hook, `git clone file://` and `git push` (upload-pack/receive-pack over pipes) | no http(s) remotes (uninstall it for tabcomputer's built-in GitHub clone/push); `git clone /path` stops at "hardlink different from source" (the kernel's `link()` copies; use `file://` or `--no-hardlinks`) |
 | Ninja | 1.12.1 | pkg `ninja` (`ninja.sh`: static x86-64) run in Blink | works | a C program built with clang through rules with depfiles, no-op rebuilds, header changes rebuilding dependents, failed commands reported with clang's diagnostics | — |
 | CMake, CTest | 3.31.9 | pkg `cmake` (`x86/cmake.sh`: static x86-64 musl, no OpenSSL) run in Blink | works with the llvm package's clang | a C project with a static library, `check_include_file`, `configure_file`: compiler detection (Clang 21.1.4), build through the Ninja and Makefile generators, `ctest` | configure takes ~10 s (each compiler check is a clang run); no https `file(DOWNLOAD)`; no ccmake/cmake-gui |
-| venv | Shiro | `python3 -m venv` | works | `pyvenv.cfg`, `bin/python` symlinks, `bin/pip`, `activate`/`deactivate`; `sys.prefix` is the venv and pip installs into it (vitest and Chromium) | `--copies` ignored (always symlinks) |
-| Node.js npm CLIs and libraries | Shiro's node (`node`, `npm`, `npx`) | builtin | works | commander + chalk + dayjs + uuid CLI, mocha 10 (pass and fail exit codes), tsc 5.6 (compile and type errors), prettier 3.3 (files, stdin, `--check "src/**/*.js"`, `--write`), ES modules binding `module`/`require`/`process`; vitest and Chromium | TypeScript 7 (`typescript@7`) is a native Go binary; native addons (`.node`) don't load; axios needs `window.location` (fine in the browser, not under vitest) |
-| pnpm | 9.12.3 | npm package under Shiro's node (`npm install pnpm`) | works | `pnpm add` from the registry into the content-addressable store and `node_modules/.pnpm` virtual store (symlinks), `require` through those symlinks (resolving from the real path, as node does), `pnpm install --offline` from the store, `pnpm run` (a `node` script and a shell one), `pnpm exec`, `node_modules/.bin` shims; vitest and Chromium (`add` of 3 packages ≈5 s, `run` ≈2.4 s) | no `pnpm dlx`/`pnpm env` tested; workers run in the same thread (no parallel speed-up) |
-| yarn 1 | 1.22.22 | npm package under Shiro's node (`npm install yarn`) | works | `yarn add` from the registry (tarballs through `request` over the fetch-backed http shim, gunzip, tar), `yarn.lock`, `yarn run`, `node_modules/.bin`, `yarn install --offline` from its cache; vitest and Chromium (`add` of 2 packages ≈2 s) | yarn 2+ (berry) not tried |
+| venv | tabcomputer | `python3 -m venv` | works | `pyvenv.cfg`, `bin/python` symlinks, `bin/pip`, `activate`/`deactivate`; `sys.prefix` is the venv and pip installs into it (vitest and Chromium) | `--copies` ignored (always symlinks) |
+| Node.js npm CLIs and libraries | tabcomputer's node (`node`, `npm`, `npx`) | builtin | works | commander + chalk + dayjs + uuid CLI, mocha 10 (pass and fail exit codes), tsc 5.6 (compile and type errors), prettier 3.3 (files, stdin, `--check "src/**/*.js"`, `--write`), ES modules binding `module`/`require`/`process`; vitest and Chromium | TypeScript 7 (`typescript@7`) is a native Go binary; native addons (`.node`) don't load; axios needs `window.location` (fine in the browser, not under vitest) |
+| pnpm | 9.12.3 | npm package under tabcomputer's node (`npm install pnpm`) | works | `pnpm add` from the registry into the content-addressable store and `node_modules/.pnpm` virtual store (symlinks), `require` through those symlinks (resolving from the real path, as node does), `pnpm install --offline` from the store, `pnpm run` (a `node` script and a shell one), `pnpm exec`, `node_modules/.bin` shims; vitest and Chromium (`add` of 3 packages ≈5 s, `run` ≈2.4 s) | no `pnpm dlx`/`pnpm env` tested; workers run in the same thread (no parallel speed-up) |
+| yarn 1 | 1.22.22 | npm package under tabcomputer's node (`npm install yarn`) | works | `yarn add` from the registry (tarballs through `request` over the fetch-backed http shim, gunzip, tar), `yarn.lock`, `yarn run`, `node_modules/.bin`, `yarn install --offline` from its cache; vitest and Chromium (`add` of 2 packages ≈2 s) | yarn 2+ (berry) not tried |
 | Lua (lua, luac) | 5.4.7 | pkg `lua` (`lua.sh`) | works | `#!/usr/bin/env lua` script reading stdin with argv, patterns, coroutines, `table.sort`; `luac -p` syntax errors with locations | no `os.execute`/`io.popen`; the REPL needs blocking stdin |
 | SQLite shell | 3.50.4 | pkg `sqlite` (`sqlite.sh`) | works | a database file reused across runs, JSON functions, FTS5, SQL and dot-commands on stdin (`.mode csv`) | single-threaded, no WAL or loadable extensions; interactive mode needs blocking stdin |
 
@@ -64,28 +64,28 @@ Not available (yet), and why:
 | --- | --- | --- |
 | Rust (rustc, cargo) as a pkg | — | no maintained WASI build of rustc to pin; use Debian's (`apt install cargo`, above) |
 | Java (JVM) | — | a JDK image is ~200 MB and HotSpot needs its JIT (mprotect RWX code) for usable speed; Blink would interpret the interpreter |
-| Deno, Bun | — | single ~100 MB binaries around V8 / JavaScriptCore JITs; Shiro's own `node` covers the npm use case |
+| Deno, Bun | — | single ~100 MB binaries around V8 / JavaScriptCore JITs; tabcomputer's own `node` covers the npm use case |
 | PHP | — | owned by unix/wasix (WASIX build in `pkg`) |
 
 ### Developer story on Debian packages (`apt`)
 
 Real Debian 13 packages in Debian mode ([DEBIAN.md](DEBIAN.md)), in headless
 Chromium against the built app (`server.mjs` with its package mirror and, for
-pip, `SHIRO_TCP_RELAY=1`). One page, one session; times are wall clock from
+pip, `TABCOMPUTER_TCP_RELAY=1`). One page, one session; times are wall clock from
 the page (`apt-get update` ≈2m20s first).
 
 | Step | Result | Time | Notes |
 | --- | --- | --- | --- |
 | `sudo apt-get install -y build-essential` | pass | 5m50s–7m10s | gcc 14.2, g++, make 4.4.1, libc6-dev, dpkg-dev |
 | `gcc -O0 -o hello hello.c && ./hello` | pass | 10.7s compile+link | the x86-64 binary runs in Blink |
-| `make hello` (`$(CC)` = `cc`) | pass (after fix) | 10.9s | failed at first: Shiro's commands look like files in the bin directories to a PATH search, so make took a made-up `/usr/local/bin/cc` for its compiler; now an installed program replaces that (below) |
+| `make hello` (`$(CC)` = `cc`) | pass (after fix) | 10.9s | failed at first: tabcomputer's commands look like files in the bin directories to a PATH search, so make took a made-up `/usr/local/bin/cc` for its compiler; now an installed program replaces that (below) |
 | `sudo apt-get install -y python3-pip` | pass | 9m00s–10m05s | pip 25.1.1, Python 3.13.5; `python3` at the prompt is then Debian's |
 | `pip3 install --user --break-system-packages six` + import | pass (after fixes) | 1m30s install, 2.8s import | needs the TCP relay. Fixed on the way: socket `ioctl(FIONBIO)` was EINVAL (CPython's `setblocking(False)`); glibc's parallel A+AAAA lookup failed in Blink (`sendmmsg` → EBADF, fixed by perf-blink in patch 0043), then its address sort aborted on a connected UDP socket with no source address (fixed in the kernel). In this sandbox pip also needed `--cert` for its TLS-intercepting egress proxy, which a normal deployment doesn't have |
 | `sudo apt-get install -y nodejs` | installs | 2m25s | Debian's node 20.19.2 |
-| node: which wins | Debian's | — | in Debian mode a program file on PATH replaces the builtin of that name, so `node` is `/usr/bin/node` once nodejs is installed (22–26 s per script under emulation); `builtin node` still runs Shiro's (0.2 s) |
+| node: which wins | Debian's | — | in Debian mode a program file on PATH replaces the builtin of that name, so `node` is `/usr/bin/node` once nodejs is installed (22–26 s per script under emulation); `builtin node` still runs tabcomputer's (0.2 s) |
 | `node -e` / `node script.js` (Debian's node) | pass | 22–26s per run | crashed in Blink until patch 0047 (`pop m64` addressed relative to the old `rsp`, overwriting V8's CEntry return address); JS, `require`, `os` and fs work, slowly (emulated V8) |
 | `sudo apt-get install -y golang-go` | installs | 5m05s–10m40s | go1.24.4 linux/amd64 |
-| `go run hello.go` | **fail** (Blink) | 35m to the link step | the compile of `fmt` and its std dependencies under Blink finishes (into GOCACHE, kept for later runs), then cmd/link stops: "mapping output file failed: function not implemented" (Blink answers `fallocate` with ENOSYS; Go tolerates only EOPNOTSUPP; sent to perf-blink). Shiro's own `pkg install go` (wasip1 toolchain) builds and runs Go programs |
+| `go run hello.go` | **fail** (Blink) | 35m to the link step | the compile of `fmt` and its std dependencies under Blink finishes (into GOCACHE, kept for later runs), then cmd/link stops: "mapping output file failed: function not implemented" (Blink answers `fallocate` with ENOSYS; Go tolerates only EOPNOTSUPP; sent to perf-blink). tabcomputer's own `pkg install go` (wasip1 toolchain) builds and runs Go programs |
 | `sudo apt-get install -y cargo` | installs | 9m35s | cargo 1.85.1, rustc 1.85.1 |
 | `cargo new hello_rs && cargo build && cargo run` | pass (after fix) | `new` 2.3s, `build` 54s, `run` 1.9s | failed at first: Rust's `std::process::Command` makes an AF_UNIX `SOCK_SEQPACKET` socketpair for every spawn, which the kernel refused (EOPNOTSUPP), so cargo couldn't start rustc nor rustc its linker |
 | `sudo apt-get install -y ruby` | installs | 2m43s | ruby 3.3.8 (`ruby` is `/usr/bin/ruby`) |
@@ -93,7 +93,7 @@ the page (`apt-get update` ≈2m20s first).
 | `sudo apt-get install -y php-cli` | installs | 26m46s | PHP 8.4.26 (slowest install of the set; not profiled) |
 | `php -r 'echo json_encode(…);'` | pass | 2.2s | |
 
-Shiro-side fixes from this (tests in `debian.test.ts`, `kernel-net.test.ts`):
+tabcomputer-side fixes from this (tests in `debian.test.ts`, `kernel-net.test.ts`):
 `binCommandStat` (src/wasi/host.ts) no longer makes up a `/bin/NAME` file for
 a builtin that an installed program replaces; Debian shadows count a program
 symlink whose target isn't unpacked yet (dpkg unpacks `gcc -> gcc-14` first);
@@ -132,6 +132,27 @@ Shell and platform fixes these needed (all with tests in the same file):
   `require` resolves a package behind a symlink from its real directory.
 - Node: `child_process.spawn` with inherited stdio (`'inherit'`, `[0,1,2]`)
   writes the child's output to the parent's and has `stdout === null`.
+- Node: `fs.watch` (files, directories, `recursive`), `fs.watchFile` /
+  `unwatchFile` and `fs.promises.watch` work, on the filesystem's change
+  hook, so writes from any process reach them (the shell, other scripts,
+  kernel programs). They were inert, so nodemon, vite HMR, jest --watch and
+  chokidar never saw a change. Events follow Linux: a new file is `rename`
+  then `change`, a removal or either side of a rename is `rename`; a
+  persistent watcher keeps the script alive until `close()`/`unref()`. A
+  script's cached copy of a file follows other processes' writes (a
+  watcher's re-read got the contents from when the script started).
+  chokidar 3 reports add/change/unlink/addDir.
+- Node: a script's timers and intervals end with it. An interval left by a
+  script that called `process.exit()` kept firing in the page, and its
+  `setTimeout`s became the next script's timers, so that script never went
+  idle (10-minute hang).
+- Node: `node:assert` and `node:assert/strict` are complete: `match`,
+  `doesNotMatch`, `rejects`, `doesNotReject`, `ifError`, real deep equality
+  (prototypes, Map/Set, Date/RegExp, typed arrays, cycles, NaN, -0; it
+  compared JSON), `throws` checking classes, RegExps, validation functions
+  and objects (it accepted any throw), and `AssertionError` with `code`,
+  `actual`, `expected`, `operator`, `generatedMessage`. `util.isDeepStrictEqual`
+  uses the same comparison.
 - Node, for yarn: `fs.open` of a missing file to read is ENOENT (yarn took
   a tarball cache it never wrote for a hit and fetched nothing),
   `fs.copyFile` copies what the script sees, as bytes (copies out of its
@@ -243,7 +264,7 @@ Known issues found along the way (not fixed here):
 - WASIX programs (bash, dash from unix/wasix) pass `exec` arguments as one
   newline-separated string (`proc_exec3`), so an argument containing a
   newline arrives split. Autoconf-style `configure` scripts that hand sed a
-  multi-line script break that way; Shiro's own shell can't run them either.
+  multi-line script break that way; tabcomputer's own shell can't run them either.
 - A static glibc CMake faults in its malloc start-up in Blink (upstream too);
   the package is built against musl.
 
@@ -318,7 +339,7 @@ EIO (the browser's `TextDecoder` refuses the shared syscall buffer).
 | gpg, gpgv, gpg-agent, gpgsm, gpgtar, gpgconf, gpg-connect-agent, pinentry | 2.5.24 (GnuPG; libgcrypt 1.12.4) | pkg (Blink) | works | Ed25519/Cv25519 key generation, detached and clear signatures, `gpgv`, a bad signature fails, public-key and symmetric encryption, the agent over its AF_UNIX socket, `gpg-connect-agent`, passphrase entry in pinentry-curses on the tty | no dirmngr (keyserver and WKD lookups), keyboxd, scdaemon (smartcards) or TOFU; `pinentry` is pinentry-curses (pinentry-tty also installed) |
 | man, apropos, whatis, makewhatis | 1.14.6 (mandoc) | pkg (Blink) | works | `man -w`, formatting `man(1)`/`mandoc(1)`, `makewhatis` then `whatis`/`apropos`; pages from other packages (`xz`, alias `xzcat` via `.so`, procps' `vmstat(8)`) | pages come with the packages here (recipes' `install_man`; publish.sh links them into /usr/share/man), except git, openssl, curl, gnupg and fzf, whose pages are generated with tools the builds leave out; pager is `less` (`pkg install less`) |
 | jq | 1.8.1 | pkg (WASI) | works | filters, `-r`, `-s`, `gsub` (oniguruma), `-e` exit status | |
-| ripgrep | 15.2.0 | pkg (WASIX) | works as `/usr/bin/rg` | `.gitignore`, `-t`, `-g`, `-c`, `-l`, exit 1 on no match | plain `rg` is Shiro's builtin (the package doesn't take the name); no PCRE2; one search thread |
+| ripgrep | 15.2.0 | pkg (WASIX) | works as `/usr/bin/rg` | `.gitignore`, `-t`, `-g`, `-c`, `-l`, exit 1 on no match | plain `rg` is tabcomputer's builtin (the package doesn't take the name); no PCRE2; one search thread |
 | sqlite3 | 3.50.4 | pkg (WASI) | works | database file, queries, SQL on stdin, `-json` | interactive shell wants blocking stdin |
 | coreutils (uutils) | 0.12.0 | pkg (WASI) | works | `coreutils sha256sum`, `/usr/bin/factor`, `sort -n`, `tr`, `numfmt`, `seq` | builtins keep the plain names; use `/usr/bin/NAME` or `coreutils NAME` |
 | fd | 10.3.0 | pkg (Blink; upstream static musl release) | works | `-e`, `-t d`, `.gitignore` respected, `-u` | |
@@ -326,14 +347,14 @@ EIO (the browser's `TextDecoder` refuses the shared syscall buffer).
 | fzf | 0.74.0 | pkg (Blink; upstream static Go release) | works | `-f` filter; the TUI with `--height` on the tty (cursor position report, typing narrows the list, Enter prints the pick) | Go runtime in Blink: start-up takes about a second |
 | yq | 4.52.1 (mikefarah) | pkg (Blink; upstream static Go release) | works | path query, `-o json`, `-i` in-place edit | |
 
-Shiro changes these programs needed (tests in `x86-engine.test.ts`,
+tabcomputer changes these programs needed (tests in `x86-engine.test.ts`,
 `kernel-core.test.ts` and the smoke tests):
 
 - Real `fork()` for Blink guests (patch 0014): a snapshot of the process is
   rebuilt in a new worker, so a child can run alongside its parent without
   exec (GNU tar's compressor helper). `x86-engine.test.ts`.
 - `/bin/sh` as a kernel process (`system()`, `popen()`, `sh -c`, tar's
-  `-z`): the forked Shiro shell is that process, and programs it starts get
+  `-z`): the forked tabcomputer shell is that process, and programs it starts get
   its real fds and process group (`Shell.kernelHost`), so binary data and the
   tty pass through.
 - `prog > file`, `>> file`, `2> file`, `2>&1` on kernel programs: the kernel
@@ -404,7 +425,7 @@ Shiro changes these programs needed (tests in `x86-engine.test.ts`,
   `useradd` in openssh-client's and other postinsts). `kernel-core.test.ts`.
 - Files keep no owner, so `stat` reports them as the caller's (root's in a
   root shell): git refused root's own repositories ("dubious ownership").
-- Shiro's commands look like files only where exec runs them (`/bin`,
+- tabcomputer's commands look like files only where exec runs them (`/bin`,
   `/usr/bin` and the sbin ones, when no real file has that name): GNU make
   took `/usr/local/bin/echo` from its own PATH search and failed with
   "echo: No such file or directory". `debian.test.ts`.
@@ -437,7 +458,7 @@ tty for stdout); fixed. emacs -nw from Debian has only had the batch check.
 | tmux | 3.5a | works | 80 s | `tmux -V` | |
 | less | 668 | works | 63 s | `less -F` | |
 | man (`man-db`) | 2.13 | broken (fix in progress) | 138 s | `man -P cat 7 man`: "No manual entry" | the rootfs excluded `/usr/share/man` (dpkg `path-exclude`, as Docker's slim images do), so no package had pages; unix/debian is dropping the exclusion for packages installed from now on |
-| curl | 8.14.1 | works (local) | 113 s | `curl --version`, `file://` | network through Shiro's relay not tried here |
+| curl | 8.14.1 | works (local) | 113 s | `curl --version`, `file://` | network through tabcomputer's relay not tried here |
 | wget | 1.25 | works (local) | 59 s | `--version` | network not tried |
 | ssh, ssh-keygen (`openssh-client`) | 10.0p1 | works | 90 s | `ssh -V`, `ssh-keygen -t ed25519` | its postinst failed (`groupadd _ssh`: link count), fixed |
 | rsync | 3.5.0 | works | 93 s | `rsync -a` | |
@@ -459,7 +480,7 @@ tty for stdout); fixed. emacs -nw from Debian has only had the batch check.
 | lsof | 4.99.4 | works | 135 s | `lsof -p` lists cwd, root, fds | |
 | nc (`netcat-openbsd`) | 1.229 | works (local) | 83 s | `nc -h` | connections not tried |
 | ps, pstree, free (`procps`, `psmisc`) | 4.0.4, 23.7 | works | 121 s | `ps -e`, `pstree`, `free -m` | memory figures are nominal |
-| python3 (`python3-minimal`) | 3.13.5 | works | 219 s | `python3 -c` | Debian's CPython in Blink (Shiro's own `python3` package is WASI) |
+| python3 (`python3-minimal`) | 3.13.5 | works | 219 s | `python3 -c` | Debian's CPython in Blink (tabcomputer's own `python3` package is WASI) |
 
 Building and publishing one of these packages:
 
@@ -499,17 +520,21 @@ no:cacheprovider"`.
 
 ## Claude Code native binary (unix/perf-kernel)
 
-Status (2026-10-09, unix/agent-clis, see "Agent CLIs" below): with Blink's
-SSE4.1/4.2 (patch 0040) the **musl build runs**: `--version` in 2.1 s and
-`-p` reaches the Anthropic API. The glibc build still crashes in Bun's
-startup. Before patch 0040 both died of SIGILL on `pinsrq`.
+Status (2026-10-09, see "Agent CLIs" below): with Blink's SSE4.1/4.2
+(patch 0040) the **musl build runs**: `--version` in 2.1 s and `-p` reaches
+the Anthropic API. The glibc build starts too since Blink patch 0044. Before
+patch 0040 both died of SIGILL on `pinsrq`.
 
-Experimental opt-in (plain `claude` still runs the pinned npm build):
+On the tabcomputer profile the native build is now the default
+(`shims.claude: native`): plain `claude`, `claude install` and
+`claude update` mean native, and `claude --npm` runs the pinned npm build.
+The shiro profile keeps npm as the default, with `--native` as the opt-in
+described here:
 
 - `claude install --native [VERSION]` (`src/commands/claude-native.ts`)
   downloads from inside the guest with the `curl` package (x86-64, its own
   TLS over the kernel's TCP relay, so CORS doesn't apply and nothing goes
-  through a Shiro proxy route): the linux-x64-musl build, checked against
+  through a tabcomputer proxy route): the linux-x64-musl build, checked against
   the release manifest's sha256, to `$CLAUDE_NATIVE_PATH` (default
   `~/.local/bin/claude`), and musl's loader from Debian's `musl` package
   (pinned sha256; snapshot.debian.org fallback) as
@@ -538,11 +563,11 @@ sha256-checked against `manifest.json`):
   `sched_getaffinity`, `posix_spawn*` (with `addchdir`), `mmap`/
   `mprotect`/`madvise` (JSC's JIT and its large virtual reservations).
 
-Where Shiro intercepts it today (so `claude` at the prompt never reaches a
-native binary):
+Where tabcomputer intercepted it before `--native` existed (kept as the
+investigation's record; the builtin now runs the native binary as above):
 
 - `src/commands/claude.ts`: the `claude` builtin runs the pinned npm build
-  (`CLAUDE_CODE_VERSION`, pure JS) through Shiro's `node`, and answers
+  (`CLAUDE_CODE_VERSION`, pure JS) through tabcomputer's `node`, and answers
   `claude install|update|upgrade` with a "pinned" message. Builtins win over
   PATH lookup, so a binary at `~/.local/bin/claude` is not reached by name.
 - `src/commands/fetch.ts`: `curl`/`fetch` of `claude.ai/install.sh` returns
@@ -555,22 +580,22 @@ native binary):
   `CLAUDE_NATIVE=1` making the builtin exec the native binary when one is
   installed, and `CLAUDE_NATIVE=1` letting `install.sh` through.
 
-To try it (once allowed): put the binary and the five glibc libraries plus
+To try it by hand (before `claude install --native` did this): put the binary and the five glibc libraries plus
 the loader in the VFS (Blink loads the ELF interpreter from SHIROFS), then
 run `claude --version` and `claude -p "say hi"` with a dummy key, with and
 without `BUN_JSC_useJIT=0`.
 
 ## Agent CLIs (unix/agent-clis)
 
-Popular AI coding-agent CLIs, run as Shiro would run them: native x86-64
-ELF builds in Blink as kernel processes, Node builds on Shiro's `node`. Run
+Popular AI coding-agent CLIs, run as tabcomputer would run them: native x86-64
+ELF builds in Blink as kernel processes, Node builds on tabcomputer's `node`. Run
 2026-10-09 with dummy API keys for the other vendors (a 401/400 from the
 vendor's API proves the network path).
 
 | Tool | Version | Kind | Install | `--version` | Network | Timings | Blockers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Claude Code (native) | 2.1.295 | ELF, Bun 1.4.3 single-file exe; glibc (256 MB) and musl (250 MB) builds, dynamic | `claude.ai/install.sh` (Shiro substitutes the npm install; fetch the binary from `downloads.claude.ai/claude-code-releases/<v>/linux-x64-musl/claude`, plus `/lib/ld-musl-x86_64.so.1`) | **yes**: musl 2.1 s, glibc 2.2 s (since Blink 0044) | **musl: yes**: `-p "say hi"` reaches the Anthropic API through the kernel relay ("Invalid API key" for a dummy key) | `-p` to the API error (Node probe, same session): musl 107 s with JSC's JIT, 85 s with `BUN_JSC_useJIT=0`; glibc 170 s / 146 s. So `claude install --native` installs musl, and `claude --native` sets `BUN_JSC_useJIT=0` unless it is already set | glibc build: works since Blink patch 0044 (`--version` 2.2 s): glibc's `pthread_getattr_np` finds the main stack through `/proc/self/maps`, which Blink now answers from the guest's page table. `claude install --native` still installs the musl build (smaller, no glibc in the VFS needed). Live-token test not run: `CLAUDE_CODE_OAUTH_TOKEN` is not in this container's environment. |
-| OpenAI Codex | 0.162.0 | ELF, Rust, static-pie musl (294 MB) | GitHub release `codex-x86_64-unknown-linux-musl.tar.gz` (`npm i -g @openai/codex` wraps the same binary) | **yes** | **yes**: `codex exec` reaches `wss://api.openai.com/v1/responses` and `https://…/responses` through the kernel's TCP relay, 401 | Chromium: `--version` 4.8 s, `exec` until the 401s end 59 s (it retries), renderer peak ~2.0 GB; Node probe: 7.9 s / 69 s | none for the request path. It warns about missing bubblewrap (its Linux sandbox) and `/proc/self/exe`; use `--sandbox danger-full-access` for tool calls in Shiro. |
+| Claude Code (native) | 2.1.295 | ELF, Bun 1.4.3 single-file exe; glibc (256 MB) and musl (250 MB) builds, dynamic | `claude.ai/install.sh` (tabcomputer substitutes the npm install; fetch the binary from `downloads.claude.ai/claude-code-releases/<v>/linux-x64-musl/claude`, plus `/lib/ld-musl-x86_64.so.1`) | **yes**: musl 2.1 s, glibc 2.2 s (since Blink 0044) | **musl: yes**: `-p "say hi"` reaches the Anthropic API through the kernel relay ("Invalid API key" for a dummy key) | `-p` to the API error (Node probe, same session): musl 107 s with JSC's JIT, 85 s with `BUN_JSC_useJIT=0`; glibc 170 s / 146 s. So `claude install --native` installs musl, and `claude --native` sets `BUN_JSC_useJIT=0` unless it is already set | glibc build: works since Blink patch 0044 (`--version` 2.2 s): glibc's `pthread_getattr_np` finds the main stack through `/proc/self/maps`, which Blink now answers from the guest's page table. `claude install --native` still installs the musl build (smaller, no glibc in the VFS needed). Live-token test not run: `CLAUDE_CODE_OAUTH_TOKEN` is not in this container's environment. |
+| OpenAI Codex | 0.162.0 | ELF, Rust, static-pie musl (294 MB) | GitHub release `codex-x86_64-unknown-linux-musl.tar.gz` (`npm i -g @openai/codex` wraps the same binary) | **yes** | **yes**: `codex exec` reaches `wss://api.openai.com/v1/responses` and `https://…/responses` through the kernel's TCP relay, 401 | Chromium: `--version` 4.8 s, `exec` until the 401s end 59 s (it retries), renderer peak ~2.0 GB; Node probe: 7.9 s / 69 s | none for the request path. It warns about missing bubblewrap (its Linux sandbox) and `/proc/self/exe`; use `--sandbox danger-full-access` for tool calls in tabcomputer. |
 | Grok Build (xAI) | 1.0.50 | ELF, Rust, static-pie (183 MB) | `x.ai/cli/install.sh` → `x.ai/cli/grok-<v>-linux-x86_64` | **yes** | **yes** (Blink patch 0039): `grok -p` reaches `api.x.ai`, 400 for a bad key | Chromium: `--version` 1.8 s; Node probe: `--version` 5.1 s, `-p` to the API error 148 s | Before patch 0039 Blink's BSF/BSR wrote 0 to the destination for a zero source and `-p` panicked ("Span not found"). |
 | Antigravity CLI (`agy`, Google) | 1.3.2 | ELF, Go (`GOAMD64` v2, boringcrypto) + cgo/Rust, glibc dynamic (211 MB) | `antigravity.google/cli/install.sh` → manifest → `cli_linux_x64.tar.gz` (sha512) | **yes** (Blink patch 0040), 11 s | not tried (needs a Google sign-in) | — | Before patch 0040 it exited with "compiled with sse4.1 enabled, but this feature is not available". |
 | opencode | 1.18.35 | ELF, Bun 1.3.14 (baseline build), glibc dynamic (185 MB); a musl build needs libstdc++/libgcc_s | `npm i -g opencode-ai` (picks `opencode-linux-x64[-baseline\|-musl]`) | **no** | not reached | — | Past `/proc/self/maps` (patch 0044) and timerfd (0045) it still dies of SIGTRAP (WebKit `CRASH()`, an `int3`) in wasm Blink right after installing its signal-30 handler; native Blink `-j` gets further. Sent to perf-blink. |
@@ -578,7 +603,7 @@ vendor's API proves the network path).
 | Grok CLI (community, `@vibe-kit/grok-cli`) | 0.0.34 | Node | `npm i -g @vibe-kit/grok-cli` | not run | — | — | Superseded by xAI's own Grok Build (above); not tested. |
 | aider | 0.86.2 | Python | Debian mode: `debian install`, `pkg install curl`, then `curl -LsSf https://aider.chat/install.sh \| sh` (uv + python-build-standalone 3.12). Debian's `pip3 install aider-chat` can't work on trixie anywhere: Python 3.13 has no wheel for its pinned numpy 1.26.4 | **yes** (first run 5.8 min, compiling .pyc) | **yes**: `aider --message` reaches api.openai.com ("not able to authenticate" for a dummy key) | install 10.5 min in Chromium (108 wheels, 121 MB); request 12.4 min | Needs Blink patch 0052 (`/proc/self/exe` from the kernel, unix/perf-blink; ld.so's `$ORIGIN` for the venv's symlinked python). Fixed here: socket `ioctl(FIONBIO)` (Python's `settimeout`; every pip connection failed with EINVAL) and `/proc/<pid>/exe` absolute and resolved. numpy warns that `exp2`/`log10` on `long double` gave invalid values (x87 80-bit in Blink). |
 
-What was fixed in Shiro for these (tests: `agent-clis.test.ts`):
+What was fixed in tabcomputer for these (tests: `agent-clis.test.ts`):
 
 - **Top-level await across modules**: an ES module whose body awaits runs
   as an async function, so `require()` handed importers its exports before
@@ -597,7 +622,7 @@ What was fixed in Shiro for these (tests: `agent-clis.test.ts`):
   proper-lockfile took as a compromised lock).
 - `child_process.spawn(…, { env })` passes `env` to the child.
 - Gemini CLI relaunches itself under a child `node` only to raise V8's heap
-  limit; Shiro sets `GEMINI_CLI_NO_RELAUNCH=true` for it (export it empty
+  limit; tabcomputer sets `GEMINI_CLI_NO_RELAUNCH=true` for it (export it empty
   to override).
 - The node runner's 15 s/60 s script timeout and the 10 s wait after the
   entry returns now end only an idle script (no fetch, fs work, timers or
@@ -643,14 +668,14 @@ of an installed app → first frame, in Chromium.
 | xeyes (Debian mode) | trixie x11-apps | `debian install`, then `gui xeyes` = real `apt-get install` in Blink | works | apt update + install 384 s; window 1.0 s after launch | apt is slow (interpreted/JIT x86) |
 | xclock | x11-apps 7.7+9 | gui (8.9 MB) | works | analog clock with RENDER antialiasing; 2.6–2.8 s | — |
 | xcalc, xedit | x11-apps 7.7+9 | gui | not checked | — | — |
-| xterm | 379 | gui (9.3 MB) | works | Shiro's shell in xterm's pty, typing, output, core fonts; 2.5–2.7 s | no XKB (core keymap), UTF-8 locale falls back to C (Xlib has no C.UTF-8 entry) |
+| xterm | 379 | gui (9.3 MB) | works | tabcomputer's shell in xterm's pty, typing, output, core fonts; 2.5–2.7 s | no XKB (core keymap), UTF-8 locale falls back to C (Xlib has no C.UTF-8 entry) |
 | FeatherPad | 1.3.5 (Qt 5.15.8) | gui (35 MB of an 84 MB closure) | works | menus, toolbar icons, typing text; 10.5–16 s | Qt warns about missing XKB; no GLX (Mesa never downloaded) |
 | GPicView | 0.2.5 (GTK 2.24.33) | gui (26.8 MB) | works | opens a PNG at 512×512; 6.9–9.7 s | some stock toolbar icons missing |
 | L3afpad | 0.8.18.1.11 (GTK 3.24.38) | gui (33.1 MB of a 51 MB closure) | works | Adwaita theme, menus, typing text; click to window 12.5 s from a fresh profile (install 4.9 s), warm 4.9 s | needed Blink patch 0029 (SSE compares) |
 | Mousepad | 0.5.10 (GTK 3, Xfce) | gui (44.6 MB) | works | editor window and menus; click to window 24.2 s (install 6.2 s), warm 17 s | slow start: syscall-free guest compute (GtkSourceView), reported to perf-blink |
 | Ristretto | 0.12.4 (GTK 3, Xfce) | gui (35.1 MB) | works | opens a PNG; click to window 14.8 s (install 4.9 s), warm 7.0 s | no thumbnails (tumbler over D-Bus) |
 | LXImage-Qt | 1.2.0 (Qt 5) | gui (36.8 MB) | exits | — | without a D-Bus session bus its single-instance check fails and it quits (status 0) |
-| GIMP | 2.10.34 (GTK 2) | gui (53.2 MB of a 141 MB closure) | works (slow) | main window, menus; install 6.3 s, splash 36 s, main window 247 s on first start, 63 s later | first start queries ~100 plug-ins one Blink process each; 22 plug-ins whose libraries are left out (PDF, HEIF, help browser...) are removed; no MIDI/ALSA, no D-Bus |
+| GIMP | 2.10.34 (GTK 2) | gui (53.2 MB of a 141 MB closure) | works (slow) | main window, menus; install 6.3 s, splash 36 s, main window 247 s on first start, 63 s later | toolbox and dock icons show as broken images (GIMP's icon theme is SVG; librsvg's pixbuf loader isn't in its startup set); first start queries ~100 plug-ins one Blink process each; 22 plug-ins whose libraries are left out (PDF, HEIF, help browser...) are removed; no MIDI/ALSA, no D-Bus |
 | Inkscape | 1.2.2 (GTK 3, gtkmm) | gui (83 MB of a 95 MB closure) | works (slow) | fresh profile: install 15 s, welcome dialog 61 s after the click, main window ~60 s after closing it; ellipse tool draws on the canvas (`gui-inkscape.png`) | no Python extensions (python3 not shipped), no spell checking; first start is long |
 | NetSurf | 3.10 (GTK 3) | gui (56.6 MB; most shared with other GTK 3 apps) | works | welcome page 24.7 s after the click from a fresh profile; https://www.debian.org/ with images and CSS in 26 s (`gui-netsurf-web.png`) | needs the TCP relay (on at tabcomputer.com); no JavaScript (NetSurf's own limit) |
 | Dillo | 3.0.5 (FLTK 1.3) | gui (11.4 MB) | works | install 1.4 s, window 4.1 s; http and https pages (`gui-dillo-web.png`) | needs the TCP relay; no CSS layout beyond Dillo's own |

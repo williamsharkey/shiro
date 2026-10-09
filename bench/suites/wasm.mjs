@@ -84,7 +84,7 @@ export async function run(h) {
   const files = h.quick ? 2000 : 10000;
   const treeReady = await h.try('wasm.tree', '', async () => {
     const t = await h.eval(async (files) => {
-      const fs = window.__shiro.fs;
+      const fs = window.__tabcomputer.fs;
       const root = `/tmp/bench-tree-${files}`;
       if (await fs.exists(root + '/d99/f' + (files / 100 - 1) + '.txt').catch(() => false)) return 0;
       const t0 = performance.now();

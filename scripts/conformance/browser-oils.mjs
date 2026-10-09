@@ -46,12 +46,12 @@ const browser = await chromium.launch({ executablePath: exe, args: ['--no-sandbo
 const page = await (await browser.newContext()).newPage();
 page.on('pageerror', (e) => console.error('[pageerror]', e.message));
 await page.goto(`http://localhost:${PORT}/`);
-await page.waitForFunction(() => window.__shiro && window.__shiro.shell, null, { timeout: 120000 });
+await page.waitForFunction(() => window.__tabcomputer && window.__tabcomputer.shell, null, { timeout: 120000 });
 
 // The oils helper commands, and the testdata the cases source
 const testdata = Object.fromEntries(readdirSync(join(OILS, 'spec/testdata')).map((n) => [n, readFileSync(join(OILS, 'spec/testdata', n), 'utf8')]));
 await page.evaluate(async ({ pyReprSrc, argvPySrc, testdata }) => {
-  const { fs, commands } = window.__shiro;
+  const { fs, commands } = window.__tabcomputer;
   // eslint-disable-next-line no-new-func
   const argvPy = new Function(`${pyReprSrc}\n${argvPySrc}\nreturn argvPy;`)();
   commands.register({ name: 'argv.py', description: 'oils spec helper', async exec(ctx) { ctx.stdout += argvPy(ctx.args); return 0; } });
@@ -82,7 +82,7 @@ for (const file of files) {
     res.total++;
     if (hangs[file]?.includes(i)) { res.failures.push({ i, name: c.name, timeout: true }); continue; }
     const r = await page.evaluate(async ({ file, i, code, timeout }) => {
-      const { fs, shell: base, commands } = window.__shiro;
+      const { fs, shell: base, commands } = window.__tabcomputer;
       const tmp = `/tmp/spec/${file}-${i}`;
       await fs.mkdir(tmp, { recursive: true });
       const script = `/spec-cases/${file}-${i}.sh`;

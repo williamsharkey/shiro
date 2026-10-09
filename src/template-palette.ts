@@ -78,13 +78,13 @@ mkdir -p /tmp/mypage && cat > /tmp/mypage/index.html << 'ENDHTML'
 </head>
 <body>
   <!-- HTML elements are the building blocks of web pages -->
-  <h1>Hello from Shiro!</h1>
+  <h1>Hello from tabcomputer!</h1>
   <p>This page is served from the browser's virtual filesystem.</p>
 
   <div class="card">
     <h3>How it works</h3>
     <p>The file <code>/tmp/mypage/index.html</code> is served
-    by Shiro's virtual web server on port 3000.</p>
+    by tabcomputer's virtual web server on port 3000.</p>
   </div>
 
   <!-- onclick runs JavaScript when the button is clicked -->
@@ -409,7 +409,7 @@ async function main() {
   if (count[0].n === 0) {
     await db.prepare("INSERT INTO notes (title, body, created_at) VALUES ('Welcome', 'This is your first note!', datetime('now'))");
     await db.prepare("INSERT INTO notes (title, body, created_at) VALUES ('Shopping List', 'Milk, eggs, bread', datetime('now'))");
-    await db.prepare("INSERT INTO notes (title, body, created_at) VALUES ('Ideas', 'Build something awesome with Shiro', datetime('now'))");
+    await db.prepare("INSERT INTO notes (title, body, created_at) VALUES ('Ideas', 'Build something awesome with tabcomputer', datetime('now'))");
   }
 
   /* GET /api/notes — list all notes */
@@ -541,7 +541,7 @@ print("Python " + sys.version.split()[0] + " running in the browser!")
 print()
 
 # --- Variables and types ---
-name = "Shiro"
+name = "tabcomputer"
 age = 1
 pi = 3.14159
 print("Variables: name=" + name + ", age=" + str(age) + ", pi=" + str(pi))
@@ -745,7 +745,7 @@ echo "${DM}  Try adding a function or a loop${RS}"`,
         level: 'intermediate',
         cmd: `echo "${CY}--- WASM Packages: Real Software in the Browser ---${RS}"
 echo ""
-echo "${DM}Shiro installs real programs compiled to ${BD}WebAssembly${RS}${DM}: built from source here or from the Wasmer registry.${RS}"
+echo "${DM}tabcomputer installs real programs compiled to ${BD}WebAssembly${RS}${DM}: built from source here or from the Wasmer registry.${RS}"
 echo "${DM}Every download is sha256-checked and installed to /usr/lib/pkg, with commands in /usr/bin.${RS}"
 echo ""
 echo "${GN}> Installing cowsay...${RS}"
@@ -777,7 +777,7 @@ echo "${DM}  fortune | figlet | lolcat        (triple pipeline)${RS}"`,
         level: 'advanced',
         cmd: `echo "${CY}--- x86-64 Emulator: Real Linux Binaries ---${RS}"
 echo ""
-echo "${DM}Shiro includes a full ${BD}x86-64 emulator${RS}${DM} that runs real Linux ELF binaries.${RS}"
+echo "${DM}tabcomputer includes a full ${BD}x86-64 emulator${RS}${DM} that runs real Linux ELF binaries.${RS}"
 echo "${DM}Not transpiled. Not interpreted. Actual x86 instructions decoded and executed.${RS}"
 echo ""
 echo "${GN}> Installing busybox (1.1 MB real ELF binary)...${RS}"
@@ -793,7 +793,7 @@ echo "${YL}--- piping stdin to x86 binary ---${RS}"
 seq 1 10 | busybox awk '{s+=$1} END {print "Sum of 1..10:", s}'
 echo ""
 echo "${YL}--- md5sum: cryptographic hash via x86 ---${RS}"
-echo "Shiro x86" | busybox md5sum
+echo "tabcomputer x86" | busybox md5sum
 echo ""
 echo "${YL}--- fibonacci with awk ---${RS}"
 busybox awk 'BEGIN {a=0;b=1; for(i=0;i<12;i++){printf "%d ",a; c=a+b;a=b;b=c} print ""}'
@@ -897,7 +897,7 @@ echo "${DM}  cat /tmp/tutorial/people.csv | cut -d, -f1${RS}"`,
         level: 'advanced',
         cmd: `echo "${CY}--- Cross-Language Pipeline ---${RS}"
 echo ""
-echo "${DM}Five languages processing data through Shiro's shared virtual filesystem.${RS}"
+echo "${DM}Five languages processing data through tabcomputer's shared virtual filesystem.${RS}"
 echo "${DM}Each step reads the previous step's output — no IPC, just files.${RS}"
 echo ""
 echo "${YL}=== Step 1/5: C — Generate sensor data ===${RS}"
@@ -1088,7 +1088,7 @@ function makeRow(
   `;
 
   // Check for progress
-  const progressKey = 'shiro-template-progress-';
+  const progressKey = 'tabcomputer-template-progress-';
   // We'll check for any completed checkpoints later
 
   row.appendChild(iconEl);

@@ -25,7 +25,7 @@ export async function runPython(ctx: RunContext, detect: DetectResult): Promise<
 
   // Warn about web framework limitations
   if (detect.kind === 'python-web') {
-    log(`\x1b[33mNote: Python web frameworks (Flask/Django/FastAPI) cannot serve HTTP in Shiro.\x1b[0m`);
+    log(`\x1b[33mNote: Python web frameworks (Flask/Django/FastAPI) cannot serve HTTP in tabcomputer.\x1b[0m`);
     log(`\x1b[33mThe script will run but HTTP serving is not supported.\x1b[0m`);
   }
 

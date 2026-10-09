@@ -15,7 +15,7 @@ import {
 
 export function getToken(ctx: CommandContext): string {
   return ctx.env['GITHUB_TOKEN'] || ctx.env['GH_TOKEN']
-    || (typeof localStorage !== 'undefined' ? localStorage.getItem('shiro_github_token') || '' : '');
+    || (typeof localStorage !== 'undefined' ? localStorage.getItem('tabcomputer_github_token') || '' : '');
 }
 
 export async function detectRepo(ctx: CommandContext): Promise<{ owner: string; repo: string } | null> {
@@ -170,7 +170,7 @@ export const ghCmd: Command = {
     const sub = ctx.args[0];
 
     if (sub === '--version' || sub === '-v') {
-      ctx.stdout = 'gh 0.1.0 (shiro)\n';
+      ctx.stdout = 'gh 0.1.0 (tabcomputer)\n';
       return 0;
     }
 
@@ -244,7 +244,7 @@ Commands:
           // Shiro's git already uses the gh token for github.com remotes
           if (!token) { ctx.stderr = 'You are not logged into any GitHub hosts. Run gh auth login first.\n'; return 1; }
         } else if (authSub === 'logout') {
-          if (typeof localStorage !== 'undefined') localStorage.removeItem('shiro_github_token');
+          if (typeof localStorage !== 'undefined') localStorage.removeItem('tabcomputer_github_token');
           delete ctx.env['GITHUB_TOKEN'];
           delete ctx.env['GH_TOKEN'];
           ctx.stdout = 'Logged out.\n';

@@ -389,8 +389,22 @@ export class Painter {
   }
 
   /** Draw text glyphs at baseline (x, y); `image` = ImageText (background box in bg). */
-  text(font: XFont, codes: ArrayLike<number>, x: number, y: number, image: boolean): number {
+  /** Draw text; without `glyphs` only ImageText's background is painted (DOM-text mode). Returns the end x. */
+  text(font: XFont, codes: ArrayLike<number>, x: number, y: number, image: boolean, glyphs = true): number {
     const gc = this.gc;
+    if (!glyphs) {
+      let width = 0;
+      for (let i = 0; i < codes.length; i++) width += (font.glyph(codes[i]) ?? font.glyph(font.defaultChar))?.width ?? 0;
+      if (image) {
+        const fg = gc.fg, func = gc.func;
+        gc.fg = gc.bg; gc.func = GXcopy;
+        this.simple = (gc.planeMask & this.mask) === this.mask;
+        this.fillRectSolid(x, y - font.ascent, width, font.ascent + font.descent);
+        gc.fg = fg; gc.func = func;
+        this.simple = gc.func === GXcopy && (gc.planeMask & this.mask) === this.mask;
+      }
+      return x + width;
+    }
     if (image) {
       let width = 0;
       for (let i = 0; i < codes.length; i++) width += (font.glyph(codes[i]) ?? font.glyph(font.defaultChar))?.width ?? 0;

@@ -248,6 +248,6 @@ export async function openClaudeSignIn(opts: ClaudeSignInOptions): Promise<boole
     }
 
     window.addEventListener('message', onMessage);
-    win.updateIframe(buildPanelHTML(authorizeUrl, opts.subtitle || 'Claude Code in Shiro uses your Claude subscription.'));
+    win.updateIframe(buildPanelHTML(authorizeUrl, opts.subtitle || 'Claude Code in tabcomputer uses your Claude subscription.'));
   });
 }

@@ -1,5 +1,5 @@
 // Shell: builtin latency, loops, ls on a big directory, builtin pipelines,
-// command substitution. Commands run through window.__shiro.shell.execute
+// command substitution. Commands run through window.__tabcomputer.shell.execute
 // (no terminal), so terminal rendering is not included.
 export const name = 'shell';
 
@@ -31,7 +31,7 @@ export async function drainFs(h) {
     const t0 = performance.now();
     for (;;) {
       const s = performance.now();
-      await window.__shiro.fs.writeFile('/tmp/.bench-drain', 'x');
+      await window.__tabcomputer.fs.writeFile('/tmp/.bench-drain', 'x');
       if (performance.now() - s < 20 || performance.now() - t0 > 120000) return performance.now() - t0;
     }
   });
@@ -50,10 +50,10 @@ export async function run(h) {
       for (let i = 0; i < n; i++) {
         for (let j = 0; j < 200; j++) await window.__bench.sh('true');
         const t0 = performance.now();
-        await window.__shiro.fs.writeFile('/tmp/bench-probe.txt', 'x');
+        await window.__tabcomputer.fs.writeFile('/tmp/bench-probe.txt', 'x');
         out.push(performance.now() - t0);
         // drain before the next round
-        for (;;) { const s = performance.now(); await window.__shiro.fs.writeFile('/tmp/.bench-drain', 'x'); if (performance.now() - s < 20) break; }
+        for (;;) { const s = performance.now(); await window.__tabcomputer.fs.writeFile('/tmp/.bench-drain', 'x'); if (performance.now() - s < 20) break; }
       }
       return out;
     }, n);
@@ -68,7 +68,7 @@ export async function run(h) {
     await drainFs(h);
     const created = await h.eval(async () => {
       const t0 = performance.now();
-      const fs = window.__shiro.fs;
+      const fs = window.__tabcomputer.fs;
       await fs.mkdir('/tmp/bench-ls', { recursive: true }).catch(() => {});
       const names = await fs.readdir('/tmp/bench-ls').catch(() => []);
       if (names.length < 1000) {

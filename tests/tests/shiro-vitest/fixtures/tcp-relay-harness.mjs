@@ -1,7 +1,7 @@
 // Test harness for kernel-net.test.ts (runs in plain Node, outside vitest's transforms).
 // Starts a TCP echo server, a "firehose" server that writes 1 MiB per connection,
 // two relays built with server.mjs's createTcpRelay, and server.mjs itself with
-// SHIRO_TCP_RELAY=1. Prints one JSON line with the ports, then runs until killed.
+// TABCOMPUTER_TCP_RELAY=1. Prints one JSON line with the ports, then runs until killed.
 import { createServer } from 'node:http';
 import net from 'node:net';
 import { spawn } from 'node:child_process';
@@ -61,14 +61,17 @@ const relayB = await mount({ ports: [echoPort, 80, 443] }, {
 // C: tight connect rate
 const relayC = await mount({ ports: [echoPort], allowCidrs: ['127.0.0.1/32'], connectsPerMinute: 2 });
 
-// D: requires a GitHub sign-in (SHIRO_TCP_REQUIRE_SIGNIN); the verifier accepts the token "good-token"
+// D: requires a GitHub sign-in (TABCOMPUTER_TCP_REQUIRE_SIGNIN); the verifier accepts the token "good-token"
 const relayD = await mount({ ports: [echoPort], allowCidrs: ['127.0.0.1/32'], requireSignin: true }, {
   verifySignin: async (t) => (t === 'good-token' ? 'octocat' : null),
 });
 
-// E: through an HTTP CONNECT proxy (SHIRO_TCP_UPSTREAM_PROXY) that dials the echo server
+// E: tokens not bound to the client IP (TABCOMPUTER_TCP_TOKEN_BIND_IP=0, tabcomputer.com)
+const relayE = await mount({ ports: [echoPort], allowCidrs: ['127.0.0.1/32'], tokenBindIp: false });
+
+// F: through an HTTP CONNECT proxy (TABCOMPUTER_TCP_UPSTREAM_PROXY) that dials the echo server
 const proxyLog = [];
-// allowHalfOpen: the relay half-closes (shutdown) and still reads the echo, like a real CONNECT tunnel
+// allowHalfOpen on both legs: the client's FIN must not close the reply direction early
 const proxyPort = await listen(net.createServer({ allowHalfOpen: true }, (c) => {
   c.on('error', () => {});
   c.once('data', (d) => {
@@ -79,7 +82,7 @@ const proxyPort = await listen(net.createServer({ allowHalfOpen: true }, (c) => 
     up.on('error', () => c.destroy());
   });
 }));
-const relayE = await mount({ ports: [echoPort], upstreamProxy: `http://127.0.0.1:${proxyPort}` }, {
+const relayF = await mount({ ports: [echoPort], upstreamProxy: `http://127.0.0.1:${proxyPort}` }, {
   lookup: async (host) => {
     if (host === 'public.test' || host === 'denied.test') return [{ address: '93.184.216.34', family: 4 }];
     if (host === 'rebind.test') return [{ address: '10.1.2.3', family: 4 }];
@@ -97,10 +100,10 @@ const child = spawn(process.execPath, [serverPath], {
     PORT: String(mainPort),
     STATIC_DIR: mkdtempSync(join(tmpdir(), 'shiro-static-')),
     SEED_DIR: mkdtempSync(join(tmpdir(), 'shiro-seeds-')),
-    SHIRO_TCP_RELAY: '1',
-    SHIRO_TCP_ORIGINS: ORIGIN,
-    SHIRO_TCP_PORTS: String(echoPort),
-    SHIRO_TCP_ALLOW_CIDRS: '127.0.0.1/32',
+    TABCOMPUTER_TCP_RELAY: '1',
+    TABCOMPUTER_TCP_ORIGINS: ORIGIN,
+    TABCOMPUTER_TCP_PORTS: String(echoPort),
+    TABCOMPUTER_TCP_ALLOW_CIDRS: '127.0.0.1/32',
   },
   stdio: ['ignore', 'pipe', 'inherit'],
 });
@@ -116,4 +119,4 @@ process.on('SIGINT', stop);
 process.stdin.on('end', stop); // parent went away
 process.stdin.resume();
 
-console.log(JSON.stringify({ echoPort, firehosePort, relayA, relayB, relayC, relayD, relayE, proxyLogPort: globalThis.proxyLogPort, mainPort, origin: ORIGIN }));
+console.log(JSON.stringify({ echoPort, firehosePort, relayA, relayB, relayC, relayD, relayE, relayF, proxyLogPort: globalThis.proxyLogPort, mainPort, origin: ORIGIN }));

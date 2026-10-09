@@ -9,6 +9,7 @@ import { setActiveTerminal } from './active-terminal';
 import { createHudPanel, HudPanel } from './hud-panel';
 import { spawnInWindow } from './commands/spawn';
 import { TtySession } from './kernel/pty';
+import { activeProfile } from './profile';
 
 /**
  * HUD (Heads-Up Display) state for dynamic banner updates.
@@ -471,7 +472,7 @@ export class ShiroTerminal {
     // Detect subdomain
     const hostname = typeof window !== 'undefined' ? window.location.hostname : 'shiro.computer';
     const subdomainMatch = hostname.match(/^([^.]+)\.shiro\.computer$/);
-    const displayHost = subdomainMatch ? `${subdomainMatch[1]}.shiro.computer` : 'shiro.computer';
+    const displayHost = subdomainMatch ? `${subdomainMatch[1]}.shiro.computer` : (activeProfile().brand?.domain ?? 'shiro.computer');
     const hostDisplay = displayHost.length <= 20 ? displayHost : displayHost.slice(0, 17) + '...';
 
     // Record HUD start position (absolute row in buffer)
@@ -519,7 +520,7 @@ export class ShiroTerminal {
       this.term.writeln(row(visible, '  ' + cmdLink(cmd) + ' '.repeat(15 - cmd.length) + `\x1b[90m${desc}\x1b[0m`));
     }
     const sep = '\x1b[36m · \x1b[0m';
-    const footer = [cmdLink('help'), link('files', 'shiro://cmd/finder'), link('github', 'https://github.com/williamsharkey/shiro')].join(sep);
+    const footer = [cmdLink('help'), link('files', 'shiro://cmd/finder'), link('github', 'https://github.com/williamsharkey/tabcomputer')].join(sep);
     this.term.writeln(row('  help · files · github', '  ' + footer));
 
     // Bottom border with 白 (double-width CJK = 2 cols)
@@ -635,7 +636,7 @@ export class ShiroTerminal {
 
     const hostname = typeof window !== 'undefined' ? window.location.hostname : 'shiro.computer';
     const subdomainMatch = hostname.match(/^([^.]+)\.shiro\.computer$/);
-    const displayHost = subdomainMatch ? `${subdomainMatch[1]}.shiro.computer` : 'shiro.computer';
+    const displayHost = subdomainMatch ? `${subdomainMatch[1]}.shiro.computer` : (activeProfile().brand?.domain ?? 'shiro.computer');
     const hostDisplay = displayHost.length <= 20 ? displayHost : displayHost.slice(0, 17) + '...';
     const build = buildNumber.trim().padStart(4, '0');
 
@@ -685,7 +686,7 @@ export class ShiroTerminal {
 
     const hostname = typeof window !== 'undefined' ? window.location.hostname : 'shiro.computer';
     const subdomainMatch = hostname.match(/^([^.]+)\.shiro\.computer$/);
-    const displayHost = subdomainMatch ? `${subdomainMatch[1]}.shiro.computer` : 'shiro.computer';
+    const displayHost = subdomainMatch ? `${subdomainMatch[1]}.shiro.computer` : (activeProfile().brand?.domain ?? 'shiro.computer');
     const hostDisplay = displayHost.length <= 20 ? displayHost : displayHost.slice(0, 17) + '...';
 
     const W = 43;
@@ -1176,7 +1177,7 @@ export class ShiroTerminal {
   private getHostDisplay(): string {
     const hostname = typeof window !== 'undefined' ? window.location.hostname : 'shiro.computer';
     const subdomainMatch = hostname.match(/^([^.]+)\.shiro\.computer$/);
-    return subdomainMatch ? subdomainMatch[1] : 'shiro';
+    return subdomainMatch ? subdomainMatch[1] : activeProfile().hostname;
   }
 
   private promptVisualLength(): number {
@@ -1530,8 +1531,8 @@ export class ShiroTerminal {
         }
       }
 
-      // shiro config subcommand completion
-      if (command === 'shiro') {
+      // tabcomputer (or shiro) config subcommand completion
+      if (command === 'tabcomputer' || command === 'shiro') {
         if (parts.length === 2) {
           const matches = ShiroTerminal.SHIRO_SUBCOMMANDS.filter(s => s.startsWith(partial));
           if (matches.length > 0) {

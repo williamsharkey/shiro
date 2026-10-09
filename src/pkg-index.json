@@ -2958,7 +2958,7 @@
    "needs": [
     "x86"
    ],
-   "notes": "s_client and other network commands use kernel sockets: TCP leaves the page through the relay (SHIRO_TCP_RELAY)."
+   "notes": "s_client and other network commands use kernel sockets: TCP leaves the page through the relay (TABCOMPUTER_TCP_RELAY)."
   },
   {
    "name": "curl",
@@ -2995,7 +2995,7 @@
   },
   {
    "name": "git",
-   "version": "2.56.0",
+   "version": "2.56.0-1",
    "description": "Git distributed version control (real git: libcurl/OpenSSL for https remotes)",
    "license": "GPL-2.0-only",
    "source": "https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.56.0.tar.xz",
@@ -3028,6 +3028,12 @@
      "sha256": "3b35d3ad338cc4b6530492e74b646c0c80113861a34da7f1e9d9affae2c4da21",
      "size": 10077,
      "unpack": "tar.gz"
+    },
+    {
+     "path": "etc/gitconfig",
+     "url": "/pkg/git/2.56.0/gitconfig",
+     "sha256": "1c283778fbc4aafbf9bfdd4a5d9341839b208b67f101eb0e7378ca7ef387d8a9",
+     "size": 339
     }
    ],
    "bin": {
@@ -3046,7 +3052,8 @@
    },
    "links": {
     "/usr/libexec/git-core": "libexec/git-core",
-    "/usr/share/git-core": "share/git-core"
+    "/usr/share/git-core": "share/git-core",
+    "/etc/gitconfig": "etc/gitconfig"
    },
    "needs": [
     "x86"

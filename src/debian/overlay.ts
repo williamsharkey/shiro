@@ -24,6 +24,7 @@
 import type { FileSystem } from '../filesystem';
 import { extraShadows } from '../pkg-manager';
 import policyJson from './overlay-policy.json';
+import { activeProfile } from '../profile';
 
 export type Side = 'shiro' | 'debian';
 
@@ -127,7 +128,7 @@ export async function setSide(fs: FileSystem, path: string, side: Side, opts: { 
   const policy = POLICY[path];
   let msg: string;
   if (side === state.current) {
-    msg = `${path}: already ${side === 'shiro' ? "Shiro's" : "Debian's"}`;
+    msg = `${path}: already ${side === 'shiro' ? "tabcomputer's" : "Debian's"}`;
   } else if (side === 'shiro') {
     if (state.diversion) throw new Error(`${path} is already diverted to ${state.diversion.to} by ${state.diversion.by === LOCAL ? 'local' : state.diversion.by}`);
     if (await exists(fs, path + SUFFIX)) throw new Error(`${path + SUFFIX} exists; refusing to overwrite it`);
@@ -136,15 +137,15 @@ export async function setSide(fs: FileSystem, path: string, side: Side, opts: { 
     if (await exists(fs, path)) await fs.rename(path, path + SUFFIX);
     const command = opts.command ?? policy?.command ?? path.slice(path.lastIndexOf('/') + 1);
     if (policy?.stub) await fs.writeFile(path, `#!/usr/bin/${command}\n`, { mode: 0o755 });
-    msg = `${path}: now Shiro's (${command}); Debian's file is ${path + SUFFIX}`;
+    msg = `${path}: now tabcomputer's (${command}); Debian's file is ${path + SUFFIX}`;
   } else {
     const d = state.diversion!;
-    if (d.by !== LOCAL) throw new Error(`${path} is diverted by package ${d.by}, not by Shiro`);
+    if (d.by !== LOCAL) throw new Error(`${path} is diverted by package ${d.by}, not by tabcomputer`);
     // Our stub (if any) goes; Debian's file comes back
     if (await exists(fs, path)) {
       const head = await fs.readFile(path, 'utf8').catch(() => '') as string;
       if (head.startsWith('#!/usr/bin/') && head.length < 128) await fs.unlink(path);
-      else throw new Error(`${path} exists and isn't Shiro's stub; refusing to replace it`);
+      else throw new Error(`${path} exists and isn't tabcomputer's stub; refusing to replace it`);
     }
     if (await exists(fs, d.to)) await fs.rename(d.to, path);
     await writeDiversions(fs, divs.filter((x) => x !== d));
@@ -172,8 +173,10 @@ export async function applyDefaults(fs: FileSystem, only?: string[]): Promise<st
     if (path in choices) continue;
     const st = await programState(fs, path, undefined, choices);
     if (!st.debianInstalled && st.current === 'debian') continue; // nothing to overlay (yet)
-    if (st.current !== policy.default) {
-      try { changed.push(await setSide(fs, path, policy.default)); } catch (e: any) { changed.push(`${path}: ${e?.message ?? e}`); }
+    // A profile without the overlay keeps Debian's own programs
+    const want: Side = activeProfile().shims.debianOverlay ? policy.default : 'debian';
+    if (st.current !== want) {
+      try { changed.push(await setSide(fs, path, want)); } catch (e: any) { changed.push(`${path}: ${e?.message ?? e}`); }
     }
   }
   return changed;

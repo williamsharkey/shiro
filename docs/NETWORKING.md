@@ -1,6 +1,6 @@
 # Networking (phase 4)
 
-Browsers have no TCP. Shiro gets real TCP from a WebSocket-to-TCP relay in
+Browsers have no TCP. tabcomputer gets real TCP from a WebSocket-to-TCP relay in
 `server.mjs` and puts kernel sockets on top of it (`src/kernel/net.ts`).
 
 ```
@@ -32,12 +32,12 @@ guest (x86 / WASM / node net)                         server.mjs                
   a message of their own and the descriptions arrive with them (`recvmsg`),
   or are closed by a plain `recv`. `SO_PEERCRED` gives the peer's pid.
   No AF_UNIX datagrams yet.
-- `listen()` also publishes the port on Shiro's virtual-server table
+- `listen()` also publishes the port on tabcomputer's virtual-server table
   (`iframeServer.serve`, the table `http.createServer` uses). Each virtual HTTP
   request (preview pane, `iframeServer.fetch`) becomes an accepted connection
   carrying a raw HTTP/1.1 request with `Connection: close`; the guest's
   response is parsed back (Content-Length, chunked, or close-delimited). A
-  guest HTTP server on port N is therefore reachable like any Shiro server.
+  guest HTTP server on port N is therefore reachable like any tabcomputer server.
 - DNS: `netStack.resolve(host)` uses the relay's `resolve` op (which returns
   only addresses the relay would connect to), falling back to DNS-over-HTTPS.
   UDP datagrams to port 53 are answered by DoH (`application/dns-message`), so
@@ -91,7 +91,10 @@ gather/scatter around sendto/recvfrom.
 ## Relay protocol (`/tcp`)
 
 1. `POST /tcp/token` from an allowed Origin → `{ "token": "...", "expires": ms }`.
-   The token is an HMAC over the expiry and the client IP.
+   The token is an HMAC over the expiry and the client IP
+   (`TABCOMPUTER_TCP_TOKEN_BIND_IP=0` leaves the IP out, as tabcomputer.com does:
+   proxy pools, iCloud Private Relay and dual-stack clients change IP between
+   the token request and each connection).
 2. WebSocket `GET /tcp?t=<token>` (Origin must be allowed).
 3. First frame, text JSON:
    - `{"op":"connect","host":"example.com","port":443}` →
@@ -119,53 +122,53 @@ The egress policy is the security boundary; everything else limits abuse.
   64:ff9b::/96, 64:ff9b:1::/48, 100::/64, 2001::/23, 2001:db8::/32, 2002::/16,
   fc00::/7 (incl. fd00:ec2::254), fe80::/10, fec0::/10, ff00::/8`. Forms that
   embed IPv4 (mapped, NAT64, 6to4, Teredo) are blocked outright rather than
-  decoded. `SHIRO_TCP_DENY_CIDRS` adds ranges (e.g. the host's own public
-  address); `SHIRO_TCP_ALLOW_CIDRS` punches holes (tests, dev).
+  decoded. `TABCOMPUTER_TCP_DENY_CIDRS` adds ranges (e.g. the host's own public
+  address); `TABCOMPUTER_TCP_ALLOW_CIDRS` punches holes (tests, dev).
 - **No DNS rebinding window.** The relay resolves once, checks, and dials the
   vetted IP literal; the connected peer address is checked again. Every
   connection resolves afresh, so a later rebind to a private address is caught.
 - **Port allowlist.** Default `22, 80, 443, 9418` (ssh/git-over-ssh,
   http/https, git://). SMTP (25/465/587) and database ports stay closed: an
   open relay to mail ports is a spam cannon, and databases have no business
-  being reached through a browser. Override with `SHIRO_TCP_PORTS`.
-- **Caller checks.** Origin must match `SHIRO_TCP_ORIGINS` (default
+  being reached through a browser. Override with `TABCOMPUTER_TCP_PORTS`.
+- **Caller checks.** Origin must match `TABCOMPUTER_TCP_ORIGINS` (default
   `https://shiro.computer,https://*.shiro.computer`), on both the token request
   and the WebSocket handshake, and the token must be valid, unexpired and
-  issued to the same client IP. This keeps other websites' pages out; it does
+  issued to the same client IP (unless binding is off). This keeps other websites' pages out; it does
   not stop a non-browser client that fakes an Origin, which is why the egress
   policy and limits are what actually bound the relay.
 - **Limits** (env, defaults): concurrent connections per IP
-  (`SHIRO_TCP_MAX_CONNS_PER_IP`, 16) and total (`SHIRO_TCP_MAX_CONNS`, 512),
-  connection attempts per IP per minute (`SHIRO_TCP_CONNECTS_PER_MIN`, 60,
-  resolves included), per-IP bandwidth (`SHIRO_TCP_BYTES_PER_SEC`, 4 MiB/s,
-  burst `SHIRO_TCP_BYTE_BURST` 16 MiB; excess is throttled, not dropped),
-  per-IP hourly bytes (`SHIRO_TCP_BYTES_PER_HOUR`, 4 GiB), per-connection
-  bytes (`SHIRO_TCP_MAX_BYTES_PER_CONN`, 1 GiB), WebSocket frame size 256 KiB.
+  (`TABCOMPUTER_TCP_MAX_CONNS_PER_IP`, 16) and total (`TABCOMPUTER_TCP_MAX_CONNS`, 512),
+  connection attempts per IP per minute (`TABCOMPUTER_TCP_CONNECTS_PER_MIN`, 60,
+  resolves included), per-IP bandwidth (`TABCOMPUTER_TCP_BYTES_PER_SEC`, 4 MiB/s,
+  burst `TABCOMPUTER_TCP_BYTE_BURST` 16 MiB; excess is throttled, not dropped),
+  per-IP hourly bytes (`TABCOMPUTER_TCP_BYTES_PER_HOUR`, 4 GiB), per-connection
+  bytes (`TABCOMPUTER_TCP_MAX_BYTES_PER_CONN`, 1 GiB), WebSocket frame size 256 KiB.
 - **Timeouts:** request frame 10 s, TCP connect 15 s, idle 5 min
-  (`SHIRO_TCP_IDLE_TIMEOUT_MS`), lifetime 4 h (`SHIRO_TCP_MAX_LIFETIME_MS`).
+  (`TABCOMPUTER_TCP_IDLE_TIMEOUT_MS`), lifetime 4 h (`TABCOMPUTER_TCP_MAX_LIFETIME_MS`).
 - **Client IP.** `X-Forwarded-For` is trusted only from a loopback peer
-  (nginx on the same host; `SHIRO_TRUST_PROXY=loopback`, or `always`/`never`),
+  (nginx on the same host; `TABCOMPUTER_TRUST_PROXY=loopback`, or `always`/`never`),
   and the rightmost entry is used, i.e. the address nginx saw.
 - **Logging.** One line per connect, refusal and close: client IP, target
   host/IP:port, byte counts, duration, close reason. Never payloads.
-- **Upstream proxy** (`SHIRO_TCP_UPSTREAM_PROXY=http://host:port`, off by
+- **Upstream proxy** (`TABCOMPUTER_TCP_UPSTREAM_PROXY=http://host:port`, off by
   default): dial through an HTTP CONNECT proxy, for hosts whose egress only
   allows proxied traffic. The address policy still vets what the name resolves
   to; the proxy then dials the name itself.
-- **Token secret.** Random per process unless `SHIRO_TCP_SECRET` is set (set
+- **Token secret.** Random per process unless `TABCOMPUTER_TCP_SECRET` is set (set
   it if several server processes sit behind one balancer).
 
 ## Enabling it
 
-The relay is off unless `SHIRO_TCP_RELAY=1`. When off, `/tcp` and
+The relay is off unless `TABCOMPUTER_TCP_RELAY=1`. When off, `/tcp` and
 `/tcp/token` return 404 and kernel sockets report `ENETUNREACH`.
 
-systemd (`/etc/systemd/system/shiro.service`):
+systemd (`/etc/systemd/system/tabcomputer.service`; tabcomputer.com reads `profiles/tabcomputer/server.env` instead):
 
 ```ini
 [Service]
-Environment=SHIRO_TCP_RELAY=1
-# Environment=SHIRO_TCP_DENY_CIDRS=<droplet public IPv4>/32,<droplet IPv6>/128
+Environment=TABCOMPUTER_TCP_RELAY=1
+# Environment=TABCOMPUTER_TCP_DENY_CIDRS=<droplet public IPv4>/32,<droplet IPv6>/128
 ```
 
 nginx needs the WebSocket upgrade for `/tcp` (and long timeouts, since a TCP
@@ -222,9 +225,7 @@ into them, loopback listen/accept, and the iframeServer HTTP bridge.
 
 ## Not done yet
 
-- `SIGPIPE` in the x86 emulator (it has no signal delivery; sends return `-EPIPE`).
-- AF_UNIX datagram and seqpacket sockets.
-- UDP beyond DNS.
+- UDP to the internet beyond DNS (port 53 is answered over DoH; other ports are `ENETUNREACH`).
 - `net.connect` to a port served by `http.createServer` (that server is not a
   kernel socket).
 
@@ -237,6 +238,14 @@ token requests and asks `requireNetworkSignIn()` (src/net-signin.ts) once on a
 receives that token. See docs/DESKTOP.md, "Network sign-in".
 
 ## Checking it from a tab
+
+When a connection fails, curl and git only say they couldn't connect.
+`dmesg` (the kernel log, src/kernel/klog.ts) says why: e.g.
+`net: relay refused connect to github.com:443: sign-in required (token 401)`,
+`... handshake refused (close 1006) after token refresh`, `... no relay
+configured`, or the relay's own `op:error` code (`EACCES (address blocked by
+relay policy)`). Identical lines are rate-limited.
+
 
 `doctor` (src/commands/doctor.ts) requests a relay token (this site's
 `/tcp/token`, or the token URL of the user's own relay) and connects a kernel

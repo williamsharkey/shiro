@@ -191,11 +191,11 @@ describe('package index', () => {
     expect(packageStatus(bash)).toBe('blocked');
     expect(packageStatus(findEntry(builtinIndex(), 'jq')!)).toBe('ok');
     expect(packageStatus(findEntry(builtinIndex(), 'lua')!)).toBe('partial'); // REPL wants blocking stdin
-    (globalThis as any).__shiroKernel = { features: ['wasix', 'processes', 'threads', 'wasix-stack'] };
+    (globalThis as any).__tabcomputerKernel = { features: ['wasix', 'processes', 'threads', 'wasix-stack'] };
     try {
       expect(packageStatus(bash)).toBe('partial');
     } finally {
-      delete (globalThis as any).__shiroKernel;
+      delete (globalThis as any).__tabcomputerKernel;
     }
   });
 
@@ -391,7 +391,7 @@ describe('pkg install / remove', () => {
     const run = await sh(shell, 'needy');
     expect(run.exitCode).toBe(126);
     expect(run.err).toContain('threads');
-    expect((await sh(shell, 'SHIRO_PKG_FORCE=1 needy')).out).toBe('never\n');
+    expect((await sh(shell, 'TABCOMPUTER_PKG_FORCE=1 needy')).out).toBe('never\n');
   });
 
   it('suggests the package for a missing command', async () => {

@@ -1,156 +1,166 @@
-# Shiro
+# tabcomputer
 
-> A standalone Unix environment that runs in a browser tab — shell, git, npm, node, vi, C compiler, SQLite, Python, and Claude Code. One HTML file. No server.
+tabcomputer is a computer that lives in your browser tab: a desktop with windows and a dock,
+a Unix kernel written for the page, and real Linux programs. Debian's x86-64 binaries run in
+the Blink emulator compiled to WebAssembly, and a TCP relay connects them to the internet.
 
-**Live:** [shiro.computer](https://shiro.computer)
-**Docs:** [shiro.computer/docs](https://shiro.computer/docs)
-**About:** [shiro.computer/about](https://shiro.computer/about)
-**Examples:** [examples/](examples/)
+**Live:** [tabcomputer.com](https://tabcomputer.com). Nothing to install. Your files stay in
+this browser's storage for this site.
+
+## Try it
+
+Type these in the Terminal window:
+
+```bash
+apt install cowsay && cowsay hello      # tabcomputer's own package index (prebuilt programs)
+apt install htop && htop
+doctor                                  # one OK/WARN/FAIL line per subsystem
+
+debian install                          # stream in a Debian 13 root filesystem
+sudo apt update && sudo apt install -y jq && jq --version   # now Debian's own apt
+
+gh auth login                           # sign in to GitHub with a one-time code
+git clone https://github.com/williamsharkey/tabcomputer
+
+gui xeyes                               # an X11 app in a desktop window
+claude --npm                            # Claude Code, the pinned JavaScript build
+```
+
+## What's real and what's emulated
+
+Real:
+
+- **The kernel.** Processes, fork/exec, file descriptors, pipes, ptys, signals, job control,
+  sockets and `/proc`, written in TypeScript for the page ([docs/KERNEL_ABI.md](docs/KERNEL_ABI.md),
+  [docs/UNIX_COMPAT.md](docs/UNIX_COMPAT.md)).
+- **The programs.** WebAssembly (WASI/WASIX) builds, and unmodified x86-64 Linux ELF
+  binaries, including Debian's own glibc, apt and dpkg.
+- **The network.** Guest TCP sockets reach real hosts through a WebSocket-to-TCP relay on the
+  server ([docs/NETWORKING.md](docs/NETWORKING.md)).
+
+Emulated:
+
+- **The CPU.** x86-64 runs in Blink compiled to WebAssembly, with a JIT from x86-64 to wasm
+  ([docs/X86_ENGINES.md](docs/X86_ENGINES.md)).
+- **The disk.** Files live in IndexedDB and survive reloads.
+- **The screen.** X11 programs draw through an X server written in TypeScript
+  ([docs/GUI.md](docs/GUI.md)).
+
+Not here: hardware devices, kernel modules, and any access to your own machine.
 
 ## What's in it
 
-- **220+ commands** — ls, grep, awk, sed, find, curl, diff, xargs, tar, wc, sort, uniq, factor, base32, numfmt, dos2unix...
-- **Persistent filesystem** — IndexedDB-backed. Files survive reloads.
-- **Git** — isomorphic-git: init, add, commit, diff, log, clone, push
-- **npm** — Real tarballs from registry.npmjs.org. require() resolves node_modules.
-- **Node.js runtime** — Run .js files. CommonJS and ES module transforms.
-- **C compiler** — xcc compiles C to WebAssembly, runs via WASI
-- **SQLite** — sql.js WASM. Persistent databases in IndexedDB.
-- **Python** — Pyodide WASM. pip installs packages.
-- **Lua, jq, esbuild** — Lazy-loaded WASM runtimes, cached on first use
-- **x86-64 emulator** — Runs real Linux ELF binaries (musl-static) via instruction-level emulation. ~135 instructions, ~60 syscalls, SSE2, JIT block cache.
-- **tmux** — Terminal multiplexer with split panes, sessions, detach/attach
-- **SSH/SCP over WebRTC** — Peer-to-peer shell sessions and file transfer between browser tabs
-- **Compression** — bzip2, xz, zstd with full tar integration (-j/-J/--zstd)
-- **Init system** — systemctl services, cron scheduling, journalctl logs
-- **Claude Code** — The real @anthropic-ai/claude-code CLI runs inside the browser
-- **Virtual servers** — `serve` hosts apps, `page` interacts with them
-- **Windowed terminals** — `spawn` opens commands in their own window with interactive REPL
-- **Template palette** — 13 educational templates across 4 categories (Web, Languages, Packages, Tools) including WASM package manager, x86 Linux binaries, full-stack Express+SQLite, and cross-language data pipelines
-- **One HTML file** — ~420 KB gzipped. Deploy anywhere. Works offline.
+- **Desktop.** Menu bar, dock, windows with snapping, Terminal with tabs, Files, Settings,
+  Activity, About, search (Ctrl+Space), light and dark themes, a phone layout with an
+  extra-keys bar. `?ui=terminal` gives the full-page terminal ([docs/DESKTOP.md](docs/DESKTOP.md)).
+- **Shell and commands.** A bash-compatible shell and built-in commands
+  (coreutils, grep/sed/awk, git, gh, node and npm, jq, rg, tmux, vi, nano). `help` lists the
+  common ones, `help --all` all of them.
+- **Packages.** Before Debian mode, `apt`/`pkg` install from tabcomputer's own index of
+  prebuilt programs: 72 entries, WASM builds and static x86-64 builds such as vim, htop,
+  git, python3 and curl ([docs/PACKAGES.md](docs/PACKAGES.md)).
+- **Debian.** `debian install` streams in Debian 13 "trixie" amd64. After that,
+  `sudo apt install` is Debian's apt against a Debian mirror. Of popcon's top 300 packages,
+  298 install and pass a smoke test ([docs/DEBIAN_SCORE.md](docs/DEBIAN_SCORE.md),
+  [docs/DEBIAN.md](docs/DEBIAN.md)).
+- **Conformance.** LTP syscall tests under Blink pass 237/320; the busybox testsuite
+  625/635; the oils shell spec tests 1413/1567 ([docs/CONFORMANCE.md](docs/CONFORMANCE.md)).
+- **GUI apps.** `gui` lists Debian X11 apps (xeyes, xterm, GTK and Qt editors and viewers,
+  GIMP, Inkscape, NetSurf). They open as desktop windows. GTK 2/3 text can render as real
+  DOM text ([docs/GUI.md](docs/GUI.md), [docs/DOM-RENDERING.md](docs/DOM-RENDERING.md)).
+- **Browser app (research spike).** Tabs showing real sites on per-site origins, with TLS done
+  in the page over the relay ([docs/BROWSER.md](docs/BROWSER.md), [docs/WEB_SCORE.md](docs/WEB_SCORE.md)).
+- **Languages.** Node.js (tabcomputer's runtime with real npm tarballs), Python, Go, clang,
+  and whatever Debian packages ([docs/COMPAT.md](docs/COMPAT.md)).
+- **Web servers in the tab.** `serve DIR` serves a folder in a preview window; programs that
+  `listen()` are reachable the same way; `page :PORT click #id` drives the page.
+- **Media.** `ffmpeg` is ffmpeg.wasm, served by tabcomputer itself; its ~31 MB core loads the first time it runs.
 
-## vs WebContainers
+## Claude Code and other agents
 
-| | Shiro | WebContainers |
-|---|---|---|
-| Deployment | Single HTML file | SDK integration |
-| Server needed | No | Yes (proxy) |
-| Persistence | IndexedDB | Memory only |
-| Claude Code | Built-in | No |
-| C/Python/Lua/SQL | WASM runtimes | Node.js only |
-| Size | ~420 KB | ~30 MB |
+Claude Code comes in two builds:
 
-## Examples
+- **Native** (the default on tabcomputer). `claude install` downloads Anthropic's
+  linux-x64-musl binary (about 240 MB) and plain `claude` runs it in the x86-64 engine.
+  `claude update` fetches a newer one. It is slow: one `claude -p` request took 85–105 s to
+  reach the API in the measurements in [docs/COMPAT.md](docs/COMPAT.md).
+- **npm** (`claude --npm`). The pinned pure-JavaScript release, `@anthropic-ai/claude-code@2.1.112`,
+  on tabcomputer's Node.js runtime. It is installed in the background at first boot, starts
+  quickly, and opens a sign-in panel if you aren't signed in. `claude-window` runs it in a new
+  window.
 
-```bash
-# Shell basics
-echo "hello" | sed 's/hello/world/' | wc -c
-mkdir -p src && echo 'console.log("hi")' > src/app.js
-find . -name "*.js" | grep -l "console"
+Codex, Grok Build, Gemini CLI and aider also reach their APIs from tabcomputer; opencode does
+not start yet. The table with versions, timings and blockers is in
+[docs/COMPAT.md](docs/COMPAT.md#agent-clis-unixagent-clis).
 
-# Git (isomorphic-git)
-git init && git add . && git commit -m "initial"
-git log --oneline
-
-# npm (real tarballs from registry.npmjs.org)
-npm install lodash prettier
-node -e "console.log(require('lodash').uniq([1,1,2]))"
-
-# C compiler → WebAssembly
-echo '#include <stdio.h>\nint main(){printf("hello\\n");}' > hi.c
-cc hi.c -o hi && ./hi
-
-# SQLite
-sqlite3 app.db "CREATE TABLE users(name TEXT); INSERT INTO users VALUES('alice');"
-sqlite3 app.db "SELECT * FROM users;"
-
-# x86-64 emulator (runs real Linux binaries)
-./hello              # Auto-detect ELF binary, run in emulator
-x86 run ./hello      # Explicit execution
-x86 debug ./hello    # Step-through with register dumps
-
-# Serve and interact with web apps
-serve /tmp/myapp 3000
-page :3000 click "#button"
-page :3000 text "body"
-
-# Heredocs
-cat > /tmp/hello.html << 'EOF'
-<h1>Hello World</h1>
-EOF
-serve /tmp 3000
-
-# Windowed terminals
-spawn                    # Open a blank interactive terminal window
-spawn node server.js     # Run command in a window, then drop to REPL
-title "My App"           # Set the window title
-
-# Claude Code (runs inside the browser)
-claude -p "create a todo app with localStorage"
-```
-
-## Claude Code Integration
-
-The real `@anthropic-ai/claude-code` CLI runs inside Shiro's Node.js runtime shim. The tools Claude Code relies on — file reads, edits, grep, glob, bash — are shimmed to use the virtual filesystem. Both print mode (`claude -p "..."`) and interactive mode (`claude`) work. API calls route through a CORS proxy to Anthropic's API.
-
-Type `claude`. Shiro installs Claude Code in the background on first boot. If you aren't signed in, a panel opens with a button for the sign-in page and a box for the code it gives you; credentials persist in IndexedDB. `claude-window` (formerly `sc`) runs it in a new window, and `claude login` signs in again.
-
-Shiro pins `@anthropic-ai/claude-code@2.1.112`, the last pure-JavaScript release (later ones ship native binaries). It reports a newer version to the API so current models work, and defaults to `claude-opus-5-5` with the flicker-free fullscreen renderer.
-
-An outer Claude Code instance can also control Shiro remotely via MCP tools over WebRTC. Run `remote start` in Shiro, then connect with the `shiro-mcp` package.
-
-Shiro records its console from page load into a bounded log (newest 3000 entries, repeats collapsed), plus the tail of the previous page load, so a peer that connects later can still see what happened: `console -g error --prev` in the shell, or the shiro-mcp `console` tool.
-
-To profile a live session, run `remote start` in Shiro and then `node shiro-mcp/probe.mjs <code>` locally. It logs heap, freezes (long tasks and page response time), filesystem traffic, and errors every 2 seconds to `probe.jsonl`, reconnects after a reload, and serves ad-hoc `eval`/`exec` and `console` queries on `127.0.0.1:7788` (`PROBE_LITE=1` skips the sampling).
+An agent outside the tab can drive it: run `remote start` here, then connect with the
+`shiro-mcp` package ([shiro-mcp/](shiro-mcp/)).
 
 ## Git and GitHub
 
-`git` (isomorphic-git) and a `gh` compatible with the common GitHub CLI commands are built in. Sign in once and private repos work too:
+`git` and a `gh` covering the common GitHub CLI commands are built in:
 
 ```bash
-gh auth login        # shows a one-time code and a panel with Copy / Open GitHub buttons
-                     # approve on github.com; git name/email are filled in from your account
-
+gh auth login        # shows a one-time code; fills in git user.name/email from your account
 gh repo clone owner/private-repo
-git init && git add . && git commit -m "First commit"
 gh repo create my-project --private --source . --push
 ```
 
-`gh auth login --with-token` still accepts a token on stdin, `gh auth refresh -s delete_repo` adds a scope, and `gh auth logout` removes the token. Use a subdomain (for example `music.shiro.computer`) to keep a project's storage, including its token, separate.
+Debian's `git` and OpenSSH (`apt install git openssh-client` in Debian mode) work too, over
+the relay.
 
-### ssh
+## Limits
 
-The builtin `ssh CODE` is Shiro's tab-to-tab ssh (a code from `remote start`
-in another tab, over WebRTC). OpenSSH usage (`ssh -T git@github.com`,
-`ssh user@host`, a dotted host name) runs OpenSSH when it is installed
-(`pkg install openssh`, or Debian's `openssh-client`); without it, `ssh`
-says how to install it instead of trying to reach a tab.
+- **Speed.** Hot loops in the x86-64 engine run at about 2–5x native, but starting a big
+  program is slow: `gh --version` takes 5.0 s on its first run in a page (75 ms native), and
+  GTK and Qt apps take 7–32 s to their first frame (GIMP longer) ([docs/X86_ENGINES.md](docs/X86_ENGINES.md),
+  [docs/GUI.md](docs/GUI.md)).
+- **Network.** TCP to ports 22, 80, 443 and 9418 only, through the relay. UDP to the internet
+  is DNS only (answered over DNS-over-HTTPS). No listening on the internet.
+- **Not yet working.** `fs.watch` and inotify (file watchers, hot reload); a D-Bus session bus
+  (some GUI apps wait on it or quit); hard links; opencode. Each scoreboard lists its failures
+  and why.
+- **Storage.** Everything lives in this browser's site storage. Clearing site data erases the
+  machine. `doctor` and Settings → Storage show usage.
+- **Isolation.** Blocking syscalls and threads need a cross-origin isolated page (SharedArrayBuffer).
+  tabcomputer.com is isolated; a page embedded elsewhere may not be.
 
 ## Something wrong?
 
-`doctor` (or `tabinfo`) checks the tab and prints one OK/WARN/FAIL line each
-for: the build and deploy, cross-origin isolation and the browser, the x86
-engine (Blink build, same-instance fork), the internet relay (token request
-and a TCP connection to example.com:443 through the kernel), the network,
-GitHub and Claude sign-ins, Debian, storage (usage, quota, persisted) and the
-kernel (processes, JS heap). It never prints tokens: paste its output into a
-bug report.
-
-## Node.js Compatibility
-
-~50 shimmed Node.js modules. Core modules (fs, path, buffer, events, process, crypto, os, url, util, child_process) are fully functional. See the [full compatibility table](https://shiro.computer/docs#node-compat).
+Run `doctor` (also `tabinfo`). It prints one line each for the build, cross-origin isolation,
+the x86 engine, the internet relay, sign-ins, Debian, storage and the kernel, and warns when
+the tab is older than the server's deploy. `dmesg` shows the kernel log, including why the
+relay refused a connection. `doctor` never prints tokens, so you can paste its output
+into an issue at [github.com/williamsharkey/tabcomputer/issues](https://github.com/williamsharkey/tabcomputer/issues).
 
 ## Development
 
 ```bash
 npm install
-npm run dev          # Dev server at localhost:5173
-npm run build        # Build to dist/
-npm run deploy       # Build + deploy to shiro.computer
+npm run dev                                      # dev server at localhost:5173
+npm run build                                    # build to dist/
+PORT=3000 STATIC_DIR=$PWD/dist node server.mjs   # the production server: relay, Debian mirror, isolation headers
+npm test                                         # the vitest suite (runs from tests/)
+npx tsc --noEmit -p .                            # typecheck
 ```
+
+The same engine can run as another product through a *profile* (`profiles/<id>/`): UI mode,
+branding and defaults. tabcomputer is the default profile ([docs/PROFILES.md](docs/PROFILES.md)).
+Server options are `TABCOMPUTER_*` environment variables.
+
+Production is one droplet set up by [deploy/tabcomputer/](deploy/tabcomputer/README.md); a push
+to the `deploy` branch ships.
+
+Coding agents and contributors: start with [AGENTS.md](AGENTS.md). All docs: [docs/README.md](docs/README.md).
+
+## History
+
+tabcomputer grew out of [Shiro](https://shiro.computer), a browser Unix shell, and keeps its
+history. The engine still runs shiro.computer as the terminal-first `shiro` profile.
 
 ## License
 
 MIT
 
-> **Note:** Experimental. Claude Code runs with `--dangerously-skip-permissions` (all tool calls auto-approved). API requests transit a CORS proxy. Don't use with sensitive data.
+> **Note:** Experimental. Claude Code here runs with tool calls auto-approved. Don't use it
+> with sensitive data.

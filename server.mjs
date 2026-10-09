@@ -1,6 +1,6 @@
 /**
  * Shiro unified server — static files + API proxy + OAuth callback + WebSocket relay
- * + opt-in WebSocket-to-TCP relay for kernel sockets (SHIRO_TCP_RELAY=1, see docs/NETWORKING.md).
+ * + opt-in WebSocket-to-TCP relay for kernel sockets (TABCOMPUTER_TCP_RELAY=1, see docs/NETWORKING.md).
  * Single Node.js process; depends on `ws` (and optionally `undici`).
  */
 
@@ -11,14 +11,14 @@ import { join, extname } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { randomBytes, createHmac, createHash, timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
-import { realpathSync, readFileSync } from 'node:fs';
+import { realpathSync, readFileSync, readdirSync } from 'node:fs';
 import net from 'node:net';
 import dns from 'node:dns/promises';
 import https from 'node:https';
 import http from 'node:http';
 
 const PORT = process.env.PORT || 3000;
-const STATIC_DIR = process.env.STATIC_DIR || '/opt/shiro/public';
+const STATIC_DIR = process.env.STATIC_DIR || '/opt/tabcomputer/public';
 
 // --- Cross-origin isolation ---
 // COOP same-origin + COEP credentialless make the app page crossOriginIsolated,
@@ -26,9 +26,9 @@ const STATIC_DIR = process.env.STATIC_DIR || '/opt/shiro/public';
 // syscalls from worker processes; see docs/UNIX_COMPAT.md). credentialless
 // (not require-corp) lets no-cors CDN loads (Pyodide, esm.sh, fonts) through
 // without CORP headers; they just go out without cookies.
-// SHIRO_ISOLATION=0 turns it off.
+// TABCOMPUTER_ISOLATION=0 turns it off.
 export function isolationEnabled() {
-  return process.env.SHIRO_ISOLATION !== '0';
+  return process.env.TABCOMPUTER_ISOLATION !== '0';
 }
 
 export function isolationHeaders() {
@@ -308,24 +308,45 @@ function handleOAuthCallback(req, res) {
   res.end(html);
 }
 
-// --- Branding of the app shell ---
-// The Unix edition (desktop UI: every host but shiro.computer, src/ui-mode.ts)
-// is "tabcomputer": src/brand.json names it. Link previews don't run JS, so the
-// shared index.html gets its title and meta tags here. The file is read from
-// src/ next to this script (a checkout) or from STATIC_DIR (the build copies it
-// into dist/; tabcomputer.com's releases carry only dist/ and server.mjs).
-// Without it nothing changes.
-const BRAND = (() => {
-  for (const at of [new URL('./src/brand.json', import.meta.url), join(STATIC_DIR, 'brand.json')]) {
-    try { return JSON.parse(readFileSync(at, 'utf8')); } catch {}
-  }
-  return null;
+// --- Product profiles (docs/PROFILES.md) ---
+// profiles/<id>/profile.json says which hosts a product serves and its brand;
+// the page reads the same files (src/profile.ts). Read from profiles/ next to
+// this script (a checkout) or STATIC_DIR/profiles.json (the build writes it;
+// releases carry only dist/ and server.mjs). Without either, nothing is branded.
+const PROFILES = (() => {
+  try {
+    const dir = new URL('./profiles/', import.meta.url);
+    const found = readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .flatMap((d) => { try { return [JSON.parse(readFileSync(new URL(`${d.name}/profile.json`, dir), 'utf8'))]; } catch { return []; } });
+    if (found.length) return found;
+  } catch {}
+  try { return JSON.parse(readFileSync(join(STATIC_DIR, 'profiles.json'), 'utf8')); } catch {}
+  return [];
 })();
 
-/** index.html with the brand's title and meta tags, for hosts that get the desktop. */
-export function brandAppShell(html, host, brand = BRAND) {
-  const hostname = String(host || '').split(':')[0].toLowerCase();
-  if (!brand || hostname === 'shiro.computer' || hostname.endsWith('.shiro.computer')) return html;
+// The same choice as profiles/select.mjs (not imported: a release has no
+// profiles/ directory); desktop-wm.test.ts checks the two agree.
+function hostMatches(pattern, hostname) {
+  const h = String(hostname || '').toLowerCase().replace(/\.$/, '');
+  const p = String(pattern).toLowerCase();
+  return p.startsWith('*.') ? h.endsWith(p.slice(1)) : h === p;
+}
+export function profileFor(host, override, profiles = PROFILES) {
+  const hostname = String(host || '').split(':')[0];
+  if (override) { const named = profiles.find((p) => p.id === override); if (named) return named; }
+  return profiles.find((p) => (p.hosts || []).some((pat) => hostMatches(pat, hostname)))
+    ?? profiles.find((p) => p.default) ?? profiles[0] ?? null;
+}
+
+// --- Branding of the app shell ---
+// Link previews don't run JS, so the shared index.html gets the profile's
+// title and meta tags here. A profile without a brand (shiro.computer) keeps
+// the page's own.
+
+/** index.html with the brand's title and meta tags, for the profile serving `host`. */
+export function brandAppShell(html, host, brand = profileFor(host)?.brand) {
+  if (!brand) return html;
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
   const url = `https://${brand.domain}/`;
   const tags = [
@@ -339,7 +360,28 @@ export function brandAppShell(html, host, brand = BRAND) {
     `<meta name="application-name" content="${esc(brand.name)}" />`,
     `<meta name="apple-mobile-web-app-title" content="${esc(brand.name)}" />`,
   ].join('\n  ');
-  return html.replace(/<title>[^<]*<\/title>/, `<title>${esc(brand.name)}</title>\n  ${tags}`);
+  let out = html.replace(/<title>[^<]*<\/title>/, `<title>${esc(brand.name)}</title>\n  ${tags}`);
+  if (brand.favicon) out = out.replace(/href="\/favicon\.svg"/, `href="${esc(brand.favicon)}"`);
+  // The brand's mark, centered while the app loads (inline: no extra request).
+  // main.ts removes #boot-mark once the terminal exists.
+  const mark = brand.favicon && bootMark(brand.favicon);
+  if (mark) out = out.replace(/<body>/, `<body>\n  <div id="boot-mark" aria-hidden="true">${mark}</div>`);
+  return out;
+}
+
+/** An SVG favicon as an inline mark in currentColor (its own color and dark-mode style dropped) */
+const bootMarks = new Map();
+function bootMark(favicon) {
+  if (!/^\/[\w.-]+\.svg$/.test(favicon)) return '';
+  if (bootMarks.has(favicon)) return bootMarks.get(favicon);
+  let svg = '';
+  for (const at of [new URL('./public' + favicon, import.meta.url), join(STATIC_DIR, favicon)]) {
+    try { svg = readFileSync(at, 'utf8'); break; } catch {}
+  }
+  svg = svg.replace(/<style>[\s\S]*?<\/style>/g, '').replace(/(<svg\b[^>]*?)\s+color="[^"]*"/, '$1').trim();
+  if (!/^<svg\b[\s\S]*<\/svg>$/.test(svg) || /<script|\son\w+=/i.test(svg)) svg = '';
+  bootMarks.set(favicon, svg);
+  return svg;
 }
 
 // --- Static file server ---
@@ -379,7 +421,10 @@ async function handleStatic(req, res) {
     // the app in iframes and need nothing from SharedArrayBuffer.
     const isAppShell = filePath === join(STATIC_DIR, 'index.html');
     const isolation = isAppShell || ext === '.js' || ext === '.mjs' ? isolationHeaders() : {};
-    if (isAppShell) data = Buffer.from(brandAppShell(data.toString('utf8'), req.headers['host']));
+    if (isAppShell) {
+      const override = new URL(req.url, 'http://localhost').searchParams.get('profile');
+      data = Buffer.from(brandAppShell(data.toString('utf8'), req.headers['host'], profileFor(req.headers['host'], override)?.brand));
+    }
     // The streamed Debian rootfs's chunks are content-addressed (named by sha256)
     const immutable = pathname.startsWith('/debian/chunks/') ? { 'cache-control': 'public, max-age=31536000, immutable' } : {};
     res.writeHead(200, { 'content-type': MIME[ext] || 'application/octet-stream', ...staticHeaders, ...isolation, ...immutable });
@@ -393,20 +438,20 @@ async function handleStatic(req, res) {
 // --- Debian package mirror (docs/DEBIAN.md "Package mirror") ---
 // apt inside the page fetches http://HOST/PATH as /debian/mirror/HOST/PATH
 // (src/debian/apt-method.ts), so it needs no TCP relay. Only the hosts in
-// SHIRO_DEBIAN_MIRRORS are served ("host=https://upstream,host2=..."; by
+// TABCOMPUTER_DEBIAN_MIRRORS are served ("host=https://upstream,host2=..."; by
 // default deb.debian.org and security.debian.org from their own CDNs), and
 // only archive paths (dists/, pool/). apt verifies everything against the
 // signed InRelease, so the mirror needs no trust (the GUI apps check each
 // .deb's sha256 themselves). Files under pool/ and by-hash/ are immutable and
-// kept in SHIRO_DEBIAN_CACHE (default: $TMPDIR/shiro-debian) forever; other
-// index files for SHIRO_DEBIAN_INDEX_TTL seconds (default 600). A deb.debian.org
-// pool file the mirror no longer has comes from SHIRO_DEBIAN_SNAPSHOT.
+// kept in TABCOMPUTER_DEBIAN_CACHE (default: $TMPDIR/shiro-debian) forever; other
+// index files for TABCOMPUTER_DEBIAN_INDEX_TTL seconds (default 600). A deb.debian.org
+// pool file the mirror no longer has comes from TABCOMPUTER_DEBIAN_SNAPSHOT.
 // /debian/pool/PATH (the GUI apps' URL) is /debian/mirror/deb.debian.org/debian/pool/PATH.
 function debianMirrorConfig() {
   const upstreams = new Map([['deb.debian.org', 'https://deb.debian.org'], ['security.debian.org', 'https://security.debian.org']]);
-  if (process.env.SHIRO_DEBIAN_MIRRORS) {
+  if (process.env.TABCOMPUTER_DEBIAN_MIRRORS) {
     upstreams.clear();
-    for (const part of process.env.SHIRO_DEBIAN_MIRRORS.split(',')) {
+    for (const part of process.env.TABCOMPUTER_DEBIAN_MIRRORS.split(',')) {
       const i = part.indexOf('=');
       if (i > 0) upstreams.set(part.slice(0, i).trim(), part.slice(i + 1).trim().replace(/\/+$/, ''));
     }
@@ -415,9 +460,9 @@ function debianMirrorConfig() {
     upstreams,
     // Pool files a point release removed from deb.debian.org (the GUI apps pin
     // versions): fetched from snapshot.debian.org instead
-    snapshot: (process.env.SHIRO_DEBIAN_SNAPSHOT || 'https://snapshot.debian.org/archive/debian/20260712T000000Z/').replace(/\/+$/, ''),
-    cacheDir: process.env.SHIRO_DEBIAN_CACHE || process.env.SHIRO_DEB_CACHE || join(tmpdir(), 'shiro-debian'),
-    indexTtl: Number(process.env.SHIRO_DEBIAN_INDEX_TTL || 600) * 1000,
+    snapshot: (process.env.TABCOMPUTER_DEBIAN_SNAPSHOT || 'https://snapshot.debian.org/archive/debian/20260712T000000Z/').replace(/\/+$/, ''),
+    cacheDir: process.env.TABCOMPUTER_DEBIAN_CACHE || process.env.TABCOMPUTER_DEB_CACHE || join(tmpdir(), 'shiro-debian'),
+    indexTtl: Number(process.env.TABCOMPUTER_DEBIAN_INDEX_TTL || 600) * 1000,
   };
 }
 const DEBIAN_MIRROR = debianMirrorConfig();
@@ -685,7 +730,7 @@ async function handleGitProxy(req, res, targetUrl) {
 }
 
 // --- Seed sharing ---
-const SEED_DIR = process.env.SEED_DIR || '/opt/shiro/seeds';
+const SEED_DIR = process.env.SEED_DIR || '/opt/tabcomputer/seeds';
 const SEED_MAX_SIZE = 512 * 1024; // 512KB max per seed (gzipped)
 const SEED_RATE_LIMIT = 200; // per IP per month
 
@@ -800,7 +845,7 @@ setInterval(async () => {
 }, 6 * 60 * 60 * 1000).unref();
 
 // --- TCP relay (kernel sockets) ---
-// One WebSocket per TCP connection at /tcp. Opt-in with SHIRO_TCP_RELAY=1.
+// One WebSocket per TCP connection at /tcp. Opt-in with TABCOMPUTER_TCP_RELAY=1.
 // Protocol (docs/NETWORKING.md): the first frame is text JSON, either
 //   {"op":"connect","host":"example.com","port":443}  → {"op":"connected",...} | {"op":"error",...}
 //   {"op":"resolve","host":"example.com"}             → {"op":"resolved","addresses":[...]} | {"op":"error",...}
@@ -871,30 +916,33 @@ export const TCP_DEFAULT_PORTS = [22, 80, 443, 9418];
 
 export function tcpRelayConfigFromEnv(env = process.env) {
   return {
-    enabled: env.SHIRO_TCP_RELAY === '1',
-    allowedOrigins: envList(env.SHIRO_TCP_ORIGINS) || ['https://shiro.computer', 'https://*.shiro.computer'],
-    ports: (envList(env.SHIRO_TCP_PORTS) || TCP_DEFAULT_PORTS).map(Number).filter((p) => p > 0 && p < 65536),
-    allowCidrs: envList(env.SHIRO_TCP_ALLOW_CIDRS) || [],
-    denyCidrs: envList(env.SHIRO_TCP_DENY_CIDRS) || [],
-    secret: env.SHIRO_TCP_SECRET || '',
+    enabled: env.TABCOMPUTER_TCP_RELAY === '1',
+    allowedOrigins: envList(env.TABCOMPUTER_TCP_ORIGINS) || ['https://shiro.computer', 'https://*.shiro.computer'],
+    ports: (envList(env.TABCOMPUTER_TCP_PORTS) || TCP_DEFAULT_PORTS).map(Number).filter((p) => p > 0 && p < 65536),
+    allowCidrs: envList(env.TABCOMPUTER_TCP_ALLOW_CIDRS) || [],
+    denyCidrs: envList(env.TABCOMPUTER_TCP_DENY_CIDRS) || [],
+    secret: env.TABCOMPUTER_TCP_SECRET || '',
     // Token requests need a GitHub sign-in (Authorization: Bearer <github token>); docs/DESKTOP.md
-    requireSignin: env.SHIRO_TCP_REQUIRE_SIGNIN === '1',
-    trustProxy: env.SHIRO_TRUST_PROXY || 'loopback', // 'loopback' | 'always' | 'never'
-    tokenTtlMs: envInt(env.SHIRO_TCP_TOKEN_TTL_MS, 10 * 60_000),
-    maxConns: envInt(env.SHIRO_TCP_MAX_CONNS, 512),
-    maxConnsPerIp: envInt(env.SHIRO_TCP_MAX_CONNS_PER_IP, 16),
-    connectsPerMinute: envInt(env.SHIRO_TCP_CONNECTS_PER_MIN, 60),
-    bytesPerSecPerIp: envInt(env.SHIRO_TCP_BYTES_PER_SEC, 4 * 1024 * 1024),
-    byteBurstPerIp: envInt(env.SHIRO_TCP_BYTE_BURST, 16 * 1024 * 1024),
-    maxBytesPerIpPerHour: envInt(env.SHIRO_TCP_BYTES_PER_HOUR, 4 * 1024 ** 3),
-    maxBytesPerConn: envInt(env.SHIRO_TCP_MAX_BYTES_PER_CONN, 1024 ** 3),
-    handshakeTimeoutMs: envInt(env.SHIRO_TCP_HANDSHAKE_TIMEOUT_MS, 10_000),
-    connectTimeoutMs: envInt(env.SHIRO_TCP_CONNECT_TIMEOUT_MS, 15_000),
-    idleTimeoutMs: envInt(env.SHIRO_TCP_IDLE_TIMEOUT_MS, 5 * 60_000),
-    maxLifetimeMs: envInt(env.SHIRO_TCP_MAX_LIFETIME_MS, 4 * 60 * 60_000),
-    window: envInt(env.SHIRO_TCP_WINDOW, 512 * 1024),
+    requireSignin: env.TABCOMPUTER_TCP_REQUIRE_SIGNIN === '1',
+    trustProxy: env.TABCOMPUTER_TRUST_PROXY || 'loopback', // 'loopback' | 'always' | 'never'
+    tokenTtlMs: envInt(env.TABCOMPUTER_TCP_TOKEN_TTL_MS, 10 * 60_000),
+    // Tie each token to the IP that fetched it. Clients whose outgoing IP changes per
+    // connection (proxy pools, iCloud Private Relay, dual-stack) fail with it on.
+    tokenBindIp: env.TABCOMPUTER_TCP_TOKEN_BIND_IP !== '0',
+    maxConns: envInt(env.TABCOMPUTER_TCP_MAX_CONNS, 512),
+    maxConnsPerIp: envInt(env.TABCOMPUTER_TCP_MAX_CONNS_PER_IP, 16),
+    connectsPerMinute: envInt(env.TABCOMPUTER_TCP_CONNECTS_PER_MIN, 60),
+    bytesPerSecPerIp: envInt(env.TABCOMPUTER_TCP_BYTES_PER_SEC, 4 * 1024 * 1024),
+    byteBurstPerIp: envInt(env.TABCOMPUTER_TCP_BYTE_BURST, 16 * 1024 * 1024),
+    maxBytesPerIpPerHour: envInt(env.TABCOMPUTER_TCP_BYTES_PER_HOUR, 4 * 1024 ** 3),
+    maxBytesPerConn: envInt(env.TABCOMPUTER_TCP_MAX_BYTES_PER_CONN, 1024 ** 3),
+    handshakeTimeoutMs: envInt(env.TABCOMPUTER_TCP_HANDSHAKE_TIMEOUT_MS, 10_000),
+    connectTimeoutMs: envInt(env.TABCOMPUTER_TCP_CONNECT_TIMEOUT_MS, 15_000),
+    idleTimeoutMs: envInt(env.TABCOMPUTER_TCP_IDLE_TIMEOUT_MS, 5 * 60_000),
+    maxLifetimeMs: envInt(env.TABCOMPUTER_TCP_MAX_LIFETIME_MS, 4 * 60 * 60_000),
+    window: envInt(env.TABCOMPUTER_TCP_WINDOW, 512 * 1024),
     // http://host:port of an HTTP CONNECT proxy to dial through (egress that only allows proxied traffic)
-    upstreamProxy: env.SHIRO_TCP_UPSTREAM_PROXY || '',
+    upstreamProxy: env.TABCOMPUTER_TCP_UPSTREAM_PROXY || '',
   };
 }
 
@@ -992,7 +1040,7 @@ export function createTcpRelay(config, { lookup, log = console.log, verifySignin
   };
 
   const verify = verifySignin || githubSigninVerifier();
-  const sign = (exp, ip) => createHmac('sha256', secret).update(`shiro-tcp.${exp}.${ip}`).digest('base64url');
+  const sign = (exp, ip) => createHmac('sha256', secret).update(`shiro-tcp.${exp}.${cfg.tokenBindIp ? ip : '*'}`).digest('base64url');
   const issueToken = (ip) => {
     const exp = Date.now() + cfg.tokenTtlMs;
     return { token: `${exp}.${sign(exp, ip)}`, expires: exp };
@@ -1005,7 +1053,7 @@ export function createTcpRelay(config, { lookup, log = console.log, verifySignin
     return want.length === got.length && timingSafeEqual(want, got);
   };
 
-  /** POST /tcp/token from an allowed Origin → { token, expires } bound to the caller's IP. */
+  /** POST /tcp/token from an allowed Origin → { token, expires }, bound to the caller's IP unless tokenBindIp is off. */
   function handleToken(req, res) {
     const origin = req.headers['origin'];
     const ok = originAllowed(origin, cfg.allowedOrigins);
@@ -1264,17 +1312,17 @@ export function createTcpRelay(config, { lookup, log = console.log, verifySignin
 // Those hosts serve only three scripts and a bootstrap page that installs the
 // origin's service worker; all content comes from the app's broker in the
 // user's page. They never serve the app, /api, /tcp or anything else.
-//   SHIRO_BROWSE_ORIGIN       template; default https://{key}.web.<brand domain> on the brand
+//   TABCOMPUTER_BROWSE_ORIGIN       template; default https://{key}.web.<brand domain> on the brand
 //                             domain and its instances (music.<domain>, …), http://{key}.localhost:PORT
 //                             on localhost, else off. Needs wildcard DNS and a *.web.<domain> certificate.
-//   SHIRO_BROWSE_APP_ORIGINS  origins (with *. wildcards) whose Browser may use them; default the
+//   TABCOMPUTER_BROWSE_APP_ORIGINS  origins (with *. wildcards) whose Browser may use them; default the
 //                             brand domain and its subdomains, or http://localhost:PORT
-//   SHIRO_BROWSE=0            off
-export function browseConfigFor(hostHeader, env = process.env, brand = BRAND) {
-  if (env.SHIRO_BROWSE === '0') return null;
+//   TABCOMPUTER_BROWSE=0            off
+export function browseConfigFor(hostHeader, env = process.env, brand = profileFor(hostHeader)?.brand) {
+  if (env.TABCOMPUTER_BROWSE === '0') return null;
   const host = String(hostHeader || '').toLowerCase();
-  let template = env.SHIRO_BROWSE_ORIGIN || '';
-  let apps = envList(env.SHIRO_BROWSE_APP_ORIGINS);
+  let template = env.TABCOMPUTER_BROWSE_ORIGIN || '';
+  let apps = envList(env.TABCOMPUTER_BROWSE_APP_ORIGINS);
   if (!template) {
     const local = /^(?:[a-z0-9-]+\.)*localhost(:\d+)?$/.exec(host);
     const domain = String(brand?.domain || '').toLowerCase();
@@ -1359,9 +1407,9 @@ async function handleBrowseHost(req, res, cfg) {
 // The product path is TLS in the page over /tcp (the server only sees
 // ciphertext). This transport makes the *server* do the request, so it sees
 // plaintext: it exists only to compare the two on the scoreboard, is off unless
-// SHIRO_BROWSE_SERVER_FETCH=1, and must never be set in production (owner
+// TABCOMPUTER_BROWSE_SERVER_FETCH=1, and must never be set in production (owner
 // decision, docs/BROWSER.md). Same address policy as the relay.
-const BROWSE_SERVER_FETCH = process.env.SHIRO_BROWSE_SERVER_FETCH === '1';
+const BROWSE_SERVER_FETCH = process.env.TABCOMPUTER_BROWSE_SERVER_FETCH === '1';
 const browseAgents = { 'https:': new https.Agent({ keepAlive: true, maxSockets: 6 }), 'http:': new http.Agent({ keepAlive: true, maxSockets: 6 }) };
 
 async function handleBrowseFetch(req, res) {
@@ -1379,10 +1427,10 @@ async function handleBrowseFetch(req, res) {
   const host = target.hostname.replace(/^\[|\]$/g, '');
   let addrs;
   try { addrs = net.isIP(host) ? [{ address: host }] : await dns.lookup(host, { all: true, verbatim: true }); } catch { return fail(502, 'ENOTFOUND'); }
-  const usable = addrs.filter((a) => !isBlockedAddress(a.address, { allow: cidrBlockList(envList(process.env.SHIRO_TCP_ALLOW_CIDRS) || []), deny: cidrBlockList([]) }));
+  const usable = addrs.filter((a) => !isBlockedAddress(a.address, { allow: cidrBlockList(envList(process.env.TABCOMPUTER_TCP_ALLOW_CIDRS) || []), deny: cidrBlockList([]) }));
   if (!usable.length) return fail(403, 'address blocked by relay policy');
   const port = Number(target.port) || (target.protocol === 'https:' ? 443 : 80);
-  if (!(envList(process.env.SHIRO_TCP_PORTS) || TCP_DEFAULT_PORTS).map(Number).includes(port)) return fail(403, 'port blocked');
+  if (!(envList(process.env.TABCOMPUTER_TCP_PORTS) || TCP_DEFAULT_PORTS).map(Number).includes(port)) return fail(403, 'port blocked');
   const flat = {};
   for (const [k, v] of headers) { const n = String(k).toLowerCase(); if (n !== 'host' && n !== 'connection' && n !== 'content-length' && n !== 'transfer-encoding') flat[k] = flat[k] ? `${flat[k]}, ${v}` : String(v); }
   const mod = target.protocol === 'https:' ? https : http;

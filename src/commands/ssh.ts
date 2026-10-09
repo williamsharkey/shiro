@@ -10,20 +10,21 @@
  */
 
 import type { Command, CommandContext, TerminalLike } from './index';
+import { activeProfile } from '../profile';
 
 // Signaling server URL (same as remote.ts)
 const SIGNAL_SERVER = 'https://shiro.computer/signal';
 
 export const sshCmd: Command = {
   name: 'ssh',
-  description: 'Connect to a remote Shiro instance',
+  description: 'Connect to a remote tabcomputer instance',
 
   async exec(ctx: CommandContext): Promise<number> {
     const args = ctx.args;
 
     if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
       ctx.stdout += 'Usage: ssh <connection-code>\n';
-      ctx.stdout += '\nConnect to a remote Shiro instance via WebRTC.\n';
+      ctx.stdout += '\nConnect to a remote tabcomputer instance via WebRTC.\n';
       ctx.stdout += 'The remote must have run `remote start` first.\n';
       ctx.stdout += '\nExamples:\n';
       ctx.stdout += '  ssh fluffy-cloud-shimutako\n';
@@ -33,13 +34,15 @@ export const sshCmd: Command = {
 
     // OpenSSH usage (options, user@host, a host name with dots) goes to
     // OpenSSH when it is installed; Shiro's tab-to-tab ssh takes peer codes
-    if (!isPeerCode(args)) {
+    // (all of it when the profile turns tab-to-tab ssh off)
+    const tabSsh = activeProfile().shims.tabSsh;
+    if (!tabSsh || !isPeerCode(args)) {
       const openssh = await findOpenSsh(ctx);
       if (openssh) {
         return ctx.shell.execute([openssh, ...args].map(shellQuote).join(' '),
           (s) => { ctx.stdout += s.replace(/\r\n/g, '\n'); }, (s) => { ctx.stderr += s.replace(/\r\n/g, '\n'); }, false, ctx.terminal, true);
       }
-      if (looksLikeOpenSsh(args)) {
+      if (!tabSsh || looksLikeOpenSsh(args)) {
         ctx.stderr += OPENSSH_HINT;
         return 255;
       }
@@ -72,7 +75,7 @@ export const sshCmd: Command = {
 };
 
 export const OPENSSH_HINT =
-  "ssh: this is Shiro's tab-to-tab ssh (ssh CONNECTION-CODE from `remote start`).\n" +
+  "ssh: this is tabcomputer's tab-to-tab ssh (ssh CONNECTION-CODE from `remote start`).\n" +
   'For OpenSSH: `pkg install openssh`, or `debian install && sudo apt install openssh-client`.\n';
 
 /** A connection code from `remote start` (fluffy-cloud-shimutako), or a short one: one bare word */

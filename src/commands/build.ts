@@ -20,7 +20,7 @@ import * as esbuild from 'esbuild-wasm';
  */
 
 const ESBUILD_WASM_URL = 'https://unpkg.com/esbuild-wasm@0.27.2/esbuild.wasm';
-const WASM_CACHE_DB = 'shiro-wasm-cache';
+const WASM_CACHE_DB = 'tabcomputer-wasm-cache';
 const WASM_CACHE_STORE = 'wasm-binaries';
 const WASM_CACHE_KEY = 'esbuild-0.27.2';
 
@@ -372,7 +372,7 @@ export const buildCmd: Command = {
       liveWrite(`[watching ${mtimes.size} files, Ctrl+C to stop]\n`);
 
       // Get iframeServer for reload broadcast
-      const iframeServer = typeof window !== 'undefined' && (window as any).__shiro?.iframeServer;
+      const iframeServer = typeof window !== 'undefined' && (window as any).__tabcomputer?.iframeServer;
 
       // Poll loop
       let stopped = false;

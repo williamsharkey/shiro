@@ -43,11 +43,11 @@ const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || 
 const page = await (await browser.newContext({ viewport: { width: 1280, height: 900 } })).newPage();
 await page.addInitScript(() => { try { localStorage.setItem('shiro-desktop-tour', '1'); } catch {} });
 await page.goto(`${APP}/?ui=desktop`);
-await page.waitForFunction(() => window.__shiro?.shell && window.__shiro.desktop, null, { timeout: 90000 });
+await page.waitForFunction(() => window.__tabcomputer?.shell && window.__tabcomputer.desktop, null, { timeout: 90000 });
 
 const sh = (cmd) => page.evaluate(async (cmd) => {
   let o = '';
-  const s = window.__vmShell ??= Object.assign(window.__shiro.shell.fork(), { terminal: null });
+  const s = window.__vmShell ??= Object.assign(window.__tabcomputer.shell.fork(), { terminal: null });
   const code = await s.execute(cmd, (x) => { o += x; }, (x) => { o += x; });
   return { code, out: o };
 }, cmd);
@@ -63,7 +63,7 @@ async function trustRoots() {
     return { hash, pem: c + '\n' };
   });
   await page.evaluate(async (files) => {
-    const fs = window.__shiro.fs;
+    const fs = window.__tabcomputer.fs;
     const bundle = '/etc/ssl/certs/ca-certificates.crt';
     let cur = '';
     try { cur = await fs.readFile(bundle, 'utf8'); } catch { /* none yet */ }
@@ -74,7 +74,7 @@ async function trustRoots() {
 }
 
 const shotOf = (app) => page.evaluate((app) => {
-  const w = window.__shiro.desktop.windows().filter((w) => w.appId === app && w.surface).pop();
+  const w = window.__tabcomputer.desktop.windows().filter((w) => w.appId === app && w.surface).pop();
   if (!w) return null;
   const c = w.surface.canvas, d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
   const counts = new Map();
@@ -110,8 +110,8 @@ for (const app of APPS) {
     rows.push(row);
     console.log(`${app.padEnd(8)} ${id.padEnd(12)} load ${row.loads ? '✓' : '✗'} render ${row.renders ? '✓' : '✗'} ${loaded ? (loaded / 1000).toFixed(1) + ' s' : ''} "${(s?.title || '').slice(0, 50)}" colors=${s?.colors} ink=${row.ink}`);
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/vm-${app}-${id}.png` });
-    await page.evaluate((app) => { for (const w of window.__shiro.desktop.windows()) if (w.appId === app) w.close(); }, app);
-    await page.waitForFunction((app) => !window.__shiro.desktop.windows().some((w) => w.appId === app), app, { timeout: 20000 }).catch(() => {});
+    await page.evaluate((app) => { for (const w of window.__tabcomputer.desktop.windows()) if (w.appId === app) w.close(); }, app);
+    await page.waitForFunction((app) => !window.__tabcomputer.desktop.windows().some((w) => w.appId === app), app, { timeout: 20000 }).catch(() => {});
     await sh(`pkill -f ${app} 2>/dev/null; true`);
     if (JSON_OUT) writeFileSync(JSON_OUT, JSON.stringify(results, null, 1));
   }

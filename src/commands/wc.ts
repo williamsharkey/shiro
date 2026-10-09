@@ -1,6 +1,7 @@
 
 import type { Command } from './index';
 import { parseArgs } from './flags';
+import { encodeText } from '../utils/byte-text';
 
 interface Counts { lines: number; words: number; chars: number; bytes: number; maxLine: number }
 
@@ -56,11 +57,11 @@ export const wc: Command = {
       let data: Uint8Array;
       try {
         if (name === undefined || name === '-') {
-          data = new TextEncoder().encode(ctx.stdin);
+          data = encodeText(ctx.stdin);
           fromPipe = true;
         } else {
           const raw = await ctx.fs.readFile(ctx.fs.resolvePath(name, ctx.cwd));
-          data = typeof raw === 'string' ? new TextEncoder().encode(raw) : raw;
+          data = typeof raw === 'string' ? encodeText(raw) : raw;
         }
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);

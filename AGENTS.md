@@ -1,41 +1,85 @@
 # AGENTS.md
 
-Canonical agent instructions live here. [CLAUDE.md](CLAUDE.md) is a compatibility shim and should only point back to this file.
+Instructions for coding agents (and people) working on this repository. [CLAUDE.md](CLAUDE.md) only points here. The docs index is [docs/README.md](docs/README.md).
 
-## Mission
+## What tabcomputer is
 
-Shiro is a browser-native Unix-like development environment. Prioritize changes that make it feel more like a real machine in the browser: shell, filesystem, Node/npm, editors, build tools, networking, WASI/x86, and first-class AI tooling.
+tabcomputer is a computer that lives in a browser tab: a desktop with windows and a dock, a Unix kernel written in TypeScript for the page, and real Linux programs. WebAssembly (WASI/WASIX) programs and unmodified x86-64 ELF binaries (Debian's own, in the Blink emulator compiled to wasm) run as kernel processes; guest sockets reach the internet through a WebSocket-to-TCP relay in `server.mjs`. Production is https://tabcomputer.com.
 
-Do not treat the dashboard or wrappers as the product. The product is the browser OS itself.
+Prioritize changes that make it behave more like a real machine: kernel, shell, filesystem, packages and Debian, networking, the x86 engine, GUI apps, the desktop, and coding agents running inside it.
 
-## Architecture Snapshot
+**Naming.** Always write "tabcomputer": one word, all lowercase, also at the start of a sentence. Every user-facing string says tabcomputer. The project grew out of Shiro (shiro.computer), which survives as the terminal-first `shiro` profile; many internal names still say shiro and may stay (see "Profiles and internal names" below).
 
-- `src/main.ts`: boot, filesystem init, command registration, seeded runtime hydration.
-- `src/filesystem.ts`: IndexedDB-backed POSIX-like filesystem.
-- `src/shell.ts`: bash-like parser/executor, pipes, redirects, jobs, functions, arrays, traps.
-- `src/terminal.ts`: xterm integration and input handling.
-- `src/commands/*`: one command per file or small group.
-- `src/node-compat/*`: Node.js runtime shims used by `node` and Claude Code.
-- `src/wasi/*`: WASM programs as kernel processes (see "WASM Processes" below). `src/wasi-runtime.ts` is the old in-page runtime, kept as the fallback.
-- `src/pkg-manager.ts`: the package manager (`pkg`/`apt`, see "Packages"); `src/wasi-packages.ts` is the older single-binary API on top of its index.
-- `src/x86-engine/*` + `public/engines/blink/` + `vendor/blink/`: x86-64 Linux ELF in Blink (wasm), as kernel processes; `src/x86/*` is the fallback interpreter when the page isn't cross-origin isolated. See `docs/X86_ENGINES.md`.
-- `src/kernel/*`: Unix kernel core (process table, fd tables, pipes, syscall dispatch, SAB syscall channel for Worker guests). Contract: `docs/KERNEL_ABI.md`; roadmap: `docs/UNIX_COMPAT.md`. `window.__shiro.kernel`; kernel processes show in `ps`.
-- `src/x11/*` + `src/gui/*`: Linux GUI apps (docs/GUI.md): Xshiro, an X11 server in the page (a kernel process on `/tmp/.X11-unix/X0`), rootless windows on the desktop's surface API, Debian GUI apps installed on first use (`gui`, `public/gui/apps.json`).
-- `src/commands/seed.ts`, `src/commands/hc.ts`, `src/seed-runtime-context.ts`: seeded sessions, host-page access, runtime orientation.
-- `src/claude-config.ts`, `src/node-compat/preload.ts`, `src/node-compat/process.ts`: Claude bootstrap, auth persistence, startup defaults.
-- `src/desktop/*`: the Unix edition's desktop (menu bar, dock, window manager `wm.ts`, Terminal with tabs, lazy Files/Settings/Activity/About). `src/ui-mode.ts` picks it: every host but shiro.computer boots the desktop; `?ui=terminal|desktop` or `desktop classic` switch. API and `/dom`: [docs/DESKTOP.md](docs/DESKTOP.md).
-- `server.mjs`: static hosting, API proxying, OAuth callback, signaling, relay, and the opt-in WebSocket-to-TCP relay (`/tcp`, `SHIRO_TCP_RELAY=1`).
-- `src/browser/*` + `src/desktop/apps/browser.ts`: the desktop's Browser app (docs/BROWSER.md, scoreboard docs/WEB_SCORE.md): iframe tabs on per-origin browse origins (`https://{key}.<domain>`, `SHIRO_BROWSE_ORIGIN`), a service worker per origin forwarding to a broker in the desktop page, which fetches with HTTP/1.1 over TLS in the page (subtls) over the relay.
-- `src/kernel/net.ts`: kernel sockets over that relay (x86 socket syscalls and node `net` use them); see `docs/NETWORKING.md` for the protocol, security model, and nginx config.
+## Architecture map
 
-## Working Style
+Page (everything under `src/` is the engine; products are profiles):
 
-- Prefer small, direct fixes over speculative rewrites.
-- Read the surrounding code before editing. Shiro has a lot of compatibility shims and edge cases.
-- Use `rg` / `rg --files` for search.
-- Use `apply_patch` for file edits.
-- Do not revert unrelated work in a dirty tree.
-- Do not hard-code counts, build numbers, or implementation inventories unless you just verified them.
+- `src/main.ts`: boot, filesystem init, command registration, the profile's preinstall, seeded runtime hydration.
+- `src/profile.ts` + `profiles/<id>/profile.json`: product profiles. Code asks `activeProfile()`, never the hostname. [docs/PROFILES.md](docs/PROFILES.md).
+- `src/kernel/*`: the Unix kernel: process table (`process.ts`), fd tables (`fd.ts`), pipes, ptys (`pty.ts`), signals and job control (`signals.ts`), epoll, file locks, `/proc` (`procfs.ts`), sockets (`net.ts`, `netlink.ts`), the SharedArrayBuffer syscall channel for Worker guests (`channel.ts`, `worker-host.ts`). Contract: [docs/KERNEL_ABI.md](docs/KERNEL_ABI.md). `window.__tabcomputer.kernel`; kernel processes show in `ps`.
+- Kernel log (`src/kernel/klog.ts`): `dmesg` (builtin; Debian's util-linux dmesg replaces it in Debian mode and reads the same log through `/dev/kmsg`), `/dev/kmsg`, `syslog(2)`. Engines and subsystems log with `klog.log`/`klog.logRatelimited` (`net: ...`, `traps: comm[pid] ...`); relay refusals (token, handshake, `op:error`, no relay) land there, so check `dmesg` when curl/git only say "Could not connect".
+- `src/filesystem.ts`: the IndexedDB-backed POSIX-like filesystem (lazy placeholders for Debian, virtual providers such as `/dom`).
+- `src/shell.ts` + `src/shell-*.ts`: the bash-compatible shell. `src/shell-kernel.ts` runs WASM/ELF pipeline stages as kernel processes.
+- `src/terminal.ts` (xterm.js, the classic HUD banner), `src/window-terminal.ts`, `src/panes.ts`.
+- `src/commands/*`: builtins, one command per file or small group (`doctor.ts`, `claude.ts`, `claude-native.ts`, `debian.ts`, `gui.ts`, `serve.ts`, `page.ts`, `remote.ts`, `pkg.ts`, `gh*.ts`, `git*.ts`, ...).
+- `src/node-compat/*`: the Node.js runtime used by `node`, npm packages and the npm build of Claude Code.
+- `src/wasi/*`: WASM programs as kernel processes (WASI preview1, WASIX fork/exec/signals/sockets, dynamic linking). `src/wasi-runtime.ts` is the old in-page runtime, kept as the fallback.
+- `src/x86-engine/*` + `public/engines/blink/` + `vendor/blink/` (`build.sh`, `patches/`, `shiro-kernel.js`, `shiro-net.js`): x86-64 Linux ELF in Blink as kernel processes. `src/x86/*` is the fallback interpreter when the page isn't cross-origin isolated. [docs/X86_ENGINES.md](docs/X86_ENGINES.md).
+- `src/pkg-manager.ts`, `src/pkg-index.json`, `src/commands/pkg.ts`: `pkg`/`apt` before Debian mode. Recipes in `scripts/pkgbuild/` (`x86/` for static x86-64 builds). [docs/PACKAGES.md](docs/PACKAGES.md).
+- `src/debian/*`: Debian mode (`rootfs.ts` streams the root filesystem, `overlay.ts` + `overlay-policy.json` decide builtin vs Debian, `apt-method.ts`, `apt-store.ts`, `preconfigure.ts`). Image built by `scripts/debian/`. [docs/DEBIAN.md](docs/DEBIAN.md).
+- `src/x11/*` + `src/gui/*`: the X11 server in the page (`Xshiro :0`), rootless windows, Debian GUI apps (`gui`, `public/gui/apps.json`). [docs/GUI.md](docs/GUI.md), [docs/DOM-RENDERING.md](docs/DOM-RENDERING.md).
+- `src/desktop/*`: the desktop (window manager `wm.ts`, shell `index.ts`, Terminal `terminal-app.ts`, `network.ts`, `session.ts`, `spotlight.ts`, `tour.ts`, `mobile.ts`; lazy apps in `apps/`: About, Activity, Browser, Files, Settings). `src/ui-mode.ts` picks desktop or terminal. [docs/DESKTOP.md](docs/DESKTOP.md).
+- `src/browser/*` + `src/desktop/apps/browser.ts`: the Browser app spike. [docs/BROWSER.md](docs/BROWSER.md).
+- `src/agent-docs.ts`: the `~/AGENTS.md` seeded for agents running inside the tab (below); `src/seed-runtime-context.ts` parses the boot context. `src/commands/seed.ts`, `src/commands/hc.ts`: seeded sessions and host-page access.
+- `src/claude-config.ts`, `src/claude-signin.ts`, `src/claude-auth.ts`, `src/claude-code-version.ts`: Claude Code bootstrap, sign-in and the pinned npm version.
+
+Server and tooling:
+
+- `server.mjs`: static hosting with COOP/COEP, API proxies, OAuth callback, git proxy, Debian mirror (`/debian/`), browse origins, and the TCP relay (`/tcp`). [docs/NETWORKING.md](docs/NETWORKING.md).
+- `deploy/tabcomputer/`: the droplet (cloud-init, `release.sh`). `profiles/tabcomputer/server.env` is its server environment.
+- `tests/`: the vitest suite (`tests/tests/shiro-vitest/`), conformance suites (`tests/conformance/`), browser scripts (`tests/browser/`).
+- `scripts/browser-check.mjs`, `scripts/browser-tui.mjs`: drive a built app in headless Chromium.
+- `bench/`: the benchmark harness ([bench/README.md](bench/README.md), results in [docs/BENCHMARKS.md](docs/BENCHMARKS.md)).
+- `shiro-mcp/`: an MCP server that lets an outside agent drive a tab over WebRTC (`remote start`).
+
+## Build and test
+
+```bash
+npm install                     # once; also `cd tests && npm install` for the suite
+npx tsc --noEmit -p .           # typecheck
+npm run build                   # tsc + vite build to dist/, profiles, browse bundle
+npm test                        # the vitest suite: cd tests && npx vitest run
+cd tests && npx vitest run tests/shiro-vitest/kernel-net.test.ts   # one file while iterating
+PORT=5299 STATIC_DIR=$PWD/dist node server.mjs                     # serve a build
+```
+
+- Browser checks (need a build and a running server; they use the pre-installed Chromium at `/opt/pw-browsers`, never `playwright install`): `tests/browser/first-run.mjs` (first impressions, desktop and `?ui=terminal`), `tests/browser/dev-workflows.mjs` (git, npm, venv + pytest, make, ssh), `tests/browser/no-reflow.mjs` (one draw at load), `tests/browser/gui-first-launch.mjs`, `tests/browser/job-control.mjs`, `tests/browser/vim-keys.mjs`, `tests/browser/web-score.mjs`. `scripts/browser-check.mjs URL 'cmd' ...` runs any commands.
+- Scoreboards: `npm run conformance` (docs/CONFORMANCE.md), `npm run debian-score` (docs/DEBIAN_SCORE.md), `npm run bench:quick` before and after a performance change.
+- CI (`.github/workflows/ci.yml`, pull requests to main) runs `npm test`, `npx tsc --noEmit` and `npm run build`.
+
+## Branches and integration
+
+- Work happens on `unix/<area>` branches of williamsharkey/shiro (unix/desktop, unix/debian, unix/gui, unix/conformance, unix/agent-clis, unix/perf-blink, ...). Each merges `origin/unix/integration` into itself before it is merged back.
+- `unix/integration` is the trunk. It is mirrored to the `main` branch of williamsharkey/tabcomputer.
+- Merge, don't rebase, shared branches. Merge `origin/unix/integration` again right before pushing.
+- Shipping: push a commit to the `deploy` branch of the tabcomputer repo (deploy/tabcomputer/README.md). Bump `build-number.txt` with `node increment-build.js` in the commit you ship. shiro.computer is deployed from the Shiro repository.
+
+## Profiles and internal names
+
+- `profiles/tabcomputer` (tabcomputer.com and every host no profile claims, so localhost) boots the desktop, runs native Claude Code by default and turns the relay on. `profiles/shiro` (shiro.computer) is the full-page terminal with the HUD banner and the npm Claude Code. `?profile=ID` overrides the host. [docs/PROFILES.md](docs/PROFILES.md) lists every field.
+- A product changes behavior by editing its `profile.json`, not by checking the hostname.
+- User-facing text (messages, `help`, man pages, banners, About, docs) says tabcomputer. Text shown under both profiles is plain text that says tabcomputer; identity (prompt hostname, `uname -n`) comes from the profile's `name` and `hostname`.
+- Internal names may stay, and should not be renamed piecemeal (it conflicts with every branch in flight): `SHIRO_BLINK_*` and other names compiled into wasm, `_SHIRO_TEXT`, `Xshiro`, `libshiro-text-hook.so`, `shiro-apt-method`/`shiro-apt-store`/`/var/lib/shiro/` inside installed Debian systems, `__shiro…` page globals other than `window.__tabcomputer`, `shiro://cmd/` links, `ShiroTerminal`, `shiro-cmds.ts`, `tests/tests/shiro-vitest/`, the `shiro-mcp` package, and infrastructure URLs on shiro.computer (`DEFAULT_MIRROR`, `/bins`, signaling, the GitHub OAuth app). PROFILES.md "The rename" has the full list and the reasons.
+- Environment variables are `TABCOMPUTER_*` (only the Blink build knobs `SHIRO_BLINK_*` and `SHIRO_LLVM_WASM` keep the old prefix).
+
+## Conventions
+
+- Prefer small, direct fixes over speculative rewrites. Read the surrounding code first: there are many compatibility shims and edge cases.
+- Use `rg` / `rg --files` for search. Don't revert unrelated work in a dirty tree.
+- Comments and docs: plain, specific, short sentences. Say what is true now; record history in the scoreboards and BENCHMARKS.md, not in instructions.
+- Numbers in docs come with the doc or tool that measured them. Don't hard-code counts, build numbers or inventories you haven't just verified. The About app's `STATUS` (`src/desktop/apps/about.ts`) quotes DEBIAN_SCORE.md and CONFORMANCE.md: update it with them.
+- Never put secrets, tokens or credentials in files, logs or `doctor` output.
+- Keep `AGENTS.md` the single source; `CLAUDE.md` stays a pointer.
 
 ## Commands
 
@@ -59,35 +103,34 @@ export const myCmd: Command = {
 };
 ```
 
-## Seeded Sessions And Inner Claude
+## Agent Context Inside The Tab
 
-- Seeded boots write runtime context to `/home/user/NEO.md` and `/home/user/.shiro-context.json`.
-- If a seeded session has host-page access, inner Claude should learn that from `NEO.md` and usually start with `hc outer`.
-- Keep seeded agent guidance compact and current in `src/claude-md-seed.ts`.
-- `CLAUDE.md` is still written for compatibility, but it should only redirect to `AGENTS.md` plus `NEO.md`.
+- Every boot seeds `~/AGENTS.md` for agents on the machine (`src/agent-docs.ts`): what the machine is, what works and what doesn't, `doctor`, where the source lives (not checked out), and this boot's context (an injected `seed` boot says to start with `hc outer`). `~/CLAUDE.md` is `@AGENTS.md`, so Claude Code imports it directly.
+- Seeding never overwrites a file the user edited: `/var/lib/tabcomputer/seeded.json` holds the hash of what was written, and older installs are recognized by the exact texts earlier builds seeded. The retired `~/NEO.md` and `~/.shiro-context.json` are removed the same way. Keep the text accurate when behavior changes; it is what an agent here believes about the machine.
 
-## Claude Code In Shiro
+## Claude Code In tabcomputer
 
-- `claude` is a Shiro builtin (`src/commands/claude.ts`) wrapping the npm CLI: it installs the pinned build if needed, opens the sign-in panel (`src/claude-signin.ts`) when there are no credentials, and adds `--dangerously-skip-permissions` for sessions. `claude-window` (old name `sc`) runs it in a new window.
-- Experimental: `claude install --native` downloads the linux-x64-musl build (sha256 from the release manifest) and musl's loader with the guest's `curl` package over the TCP relay (`claude-native.ts`); `claude --native` / `CLAUDE_NATIVE=1` run it (`$CLAUDE_NATIVE_PATH`, default `~/.local/bin/claude`) in Blink, ~2 min per request. Default unchanged.
+- `claude` is a builtin (`src/commands/claude.ts`) that runs one of two builds. The profile's `shims.claude` picks the default: `native` on tabcomputer, `npm` on shiro. `--npm`/`--native` (also after `install`) or `CLAUDE_NATIVE=0/1` pick the other.
+- Native: `claude install` (`claude-native.ts`) downloads the linux-x64-musl build (sha256 from the release manifest) and musl's loader with the guest's `curl` package over the TCP relay, to `$CLAUDE_NATIVE_PATH` (default `~/.local/bin/claude`); `claude update` fetches a newer one. Plain `claude` runs it in Blink with `BUN_JSC_useJIT=0` (faster there): about 85–105 s per `-p` request (docs/COMPAT.md). A missing binary prints how to install it or use `--npm`.
+- npm: the pinned JS build on tabcomputer's node. It installs itself if needed, opens the sign-in panel (`src/claude-signin.ts`) when there are no credentials, and adds `--dangerously-skip-permissions` for sessions. `claude-window` (old name `sc`) runs it in a new window. Both profiles preinstall it in the background at boot (`preinstall: claude-code`).
 - The npm package is pinned to 2.1.112, the last pure-JS release (`src/claude-code-version.ts`). Boot installs it in the background from the npm tarball. At load time `execution.ts` rewrites its inlined `VERSION` constant to `CLAUDE_CODE_REPORTED_VERSION`, because the API gates newer models (e.g. `claude-opus-5-5`, the default `ANTHROPIC_MODEL`) on the version in the billing header.
 - The same load-time rewrite teaches 2.1.112 about newer models (`CAPABILITY_PATCHES`): Opus/Sonnet 5+ get adaptive thinking, effort control including xhigh, and the xhigh launch default, like Opus 4.7. Without it the pinned build sent fixed-budget thinking, no effort, and defaulted subscriptions to medium effort. Opus 5.5 delivers thinking as one chunk at the end, so the token counter stalls during long thinking; that is the API, not a hang.
-- Also patched: interactive sessions use the in-memory `TodoWrite` list instead of the file-backed task tools (`TaskCreate`…), whose proper-lockfile locking hung in Shiro; `CLAUDE_CODE_ENABLE_TASKS=1` restores them. Callback and promise `fs.rmdir` now remove directories (they used `unlink`, so lock directories never released).
-- The bundle patch also replaces Claude Code's Opus 4.7 launch card with a Shiro one and names `claude-opus-5-5` "Opus 5.5".
-- Tiling panes (`src/panes.ts`): every pane in `#shiro-panes` has tiny corner triangles; dragging one splits the pane (mostly sideways = side by side, mostly vertical = stacked), dividers drag to resize (double-click evens them), and `exit`/Ctrl-D at an extra pane's prompt closes it. `#terminal` stays the main pane (`window.__shiro.terminal`); extra panes get fresh shells (copied env and cwd, no `~/.profile`). The layout is saved in localStorage `shiro-panes` and rebuilt on reload; `window.__shiroPanes.layout()` / `.reset()` inspect or clear it. Don't hand-build split layouts with page scripts anymore.
+- Also patched: interactive sessions use the in-memory `TodoWrite` list instead of the file-backed task tools (`TaskCreate`…), whose proper-lockfile locking hung in tabcomputer; `CLAUDE_CODE_ENABLE_TASKS=1` restores them. Callback and promise `fs.rmdir` now remove directories (they used `unlink`, so lock directories never released).
+- The bundle patch also replaces Claude Code's Opus 4.7 launch card with a tabcomputer one and names `claude-opus-5-5` "Opus 5.5".
+- Tiling panes (`src/panes.ts`): every pane in `#shiro-panes` has tiny corner triangles; dragging one splits the pane (mostly sideways = side by side, mostly vertical = stacked), dividers drag to resize (double-click evens them), and `exit`/Ctrl-D at an extra pane's prompt closes it. `#terminal` stays the main pane (`window.__tabcomputer.terminal`); extra panes get fresh shells (copied env and cwd, no `~/.profile`). The layout is saved in localStorage `shiro-panes` and rebuilt on reload; `window.__shiroPanes.layout()` / `.reset()` inspect or clear it. Don't hand-build split layouts with page scripts anymore.
 - The startup banner (`drawHud` in `terminal.ts`) lists `claude`, `gh auth login`, `remote start`, and help/files/github; `shiro://cmd/<cmd>` links type the command at an idle prompt. A terminal that is busy (command running or alternate screen) never gets in-place banner rewrites; remote status goes to an idle sibling terminal instead (e.g. the upper shell of a split), drawing a banner there if needed. `help` is a curated getting-started page; `help --all` lists every command.
 - Claude defaults in `process.ts`: tool concurrency 4 and 3 planner agents (were 1), background tasks off. Export the env vars to override.
 - Scripts run through bin symlinks execute under their real path (`shell.ts` → `fs.realpath`), so Claude-specific preload/env tweaks key off `/@anthropic-ai/claude-code/`.
 - Claude's `tui` setting is seeded to `fullscreen` (alt-screen renderer). The classic renderer leaves stale frames in scrollback when the window is resized or a frame is taller than the terminal.
 - Commands run through the `child_process` shim execute in a forked shell with no terminal, so their output returns to the caller instead of painting over Claude's UI.
 - Console output is captured from boot into a bounded log (`src/console-log.ts`): the newest 3000 entries / 1.5M characters, 2000 characters per entry, consecutive repeats collapsed, text only (no retained objects). The newest 300 entries are saved to `localStorage` (`shiro-console-log`) every 5s and on pagehide, so the previous page load's log is queryable after a reload or crash. Query it with `console -g RE [--since S] [--prev]`, the remote `{type:'console'}` request, the shiro-mcp `console` tool, or `curl 'localhost:7788/console?grep=RE&level=error&since=-600000&limit=100&previous=1'` via the probe. Replies default to 100 entries / 64 KB.
-- To profile a live session: `remote start` in Shiro, then `node shiro-mcp/probe.mjs <code>` (run `npm install` in `shiro-mcp/` first; set `SHIRO_SIGNALING_URL` for subdomains like `https://music.shiro.computer`). Every 2s it logs heap, long tasks, page response time, IndexedDB filesystem traffic, errors, tagged console lines, and shell commands still running after 30s into `probe.jsonl`, and serves `curl localhost:7788/eval --data-binary '<js>'` and `/exec`. Replies over the data channel are size-limited; fetch large files in ~100 KB slices.
+- To profile a live session: `remote start` in tabcomputer, then `node shiro-mcp/probe.mjs <code>` (run `npm install` in `shiro-mcp/` first; set `TABCOMPUTER_SIGNALING_URL` for subdomains like `https://music.shiro.computer`). Every 2s it logs heap, long tasks, page response time, IndexedDB filesystem traffic, errors, tagged console lines, and shell commands still running after 30s into `probe.jsonl`, and serves `curl localhost:7788/eval --data-binary '<js>'` and `/exec`. Replies over the data channel are size-limited; fetch large files in ~100 KB slices.
 - Fullscreen TUIs copy a selection with OSC 52; both terminals handle it (`src/utils/osc52.ts`, with an `execCommand` fallback), and `pbcopy`/`xclip`/`wl-copy` are builtins that copy stdin.
 - Claude's Bash tool opens its task output file with `fs.promises.open` and reads it back with `handle.read()` inside `await using`, so the shim's FileHandle must keep a real registered fd, `read`, `stat`, and `[Symbol.asyncDispose]`.
 - Claude auth/bootstrap lives in `src/claude-signin.ts`, `src/claude-auth.ts`, `src/claude-config.ts`, `src/node-compat/preload.ts`, and `src/node-compat/process.ts`.
-- Shiro pre-seeds trust/onboarding/bypass settings for Claude Code.
+- tabcomputer pre-seeds trust/onboarding/bypass settings for Claude Code.
 - Browser-hosted Claude is more stable with conservative runtime defaults. Prefer serial/single-lane behavior over background worker fan-out unless you have verified a broader mode works.
-- In `seed blob`, Claude runs cross-origin from the host page. Shiro-backed calls must resolve through the Shiro origin, not the parent site, and `server.mjs` CORS preflight handling must tolerate Claude headers like `x-app` and `x-stainless-*`.
+- In `seed blob`, Claude runs cross-origin from the host page. tabcomputer-backed calls must resolve through the tabcomputer origin, not the parent site, and `server.mjs` CORS preflight handling must tolerate Claude headers like `x-app` and `x-stainless-*`.
 
 ## Git And GitHub
 
@@ -97,23 +140,22 @@ export const myCmd: Command = {
 - Spawns like Claude's `zsh -c -l <cmd>`: flags after `-c` are skipped (`extractShellArgs`), otherwise a cwd prefix turned `-l` into a command.
 - `git config` supports get/set/`--list`/`--unset`, local and `--global` (`~/.gitconfig`). Commit authors come from repo config, then `~/.gitconfig`, then `GIT_AUTHOR_*`.
 - `gh` (`src/commands/gh*.ts`) follows the real CLI's flags where implemented: `auth` (status/login/logout/token/setup-git), `repo` (view `--json`, list, create `--source --push`, clone, delete `--yes`), `api` (`-q/--jq`, `-f/-F`, `-X/--method`), `pr`, `issue`, `release`, `workflow`, `run`, `label`, `search`.
-- Known gaps: git only works from the repository root (no upward `.git` discovery), and `git log --oneline` prints full messages.
 
 ## WASM Processes
 
 - `wasi run`, `wasi exec`, `.wasm` files on PATH, `#!wasi-pkg` stubs, package auto-install and the lua fallback all go through `runWasiProgram` (`src/wasi/run-command.ts`). When the page can block it spawns a kernel process; when `canBlock()` is `'none'` it uses the old `WasiRT` (preloaded files, fixed stdin).
 - Cross-origin isolated page (SAB): each WASM thread is a Worker (`guest-worker.ts`, bundled inline via `?worker&inline`) making blocking syscalls through `Kernel.syscall`, so `fd_read` on an empty pipe or the terminal blocks, files open on demand, output streams. Without SAB but with JSPI (Chrome) the module runs on the main thread with `WebAssembly.Suspending` imports; wasi-threads programs then fail with a clear message.
 - `wasi-guest.ts` implements WASI preview1 once, as generators yielding kernel syscalls; `runSync` (Worker) and `runMaybeAsync` (JSPI) drive them. Path calls use the kernel's `*at` syscalls with the WASI dirfd; preview1 `sock_accept/recv/send/shutdown` map to accept4/recvfrom/sendto/shutdown. Other wasi/wasix imports become ENOSYS stubs so binaries still instantiate.
-- Spawning from WASM uses WASIX `wasix_32v1` (`proc_spawn3`/`proc_spawn2`, `proc_join`, `fd_pipe`, `fd_dup`, `getcwd`/`chdir`) mapped onto `SYS_spawn` with `inherit: true`; dup2/open file actions become fd overrides, and a close action marks the parent fd close-on-exec for the duration of the spawn. Children can be WASM (`installWasmLoader`: by path or `NAME`/`NAME.wasm` on PATH) or Shiro builtins.
+- Spawning from WASM uses WASIX `wasix_32v1` (`proc_spawn3`/`proc_spawn2`, `proc_join`, `fd_pipe`, `fd_dup`, `getcwd`/`chdir`) mapped onto `SYS_spawn` with `inherit: true`; dup2/open file actions become fd overrides, and a close action marks the parent fd close-on-exec for the duration of the spawn. Children can be WASM (`installWasmLoader`: by path or `NAME`/`NAME.wasm` on PATH) or tabcomputer builtins.
 - WASIX fork, setjmp/longjmp and exec (`src/wasi/asyncify.ts`, `host.ts`): WASIX binaries are already asyncified (they export `asyncify_*`), so `stack_checkpoint`/`stack_restore`/`proc_fork` unwind the main thread's stack into a buffer at the bottom of its shadow stack (`__data_end`, like Wasmer), and the Worker driver (`runEntry` in `guest-worker.ts`) rewinds it. Checkpoints are kept by content hash (key written into the jmp_buf); longjmp restores wasm locals and `__stack_pointer`, not linear memory. Fork (`SYS_wasix_fork`, vfork too) copies the shared memory into a new kernel process (fds via `FdTable.fork`, signal state copied) whose Worker rewinds into `proc_fork` returning 0. `proc_exec*` is a real exec (`SYS_wasix_exec`: same pid, close-on-exec fds closed, caught signals reset; JSPI keeps spawn+wait+exit).
 - WASIX signals: `callback_signal` makes every catchable non-ignored signal a guest handler (`WASIX_HANDLER`), delivered after the next syscall reply by calling the export. WASIX libc runs default actions itself (prints "Program recieved … signal" and aborts); inside the callback that write is intercepted and the kernel takes the real default action (`SYS_wasix_signal`). Ignored-by-default signals (CHLD, WINCH, CONT, URG) restart the interrupted call instead of EINTR, and when the main thread spins in WASM without syscalls (WASIX `sigsuspend` is a no-op, so dash's `wait` busy-waits) the host runs such a signal on a signal thread with its own stack page.
 - WASIX sockets (`sock_open`, `sock_connect`/`bind`/`listen`/`accept_v2`, `sock_send_to`/`recv_from`, `sock_addr_*`, `sock_set/get_opt_*`, `sock_status`) map onto the kernel socket syscalls (net.ts); `__wasi_addr_port_t` is tag u8, port u16 at 2 (host order), address bytes at 4. `resolve` is `SYS_wasix_resolve` on the NetStack `installNet` gave the kernel (`netStackOf`), answering one address because early libcs (curl's) and later ones disagree on the entry size. curl does HTTP and HTTPS (its own OpenSSL) through the relay.
 - Dynamic linking (`src/wasi/dylink.ts`): a position-independent main module (`dylink.0`, python) gets its data at 1024 and an 8 MiB stack after it, a table per Worker, `__memory_base`/`__table_base`/`__stack_pointer`, GOT globals (filled from its own exports after instantiation) and EH tags; the main thread of a fresh process applies `__wasm_apply_data_relocs` and `__wasm_apply_tls_relocs`. dlopen of side modules is not implemented (ENOSYS). WASIX `reflect_signature`/`call_dynamic`/`closure_*` (`src/wasi/dyncall.ts`) get function types from the module's sections (an exported funcref's `name` is its function index); closures are generated one-import modules re-exporting a JS function.
 - Package mounts: an index entry's `mounts` (guest path → package dir) become per-process preopens named after the guest path (`wasmRunner(…, mounts)`; libcs resolve absolute paths through the longest matching preopen), for package binaries and for package programs started by path (`packageMountsForPath`: clang's driver running wasm-ld). curl gets its CA dir at `/openssl`, python its `/nix/store/...` stdlib, tzdata and terminfo, clang `/sysroot` and `/lib`. A bin's `self` names the command `/proc/self/exe` reports (and an empty-name exec runs): clang's slim driver re-runs the full `clang-16` for `-cc1`, like Wasmer's exec-name. Volume installs create the volume's empty directories and symlinks too.
-- `tty_get`/`tty_set` map onto TCGETS/TCSETS of the first terminal among fds 0-2. Shiro commands stat as executables in `/bin`, `/usr/bin`, `/usr/local/bin` (`binCommandStat`), so shells searching PATH find `ls`, `cat`, ...
+- `tty_get`/`tty_set` map onto TCGETS/TCSETS of the first terminal among fds 0-2. tabcomputer commands stat as executables in `/bin`, `/usr/bin`, `/usr/local/bin` (`binCommandStat`), so shells searching PATH find `ls`, `cat`, ...
 - wasi-threads: `wasi.thread-spawn` is `SYS_wasi_thread_spawn` (1100, registered by `host.ts` with `kernel.registerSyscalls`), answered with the kernel's `attachThread`, so each thread is a Worker with its own channel and kernel tid; a returning thread sends `SYS_exit`. Shared memory limits come from the binary's import section (`wasm-imports.ts`). WASIX `futex_wait/wake` use `Atomics.wait/notify` on the shared memory.
 - Browsers refuse `TextDecoder.decode` on views of a SharedArrayBuffer (Node allows it, so vitest misses it): copy, or use `decodeText()` from `src/kernel/abi.ts`.
-- Preview1 follows Wasmtime where the wasi-testsuite checks it (`tests/conformance/syscalls-wasi.conf.ts`, 71/72; regressions in `wasi-conformance.test.ts`): fixed rights per filetype (`fd_fdstat_set_rights` is ENOTSUP), `path_open` without `symlink_follow` is O_NOFOLLOW, O_DIRECTORY with write rights is EISDIR, `fd_seek` on a directory is EISDIR, preview1 `fd_renumber` needs an open target (WASIX's doesn't: dash's dup2). When the guest's "/" is a mounted directory rather than Shiro's root (`confined`), dirfd paths can't be absolute or climb above the dirfd and symlink targets can't be absolute (ENOTCAPABLE); with the real root they keep POSIX meaning. The kernel's path syscalls carry the Linux rules underneath (trailing slashes, ELOOP, rename/rmdir ENOTEMPTY/EISDIR/ENOTDIR, utimensat with nanoseconds and AT_SYMLINK_NOFOLLOW; FSNode keeps `mtimeNs`, `atime`, `atimeNs`). No hard links: `link()` is EPERM (after its EEXIST/ENOENT/EINVAL checks).
+- Preview1 follows Wasmtime where the wasi-testsuite checks it (`tests/conformance/syscalls-wasi.conf.ts`, 71/72; regressions in `wasi-conformance.test.ts`): fixed rights per filetype (`fd_fdstat_set_rights` is ENOTSUP), `path_open` without `symlink_follow` is O_NOFOLLOW, O_DIRECTORY with write rights is EISDIR, `fd_seek` on a directory is EISDIR, preview1 `fd_renumber` needs an open target (WASIX's doesn't: dash's dup2). When the guest's "/" is a mounted directory rather than tabcomputer's root (`confined`), dirfd paths can't be absolute or climb above the dirfd and symlink targets can't be absolute (ENOTCAPABLE); with the real root they keep POSIX meaning. The kernel's path syscalls carry the Linux rules underneath (trailing slashes, ELOOP, rename/rmdir ENOTEMPTY/EISDIR/ENOTDIR, utimensat with nanoseconds and AT_SYMLINK_NOFOLLOW; FSNode keeps `mtimeNs`, `atime`, `atimeNs`). No hard links: `link()` is EPERM (after its EEXIST/ENOENT/EINVAL checks).
 - Tests: `tests/tests/shiro-vitest/kernel-wasi.test.ts`; the real WASIX packages (dash, bash, php from Wasmer's CDN, cached in `tests/.pkg-cache`) in `kernel-wasix.test.ts`. Fixtures are freestanding C (no wasi-sysroot needed; `fixtures/wasi/build.sh`), plus a Go `GOOS=wasip1` program built at test time when Go is installed.
 
 ## Node Processes Share The Page
@@ -129,16 +171,16 @@ export const myCmd: Command = {
 - The shell runs anything resolving into `/usr/lib/pkg/` through `runPackageBinary`: a kernel process via `runWasiProgram` when the page can block, else the in-page `WasiRT` (always for `wasi_unstable` programs). An installed package's command wins over a builtin of the same name unless its bin entry says `"shadow": false` (coreutils applets, every WASIX command); `builtin NAME` reaches the builtin.
 - Packages built here come from `scripts/pkgbuild/<name>.sh` (wasi-sdk, pinned sources) and live in `public/pkg/`; registry packages are Wasmer WebC containers read by `src/webc.ts`.
 - x86-64 packages (`abi: x86_64-linux`, recipes in `scripts/pkgbuild/x86/`) are static musl builds run in Blink; [docs/COMPAT.md](docs/COMPAT.md) is the scoreboard of popular tools (less, vim, ...) with a smoke test each in `compat-tools.test.ts`.
-- Packages that need kernel features (`needs`: wasix, processes, threads, sockets, ...) stay gated until the WASM process mode (`src/wasi/host.ts`) or `globalThis.__shiroKernel.features` provides them.
+- Packages that need kernel features (`needs`: wasix, processes, threads, sockets, ...) stay gated until the WASM process mode (`src/wasi/host.ts`) or `globalThis.__tabcomputerKernel.features` provides them.
 
 ## Debian Mode
 
 - `debian install` streams Debian 13 trixie in (docs/DEBIAN.md): `public/debian/` is built by `scripts/debian/build-rootfs.sh` (debootstrap minbase from a pinned snapshot.debian.org timestamp, run as root) and `pack-rootfs.mjs` (content-addressed gzip chunks grouped by package + a path index). Installing writes every path as a placeholder (`FSNode.lazy`); the first read fetches the chunk (sha256-checked, Cache API) and stores the bytes in IndexedDB. Boot re-attaches the loader from `/var/lib/shiro/rootfs.json` (`src/debian/rootfs.ts`).
 - Debian's binaries (dynamic glibc) run in Blink. `sudo` sets kernel uid/gid 0 for its children (`SpawnOptions.uid`, `Shell.uid`). The kernel runs `#!` scripts whose interpreter is an ELF or a `Command.program` itself (`shebangLoader`), so maintainer scripts run under Debian's dash. `link()` copies and reports the source's inode (dpkg's backups need it).
-- apt's http method is diverted to `http.debian`; its place holds `#!/usr/bin/shiro-apt-method`, a kernel program (`Command.program`, `src/debian/apt-method.ts`) fetching `http://HOST/PATH` as `/debian/mirror/HOST/PATH` from `server.mjs` (`SHIRO_DEBIAN_MIRRORS` allowlist, `SHIRO_DEBIAN_CACHE`).
+- apt's http method is diverted to `http.debian`; its place holds `#!/usr/bin/shiro-apt-method`, a kernel program (`Command.program`, `src/debian/apt-method.ts`) fetching `http://HOST/PATH` as `/debian/mirror/HOST/PATH` from `server.mjs` (`TABCOMPUTER_DEBIAN_MIRRORS` allowlist, `TABCOMPUTER_DEBIAN_CACHE`).
 - apt's `store` method (index decompression + hashing) is diverted the same way to `#!/usr/bin/shiro-apt-store` (`src/debian/apt-store.ts`, native codecs): under Blink the original's xz decode was ~45% of `apt-get update`.
-- Overlay (`src/debian/overlay.ts`): dpkg local diversions are the policy (diverted to `PATH.debian` = Shiro's). `shiro-alternatives --list|--set NAME shiro|debian|--auto`. Defaults in `src/debian/overlay-policy.json`; only programs whose cases in `debian-overlay.test.ts` match Debian's may default to Shiro. In Debian mode a program file in `/usr/{local/,}{s,}bin` replaces a builtin of the same name (`debianShadows` → `packageShadows`); `builtin NAME` still reaches Shiro's.
-- Scoreboard: `npm run debian-score -- --top 100` (scripts/debian/score.mjs, headless Chromium) → docs/DEBIAN_SCORE.md. Bench: `node bench/run.mjs --suites debian --modes isolated`. Tests: `debian.test.ts` (apt end to end with `SHIRO_DEBIAN_NET=1`).
+- Overlay (`src/debian/overlay.ts`): dpkg local diversions are the policy (diverted to `PATH.debian` = tabcomputer's). `tabcomputer-alternatives --list|--set NAME tabcomputer|debian|--auto` (old name `shiro-alternatives`, and `shiro` as a side, still work). Defaults in `src/debian/overlay-policy.json`; only programs whose cases in `debian-overlay.test.ts` match Debian's may default to tabcomputer. In Debian mode a program file in `/usr/{local/,}{s,}bin` replaces a builtin of the same name (`debianShadows` → `packageShadows`); `builtin NAME` still reaches tabcomputer's.
+- Scoreboard: `npm run debian-score -- --top 100` (scripts/debian/score.mjs, headless Chromium) → docs/DEBIAN_SCORE.md. Bench: `node bench/run.mjs --suites debian --modes isolated`. Tests: `debian.test.ts` (apt end to end with `TABCOMPUTER_DEBIAN_NET=1`).
 
 ## Languages And Toolchains
 
@@ -148,8 +190,9 @@ export const myCmd: Command = {
 - Shebangs: `executeScript` → `runInterpreter`; `#!/usr/bin/env X` and `#!/abs/X` reach builtins, packages and PATH scripts.
 - `scripts/browser-check.mjs URL 'cmd' ...` runs commands in headless Chromium against a built app (`npm run build`, `PORT=5299 STATIC_DIR=$PWD/dist node server.mjs`), in a terminal-less shell fork so kernel jobs' output is captured; it routes https through `$HTTPS_PROXY` when set.
 - `scripts/browser-tui.mjs URL 'run:pkg install vim' 'type:vim x\r' 'wait:x' 'type::q\r' 'shot:/tmp/v.png'` drives full-screen programs on the real terminal (xterm.js keyboard input, waits on the rendered screen, screenshots); a `wait:` can match the echoed command line, so wait for something only the program draws.
-- `tests/browser/first-run.mjs [URL] [--only NAME] [--shots DIR]` is the desktop's first-impression check: from a fresh profile per case it clicks every welcome-banner suggestion and dock app (and zooms a window running htop) and waits on the rendered terminal; it works against https://tabcomputer.com through `$HTTPS_PROXY` too.
+- `tests/browser/first-run.mjs [URL] [--only NAME] [--shots DIR]` is the first-impression check (the terminal UI too: `?ui=terminal`, `?profile=shiro` or a shiro.computer URL types the programs at the prompt). For the desktop: from a fresh profile per case it clicks every welcome-banner suggestion and dock app (and zooms a window running htop) and waits on the rendered terminal; it works against https://tabcomputer.com through `$HTTPS_PROXY` too.
 - `tests/browser/dev-workflows.mjs [URL] [--only NAME]` runs real developer workflows from a fresh profile each, typed into the terminal: git clone/commit over the git proxy, `npm install && npm test`, a venv with `pip install pytest requests` and `pytest`, `make test` on a C project, `ssh -T git@github.com` (needs the server's TCP relay). It times every step; external hosts go through `$HTTPS_PROXY`.
+- `tests/browser/ffmpeg.mjs [URL]` checks the ffmpeg shim in Chromium: its worker and ~31 MB core come from the page's own origin, only once ffmpeg runs; `ffmpeg -version` and a small transcode (a lavfi test clip to mp4, then gif).
 - `pkg install make llvm` gives GNU make and clang 21 (wasm32-wasip1). Programs built with wasi-sdk get processes from `scripts/pkgbuild/compat/wasi-proc.c` (posix_spawn/waitpid/pipe/dup2/exec*/system/popen over the guest's WASIX `proc_spawn3`/`proc_join`/`fd_pipe`/`fd_dup`; `setup_proc` in `common.sh`, headers in `compat/include/`). It syncs wasi-libc's cwd with the kernel's at startup. WASI LLVM can't spawn, so `compat/clang-driver.c` runs `clang -###` and then each step as `yowasp-llvm TOOL ...`.
 - `pkg install go` is Go 1.24.7 running on wasip1 (`scripts/pkgbuild/go.sh` + `go/wasip1-processes.patch`; one tarball the index unpacks into bin/, pkg/, src/, cache/). `GOROOT/go.env` sets GOTOOLCHAIN=local, GOPROXY=off, GOFLAGS=-p=4 and GOCACHE=/usr/lib/pkg/go/cache, which ships common std packages compiled natively by the same patched toolchain (release tool IDs match, so the wasm go command hits them). The guest's spawn treats a close of fd 0xffffffff as "inherit only the dup2'd fds".
 - Package ABI `x86_64-linux` (perl): static ELF programs under /usr/lib/pkg run in Blink through the shell's ELF path (`executeScript` only sends WASM to `runPackageBinary`); `needs: [threads, processes]` (Blink needs SharedArrayBuffer). Boot's PATH shims live in `src/path-shims.ts` (`createPathShims`), shared with tests.
@@ -157,31 +200,24 @@ export const myCmd: Command = {
 - `FileSystem.writeFile` copies a Uint8Array that is a view of a larger buffer (IndexedDB clones the whole buffer otherwise).
 - Builds: `vite-plugin-inline.ts` makes the inline entry script `import "./assets/index-….js"` instead of inlining its code; inlining made two instances of every module in the entry chunk (lazy chunks import the file), with separate state.
 
-## Build, Test, Deploy
-
-```bash
-npx tsc --noEmit
-cd tests && npm run test:shiro
-npm run build
-npm run deploy
-```
+## Performance, Deploy, Isolation
 
 Performance: `npm run bench:quick` (~2.5 min) before and after a performance change, `node bench/compare.mjs old.json new.json` to diff; the baseline, the ranked hotspot list and bugs found are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md), the harness in [bench/README.md](bench/README.md). It drives the pre-installed Chromium (`/opt/pw-browsers/chromium`); never run `playwright install`.
 
-Use focused vitest runs while iterating, then run the smallest meaningful verification set before deploy. For changes touching seed/Claude/bootstrap paths, relevant files usually include:
+Use focused vitest runs while iterating, then the full suite before pushing. For changes touching seed/Claude/bootstrap paths, relevant files usually include:
 
 - `tests/tests/shiro-vitest/seed.test.ts`
-- `tests/tests/shiro-vitest/seed-runtime-context.test.ts`
+- `tests/tests/shiro-vitest/agent-docs.test.ts`
 - `tests/tests/shiro-vitest/claude-bootstrap.test.ts`
 - `tests/tests/shiro-vitest/node-runtime.test.ts`
 - `tests/tests/shiro-vitest/new-features.test.ts`
 - `tests/tests/shiro-vitest/server-cors.test.ts`
 
-Production is `https://shiro.computer` on a DigitalOcean droplet. `deploy.sh` handles build, upload, and restart, and it is the only place that should bump `build-number.txt`. nginx on the host sets `client_max_body_size 100m` (`/etc/nginx/sites-enabled/shiro`): the 1 MB default rejected long Claude conversations and GitHub blob uploads with 413. `deploy.sh` uploads only `server.mjs`; the host's own `/opt/shiro/package.json` holds its deps (`ws`, and `undici` so proxied model calls have no 5-minute header timeout). Each model call logs one `[proxy] messages model=… stream=… bytes=… → status headers in Nms` line (`journalctl -u shiro`).
+Production is `https://tabcomputer.com` on its own DigitalOcean droplet, set up by `deploy/tabcomputer/cloud-init.yaml` (see `deploy/tabcomputer/README.md`). Shipping is a push to the `deploy` branch, and the droplet builds and switches to it within minutes. Bump `build-number.txt` with `node increment-build.js` in the commit you ship. nginx there sets `client_max_body_size 100m`: the 1 MB default rejected long Claude conversations and GitHub blob uploads with 413. `/opt/tabcomputer/package.json` holds the server's deps (`ws`, and `undici` so proxied model calls have no 5-minute header timeout). Each model call logs one `[proxy] messages model=… stream=… bytes=… → status headers in Nms` line (`journalctl -u tabcomputer`). shiro.computer is deployed from the Shiro repository.
 
 ### Cross-origin isolation
 
-- `server.mjs` sends `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: credentialless` on the app shell (`index.html`, including SPA fallbacks like `/s/:id`), on `.js`/`.mjs` (so same-origin Workers can start), and on `/oauth/callback`. The page is then `crossOriginIsolated`, so `SharedArrayBuffer` and `Atomics.wait` work. `vite.config.ts` sends the same pair for `npm run dev`/`vite preview`. `SHIRO_ISOLATION=0` turns both off (set it in the systemd unit for the server). `isIsolated()` in `src/utils/isolation.ts` is the runtime check, and boot logs one `[shiro] Cross-origin isolated…` / `Not cross-origin isolated…` line.
+- `server.mjs` sends `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: credentialless` on the app shell (`index.html`, including SPA fallbacks like `/s/:id`), on `.js`/`.mjs` (so same-origin Workers can start), and on `/oauth/callback`. The page is then `crossOriginIsolated`, so `SharedArrayBuffer` and `Atomics.wait` work. `vite.config.ts` sends the same pair for `npm run dev`/`vite preview`. `TABCOMPUTER_ISOLATION=0` turns both off (set it in the systemd unit for the server). `isIsolated()` in `src/utils/isolation.ts` is the runtime check, and boot logs one `[tabcomputer] Cross-origin isolated…` / `Not cross-origin isolated…` line.
 - nginx proxies everything to node, so it passes these headers through and needs no change. If nginx ever serves `dist/` itself, it needs `add_header Cross-Origin-Opener-Policy same-origin always;` and `add_header Cross-Origin-Embedder-Policy credentialless always;` on `index.html` and `*.js`.
 - `credentialless` (not `require-corp`) lets no-cors CDN loads (scripts, CSS, images, fonts) through without CORP; they go out without cookies. CORS loads (Pyodide, esm.sh, jsdelivr, unpkg, the npm registry) are unaffected.
 - Carve-outs: a cross-origin `<iframe>` inside the app is blocked (`ERR_BLOCKED_BY_RESPONSE`) unless the framed site sends COEP/CORP or the iframe has the `credentialless` attribute. This applies to user pages in server windows that embed third-party frames. srcdoc/blob/about:blank frames inherit isolation. The `public/*.html` docs pages are not isolated. `seed blob` runs in the host page's origin, so it is isolated only if the host is. URL-mode `seed` iframes carry `allow="cross-origin-isolated"`, so they are isolated only when the host page is.
@@ -196,20 +232,20 @@ Production is `https://shiro.computer` on a DigitalOcean droplet. `deploy.sh` ha
 - Shell job control for kernel jobs: `runKernelJob` in `src/commands/jobs.ts`; Ctrl-Z puts the job in `backgroundJobs` as `stopped`, and `fg`/`bg`/`jobs`/`kill %N`/`wait` signal and wait on its process group. A kernel sh on a pty (screen, tmux, `sh -i`) does the same through `Shell.kernelTty` (`ProcessTty`, src/kernel/pty.ts). Plain in-page `&` jobs are promises that can only be aborted.
 - `kill` is one implementation (`src/commands/trap.ts`, re-exported by `ps.ts`) with bash's options; `stty` reads and sets the terminal's pty (a per-shell detached pty when there is no terminal); `tput lines/cols` use the pty size, overridden by `LINES`/`COLUMNS`.
 
-## Desktop (Unix edition)
+## Desktop
 
-- The window manager API (`window.__shiro.desktop`, `src/desktop/wm.ts`) is a contract with unix/gui (X11/Wayland windows as `surface` content): keep it additive and log changes in docs/DESKTOP.md.
-- `#terminal` moves into the first Terminal window before `ShiroTerminal` is created, so `window.__shiro.terminal` is the same in both UIs (scripts and the bench rely on it). Closing that tab parks it in `#sd-parking`; the next Terminal window adopts it. Panes (`initPanes`) are classic-only.
+- The window manager API (`window.__tabcomputer.desktop`, `src/desktop/wm.ts`) is a contract with unix/gui (X11/Wayland windows as `surface` content): keep it additive and log changes in docs/DESKTOP.md.
+- `#terminal` moves into the first Terminal window before `ShiroTerminal` is created, so `window.__tabcomputer.terminal` is the same in both UIs (scripts and the bench rely on it). Closing that tab parks it in `#sd-parking`; the next Terminal window adopts it. Panes (`initPanes`) are classic-only.
 - Desktop shortcuts are Alt+Shift+… and Alt+\` (`isDesktopShortcut`), caught in the capture phase before xterm. Don't take plain Alt keys: readline uses them.
 - The desktop is a separate chunk that `main()` starts importing before IndexedDB opens (the terminal UI never loads it); apps under `src/desktop/apps/` are further chunks `import()`ed on launch. Keep `src/desktop` out of static imports from the entry; measure both UIs (`BENCH_PATH='/?ui=terminal'`). Fonts (`public/fonts`, OFL) are injected by the desktop only.
 - `/dom` (`src/dom-fs.ts`) is a FileSystem virtual provider (`fs.addVirtualProvider`, `mountPoint`) plus kernel devices for `/dom/events/<type>`; `cat` follows those live at a terminal.
-- Browser app: a browse origin must never serve the app or its APIs (`handleBrowseHost` in server.mjs), and a document's broker port is bound to the context the app reads from `event.origin` and the `WindowProxy` chain, never from message contents. `client.ts` (the page runtime) is a compatibility layer, not a security boundary. Score changes with `node tests/browser/web-score.mjs --md docs/WEB_SCORE.md` (needs the relay: `SHIRO_TCP_RELAY=1 SHIRO_TCP_ORIGINS=http://localhost:5299`).
-- Network sign-in: call `requireNetworkSignIn()` (`src/net-signin.ts`) before outbound network that needs a signed-in user; never for same-origin requests. The relay token fetch does; `SHIRO_TCP_REQUIRE_SIGNIN=1` makes server.mjs demand a GitHub token.
+- Browser app: a browse origin must never serve the app or its APIs (`handleBrowseHost` in server.mjs), and a document's broker port is bound to the context the app reads from `event.origin` and the `WindowProxy` chain, never from message contents. `client.ts` (the page runtime) is a compatibility layer, not a security boundary. Score changes with `node tests/browser/web-score.mjs --md docs/WEB_SCORE.md` (needs the relay: `TABCOMPUTER_TCP_RELAY=1 TABCOMPUTER_TCP_ORIGINS=http://localhost:5299`).
+- Network sign-in: call `requireNetworkSignIn()` (`src/net-signin.ts`) before outbound network that needs a signed-in user; never for same-origin requests. The relay token fetch does; `TABCOMPUTER_TCP_REQUIRE_SIGNIN=1` makes server.mjs demand a GitHub token.
 
 ## Linux GUI Apps (X11)
 
 - `Xshiro :0` (`src/x11/display.ts`) starts at boot and only listens; `src/x11/session.ts` builds the server (`server.ts`, `render.ts`, fonts) on the first client. `DISPLAY=:0` is in the shell env. `xserver` shows clients and windows; `window.__shiroX` is `{server, rootless}`.
-- Rootless: each X toplevel is a desktop `surface` window (`src/gui/desktop-host.ts`, scale 1, no auto-resize) or a stand-in floating window in the classic UI (`standin-host.ts`). Windows' app id is the app that launched their `_NET_WM_PID` (`src/x11/app-ids.ts`), else the WM_CLASS instance, so dock entries (`src/gui/desktop-apps.ts`) find them. The dock's Apps entry is `src/gui/apps-sheet.ts`; installed apps get dock icons. `.deb`s decode in workers (`src/gui/deb.ts`); measure first launch with `tests/browser/gui-first-launch.mjs`.
+- Rootless: each X toplevel is a desktop `surface` window (`src/gui/desktop-host.ts`, scale 1, no auto-resize) or a stand-in floating window in the classic UI (`standin-host.ts`). Windows' app id is the app that launched their `_NET_WM_PID` (`src/x11/app-ids.ts`), else the WM_CLASS instance, so dock entries (`src/gui/desktop-apps.ts`) find them. The dock's Apps entry is `src/gui/apps-sheet.ts`; installed apps get dock icons. `.deb`s decode in workers (`src/gui/deb.ts`); measure first launch with `tests/browser/gui-first-launch.mjs`. X pixels are device pixels (`src/gui/display-scale.ts`, docs/GUI.md "HiDPI"). DOM-text mode (`src/x11/dom-text.ts`, `xserver text dom|overlay`): docs/DOM-RENDERING.md.
 - `gui APP` installs from `public/gui/apps.json` (regenerate with `scripts/gui/gen-apps.py`; it needs the Debian Packages index, network, dpkg-deb, readelf and the host's update-mime-database): packages by sha256 through the server's `/debian/` route, Cache Storage, unpack in the page, triggers in Blink, overlays from `public/gui/overlay/`.
 - Debug a client without the browser: `tests/tests/shiro-vitest/gui-probe.test.ts` (`GUI_PROBE_ROOT` = a rootfs from `scripts/gui/debfetch.py`) or `scripts/gui/xdev.ts` (the server on a real Unix socket for native clients). Browser numbers and screenshots: `scripts/gui/shoot.mjs`.
 - Server code reads requests with `Reader` and writes with `Writer` in the client's byte order; throw `XError(code, value)` for protocol errors. Drawing goes through `Painter` (raster.ts) so clips, raster ops and damage stay right; never write `Pix.data` without calling `damage`.
@@ -221,7 +257,7 @@ Production is `https://shiro.computer` on a DigitalOcean droplet. `deploy.sh` ha
 - `vite-plugin-inline.ts` inlines the entry CSS into index.html but must keep the `.css` file: lazy chunks preload it, and the 404 made every such `import()` (WASM processes, the kernel shell) reject in production builds.
 - Blink engine: rebuild `public/engines/blink/blink.{mjs,wasm}` with `vendor/blink/build.sh` after changing `vendor/blink/patches/` or `shiro-net.js`; don't hand-edit the generated files. `host.mjs` is hand-written. Browsers refuse `TextDecoder.decode()` on SharedArrayBuffer views (Node doesn't), so decode a `.slice()` of channel data.
 
-- `child_process` is shimmed. There is no real process tree.
+- Node's `child_process` is a shim: it runs commands in forked shells inside the page. Kernel processes (WASM, x86) are real entries in the kernel's process table; builtins and node scripts mostly are not.
 - Most filesystem work is async under the hood even when sync APIs are emulated.
 - `FileSystem` reopens IndexedDB when the browser closes the connection (`onclose`/`onversionchange`, or an `InvalidStateError` from `transaction()`), retrying the request once. Writes resolve on transaction commit, and `fs.pendingWrites` makes `beforeunload` warn before leaving mid-write.
 - Background-task-heavy or highly concurrent agent flows can stall in the browser runtime.
@@ -230,7 +266,7 @@ Production is `https://shiro.computer` on a DigitalOcean droplet. `deploy.sh` ha
 - A loop, `if`, `case`, or subshell can head a pipeline (`for …; done | tail -1`): `splitTopLevelPipes` finds the pipe after the closing keyword and `runHeadedPipeline` feeds the head's output to the rest. Redirections after `done`/`fi`/`esac` (`< in`, `> out`, `2>&1`) are applied by `splitCompoundRedirects`. `printf` (except `-v`) is the regular command, so redirects and pipes apply; `ctx.stdoutIsTTY` is false for piped/redirected commands (`ls` then prints one name per line).
 - Node scripts end like node on an empty event loop: after the synchronous part, the runner waits until nothing tracked is in flight (`fetch`, `fs.promises`, timers; see `node-compat/activity.ts`) and output has been quiet for 60–150 ms, with the old 10 s ceiling as a fallback. Missing Node APIs come from `auto-stub.ts`, which logs `[AutoStub] called missing …` the first time; a stubbed callback API never calls back, so check the console for these when something hangs.
 - ES modules with top-level await run as async functions; static imports in async modules and `import()` wait for the imported module's body (`requireModule.ready`, `compileAsyncModule` in `node-compat/require.ts`). esbuild code-split chunks (they import `__esm`/`__export`… from a sibling) get live import bindings and getter exports (`src/commands/jseval/esm-live.ts`); Gemini CLI depends on both. The node runner's script timeouts end only idle scripts (nothing in flight, no new output).
-- Agent CLIs scoreboard (Codex, Grok Build, Gemini CLI, native Claude Code, agy, opencode): docs/COMPAT.md "Agent CLIs"; `agent-cli-probe.test.ts` runs a native one in Blink under Node. Claude Code native runs as the musl build (glibc Bun builds still crash at startup); `curl -o` writes bytes unchanged.
+- Agent CLIs scoreboard (Codex, Grok Build, Gemini CLI, native Claude Code, agy, opencode): docs/COMPAT.md "Agent CLIs"; `agent-cli-probe.test.ts` runs a native one in Blink under Node. `claude install` installs the musl build of native Claude Code (the glibc build also starts since Blink patch 0044, but needs glibc in the VFS); `curl -o` writes bytes unchanged.
 - `require('sharp')` is a browser-backed implementation (`shims/browser-sharp.ts`: createImageBitmap + canvas, real metadata/resize/JPEG/PNG/WebP). Claude Code's image loader is patched to use it; its bundled native/sharp path stalled image Reads.
 - Builtins and shell functions write straight to the writers passed to `execute()`. When a segment feeds a pipe or has output redirects, the pipeline loop swaps in capture writers (`startCapture`) and, once the builtin `continue`s, runs the captured text through the same `applyOutputRedirects` as regular commands (`flushCapture`). Functions, `eval`, `sh -c`, aliases, `exec`, `builtin`, and `time` get the segment's stdin through `injectedStdin` (the next `execute()`'s first command; `executeWithStdin` is the public form), and functions/brace groups also set `__PIPE_STDIN` so `read` inside them consumes it line by line.
 - A shell that runs as a kernel process (`sh -c` spawned by a program, scripts via `runViaShell`) has `kernelStdio` (`src/shell-stdio.ts`): its fds are its stdio. `liveStdin()` says whether a segment reads fd 0 (no pipe, here-doc, `<`, injected string or `__PIPE_STDIN`); then `read` takes one record from fd 0, `mapfile` reads it all, registered commands go through `execLazyStdin` (ctx.stdin read on first use, the command re-run), and kernel programs get the fds (`runKernelPipeline` `fds`) when the writers reach fd 1/2 (`writesTo` sees through `exec >` routing). Anything that hands a fork a string stdin must clear the fork's `kernelStdinLive` (`executeWithStdin`/`setInjectedStdin` do).

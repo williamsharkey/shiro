@@ -91,7 +91,7 @@ node bench/ab.mjs origin/unix/integration --quick          # integration vs your
 - `run.mjs` builds the app, copies fixtures to `dist/__bench/`, starts a TCP
   test server (echo/source/sink on this machine's non-loopback address,
   since Shiro keeps 127/8 inside the page) and `server.mjs` twice: isolated
-  (COOP/COEP) and `SHIRO_ISOLATION=0`. The relay is on (`SHIRO_TCP_RELAY=1`)
+  (COOP/COEP) and `TABCOMPUTER_ISOLATION=0`. The relay is on (`TABCOMPUTER_TCP_RELAY=1`)
   with the bandwidth/rate limits raised and the test server's address allowed.
 - Chromium (headless, `--enable-blink-features=ForceEagerMeasureMemory`)
   loads the page with `lib/inpage.js` injected first: boot marks (first

@@ -16,6 +16,7 @@ import type { KernelStdio } from './shell-stdio';
 import type { OpenFile } from './kernel/fd';
 import { getCompiledModule } from './wasi-packages';
 import { builtinIndex, findEntry, packageStatus, packageShadows, pkgOwnShadows, loadPackageShadows, packageOfPath, runPackageBinary, PKG_BIN_DIR } from './pkg-manager';
+import { activeProfile } from './profile';
 
 // Lazy-load the WASI runtime (~960 lines) only when WASM execution is needed
 let _wasiRuntime: typeof import('./wasi-runtime') | null = null;
@@ -524,6 +525,12 @@ export class Shell {
   fs: FileSystem;
   /** User id kernel processes started by this shell run as (`sudo` sets 0); undefined = the parent's (1000). */
   uid?: number;
+  /**
+   * Boot work that decides what names mean (Debian mode's overlay, which
+   * makes `python3` Debian's once installed): commands wait for it, so one
+   * typed right after load doesn't run the builtin.
+   */
+  bootGate?: Promise<unknown>;
   cwd: string = '/home/user';
   env: Record<string, string> = {};
   history: string[] = [];
@@ -885,6 +892,7 @@ export class Shell {
     child.inheritedReturn = this.canReturn();
     child.kernelHost = this.kernelHost;
     child.uid = this.uid;
+    child.bootGate = this.bootGate;
     return child;
   }
 
@@ -1023,6 +1031,7 @@ export class Shell {
     // loop or if body) runs on the terminal of the call around it; a builtin
     // calling back with its own sink collects the output like $(...), kernel
     // programs included (their stdout doesn't go to the screen)
+    if (this.bootGate) { await this.bootGate; this.bootGate = undefined; }
     if (terminalOverride === undefined) {
       terminalOverride = this.inCommand > 0
         ? (this.terminal ? capturingStdout(this.terminal) : undefined)
@@ -1174,8 +1183,10 @@ export class Shell {
     if (!done() && SHELL_KEYWORDS.has(name)) out.push({ kind: 'keyword' });
     if (!done() && name in this.functions) out.push({ kind: 'function' });
     if (!done() && SHELL_BUILTIN_NAMES.has(name)) out.push({ kind: 'builtin' });
-    // Shiro's own commands come before files on PATH (an installed package doesn't shadow them)
-    if (!done() && !name.includes('/') && this.commands.get(name) && !SHELL_BUILTIN_NAMES.has(name)) out.push({ kind: 'registered' });
+    // Shiro's own commands come before files on PATH, unless a program shadows
+    // them as it does when run (pkg install, or Debian mode's /usr/bin/NAME)
+    if (!done() && !name.includes('/') && this.commands.get(name) && !SHELL_BUILTIN_NAMES.has(name) &&
+      !(this.pkgShadowBypass !== name && packageShadows(this.fs).has(name))) out.push({ kind: 'registered' });
     if (!done()) {
       const path = await this.findExecutableInPath(name).catch(() => null);
       if (path) out.push({ kind: 'file', path });
@@ -1215,7 +1226,7 @@ export class Shell {
       }
     };
     if (args[0] && /^-./.test(args[0]) && args[0] !== '-p') {
-      writeStderr(`shiro: trap: ${args[0]}: invalid option\r\ntrap: usage: trap [-lp] [[arg] signal_spec ...]\r\n`);
+      writeStderr(`tabcomputer: trap: ${args[0]}: invalid option\r\ntrap: usage: trap [-lp] [[arg] signal_spec ...]\r\n`);
       return 2;
     }
     if (args.length === 0 || args[0] === '-p') {
@@ -1893,7 +1904,7 @@ export class Shell {
             for (const r of redirects) {
               if (r.type === '<' && fdOfRef(r.target) === null && !this.heredocs.lookup(r.target)) {
                 const st = await this.fs.stat(this.fs.resolvePath(r.target, this.cwd)).catch(() => null);
-                if (!st) { stderrWriter(`shiro: ${r.target}: No such file or directory\r\n`); exitCode = 1; }
+                if (!st) { stderrWriter(`tabcomputer: ${r.target}: No such file or directory\r\n`); exitCode = 1; }
               }
             }
             if (exitCode === 0) await this.applyOutputRedirects('', '', redirects, false, writeStdout, stderrWriter);
@@ -1985,7 +1996,7 @@ export class Shell {
                   liveStdin: this.liveStdin(i, heredocStdin, hereString, redirects) };
                 exitCode = await this.executeShellScript(content, scripts.slice(1), shCtx, writeStdout, stderrWriter, scripts[0]);
               } catch (e: any) {
-                stderrWriter(`shiro: ${scripts[0]}: ${e.message}\r\n`);
+                stderrWriter(`tabcomputer: ${scripts[0]}: ${e.message}\r\n`);
                 exitCode = 1;
               }
             } else {
@@ -2116,7 +2127,7 @@ export class Shell {
           if (key.endsWith('+') && /^[A-Za-z_][A-Za-z0-9_]*\+$/.test(key)) {
             const name = key.slice(0, -1);
             const err = this.setVar(name, (this.getVar(name) ?? '') + val);
-            if (err) stderrWriter(`shiro: ${err}\r\n`);
+            if (err) stderrWriter(`tabcomputer: ${err}\r\n`);
             exitCode = err ? 1 : this.substStatus ?? 0;
             this.lastExitCode = exitCode;
             this.env['?'] = String(exitCode);
@@ -2144,9 +2155,9 @@ export class Shell {
           }
           // Persist API keys to localStorage
           const persistKeys: Record<string, string> = {
-            ANTHROPIC_API_KEY: 'shiro_anthropic_key',
-            OPENAI_API_KEY: 'shiro_openai_key',
-            GOOGLE_API_KEY: 'shiro_google_key',
+            ANTHROPIC_API_KEY: 'tabcomputer_anthropic_key',
+            OPENAI_API_KEY: 'tabcomputer_openai_key',
+            GOOGLE_API_KEY: 'tabcomputer_google_key',
           };
           if (persistKeys[key] && typeof localStorage !== 'undefined') {
             localStorage.setItem(persistKeys[key], val);
@@ -2202,7 +2213,7 @@ export class Shell {
           const evalCmd = stripComments((cmdArgs[0] === '--' ? cmdArgs.slice(1) : cmdArgs).join(' '));
           if (evalCmd && !this.compoundsBalanced(evalCmd)) {
             // `eval "if"`: a syntax error; as sh it ends the script (eval is a special builtin)
-            stderrWriter('shiro: eval: syntax error: unexpected end of file\r\n');
+            stderrWriter('tabcomputer: eval: syntax error: unexpected end of file\r\n');
             exitCode = 2;
             if (this.posixFatal()) throw new ExitSignal(2);
           } else if (evalCmd) {
@@ -2287,7 +2298,7 @@ export class Shell {
             exitCode = 0;
             for (const name of declPositional) {
               const line = this.declareLine(name);
-              if (line === null) { stderrWriter(`shiro: declare: ${name}: not found\r\n`); exitCode = 1; }
+              if (line === null) { stderrWriter(`tabcomputer: declare: ${name}: not found\r\n`); exitCode = 1; }
               else writeStdout(line + '\r\n');
             }
             this.lastExitCode = exitCode;
@@ -2353,7 +2364,7 @@ export class Shell {
             if (badOpt) break;
           }
           if (badOpt) {
-            stderrWriter(`shiro: read: ${badOpt}\r\n`);
+            stderrWriter(`tabcomputer: read: ${badOpt}\r\n`);
             exitCode = 2;
             this.lastExitCode = exitCode;
             this.env['?'] = String(exitCode);
@@ -2376,7 +2387,7 @@ export class Shell {
               redirectInput = stdinRedirect.target === '/dev/null' ? ''
                 : await this.readInputRedirect(stdinRedirect.target);
             } catch (e: any) {
-              stderrWriter(`shiro: ${stdinRedirect.target}: ${e.message}\r\n`);
+              stderrWriter(`tabcomputer: ${stdinRedirect.target}: ${e.message}\r\n`);
               exitCode = 1;
               this.lastExitCode = 1;
               this.env['?'] = '1';
@@ -2393,7 +2404,7 @@ export class Shell {
             try {
               readInput = await this.readInputRedirect(fdOpen.target);
             } catch (e: any) {
-              stderrWriter(`shiro: ${fdOpen.target}: ${e.message}\r\n`);
+              stderrWriter(`tabcomputer: ${fdOpen.target}: ${e.message}\r\n`);
             }
           } else if (readFd >= 0 && this.fileDescriptors.has(readFd)) {
             // Read from file descriptor
@@ -2456,7 +2467,7 @@ export class Shell {
               readErr = this.setVar(readVars[vi], fields[vi] ?? '');
             }
           }
-          if (readErr) stderrWriter(`shiro: read: ${readErr}\r\n`);
+          if (readErr) stderrWriter(`tabcomputer: read: ${readErr}\r\n`);
           exitCode = readErr ? (readErr.includes('identifier') ? 2 : 1) : rec.complete ? 0 : 1;
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
@@ -2523,7 +2534,7 @@ export class Shell {
             const levels = cmdArgs.length > 0 ? parseInt(cmdArgs[0], 10) || 1 : 1;
             throw effectiveCmdName === 'break' ? new BreakSignal(levels) : new ContinueSignal(levels);
           }
-          stderrWriter(`shiro: ${effectiveCmdName}: only meaningful in a \`for', \`while', or \`until' loop\r\n`);
+          stderrWriter(`tabcomputer: ${effectiveCmdName}: only meaningful in a \`for', \`while', or \`until' loop\r\n`);
           exitCode = 0;
           this.lastExitCode = 0;
           this.env['?'] = '0';
@@ -2548,7 +2559,7 @@ export class Shell {
 
         // Shell builtin: return (throw sentinel caught by execFunction)
         if (effectiveCmdName === 'return' && !this.canReturn()) {
-          stderrWriter('shiro: return: can only `return\' from a function or sourced script\r\n');
+          stderrWriter('tabcomputer: return: can only `return\' from a function or sourced script\r\n');
           exitCode = 2;
           this.lastExitCode = 2;
           this.env['?'] = '2';
@@ -2666,7 +2677,7 @@ export class Shell {
             if (mode === 'P') found = found.filter((k) => k.kind === 'file');
             if (mode === 'p' && found.length && found[0].kind !== 'file') { continue; }
             if (!found.length) {
-              if (mode === 'long') stderrWriter(`shiro: type: ${name}: not found\r\n`);
+              if (mode === 'long') stderrWriter(`tabcomputer: type: ${name}: not found\r\n`);
               exitCode = 1;
               continue;
             }
@@ -2698,7 +2709,7 @@ export class Shell {
           exitCode = 0;
           for (const name of cmdArgs.slice(1)) {
             const [k] = await this.commandKinds(name, false);
-            if (!k) { if (verbose) stderrWriter(`shiro: command: ${name}: not found\r\n`); exitCode = 1; continue; }
+            if (!k) { if (verbose) stderrWriter(`tabcomputer: command: ${name}: not found\r\n`); exitCode = 1; continue; }
             if (!verbose) writeStdout((k.kind === 'file' ? k.path : k.kind === 'alias' ? `alias ${name}='${k.path}'` : name) + '\r\n');
             else if (k.kind === 'file') writeStdout(`${name} is ${k.path}\r\n`);
             else if (k.kind === 'alias') writeStdout(`${name} is aliased to \`${k.path}'\r\n`);
@@ -2717,7 +2728,7 @@ export class Shell {
           for (const name of names) {
             const path = await this.commandPath(name);
             if (path) this.hashTable.set(name, { path, hits: 0 });
-            else { stderrWriter(`shiro: hash: ${name}: not found\r\n`); exitCode = 1; }
+            else { stderrWriter(`tabcomputer: hash: ${name}: not found\r\n`); exitCode = 1; }
           }
           if (!names.length && !cmdArgs.includes('-r')) {
             if (!this.hashTable.size) writeStdout('hash: hash table empty\r\n');
@@ -2750,10 +2761,10 @@ export class Shell {
             if (printfVarName) {
               // -v NAME or NAME[SUB]
               const vm = /^([A-Za-z_][A-Za-z0-9_]*)(?:\[([\s\S]*)\])?$/.exec(printfVarName);
-              if (!vm) { stderrWriter(`shiro: printf: \`${printfVarName}': not a valid identifier\r\n`); exitCode = 2; this.lastExitCode = 2; this.env['?'] = '2'; lastOutput = ''; continue; }
+              if (!vm) { stderrWriter(`tabcomputer: printf: \`${printfVarName}': not a valid identifier\r\n`); exitCode = 2; this.lastExitCode = 2; this.env['?'] = '2'; lastOutput = ''; continue; }
               let err: string | null = null;
               try { err = this.setVar(vm[1], r.out, vm[2]); } catch (e) { if (e instanceof ArithError) err = e.message; else throw e; }
-              if (err) r.errors.push(`shiro: printf: ${err}`);
+              if (err) r.errors.push(`tabcomputer: printf: ${err}`);
             } else {
               writeStdout(r.out.replace(/\n/g, '\r\n'));
             }
@@ -2857,7 +2868,7 @@ export class Shell {
                 if (val !== undefined) {
                   writeStdout(`alias ${arg}='${val.replace(/'/g, "'\\''")}'\r\n`);
                 } else {
-                  stderrWriter(`shiro: alias: ${arg}: not found\r\n`);
+                  stderrWriter(`tabcomputer: alias: ${arg}: not found\r\n`);
                   exitCode = 1;
                 }
               }
@@ -3026,7 +3037,7 @@ export class Shell {
                     else if (n === 0) delete this.env[arrName];
                   } catch (e) {
                     if (!(e instanceof ArithError)) throw e;
-                    stderrWriter(`shiro: unset: ${e.message}\r\n`);
+                    stderrWriter(`tabcomputer: unset: ${e.message}\r\n`);
                     exitCode = 1;
                   }
                 }
@@ -3120,7 +3131,7 @@ export class Shell {
               if (eqIdx !== -1) {
                 const err = this.setVar(name, arg.slice(eqIdx + 1));
                 if (err) {
-                  stderrWriter(`shiro: export: ${err}\r\n`);
+                  stderrWriter(`tabcomputer: export: ${err}\r\n`);
                   exitCode = 1;
                   this.readonlyAssignFailed();
                   continue;
@@ -3672,7 +3683,7 @@ export class Shell {
             try {
               stdin = await this.readInputRedirect(redir.target);
             } catch (e: any) {
-              stderrWriter(`shiro: ${redir.target}: ${e.message}\r\n`);
+              stderrWriter(`tabcomputer: ${redir.target}: ${e.message}\r\n`);
               exitCode = 1;
               break;
             }
@@ -3797,7 +3808,7 @@ export class Shell {
               const toCtxErr = (t: string) => { ctx.stderr += t.replace(/\r\n/g, '\n'); };
               exitCode = await this.executeScript(executable, cmdArgs, ctx,
                 outRedirected || i !== pipeline.length - 1 ? toCtxOut : writeStdout,
-                outRedirected ? toCtxErr : stderrWriter);
+                outRedirected ? toCtxErr : stderrWriter, effectiveCmdName);
             } catch (e: any) {
               ctx.stderr += e.message + '\n';
               exitCode = 1;
@@ -3806,15 +3817,15 @@ export class Shell {
             // Like Debian's command-not-found: name the package that has it
             const provider = findEntry(builtinIndex(), effectiveCmdName);
             if (provider && Object.prototype.hasOwnProperty.call(provider.bin, effectiveCmdName)) {
-              stderrWriter(`shiro: command not found: ${effectiveCmdName}\r\n`);
+              stderrWriter(`tabcomputer: command not found: ${effectiveCmdName}\r\n`);
               stderrWriter(`  it can be installed with: pkg install ${provider.name}` +
-                (packageStatus(provider) === 'blocked' ? ` (needs kernel support Shiro doesn't have yet)` : '') + '\r\n');
+                (packageStatus(provider) === 'blocked' ? ` (needs kernel support tabcomputer doesn't have yet)` : '') + '\r\n');
               exitCode = 127;
               this.lastExitCode = exitCode;
               this.env['?'] = String(exitCode);
               break;
             } else {
-              stderrWriter(`shiro: command not found: ${effectiveCmdName}\r\n`);
+              stderrWriter(`tabcomputer: command not found: ${effectiveCmdName}\r\n`);
               exitCode = 127;
               this.lastExitCode = exitCode;
               this.env['?'] = String(exitCode);
@@ -3905,7 +3916,7 @@ export class Shell {
       if (ref !== null) {
         if (ref === 1) return t1;
         if (ref === 2) return t2;
-        if (!this.resolveOutFd(ref)) { stderrWriter(`shiro: ${ref}: Bad file descriptor\r\n`); this.redirectFailed = true; return null; }
+        if (!this.resolveOutFd(ref)) { stderrWriter(`tabcomputer: ${ref}: Bad file descriptor\r\n`); this.redirectFailed = true; return null; }
         return { kind: 'fd', n: ref };
       }
       if (target === '/dev/stdout') return t1;
@@ -3974,7 +3985,7 @@ export class Shell {
     } catch (e: any) {
       const msg = e?.code === 'EISDIR' || /EISDIR/.test(e?.message ?? '') ? 'Is a directory'
         : e?.code === 'ENOENT' || /ENOENT/.test(e?.message ?? '') ? 'No such file or directory' : (e?.message ?? String(e));
-      writeStderr(`shiro: ${shown}: ${msg}\r\n`);
+      writeStderr(`tabcomputer: ${shown}: ${msg}\r\n`);
       this.redirectFailed = true;
     }
   }
@@ -3984,7 +3995,7 @@ export class Shell {
     if (redir.force || !this.options.has('noclobber')) return true;
     const st = await this.fs.stat(path).catch(() => null);
     if (st && !st.isDirectory() && st.isFile() && !st.isFIFO?.()) {
-      writeStderr(`shiro: ${redir.target}: cannot overwrite existing file\r\n`);
+      writeStderr(`tabcomputer: ${redir.target}: cannot overwrite existing file\r\n`);
       this.redirectFailed = true;
       return false;
     }
@@ -4372,7 +4383,7 @@ export class Shell {
           // Dynamic special variables
           if (varName === 'RANDOM') { result += String(Math.floor(Math.random() * 32768)); i += m[0].length; continue; }
           if (varName === 'BASH_VERSION') { result += '5.0.0'; i += m[0].length; continue; }
-          if (varName === 'HOSTNAME' && this.env['HOSTNAME'] === undefined) { result += 'shiro'; i += m[0].length; continue; }
+          if (varName === 'HOSTNAME' && this.env['HOSTNAME'] === undefined) { result += activeProfile().hostname; i += m[0].length; continue; }
           if (varName === 'OSTYPE' && this.env['OSTYPE'] === undefined) { result += 'linux-gnu'; i += m[0].length; continue; }
           // Read-only: an assignment or the environment doesn't change them
           if (varName === 'PPID') { result += String(this.parentPid); i += m[0].length; continue; }
@@ -4458,7 +4469,7 @@ export class Shell {
     // ${@:off:len} / ${*:off:len}: offset 0 is $0
     if (/^[@*]:(?![-=+?])/.test(inner)) {
       const args = this.getPositionalArgs();
-      const pairs: [number, string][] = [[0, this.env['0'] ?? 'shiro'], ...args.map((a, k): [number, string] => [k + 1, a])];
+      const pairs: [number, string][] = [[0, this.env['0'] ?? activeProfile().hostname], ...args.map((a, k): [number, string] => [k + 1, a])];
       return { list: this.sliceList(pairs, args.length + 1, inner.slice(2)), star: inner[0] === '*' };
     }
     const m = /^([!#]?)([A-Za-z_][A-Za-z0-9_]*)\[/.exec(inner);
@@ -5886,7 +5897,7 @@ export class Shell {
       return v !== 0n ? 0 : 1;
     } catch (e) {
       if (!(e instanceof ArithError)) throw e;
-      writeStderr(`shiro: ${e.message}\r\n`);
+      writeStderr(`tabcomputer: ${e.message}\r\n`);
       return 1;
     }
   }
@@ -6197,7 +6208,7 @@ export class Shell {
       return await this.finishSubshell(await this.execute(inner, writeStdout, writeStderr, false, terminal, true), writeStdout, writeStderr);
     } catch (e) {
       if (e instanceof ExitSignal || e instanceof ReturnSignal) return e.code;
-      if (e instanceof Error && e.name !== 'AbortError') { writeStderr(`shiro: ${e.message}\r\n`); return 1; }
+      if (e instanceof Error && e.name !== 'AbortError') { writeStderr(`tabcomputer: ${e.message}\r\n`); return 1; }
       throw e;
     }
   }
@@ -6292,7 +6303,7 @@ export class Shell {
         try {
           stdin = await this.readInputRedirect(target);
         } catch {
-          writeStderr(`shiro: ${target}: No such file or directory\r\n`);
+          writeStderr(`tabcomputer: ${target}: No such file or directory\r\n`);
           return 1;
         }
       } else if (r.op === '2>&1') {
@@ -6320,7 +6331,7 @@ export class Shell {
         if (outFile.append) await this.fs.appendFile(outFile.path, text);
         else await this.fs.writeFile(outFile.path, text);
       } catch (e: any) {
-        writeStderr(`shiro: ${outFile.path}: ${/EISDIR/.test(e?.message ?? '') ? 'Is a directory' : /ENOENT/.test(e?.message ?? '') ? 'No such file or directory' : e?.message ?? e}\r\n`);
+        writeStderr(`tabcomputer: ${outFile.path}: ${/EISDIR/.test(e?.message ?? '') ? 'Is a directory' : /ENOENT/.test(e?.message ?? '') ? 'No such file or directory' : e?.message ?? e}\r\n`);
         return 1;
       }
     }
@@ -6827,7 +6838,7 @@ export class Shell {
     for (const item of items) {
       const err = this.setVar(varName, item);
       if (err) {
-        writeStderr(`shiro: ${err}\r\n`);
+        writeStderr(`tabcomputer: ${err}\r\n`);
         this.readonlyAssignFailed();
         return 1;
       }
@@ -6850,15 +6861,15 @@ export class Shell {
       tree = parseDoubleBracket(src);
     } catch (e) {
       if (!(e instanceof DbSyntaxError)) throw e;
-      writeStderr(`shiro: [[: ${e.message}\r\n`);
+      writeStderr(`tabcomputer: [[: ${e.message}\r\n`);
       if (this.scriptShell) throw new ExitSignal(2);
       return 2;
     }
     try {
       return (await this.dbEval(tree, writeStderr)) ? 0 : 1;
     } catch (e) {
-      if (e instanceof RegexSyntaxError) { writeStderr(`shiro: [[: invalid regular expression\r\n`); return 2; }
-      if (e instanceof ArithError) { writeStderr(`shiro: ${e.message}\r\n`); return 1; }
+      if (e instanceof RegexSyntaxError) { writeStderr(`tabcomputer: [[: invalid regular expression\r\n`); return 2; }
+      if (e instanceof ArithError) { writeStderr(`tabcomputer: ${e.message}\r\n`); return 1; }
       throw e;
     }
   }
@@ -7019,7 +7030,7 @@ export class Shell {
         if (!(e instanceof ArithError)) throw e;
         err = e.message;
       }
-      if (err) { writeStderr(`shiro: ${err}\r\n`); status = 1; }
+      if (err) { writeStderr(`tabcomputer: ${err}\r\n`); status = 1; }
     }
     if (decl === 'readonly') status = (await declare()) || status;
     return status || (this.substStatus ?? 0);
@@ -7583,6 +7594,8 @@ export class Shell {
     ctx: CommandContext,
     writeStdout: (s: string) => void,
     writeStderr: (s: string) => void,
+    /** argv[0] as the caller gave it (the command word); a symlink is followed for the binary only, as on Linux */
+    argv0: string = filePath,
   ): Promise<number> {
     // Only a shell script reads the shell's live fd 0 as it goes; anything else gets it as ctx.stdin
     const fillStdin = async () => {
@@ -7618,7 +7631,7 @@ export class Shell {
         }
       }
     } catch (e: any) {
-      writeStderr(`shiro: ${filePath}: ${e.message}\r\n`);
+      writeStderr(`tabcomputer: ${filePath}: ${e.message}\r\n`);
       return 1;
     }
 
@@ -7627,7 +7640,7 @@ export class Shell {
     try {
       content = await this.fs.readFile(resolvedPath, 'utf8') as string;
     } catch (e: any) {
-      writeStderr(`shiro: ${resolvedPath}: ${e.message}\r\n`);
+      writeStderr(`tabcomputer: ${resolvedPath}: ${e.message}\r\n`);
       return 1;
     }
     {
@@ -7642,7 +7655,7 @@ export class Shell {
     if (content.charCodeAt(0) === 0x00 && content.charCodeAt(1) === 0x61 &&
         content.charCodeAt(2) === 0x73 && content.charCodeAt(3) === 0x6d) {
       await fillStdin();
-      return this.executeWasmBinary(resolvedPath, args, ctx, writeStdout, writeStderr);
+      return this.executeWasmBinary(resolvedPath, args, ctx, writeStdout, writeStderr, argv0);
     }
 
     // Check for #!wasi-pkg stub — load from package cache
@@ -7659,7 +7672,7 @@ export class Shell {
       } catch (e: any) {
         const { WasiExit } = await loadWasiRuntime();
         if (e instanceof WasiExit) return e.code;
-        writeStderr(`shiro: ${pkgName}: ${e.message}\r\n`);
+        writeStderr(`tabcomputer: ${pkgName}: ${e.message}\r\n`);
         return 1;
       }
     }
@@ -7681,7 +7694,7 @@ export class Shell {
           stdin: ctx.stdin || '', writeStdout: writeStdout, writeStderr: writeStderr,
         });
       } catch (e: any) {
-        writeStderr(`shiro: ${pkgName}: ${e.message}\r\n`);
+        writeStderr(`tabcomputer: ${pkgName}: ${e.message}\r\n`);
         return 1;
       }
     }
@@ -7695,12 +7708,12 @@ export class Shell {
       return runElf(resolvedPath, args, {
         fs: this.fs, cwd: this.cwd, args, env: this.env, shell: this,
         stdin: ctx.stdin || '', writeStdout: writeStdout, writeStderr: writeStderr,
-      });
+      }, undefined, argv0);
     }
 
     // Reject other binary files (Mach-O, etc.) that can't be interpreted
     if (content.charCodeAt(0) === 0x7f || content.includes('\0')) {
-      writeStderr(`shiro: ${resolvedPath}: cannot execute binary file\n`);
+      writeStderr(`tabcomputer: ${resolvedPath}: cannot execute binary file\n`);
       return 126;
     }
 
@@ -7779,7 +7792,7 @@ export class Shell {
     writeStderr: (s: string) => void,
   ): Promise<number> {
     if (!interp) {
-      writeStderr('shiro: env: missing interpreter in #! line\n');
+      writeStderr('tabcomputer: env: missing interpreter in #! line\n');
       return 126;
     }
     if (interp.includes('/') && !viaEnv && await this.fs.exists(interp)) {
@@ -7793,7 +7806,7 @@ export class Shell {
     }
     const found = cmd ? `${PKG_BIN_DIR}/${base}` : await this.findExecutableInPath(base);
     if (found) return this.executeScript(found, argv, ctx, writeStdout, writeStderr);
-    writeStderr(`shiro: ${interp}: bad interpreter: No such file or directory\n`);
+    writeStderr(`tabcomputer: ${interp}: bad interpreter: No such file or directory\n`);
     return 126;
   }
 
@@ -7806,13 +7819,15 @@ export class Shell {
     ctx: CommandContext,
     writeStdout: (s: string) => void,
     writeStderr: (s: string) => void,
+    argv0: string = filePath,
   ): Promise<number> {
     try {
       const data = await this.fs.readFile(filePath) as Uint8Array;
       const image = new Uint8Array(data);
       const wasmModule = await WebAssembly.compile(image);
 
-      const programName = filePath.split('/').pop() || filePath;
+      // (the name the program was run by, not a symlink's target: multi-call binaries pick their applet by it)
+      const programName = argv0.split('/').pop() || argv0;
       const { runWasiProgram } = await import('./wasi/run-command');
       return await runWasiProgram(ctx, {
         module: wasmModule, image, argv: [programName, ...args], cwd: this.cwd, env: { ...this.env },
@@ -7822,7 +7837,7 @@ export class Shell {
       if (e instanceof WasiExit) {
         return e.code;
       }
-      writeStderr(`shiro: ${filePath}: ${e.message}\n`);
+      writeStderr(`tabcomputer: ${filePath}: ${e.message}\n`);
       return 1;
     }
   }
@@ -7841,7 +7856,7 @@ export class Shell {
     // Use the existing 'node' command with the script path
     const nodeCmd = this.commands.get('node');
     if (!nodeCmd) {
-      writeStderr('shiro: node command not available\r\n');
+      writeStderr('tabcomputer: node command not available\r\n');
       return 127;
     }
 
@@ -7932,7 +7947,7 @@ export class Shell {
           exitCode = await this.execute(stmt.text, writeStdout, writeStderr, false, terminal, true);
         } catch (e) {
           if (!(e instanceof LineAbort)) throw e;
-          writeStderr(`shiro: line ${stmt.line}: ${e.message}\r\n`);
+          writeStderr(`tabcomputer: line ${stmt.line}: ${e.message}\r\n`);
           exitCode = 1;
           this.lastExitCode = 1;
           this.env['?'] = '1';
@@ -7941,7 +7956,7 @@ export class Shell {
     } catch (e) {
       if (e instanceof ExitSignal || e instanceof ReturnSignal) exitCode = e.code;
       // An expansion error (${x?msg}, bad substitution, set -u) ends the script with status 1 (127)
-      else if (e instanceof Error && e.name !== 'AbortError') { writeStderr(`shiro: ${e.message}\r\n`); exitCode = e instanceof UnboundVariable ? e.code : 1; }
+      else if (e instanceof Error && e.name !== 'AbortError') { writeStderr(`tabcomputer: ${e.message}\r\n`); exitCode = e instanceof UnboundVariable ? e.code : 1; }
       else if (!(e instanceof BreakSignal || e instanceof ContinueSignal)) throw e;
     } finally {
       this.executeDepth = depth;

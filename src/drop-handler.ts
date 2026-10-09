@@ -66,7 +66,7 @@ async function promptSeedRestore(terminal: ShiroTerminal, seed: SeedData): Promi
   const blank = ' '.repeat(W);
   const L = '\x1b[36m\u2551\x1b[0m'; // left border
   const R = '\x1b[36m\u2551\x1b[0m'; // right border
-  term.writeln(`${L}${rpad('  \x1b[1;97mShiro Snapshot Detected\x1b[0m')}${R}`);
+  term.writeln(`${L}${rpad('  \x1b[1;97mtabcomputer snapshot detected\x1b[0m')}${R}`);
   term.writeln(`${L}${blank}${R}`);
   const filesLine = `  Files: ${String(seed.files).padEnd(8)}Size: ${sizeMB.padStart(7)} MB  `;
   term.writeln(`${L}${rpad(filesLine)}${R}`);

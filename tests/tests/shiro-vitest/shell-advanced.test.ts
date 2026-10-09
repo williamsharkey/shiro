@@ -3117,7 +3117,8 @@ describe('Shell Advanced', () => {
     it('cat /proc/version shows Linux version', async () => {
       const { output, exitCode } = await run(shell, 'cat /proc/version');
       expect(exitCode).toBe(0);
-      expect(output).toContain('Linux version 6.1.0-shiro');
+      expect(output).toMatch(/^Linux version 6\.1\.0-tabcomputer \(user@tabcomputer\) #1 SMP PREEMPT_DYNAMIC /); // as uname -rv
+      expect(output).not.toContain('shiro');
     });
 
     it('cat /proc/uptime returns uptime', async () => {
@@ -3138,7 +3139,7 @@ describe('Shell Advanced', () => {
       const { output, exitCode } = await run(shell, 'cat /proc/cpuinfo');
       expect(exitCode).toBe(0);
       expect(output).toContain('processor');
-      expect(output).toContain('Shiro Virtual CPU');
+      expect(output).toContain('tabcomputer Virtual CPU');
     });
 
     it('ls /proc lists proc entries', async () => {

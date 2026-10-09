@@ -53,6 +53,11 @@ const forkBin = join(out, 'forkcopy');
 const haveFork = tryBuild('gcc', ['-static', '-O1', '-o', forkBin, 'forkcopy.c']);
 const mtchildBin = join(out, 'mtchild');
 const haveMtchild = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', mtchildBin, 'mtchild.c']);
+const fsidentBin = join(out, 'fsident');
+const haveFsident = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', fsidentBin, 'fsident.c']);
+// musl's libc (native Claude Code's) resolves paths and stats files its own way
+const fsidentMuslBin = join(out, 'fsident-musl');
+const haveFsidentMusl = tryBuild('musl-gcc', ['-static', '-O1', '-o', fsidentMuslBin, 'fsident.c']);
 const statnullBin = join(out, 'statnull');
 const haveStatnull = tryBuild('gcc', ['-static', '-O1', '-o', statnullBin, 'statnull.c']);
 const futexwakeBin = join(out, 'futexwake');
@@ -85,6 +90,8 @@ const sockaddrsBin = join(out, 'sockaddrs');
 const haveSockaddrs = tryBuild('gcc', ['-static', '-O1', '-o', sockaddrsBin, 'sockaddrs.c']);
 const sleepintrBin = join(out, 'sleepintr');
 const haveSleepintr = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', sleepintrBin, 'sleepintr.c']);
+const unameBin = join(out, 'uname');
+const haveUname = tryBuild('gcc', ['-static', '-O1', '-o', unameBin, 'uname.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -109,6 +116,8 @@ const ssecmpBin = join(out, 'ssecmp');
 const haveSsecmp = tryBuild('gcc', ['-static', '-O1', '-o', ssecmpBin, 'ssecmp.c', '-lm']);
 const brkmapBin = join(out, 'brkmap');
 const haveBrkmap = tryBuild('gcc', ['-static', '-O1', '-o', brkmapBin, 'brkmap.c']);
+const rawepollBin = join(out, 'rawepoll');
+const haveRawepoll = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', rawepollBin, 'rawepoll.c']);
 const bigfileBin = join(out, 'bigfile');
 const haveBigfile = tryBuild('gcc', ['-static', '-O1', '-o', bigfileBin, 'bigfile.c']);
 const getgroupsBin = join(out, 'getgroups');
@@ -117,6 +126,9 @@ const fionbioBin = join(out, 'fionbio');
 const haveFionbio = tryBuild('gcc', ['-static', '-O1', '-o', fionbioBin, 'fionbio.c']);
 const fuzzBin = join(out, 'jitfuzz');
 const haveFuzz = tryBuild('gcc', ['-static', '-O1', '-o', fuzzBin, 'jitfuzz.c']);
+
+const argv0Bin = join(out, 'argv0');
+const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
 async function setup(bin: Uint8Array) {
   const { fs, shell } = await createTestShell();
@@ -131,13 +143,13 @@ describe('x86 engine selection', () => {
   it('chooses blink in Node (SharedArrayBuffer available)', async () => {
     const { chooseX86Engine } = await import('@shiro/x86-engine');
     expect(await chooseX86Engine({})).toBe('blink');
-    expect(await chooseX86Engine({ SHIRO_X86_ENGINE: 'x86' })).toBe('x86');
+    expect(await chooseX86Engine({ TABCOMPUTER_X86_ENGINE: 'x86' })).toBe('x86');
   });
 
   it('chooseElfRunner falls back when the old engine is forced', async () => {
     const { chooseElfRunner } = await import('@shiro/x86-engine');
     const fallback = async () => 7;
-    expect(await chooseElfRunner('/bin/x', { SHIRO_X86_ENGINE: 'x86' }, () => fallback)).toBe(fallback);
+    expect(await chooseElfRunner('/bin/x', { TABCOMPUTER_X86_ENGINE: 'x86' }, () => fallback)).toBe(fallback);
     expect(await chooseElfRunner('/bin/x', {}, () => fallback)).not.toBe(fallback);
   });
 });
@@ -503,6 +515,45 @@ describe.skipIf(!haveTty)('Blink engine: interactive program on a kernel pty', (
     expect(await done).toEqual({ type: 'exited', status: 0 });
   }, 120_000);
 
+  // Bun's and libuv's input loop (native Claude Code): raw, O_NONBLOCK stdin
+  // waited on with epoll, SIGWINCH through a self-pipe
+  it.skipIf(!haveRawepoll).each(['', 'threads', 'offmain', 'reopen'])('raw non-blocking epoll reads of the tty see keys; a resize wakes it with the new size (%s)', async (mode) => {
+    const { fs } = await setup(readFileSync(rawepollBin));
+    const { Kernel } = await import('@shiro/kernel/kernel');
+    const { TtySession, attachKernelTty } = await import('@shiro/kernel/pty');
+    const { JobControl } = await import('@shiro/kernel/signals');
+    const { blinkRunner } = await import('@shiro/x86-engine/blink');
+    const kernel = new Kernel({ fs, registerWithProcessTable: false });
+    const jc = new JobControl();
+    attachKernelTty(kernel, jc);
+    const tty = new TtySession({ jc });
+    let screen = '';
+    tty.pty.onOutput((b: Uint8Array) => { screen += new TextDecoder().decode(b); });
+    tty.resize(30, 90);
+    const until = async (re: RegExp, ms = 30_000) => {
+      const t0 = Date.now();
+      while (!re.test(screen)) {
+        if (Date.now() - t0 > ms) throw new Error(`timed out waiting for ${re}; screen: ${JSON.stringify(screen)}`);
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    };
+    const p = tty.spawnJob(kernel, { path: '/home/user/work/prog', argv: mode ? ['prog', mode] : ['prog'], cwd: '/home/user/work', run: blinkRunner('/home/user/work/prog') });
+    const done = tty.foreground({ pgid: p.pgid });
+    await until(/ready/);
+    expect(screen).toContain('size 30x90');
+    await new Promise((r) => setTimeout(r, 200)); // blocked in epoll_wait
+    tty.pty.input('a');
+    await until(/key 97/);
+    await new Promise((r) => setTimeout(r, 200));
+    tty.pty.input('bc');
+    await until(/key 99/);
+    tty.resize(41, 132);
+    await until(/winch 41x132/);
+    tty.pty.input('q');
+    await until(/bye/);
+    expect(await done).toEqual({ type: 'exited', status: 0 });
+  }, 120_000);
+
   it('Ctrl-C ends a C program blocked reading the tty (no handler)', async () => {
     const { fs } = await setup(readFileSync(join(FIX, 'hello-musl')));
     const { Kernel } = await import('@shiro/kernel/kernel');
@@ -529,6 +580,20 @@ describe.skipIf(!haveTty)('Blink engine: interactive program on a kernel pty', (
 });
 
 // Blink patch 0011: the guest's fds and processes are the kernel's.
+// Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
+// (busybox picks its applet by it; Debian's redis-server -> redis-check-rdb)
+describe('argv[0] through a symlink', () => {
+  for (const engine of ['blink', 'x86']) {
+    it.skipIf(!haveArgv0)(`is the link's name, not the target's (${engine})`, async () => {
+      const { shell } = await setup(readFileSync(argv0Bin));
+      const env = engine === 'x86' ? 'TABCOMPUTER_X86_ENGINE=x86 ' : '';
+      // (and through a hard link: dpkg links graphviz's libgvc6-config-update to dot, which picks its layout by argv[0])
+      const r = await run(shell, `ln -sf prog echo2; mkdir -p bin; ln -sf ../prog bin/redis-server; rm -f dot; ln prog dot; ${env}./echo2; ${env}./prog; PATH=$PWD/bin:$PATH ${env}redis-server; ${env}./dot`);
+      expect(r.output.replace(/\r\n/g, '\n')).toBe('argv0=./echo2\nargv0=./prog\nargv0=redis-server\nargv0=./dot\n');
+    }, 60_000);
+  }
+});
+
 describe('Blink engine: kernel processes (fork, exec, pipes)', () => {
   it('fork+exec+wait, posix_spawn over a pipe, popen and system through /bin/sh', async () => {
     const { shell } = await setup(readFileSync(join(FIX, 'proc-musl')));
@@ -700,8 +765,15 @@ describe('Blink engine: CPU and syscall fixes', () => {
   it.skipIf(!haveSleepintr)('signals end sleeps with the time left; exit with parked threads', async () => {
     const { shell } = await setup(readFileSync(sleepintrBin));
     const r = await run(shell, './prog');
-    expect(r.output.replace(/\r\n/g, '\n')).toBe('nanosleep eintr 1 early 1 rem>3s 1\nclock_nanosleep eintr 1 early 1 rem>3s 1\n' +
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('invalid timespec EINVAL 6/6\nnanosleep eintr 1 early 1 rem>3s 1\nclock_nanosleep eintr 1 early 1 rem>3s 1\n' +
       'threads parked: exit 7 within 3s 1\n');
+  }, 60_000);
+
+  // Node's os.release() in native Claude Code; glibc's minimum-kernel check
+  it.skipIf(!haveUname)("uname has the kernel's release and version, Blink's sysname and machine", async () => {
+    const { shell } = await setup(readFileSync(unameBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('sysname Linux machine x86_64 release-6.1 1 version-SMP 1 nodename-in-release 1\n');
   }, 60_000);
 
   // vim's typeahead check blocked for a key when two reads straddled a ms tick
@@ -738,6 +810,37 @@ describe('Blink engine: CPU and syscall fixes', () => {
   }, 60_000);
 
   // LTP fstat03
+  // Claude Code's atomic writes and its task-output swap check (docs/COMPAT.md "Agent CLIs")
+  it.each([['glibc', fsidentBin, haveFsident, ''], ['musl', fsidentMuslBin, haveFsidentMusl, ''], ['glibc-thread', fsidentBin, haveFsident, '--thread '], ['musl-thread', fsidentMuslBin, haveFsidentMusl, '--thread ']] as const)(
+    'O_CREAT|O_EXCL, mkdir -p + openat(dirfd), O_PATH dirs, one dev/ino from stat, lstat, fstat and statx (%s)', async (_libc, bin, have, flag) => {
+      if (!have) return;
+      const { shell } = await setup(readFileSync(bin));
+      const r = await run(shell, `./prog ${flag}/tmp/claude-1000/-home-user-${_libc}`);
+      expect(r.output.replace(/\r\n/g, '\n')).toBe('fsident: ok\n');
+      expect(r.exitCode).toBe(0);
+    }, 60_000);
+
+  it.skipIf(!haveFsident)('a path has one dev:ino in every process (the kernel\'s), whatever order they look it up in', async () => {
+    const { shell, fs } = await setup(readFileSync(fsidentBin));
+    await fs.mkdir('/tmp/inod/sub', { recursive: true });
+    await fs.writeFile('/tmp/inod/f', 'x');
+    const paths = ['/tmp/inod', '/tmp/inod/f', '/tmp/inod/sub', '/home/user/work', '/tmp'];
+    const ids = async (ps: string[]) => (await run(shell, `./prog --ino ${ps.join(' ')}`)).output.trim().split(/\r?\n/);
+    const a = await ids(paths);
+    const b = (await ids([...paths].reverse())).reverse();
+    expect(b).toEqual(a);
+    expect(new Set(a).size).toBe(paths.length);
+    // what the kernel (and WASM programs) report
+    const { kernelForContext } = await import('@shiro/wasi/run-command');
+    const kernel = kernelForContext({ fs, shell } as any);
+    const proc = { pid: 1, cwd: '/', uid: 1000 } as any;
+    for (const [i, p] of paths.entries()) {
+      const st = await kernel.statPath(proc, p, false);
+      expect(typeof st).not.toBe('number');
+      expect(a[i]).toBe(`${(st as any).dev}:${(st as any).ino}`);
+    }
+  }, 60_000);
+
   it.skipIf(!haveStatnull)('the stat family with a NULL buffer is EFAULT once the file is found', async () => {
     const { shell } = await setup(readFileSync(statnullBin));
     const r = await run(shell, './prog');

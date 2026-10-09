@@ -6,15 +6,15 @@ import { ICONS } from '../icons';
 import { BRAND } from '../../brand';
 import buildNumber from '../../../build-number.txt?raw';
 
-const REPO = 'https://github.com/williamsharkey/shiro/blob/main/docs';
+const REPO = 'https://github.com/williamsharkey/tabcomputer/blob/main/docs';
 
 /**
  * Measured numbers, each with the document that records it. Update these
  * with the docs: they are claims a visitor will check.
  */
 const STATUS = [
-  { label: 'Debian 13 top-200 packages', value: '200/200', note: 'install with apt and run (popcon ranks 1–200)', doc: 'DEBIAN_SCORE.md' },
-  { label: 'LTP syscall tests, x86-64', value: '197/320', note: 'pass under the x86-64 engine', doc: 'X86_ENGINES.md' },
+  { label: 'Debian 13 top-300 packages', value: '298/300', note: 'install with apt and run (popcon ranks 1–300)', doc: 'DEBIAN_SCORE.md' },
+  { label: 'LTP syscall tests, x86-64', value: '237/320', note: 'pass under the x86-64 engine', doc: 'CONFORMANCE.md' },
 ];
 
 export function open(ctx: AppContext): DesktopWindow {
@@ -26,7 +26,7 @@ export function open(ctx: AppContext): DesktopWindow {
   root.innerHTML = `
     <div class="sd-scroll"><div class="sd-panel" style="max-width:none">
       <div style="display:flex;gap:16px;align-items:center">
-        <div style="width:64px;height:64px;flex:none">${ICONS.about}</div>
+        <div class="sd-brand-mark" style="width:64px;flex:none">${ICONS.logo}</div>
         <div><h2>${BRAND.name}</h2><div class="sd-muted sd-small">${BRAND.tagline} · build #${buildNumber.trim()}</div></div>
       </div>
       <h3>Status</h3>
@@ -35,15 +35,18 @@ export function open(ctx: AppContext): DesktopWindow {
       </div>
       <h3>What's real</h3>
       <p class="sd-small sd-muted" style="line-height:1.6">A Unix kernel written for the browser: processes, file descriptors, pipes, ptys,
-        signals, job control and sockets. Programs are real binaries: WebAssembly (WASI/WASIX) builds, and Debian's own
-        x86-64 Linux programs (glibc, apt, dpkg) after <code>debian install</code>. Everything runs in this tab, on this device.</p>
+        signals, job control and sockets. Programs are real binaries: WebAssembly (WASI/WASIX) builds, and unmodified x86-64 Linux programs, including
+        Debian's own (glibc, apt, dpkg) after <code>debian install</code>. TCP connections reach real hosts.
+        Everything runs in this tab, on this device.</p>
       <h3>What's emulated</h3>
       <p class="sd-small sd-muted" style="line-height:1.6">The x86-64 CPU (Blink, compiled to WebAssembly, with a JIT). The disk: files live in this
-        browser's IndexedDB. The network: TCP goes through a WebSocket relay (this site's, or your own in Settings → Network).
+        browser's IndexedDB. The network: TCP goes through a WebSocket relay (this site's, or your own in Settings → Network), on ports 22, 80,
+        443 and 9418; UDP is DNS only.
         Graphical Linux apps draw through an X server inside the page.</p>
       <h3>Not here</h3>
       <p class="sd-small sd-muted" style="line-height:1.6">Hardware devices, kernel modules, and any access to your own machine: the browser's
-        sandbox holds everything. Some programs still fail; the scoreboards list which and why.</p>
+        sandbox holds everything. Not yet: file watching (inotify), a D-Bus session bus. x86-64 programs start
+        slowly. Some programs still fail; the scoreboards list which and why.</p>
       <h3>This tab</h3>
       <div class="sd-card sd-small">
         <div class="sd-row"><span class="sd-grow sd-muted">Kernel processes</span><span data-k="procs">${kernel.procs.size}</span></div>

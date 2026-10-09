@@ -42,14 +42,14 @@ type IndexRow = [string, 'd', number, number] | [string, 'l', number, number, st
 interface RootfsIndex { format: number; chunks: Array<[string, number, number]>; entries: IndexRow[] }
 
 export const ROOTFS_STATE = '/var/lib/shiro/rootfs.json';
-const CACHE_NAME = 'shiro-debian-chunks-v1';
+const CACHE_NAME = 'tabcomputer-debian-chunks-v1';
 
 const nodeProcess = (): any => (globalThis as any).process;
 const isNode = () => typeof nodeProcess()?.getBuiltinModule === 'function';
 
 /** Where the app serves the rootfs (public/debian → /debian/). */
 export function defaultRootfsBase(): string {
-  const env = nodeProcess()?.env?.SHIRO_DEBIAN_ROOTFS;
+  const env = nodeProcess()?.env?.TABCOMPUTER_DEBIAN_ROOTFS;
   if (env) return env.endsWith('/') ? env : env + '/';
   if (isNode()) {
     const p = nodeProcess();
@@ -312,6 +312,20 @@ export async function writeEngineWorkarounds(fs: FileSystem): Promise<void> {
     }
   } catch { /* no resolv.conf */ }
   await keepManPages(fs);
+  await noServicesFromPackages(fs);
+}
+
+/**
+ * /usr/sbin/policy-rc.d exiting 101, as Debian's chroots and containers
+ * have it: invoke-rc.d and deb-systemd-invoke don't start or restart
+ * services from maintainer scripts (openssh-server's postinst started
+ * sshd in the middle of apt, which then never finished). `service NAME
+ * start` and Shiro's systemctl still start them.
+ */
+export async function noServicesFromPackages(fs: FileSystem): Promise<void> {
+  const p = '/usr/sbin/policy-rc.d';
+  if (await fs.exists(p)) return;
+  await fs.writeFile(p, '#!/bin/sh\n# Written by tabcomputer (src/debian/rootfs.ts): packages do not start services; see docs/DEBIAN.md\nexit 101\n', { mode: 0o755 });
 }
 
 /**

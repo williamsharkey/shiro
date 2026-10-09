@@ -2,7 +2,11 @@
    body.sd-active, so the classic terminal UI is untouched. */
 
 body.sd-active { background: #0b0e18; }
+html.sd-theme-light, html.sd-theme-light body.sd-active { background: #eef0ff; } /* not .sd-light: that's the traffic lights */
 body.sd-active #shiro-layout { display: none; }
+/* Built out of sight, shown in one frame once complete (index.ts reveal) */
+.sd-desktop.sd-booting { visibility: hidden; }
+.sd-booting *, .sd-booting *::before, .sd-booting *::after { transition: none !important; animation: none !important; }
 
 .sd-desktop {
   /* Web font + generic family only: every missing family in a stack is a blocking
@@ -91,7 +95,7 @@ body.sd-active #shiro-layout { display: none; }
 }
 .sd-mb-item:hover, .sd-mb-item.sd-open { background: var(--sd-active); }
 .sd-mb-item:focus-visible { outline: 2px solid var(--sd-accent); outline-offset: -2px; }
-.sd-mb-logo svg { width: 17px; height: 17px; }
+.sd-mb-logo svg { width: 21px; height: 17px; }
 .sd-mb-app { font-weight: 650; }
 .sd-mb-menus { display: contents; }
 .sd-mb-spacer { flex: 1; }
@@ -132,7 +136,7 @@ body.sd-active #shiro-layout { display: none; }
 }
 .sd-dock-item {
   position: relative; width: 50px; height: 50px; flex: 0 0 auto; padding: 0; border: 0; background: none; cursor: default;
-  transition: transform .22s var(--sd-ease), margin .22s var(--sd-ease); transform-origin: 50% 100%;
+  transition: transform .22s var(--sd-ease); transform-origin: 50% 100%;
 }
 .sd-tile {
   position: relative; display: block; width: 90.6%; height: 90.6%; margin: 4.7%; border-radius: 24%;
@@ -143,7 +147,7 @@ body.sd-active #shiro-layout { display: none; }
 .sd-tile svg { position: relative; display: block; width: 100%; height: 100%; }
 .sd-dock-item img { width: 100%; height: 100%; display: block; filter: drop-shadow(0 3px 6px rgba(0, 0, 0, .3)); }
 .sd-dock-item > svg { width: 100%; height: 100%; display: block; filter: drop-shadow(0 3px 6px rgba(0, 0, 0, .3)); }
-.sd-dock-item:hover { transform: translateY(-6px) scale(1.14); margin: 0 4px; }
+.sd-dock-item:hover { transform: translateY(-6px) scale(1.14); } /* transform only: the slot keeps its width */
 .sd-dock-item:active { filter: brightness(.82); }
 .sd-dock-item:focus-visible { outline: 2px solid var(--sd-accent); outline-offset: 3px; border-radius: 14px; }
 .sd-dock-item.sd-launching { animation: sd-bounce .7s var(--sd-ease) 2; }
@@ -288,6 +292,41 @@ body.sd-active #shiro-layout { display: none; }
 .sd-side-item:hover { background: var(--sd-hover); }
 .sd-desktop button:focus:not(:focus-visible), .sd-app:focus { outline: none; }
 .sd-side-item.sd-active { background: var(--sd-active); }
+/* Settings: a searchable, grouped sidebar with colored pane icons (apps/settings.ts) */
+.sd-settings .sd-sidebar { flex-basis: 200px; padding: 10px 10px; }
+.sd-set-search {
+  display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; margin: 2px 0 10px;
+  border-radius: 7px; background: var(--sd-field); border: 1px solid var(--sd-sep); color: var(--sd-text-3);
+}
+.sd-set-search svg { width: 13px; height: 13px; flex: none; }
+.sd-set-search input { flex: 1; min-width: 0; border: 0; background: none; color: var(--sd-text); font: inherit; outline: none; }
+.sd-set-search:focus-within { border-color: var(--sd-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sd-accent) 25%, transparent); }
+.sd-set-group + .sd-set-group { margin-top: 12px; }
+.sd-set-group[hidden], .sd-set-item[hidden] { display: none; }
+.sd-set-item { height: 30px; gap: 9px; }
+.sd-set-ico { width: 21px; height: 21px; flex: none; display: grid; place-items: center; border-radius: 6px; box-shadow: inset 0 0 0 .5px rgba(0,0,0,.15), 0 1px 1px rgba(0,0,0,.12); }
+.sd-side-item .sd-set-ico svg { width: 14px; height: 14px; color: #fff; }
+.sd-settings .sd-side-item.sd-active { background: var(--sd-accent); color: #fff; }
+
+/* The icon set picker: cards with a still mini dock each */
+.sd-iconsets { display: grid; grid-template-columns: repeat(auto-fill, minmax(188px, 1fr)); gap: 10px; }
+.sd-iconset-card {
+  display: flex; flex-direction: column; align-items: stretch; gap: 6px; padding: 10px; text-align: left;
+  border-radius: 12px; border: 1px solid var(--sd-sep); background: var(--sd-field); color: var(--sd-text); font: inherit; cursor: default;
+}
+.sd-iconset-card:hover { border-color: color-mix(in srgb, var(--sd-accent) 45%, var(--sd-sep)); }
+.sd-iconset-card.sd-active { border-color: var(--sd-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--sd-accent) 35%, transparent); }
+.sd-iconset-mini {
+  display: flex; justify-content: center; gap: 4px; padding: 6px; border-radius: 12px;
+  background: var(--sd-bar); box-shadow: inset 0 0 0 1px var(--sd-bar-border);
+}
+.sd-iconset-slot { width: 30px; height: 30px; flex: none; display: block; }
+.sd-iconset-slot > .sd-tile, .sd-iconset-slot > .sd-ic { width: 100%; height: 100%; margin: 0; }
+.sd-iconset-slot > svg, .sd-iconset-slot > img { width: 100%; height: 100%; display: block; }
+.sd-iconset-name { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.sd-iconset-live { font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 4px; background: color-mix(in srgb, var(--sd-accent) 18%, transparent); color: var(--sd-accent); }
+.sd-iconset-check { margin-left: auto; color: var(--sd-accent); font-weight: 700; }
+.sd-iconset-blurb { font-size: 11.5px; color: var(--sd-text-2); line-height: 1.35; }
 .sd-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .sd-toolbar { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--sd-sep); }
 .sd-toolbar .sd-path { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -419,6 +458,8 @@ body.sd-active #shiro-layout { display: none; }
 .sd-spot-foot { display: flex; justify-content: space-between; padding: 7px 16px; border-top: 1px solid var(--sd-sep); }
 
 /* ── First-visit tour ── */
+.sd-brand-mark { color: var(--sd-text); }
+.sd-brand-mark svg { display: block; width: 100%; height: auto; }
 .sd-tour {
   position: absolute; right: 18px; bottom: calc(var(--sd-dock-h) + var(--sd-dock-gap) + 18px); z-index: 100001; width: min(340px, calc(100vw - 24px));
   background: var(--sd-material-strong); color: var(--sd-text); border: 1px solid var(--sd-window-border); border-radius: 16px;
@@ -442,7 +483,7 @@ body.sd-active #shiro-layout { display: none; }
 .sd-compact .sd-mb-menus, .sd-compact .sd-wordmark { display: none; }
 .sd-compact .sd-dock { overflow-x: auto; scrollbar-width: none; justify-content: flex-start; padding: 6px 8px; border-radius: 18px; }
 .sd-compact .sd-dock-item { width: 44px; height: 44px; }
-.sd-compact .sd-dock-item:hover { transform: none; margin: 0; }
+.sd-compact .sd-dock-item:hover { transform: none; }
 .sd-compact .sd-dock-tip { display: none; }
 .sd-compact .sd-win { border-radius: 12px; }
 .sd-compact .sd-sidebar { flex-basis: 112px; padding: 8px 4px; }

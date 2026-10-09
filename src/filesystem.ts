@@ -1,3 +1,6 @@
+import { decodeBytes, encodeText } from './utils/byte-text';
+import { activeProfile, unameRelease, UNAME_VERSION } from './profile';
+
 function globPatternToRegex(pattern: string, base: string, caseInsensitive?: boolean): RegExp {
   // Resolve the pattern relative to base
   let fullPattern: string;
@@ -48,7 +51,7 @@ function globPatternToRegex(pattern: string, base: string, caseInsensitive?: boo
   return new RegExp(regex, caseInsensitive ? 'i' : undefined);
 }
 
-const DB_NAME = 'shiro-fs';
+const DB_NAME = 'tabcomputer-fs';
 const DB_VERSION = 1;
 const STORE_NAME = 'files';
 
@@ -186,12 +189,12 @@ class DevProvider implements VirtualFSProvider {
   }
   readFile(path: string, encoding?: 'utf8'): string | Uint8Array | null {
     if (path === '/dev/null') return encoding === 'utf8' ? '' : new Uint8Array(0);
-    // A page of zeros / random bytes; as text, one char per byte (Latin-1, like other binary shell strings)
+    // A page of zeros / random bytes; as text, byte-exact (src/utils/byte-text.ts)
     if (path === '/dev/zero') return encoding === 'utf8' ? '\0'.repeat(4096) : new Uint8Array(4096);
     if (path === '/dev/random' || path === '/dev/urandom') {
       const buf = new Uint8Array(256);
       crypto.getRandomValues(buf);
-      return encoding === 'utf8' ? String.fromCharCode(...buf) : buf;
+      return encoding === 'utf8' ? decodeBytes(buf) : buf;
     }
     if (path === '/dev') return null; // directory
     return encoding === 'utf8' ? '' : new Uint8Array(0);
@@ -266,7 +269,8 @@ class ProcProvider implements VirtualFSProvider {
       const secs = ((Date.now() - this.startTime) / 1000).toFixed(2);
       return `${secs} ${secs}\n`;
     },
-    '/proc/version': () => `Linux version 6.1.0-shiro (shiro@browser) (TypeScript) #1 SMP ${new Date().toUTCString()}\n`,
+    // What uname(2) says, as on Linux (`uname -rv`, Node's os.release())
+    '/proc/version': () => `Linux version ${unameRelease()} (user@${activeProfile().hostname}) ${UNAME_VERSION} ${new Date(this.startTime).toUTCString()}\n`,
     '/proc/meminfo': () => {
       const total = (typeof performance !== 'undefined' && (performance as any).memory?.jsHeapSizeLimit) || 256 * 1024 * 1024;
       const used = (typeof performance !== 'undefined' && (performance as any).memory?.usedJSHeapSize) || 64 * 1024 * 1024;
@@ -286,7 +290,7 @@ class ProcProvider implements VirtualFSProvider {
       const cores = navigator?.hardwareConcurrency || 4;
       return Array.from({ length: cores }, (_, i) => [
         `processor\t: ${i}`,
-        `model name\t: Shiro Virtual CPU`,
+        `model name\t: tabcomputer Virtual CPU`,
         `cpu MHz\t\t: 3000.000`,
         `cache size\t: 8192 KB`,
       ].join('\n')).join('\n\n') + '\n';
@@ -407,14 +411,18 @@ class VarLogProvider implements VirtualFSProvider {
   writeFile(): boolean { return false; }
 }
 
-/** Files every Unix system has, created when missing. */
-const BASE_ETC_FILES: Record<string, string> = {
-  '/etc/passwd': 'root:x:0:0:root:/root:/bin/sh\nuser:x:1000:1000:Shiro User:/home/user:/bin/sh\nnobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n',
-  '/etc/group': 'root:x:0:\ntty:x:5:user\nuser:x:1000:\nnogroup:x:65534:\n',
-  '/etc/hostname': 'shiro\n',
-  '/etc/hosts': '127.0.0.1\tlocalhost shiro\n::1\tlocalhost ip6-localhost ip6-loopback\n',
-  '/etc/shells': '/bin/sh\n/bin/bash\n',
-};
+/** Files every Unix system has, created when missing (named after the profile's machine). */
+function baseEtcFiles(): Record<string, string> {
+  const { hostname, name } = activeProfile();
+  return {
+    '/etc/passwd': `root:x:0:0:root:/root:/bin/sh\nuser:x:1000:1000:${name} user:/home/user:/bin/sh\nnobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n`,
+    '/etc/group': 'root:x:0:\ntty:x:5:user\nuser:x:1000:\nnogroup:x:65534:\n',
+    '/etc/hostname': `${hostname}\n`,
+    '/etc/hosts': `127.0.0.1\tlocalhost ${hostname}\n::1\tlocalhost ip6-localhost ip6-loopback\n`,
+    '/etc/shells': '/bin/sh\n/bin/bash\n',
+    '/etc/os-release': `NAME="${name}"\nPRETTY_NAME="${name}"\nID=${hostname}\nID_LIKE=debian\nHOME_URL="https://${activeProfile().brand?.domain ?? 'shiro.computer'}/"\n`,
+  };
+}
 
 /** Run fn as a macrotask without timer clamping/throttling (MessageChannel),
  *  falling back to setTimeout where there is none. */
@@ -474,12 +482,51 @@ export class FileSystem {
   private _flushScheduled = false;
   /** First error from a failed background flush, reported by the next sync(). */
   private _flushError: unknown = null;
+  /**
+   * The browser refused a commit for lack of space (QuotaExceededError). The
+   * failed batch stays queued (nothing of it reached IndexedDB: one
+   * transaction), and writes that need more space fail with ENOSPC until a
+   * commit goes through: the user deletes something and the next flush
+   * carries the deletes and the queued writes together.
+   */
+  private _full = false;
+  private _fullListeners: Set<(full: boolean) => void> = new Set();
+  /** Bytes written this page load, for onBigWrite. */
+  private _bytesWritten = 0;
+  private _bigWrite: { bytes: number; fn: () => void } | null = null;
   private _changeListeners: Set<FSChangeListener> = new Set();
   private virtualProviders: VirtualFSProvider[] = [new DevProvider(), new ProcProvider(), new VarLogProvider()];
 
   /** Mount a virtual provider (e.g. /dom, src/dom-fs.ts); consulted after the built-in ones. */
   addVirtualProvider(vp: VirtualFSProvider): void {
     if (!this.virtualProviders.includes(vp)) this.virtualProviders.push(vp);
+  }
+
+  /** Browser storage is full (see _full). */
+  get storageFull(): boolean { return this._full; }
+
+  /** Called with true when a commit fails for lack of space, false once one succeeds again. */
+  onStorageFull(fn: (full: boolean) => void): () => void {
+    this._fullListeners.add(fn);
+    return () => { this._fullListeners.delete(fn); };
+  }
+
+  /** Call `fn` once, when this page load has written `bytes` (asking for persistent storage). */
+  onBigWrite(bytes: number, fn: () => void): void { this._bigWrite = { bytes, fn }; }
+
+  private _setFull(full: boolean): void {
+    if (this._full === full) return;
+    this._full = full;
+    for (const fn of this._fullListeners) { try { fn(full); } catch {} }
+  }
+
+  private static _isQuotaError(e: unknown): boolean {
+    const name = (e as any)?.name;
+    return name === 'QuotaExceededError' || (e as any)?.code === 22 || /quota/i.test(String((e as any)?.message));
+  }
+
+  private _enospc(path?: string): Error {
+    return fsError('ENOSPC', `ENOSPC: no space left on device (browser storage is full)${path ? `, write '${path}'` : ''}`);
   }
 
   /** Subscribe to filesystem change events. Returns unsubscribe function. */
@@ -513,7 +560,7 @@ export class FileSystem {
     }
     // The account database Unix programs look themselves up in (getpwuid:
     // ssh, git, vim's ~ expansion). The kernel runs everything as uid 1000.
-    for (const [path, text] of Object.entries(BASE_ETC_FILES)) {
+    for (const [path, text] of Object.entries(baseEtcFiles())) {
       if (!(await this._get(path))) await this._put(this._makeNode(path, 'file', new TextEncoder().encode(text)));
     }
   }
@@ -541,7 +588,8 @@ export class FileSystem {
         if (content.length !== now.size) throw fsError('EIO', `EIO: lazy file '${path}' is ${content.length} bytes, expected ${now.size}`);
         const filled: FSNode = { ...now, content };
         delete filled.lazy;
-        this._putNow(filled);
+        // Storage full: read it all the same, fetching again next time
+        if (!this._full) this._putNow(filled);
         return filled;
       }).finally(() => this._materializing.delete(path));
       this._materializing.set(path, p);
@@ -655,6 +703,15 @@ export class FileSystem {
   /** Queue a put (node) or delete (null) for the next flush. */
   private _queue(path: string, node: FSNode | null): void {
     this._dirty.set(path, node);
+    if (this._full) {
+      // Retry the failed batch once a burst of deletes has freed something,
+      // not after every write (each retry clones the whole batch)
+      if (!this._flushScheduled && !this._flushing) {
+        this._flushScheduled = true;
+        setTimeout(() => { this._flushScheduled = false; void this._flush(); }, 250);
+      }
+      return;
+    }
     if (!this._flushScheduled && !this._flushing) {
       this._flushScheduled = true;
       scheduleMacrotask(() => { this._flushScheduled = false; void this._flush(); });
@@ -672,7 +729,17 @@ export class FileSystem {
         this._inflight = batch;
         try {
           await this._commit(batch, durability);
+          this._setFull(false);
         } catch (e) {
+          if (FileSystem._isQuotaError(e)) {
+            // Requeue it under the writes made meanwhile (newer wins) and
+            // stop: the next flush is a retry, after the user frees space
+            for (const [p, n] of this._dirty) batch.set(p, n);
+            this._dirty = batch;
+            if (!this._full) console.error('[fs] browser storage is full; writes fail with ENOSPC until space is freed:', e);
+            this._setFull(true);
+            break;
+          }
           // Keep the cache (the session goes on with what the user wrote) but
           // report it; the next sync() rejects with it.
           console.error('[fs] IndexedDB write failed:', e);
@@ -720,17 +787,19 @@ export class FileSystem {
   /** Start committing queued writes now; resolves when the queue is empty
    *  (relaxed durability). For writers that pace themselves by the commits. */
   flushed(): Promise<void> {
-    return this._flush();
+    return this._flush().then(() => { if (this._full) throw this._enospc(); });
   }
 
   /**
    * Wait until every write made so far is committed to IndexedDB (strict
-   * durability). Rejects with the error of a failed background flush, once.
+   * durability). Rejects with the error of a failed background flush, once,
+   * and with ENOSPC while storage is full.
    */
   async sync(): Promise<void> {
     while (this._flushing || this._dirty.size > 0) {
       if (this._flushing) await this._flushing;
       else await this._flush('strict');
+      if (this._full && !this._flushing) throw this._enospc();
     }
     if (this._flushError) {
       const e = this._flushError;
@@ -920,8 +989,8 @@ export class FileSystem {
     return this._canon(path, true);
   }
 
-  private async _put(node: FSNode): Promise<void> {
-    this._putNow(node);
+  private async _put(node: FSNode, move = false): Promise<void> {
+    this._putNow(node, move);
   }
 
   private async _delete(path: string): Promise<void> {
@@ -929,7 +998,16 @@ export class FileSystem {
   }
 
   /** Synchronous part of a put: cache + key index now, IndexedDB on the next flush. */
-  private _putNow(node: FSNode): void {
+  private _putNow(node: FSNode, move = false): void {
+    const prev = this.cache.get(node.path);
+    const grow = (node.content?.byteLength ?? 0) - (prev?.content?.byteLength ?? 0);
+    // A new node or more bytes needs space; a rename (move) moves what is stored
+    if (this._full && !move && (prev === undefined || grow > 0)) throw this._enospc(node.path);
+    if (grow > 0 && this._bigWrite && (this._bytesWritten += grow) >= this._bigWrite.bytes) {
+      const { fn } = this._bigWrite;
+      this._bigWrite = null;
+      try { fn(); } catch {}
+    }
     if (node.type === 'symlink' || this.cache.get(node.path)?.type === 'symlink') this._canonDirs.clear();
     this.cache.set(node.path, node);
     this._noteKey(node.path, true);
@@ -1024,7 +1102,7 @@ export class FileSystem {
   readCached(path: string): string | undefined {
     const node = this.cache.get(path);
     if (!node || node.type !== 'file' || !node.content) return undefined;
-    return new TextDecoder().decode(node.content);
+    return decodeBytes(node.content);
   }
 
   /** Synchronously read a file's raw bytes from the in-memory cache. */
@@ -1172,9 +1250,8 @@ export class FileSystem {
     if (node.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, read '${path}'`);
     if (node.lazy) node = await this._materialize(node);
     const data = node.content || new Uint8Array(0);
-    if (encoding === 'utf8') {
-      return new TextDecoder().decode(data);
-    }
+    // Byte-exact: invalid UTF-8 survives a round trip through the string (src/utils/byte-text.ts)
+    if (encoding === 'utf8') return decodeBytes(data);
     return data;
   }
 
@@ -1195,7 +1272,7 @@ export class FileSystem {
     // A view into a larger buffer is stored compactly: IndexedDB clones the
     // whole ArrayBuffer behind a typed array (a WebC volume file would carry
     // its entire container)
-    const content = typeof data === 'string' ? new TextEncoder().encode(data)
+    const content = typeof data === 'string' ? encodeText(data)
       : data.byteOffset !== 0 || data.byteLength !== data.buffer.byteLength ? data.slice() : data;
     const existing = await this._get(path);
     // Prevent overwriting a directory with a file
@@ -1224,7 +1301,7 @@ export class FileSystem {
     } catch {
       existing = new Uint8Array(0);
     }
-    const append = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+    const append = typeof data === 'string' ? encodeText(data) : data;
     const combined = new Uint8Array(existing.length + append.length);
     combined.set(existing);
     combined.set(append, existing.length);
@@ -1284,7 +1361,7 @@ export class FileSystem {
    * and the file was lost). Falls back to mkdir() otherwise.
    */
   mkdirNow(path: string, options?: { recursive?: boolean }): Promise<void> {
-    if (this.virtualProviders.some((vp) => vp.handles(path))) return this.mkdir(path, options);
+    if (this._full || this.virtualProviders.some((vp) => vp.handles(path))) return this.mkdir(path, options);
     const parts = path.split('/').filter(Boolean);
     const made: string[] = [];
     let current = '';
@@ -1358,6 +1435,7 @@ export class FileSystem {
    * callers (node's fs.writeFileSync of binary data) that read the file right back.
    */
   writeNow(path: string, content: Uint8Array): Promise<void> {
+    if (this._full) return this.writeFile(path, content);
     const prev = this.cache.get(path);
     const now = Date.now();
     this.cache.set(path, {
@@ -1444,7 +1522,7 @@ export class FileSystem {
           const child = await this._get(key);
           if (child) {
             const newChildPath = newPath + key.slice(oldPath.length);
-            await this._put({ ...child, path: newChildPath });
+            await this._put({ ...child, path: newChildPath }, true);
             await this._delete(key);
           }
         }
@@ -1453,7 +1531,7 @@ export class FileSystem {
       // Prevent renaming a file over a directory
       const existing = await this._get(newPath);
       if (existing?.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, rename '${newPath}'`);
-      await this._put({ ...node, path: newPath, ctime: Date.now() }); // rename keeps mtime (rsync -a, make)
+      await this._put({ ...node, path: newPath, ctime: Date.now() }, true); // rename keeps mtime (rsync -a, make)
       await this._delete(oldPath);
     }
     this._emitChange('rename', oldPath, newPath);

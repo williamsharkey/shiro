@@ -1,0 +1,8 @@
+# Shiro: no automatic maintenance. After commits, fetches and merges git
+# would start `git maintenance run --auto --detach` (gc, commit-graph, ...)
+# in the background, which costs seconds of CPU per run in the browser.
+# To have it back: git config --global maintenance.auto true; gc.auto 6700
+[maintenance]
+	auto = false
+[gc]
+	auto = 0

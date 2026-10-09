@@ -3,7 +3,7 @@
  * Debian's own dynamically linked programs in Blink, the overlay, sudo.
  *
  * The apt end-to-end case needs the network (the mirror route of server.mjs
- * proxies deb.debian.org) and a few minutes: SHIRO_DEBIAN_NET=1 enables it.
+ * proxies deb.debian.org) and a few minutes: TABCOMPUTER_DEBIAN_NET=1 enables it.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { existsSync } from 'node:fs';
@@ -46,22 +46,22 @@ describe.skipIf(!haveRootfs)('Debian rootfs', () => {
     expect(a).toBe(b);
   }, 120000);
 
-  it("diverts apt's http method to Shiro's transport and keeps dpkg truthful", async () => {
+  it("diverts apt's http method to tabcomputer's transport and keeps dpkg truthful", async () => {
     const list = (await run(shell, 'dpkg-divert --list')).output;
     expect(list).toContain('local diversion of /usr/lib/apt/methods/http to /usr/lib/apt/methods/http.debian');
     expect(await fs.readFile('/usr/lib/apt/methods/http', 'utf8')).toBe('#!/usr/bin/shiro-apt-method\n');
     expect((await fs.lstat('/usr/lib/apt/methods/http.debian')).size).toBeGreaterThan(100000);
-    expect((await run(shell, 'shiro-alternatives --display /usr/lib/apt/methods/http')).output).toMatch(/shiro \(shiro-apt-method\)\s+\(auto, default shiro\)/);
+    expect((await run(shell, 'tabcomputer-alternatives --display /usr/lib/apt/methods/http')).output).toMatch(/tabcomputer \(shiro-apt-method\)\s+\(auto, default tabcomputer\)/);
   }, 60000);
 
-  it('switches a program between Shiro and Debian with shiro-alternatives', async () => {
+  it('switches a program between tabcomputer and Debian with tabcomputer-alternatives', async () => {
     expect((await run(shell, 'type -a env 2>&1; command -v env')).exitCode).toBe(0);
-    let r = await run(shell, 'shiro-alternatives --set env shiro');
-    expect(r.output).toContain("/usr/bin/env: now Shiro's");
+    let r = await run(shell, 'tabcomputer-alternatives --set env tabcomputer');
+    expect(r.output).toContain("/usr/bin/env: now tabcomputer's");
     expect(await fs.exists('/usr/bin/env')).toBe(false);
     expect((await fs.lstat('/usr/bin/env.debian')).isFile()).toBe(true);
     expect((await run(shell, 'dpkg-divert --list /usr/bin/env')).output).toContain('local diversion of /usr/bin/env to /usr/bin/env.debian');
-    r = await run(shell, 'shiro-alternatives --set env debian');
+    r = await run(shell, 'tabcomputer-alternatives --set env debian');
     expect(r.output).toContain("/usr/bin/env: now Debian's");
     expect((await fs.lstat('/usr/bin/env')).isFile()).toBe(true);
     expect((await run(shell, 'dpkg-divert --list /usr/bin/env')).output.trim()).toBe('');
@@ -85,6 +85,19 @@ describe.skipIf(!haveRootfs)('Debian rootfs', () => {
     await fs.unlink('/usr/bin/curl-8');
   });
 
+  it("Debian's util-linux dmesg reads the kernel log through /dev/kmsg", async () => {
+    const { klog, LOG_WARNING } = await import('@shiro/kernel/klog');
+    klog.log(LOG_WARNING, 'net: relay refused connect to github.com:443: debian-dmesg-test');
+    // In Debian mode Debian's dmesg replaces the builtin (no overlay policy for it)
+    const r = await run(shell, 'dmesg');
+    expect(r.output).toMatch(/^\[ *\d+\.\d{6}\] net: relay refused connect to github\.com:443: debian-dmesg-test$/m);
+    const x = await run(shell, '/usr/bin/dmesg -x --level=warn');
+    expect(x.output).toMatch(/^kern  :warn  : \[ *\d+\.\d{6}\] net: relay refused connect to github\.com:443: debian-dmesg-test$/m);
+    // dmesg -S reads the same log through syslog(2) (Blink patch 0060)
+    const s = await run(shell, '/usr/bin/dmesg -S');
+    expect(s.output).toContain('net: relay refused connect to github.com:443: debian-dmesg-test');
+  }, 120000);
+
   it('sudo runs kernel programs as uid 0', async () => {
     expect((await run(shell, '/usr/bin/id -u')).output.trim()).toBe('1000');
     expect((await run(shell, 'sudo /usr/bin/id -u')).output.trim()).toBe('0');
@@ -104,7 +117,28 @@ describe.skipIf(!haveRootfs)('Debian rootfs', () => {
     expect(cfg).toMatch(/path-exclude \/usr\/share\/man\/\*\npath-include \/usr\/share\/man\/man\[1-9\]\*\/\*\n/);
     expect(cfg).toContain('path-exclude /usr/share/doc/*');
     expect(await fs.exists('/etc/apt/apt.conf.d/91shiro-engine')).toBe(false);
+    // Maintainer scripts don't start services (invoke-rc.d asks policy-rc.d)
+    expect((await run(shell, '/usr/sbin/policy-rc.d ssh start; echo "rc=$?"')).output).toContain('rc=101');
   });
+
+  it("a Debian program replaces the builtin of its name, for type too; commands wait for the boot gate", async () => {
+    expect(shell.commands.get('jq')).toBeTruthy();
+    await fs.writeFile('/usr/bin/jq', '#!/bin/sh\necho debian-jq\n', { mode: 0o755 });
+    await new Promise((r) => setTimeout(r, 50)); // the overlay hears the write
+    expect((await run(shell, 'type jq')).output).toContain('/usr/bin/jq');
+    expect((await run(shell, 'jq')).output).toContain('debian-jq');
+    await fs.unlink('/usr/bin/jq');
+    // A command typed before the overlay is up waits for it (python3 right after load)
+    let release!: () => void;
+    const order: string[] = [];
+    shell.bootGate = new Promise<void>((r) => { release = r; }).then(() => { order.push('boot'); });
+    const pending = run(shell, 'echo cmd').then((r) => { order.push('cmd'); return r; });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(order).toEqual([]);
+    release();
+    expect((await pending).output).toContain('cmd');
+    expect(order).toEqual(['boot', 'cmd']);
+  }, 60000);
 
   it("bash's PATH search finds builtins and Debian's programs (no phantom /usr/local/sbin/NAME)", async () => {
     // id: Debian's file in /usr/bin; tail: diverted to Shiro's (no file); /usr/local/sbin comes first
@@ -125,23 +159,23 @@ describe.skipIf(!haveRootfs)('Debian rootfs', () => {
   }, 120000);
 });
 
-const net = process.env.SHIRO_DEBIAN_NET === '1';
+const net = process.env.TABCOMPUTER_DEBIAN_NET === '1';
 
-describe.skipIf(!haveRootfs || !net)('Debian apt end to end (SHIRO_DEBIAN_NET=1)', () => {
+describe.skipIf(!haveRootfs || !net)('Debian apt end to end (TABCOMPUTER_DEBIAN_NET=1)', () => {
   let srv: ChildProcess;
   const PORT = 5393;
   beforeAll(async () => {
     srv = spawn('node', ['server.mjs'], {
       cwd: ROOT, stdio: 'ignore',
-      env: { ...process.env, PORT: String(PORT), STATIC_DIR: resolve(ROOT, 'public'), SHIRO_DEBIAN_CACHE: resolve(ROOT, '.debian-build/mirror-cache') },
+      env: { ...process.env, PORT: String(PORT), STATIC_DIR: resolve(ROOT, 'public'), TABCOMPUTER_DEBIAN_CACHE: resolve(ROOT, '.debian-build/mirror-cache') },
     });
     for (let i = 0; i < 50; i++) {
       try { if ((await fetch(`http://127.0.0.1:${PORT}/health`)).ok) break; } catch { /* starting */ }
       await new Promise((r) => setTimeout(r, 200));
     }
-    process.env.SHIRO_DEBIAN_MIRROR = `http://127.0.0.1:${PORT}/debian/mirror/`;
+    process.env.TABCOMPUTER_DEBIAN_MIRROR = `http://127.0.0.1:${PORT}/debian/mirror/`;
   });
-  afterAll(() => { srv?.kill(); delete process.env.SHIRO_DEBIAN_MIRROR; });
+  afterAll(() => { srv?.kill(); delete process.env.TABCOMPUTER_DEBIAN_MIRROR; });
 
   it('sudo apt update && sudo apt install hello jq', async () => {
     const { shell } = await createTestShell();

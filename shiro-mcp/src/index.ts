@@ -86,7 +86,7 @@ if (process.argv.includes("--install") || process.argv.includes("install")) {
 // WebRTC for Node.js using node-datachannel
 import { PeerConnection } from "node-datachannel";
 
-const SIGNALING_URL = process.env.SHIRO_SIGNALING_URL || "https://shiro.computer";
+const SIGNALING_URL = process.env.TABCOMPUTER_SIGNALING_URL || "https://shiro.computer";
 
 // MCP Protocol types
 interface MCPRequest {

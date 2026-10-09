@@ -1,10 +1,10 @@
 #cloud-config
-# tabcomputer.com (the Unix edition of Shiro) on its own DigitalOcean droplet.
+# tabcomputer.com on its own DigitalOcean droplet.
 #
 # The droplet sets itself up from this file on first boot and then deploys
-# itself: every 2 minutes tabcomputer-deploy checks the deploy/tabcomputer
-# branch of github.com/williamsharkey/shiro and, when it moved, builds that
-# commit and switches to it. Shipping is `git push origin <commit>:deploy/tabcomputer`.
+# itself: every 2 minutes tabcomputer-deploy checks the deploy
+# branch of github.com/williamsharkey/tabcomputer and, when it moved, builds that
+# commit and switches to it. Shipping is `git push origin <commit>:deploy`.
 # No SSH is needed for any of it. See deploy/tabcomputer/README.md.
 
 package_update: true
@@ -18,14 +18,14 @@ write_files:
   - path: /etc/systemd/system/tabcomputer.service
     content: |
       [Unit]
-      Description=tabcomputer.com (Shiro Unix edition)
+      Description=tabcomputer.com
       After=network.target
       [Service]
       WorkingDirectory=/opt/tabcomputer
       Environment=PORT=3000
       Environment=STATIC_DIR=/opt/tabcomputer/current/public
       Environment=SEED_DIR=/opt/tabcomputer/seeds
-      # Server settings ship with each release (deploy/tabcomputer/server.env)
+      # Server settings ship with each release (profiles/tabcomputer/server.env)
       EnvironmentFile=-/opt/tabcomputer/current/server.env
       ExecStart=/usr/bin/node /opt/tabcomputer/current/server.mjs
       Restart=always
@@ -37,11 +37,11 @@ write_files:
     permissions: '0755'
     content: |
       #!/bin/bash
-      # Build and switch to the head of deploy/tabcomputer if it moved.
+      # Build and switch to the head of the deploy branch if it moved.
       set -euo pipefail
       exec 9>/run/tabcomputer-deploy.lock; flock -n 9 || exit 0
-      REPO=https://github.com/williamsharkey/shiro.git
-      BRANCH=deploy/tabcomputer
+      REPO=https://github.com/williamsharkey/tabcomputer.git
+      BRANCH=deploy
       ROOT=/opt/tabcomputer
       SRC=$ROOT/src
       want=$(git ls-remote "$REPO" "refs/heads/$BRANCH" | cut -f1)
@@ -67,7 +67,7 @@ write_files:
   - path: /etc/systemd/system/tabcomputer-deploy.service
     content: |
       [Unit]
-      Description=Deploy deploy/tabcomputer if it moved
+      Description=Deploy the deploy branch if it moved
       [Service]
       Type=oneshot
       Environment=HOME=/root

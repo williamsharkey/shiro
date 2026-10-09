@@ -6,8 +6,8 @@ web, next to the host browser showing the same pages in a real tab. Like
 
 ```sh
 npm run build
-SHIRO_TCP_RELAY=1 SHIRO_TCP_ORIGINS=http://localhost:5299 SHIRO_TCP_CONNECTS_PER_MIN=3000 SHIRO_TCP_MAX_CONNS_PER_IP=256 \
-  PORT=5299 STATIC_DIR=$PWD/dist node server.mjs &     # + SHIRO_TCP_UPSTREAM_PROXY=$HTTPS_PROXY in a proxied sandbox
+TABCOMPUTER_TCP_RELAY=1 TABCOMPUTER_TCP_ORIGINS=http://localhost:5299 TABCOMPUTER_TCP_CONNECTS_PER_MIN=3000 TABCOMPUTER_TCP_MAX_CONNS_PER_IP=256 \
+  PORT=5299 STATIC_DIR=$PWD/dist node server.mjs &     # + TABCOMPUTER_TCP_UPSTREAM_PROXY=$HTTPS_PROXY in a proxied sandbox
 node tests/browser/web-score.mjs --speedometer --wpt --json /tmp/web.json --md docs/WEB_SCORE.md
 node tests/browser/web-score.mjs --only google,github --modes tab     # a few sites, one column
 node tests/browser/web-score.mjs --from-json /tmp/web.json --md docs/WEB_SCORE.md   # re-render
@@ -56,12 +56,12 @@ page; it shows up as part of the desktop's heap.
 - **Headless Chromium meets bot checks** (Amazon's captcha page, 403s). They
   hit both columns, which is why the direct column is there.
 - **The relay dialed through the sandbox's HTTP proxy**
-  (`SHIRO_TCP_UPSTREAM_PROXY=$HTTPS_PROXY`). Chromium uses that proxy for the
+  (`TABCOMPUTER_TCP_UPSTREAM_PROXY=$HTTPS_PROXY`). Chromium uses that proxy for the
   direct column, and the sandbox's direct egress blocks some hosts the proxy
   allows (BBC, Reddit, Stack Overflow, …). Without it, the tab column lost
   those sites to the environment rather than to the Browser.
-- **The relay ran with raised limits** (`SHIRO_TCP_CONNECTS_PER_MIN=3000`,
-  `SHIRO_TCP_MAX_CONNS_PER_IP=256`). With the production defaults (60/min,
+- **The relay ran with raised limits** (`TABCOMPUTER_TCP_CONNECTS_PER_MIN=3000`,
+  `TABCOMPUTER_TCP_MAX_CONNS_PER_IP=256`). With the production defaults (60/min,
   16 concurrent) a news site alone exhausts them; see BROWSER.md, "Decisions".
 
 

@@ -15,7 +15,7 @@
  * which picks the WASI runtime and the arguments recorded for that binary.
  * Packages that need kernel features the runtime lacks (WASIX, child
  * processes, threads, sockets) are listed but refuse to install or run until
- * a kernel advertises them (globalThis.__shiroKernel.features).
+ * a kernel advertises them (globalThis.__tabcomputerKernel.features).
  */
 
 import type { FileSystem } from './filesystem';
@@ -307,10 +307,10 @@ export async function refreshRuntimeMode(): Promise<'sab' | 'jspi' | 'none'> {
 
 /**
  * Features the kernel provides: those of the WASM process runtime's mode,
- * plus any a kernel component adds to globalThis.__shiroKernel.features.
+ * plus any a kernel component adds to globalThis.__tabcomputerKernel.features.
  */
 export function kernelFeatures(): Set<string> {
-  const k = (globalThis as any).__shiroKernel;
+  const k = (globalThis as any).__tabcomputerKernel;
   const out = new Set<string>(Array.isArray(k?.features) ? k.features : []);
   for (const f of MODE_FEATURES[runtimeMode ?? 'none']) out.add(f);
   if (x86Engine) out.add('x86');
@@ -340,7 +340,7 @@ export async function sha256Hex(bytes: Uint8Array): Promise<string> {
 export function resolveUrl(url: string, env?: Record<string, string>): string {
   if (/^https?:\/\//.test(url)) return url;
   const origin = typeof location !== 'undefined' ? location.origin : undefined;
-  const mirror = env?.SHIRO_PKG_MIRROR || (origin && /^https?:\/\//.test(origin) ? origin : DEFAULT_MIRROR);
+  const mirror = env?.TABCOMPUTER_PKG_MIRROR || (origin && /^https?:\/\//.test(origin) ? origin : DEFAULT_MIRROR);
   return mirror.replace(/\/$/, '') + url;
 }
 
@@ -414,7 +414,7 @@ export async function installPackages(fs: FileSystem, index: PkgIndex, names: st
     for (const p of todo) {
       const missing = missingFeatures(p);
       if (missing.length) {
-        throw new Error(`${p.name} needs kernel support Shiro doesn't have yet: ${missing.join(', ')}` +
+        throw new Error(`${p.name} needs kernel support tabcomputer doesn't have yet: ${missing.join(', ')}` +
           (p.notes ? `\n  ${p.notes}` : '') + `\n  (install anyway with --force)`);
       }
     }
@@ -755,8 +755,8 @@ export async function runPackageBinary(binPath: string, argv0: string, args: str
 
   if (entry) {
     const missing = missingFeatures(entry);
-    if (missing.length && ctx.env.SHIRO_PKG_FORCE !== '1') {
-      ctx.stderr += `${argv0}: needs kernel support Shiro doesn't have yet: ${missing.join(', ')}\n`;
+    if (missing.length && ctx.env?.TABCOMPUTER_PKG_FORCE !== '1') {
+      ctx.stderr += `${argv0}: needs kernel support tabcomputer doesn't have yet: ${missing.join(', ')}\n`;
       return 126;
     }
   }

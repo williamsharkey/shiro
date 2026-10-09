@@ -7,11 +7,13 @@
  * `top` see kernel processes.
  */
 
+import { decodeBytes, encodeText } from '../utils/byte-text';
 import { addProcInfoSource, type FileSystem } from '../filesystem';
 import type { Shell } from '../shell';
 import type { Command, CommandContext } from '../commands/index';
 import { KernelStdio, execLazyStdin } from '../shell-stdio';
 import { ProcFs, bootMs } from './procfs';
+import { klog, KmsgFile, LOG_ERR, LOG_INFO, SYSLOG_ACTION_READ_ALL, SYSLOG_ACTION_SIZE_BUFFER, SYSLOG_ACTION_SIZE_UNREAD } from './klog';
 import { processTable, type ShiroProcess } from '../process-table';
 import { packageShadows, pkgOwnShadows, packageArgsForPath, PKG_BIN_DIR } from '../pkg-manager';
 import * as A from './abi';
@@ -26,6 +28,7 @@ import { LockTable, F_RDLCK, F_WRLCK, F_UNLCK } from './locks';
 import { Process } from './process';
 import { EpollFile, waitReady } from './epoll';
 import { EventFile, TimerFile } from './fd';
+import { activeProfile, unameRelease, UNAME_VERSION } from '../profile';
 
 /** Runs a process to completion; resolves with its exit code (or nothing if it exited through the kernel). */
 export type Runner = (proc: Process, kernel: Kernel) => Promise<number | void>;
@@ -166,7 +169,7 @@ export class Kernel {
   /** The page's shell: builtins run in forks of it. */
   shell?: Shell;
   /** uname(2) nodename (the prompt's \h). */
-  hostname = 'shiro';
+  hostname = activeProfile().hostname;
   readonly procs = new Map<number, Process>();
   readonly init: Process;
   private loaders: Loader[] = [];
@@ -208,6 +211,7 @@ export class Kernel {
     this.registerDevice('/dev/urandom', (_p, f) => new DevRandom(f, '/dev/urandom'));
     this.registerDevice('/dev/random', (_p, f) => new DevRandom(f, '/dev/random'));
     this.registerDevice('/dev/tty', p => p.ctty ?? -A.ENXIO);
+    this.registerDevice('/dev/kmsg', (_p, f) => new KmsgFile(klog, f));
     this.addLoader((path, proc, k) => k.builtinLoader(path, proc));
     this.addLoader((path, proc, k) => k.shebangLoader(path, proc));
     if (opts.registerWithProcessTable !== false) {
@@ -557,10 +561,41 @@ export class Kernel {
       }
     }
     proc.markExited(status);
+    this.logTrap(proc, status);
     const parent = this.procs.get(proc.ppid);
     if (parent && parent.pid !== 1) this.deliver(parent, A.SIGCHLD);
     if (proc.ppid === 1) this.scheduleInitReap(proc);
     this.notify();
+  }
+
+  /**
+   * A process killed by a fault signal (a guest's SIGSEGV from Blink, a wasm
+   * trap mapped to one) gets a kernel log line, as Linux's show_signal_msg
+   * and traps do. `proc.data.trapReason` (set by the engine) says more.
+   */
+  private logTrap(proc: Process, status: number): void {
+    if (!A.WIFSIGNALED(status) || proc.data.trapLogged) return;
+    const sig = A.WTERMSIG(status);
+    const what: Record<number, string> = {
+      [A.SIGSEGV]: 'segfault', [A.SIGBUS]: 'bus error', [A.SIGILL]: 'invalid opcode', [A.SIGFPE]: 'divide error',
+    };
+    if (!what[sig]) return;
+    const reason = typeof proc.data.trapReason === 'string' ? ` (${proc.data.trapReason})` : '';
+    klog.log(LOG_INFO, `traps: ${proc.comm}[${proc.pid}] ${what[sig]}${reason}, killed by SIG${A.SIGNAL_NAMES[sig]}`);
+  }
+
+  /**
+   * Log why a guest engine ended `proc` abnormally (worker error, wasm trap,
+   * engine abort). Out-of-memory errors are logged like the OOM killer's.
+   */
+  reportFatal(proc: Process, message: string): void {
+    if (proc.data.trapLogged) return;
+    proc.data.trapLogged = true;
+    if (/out of memory|\boom\b|cannot enlarge memory|maximum memory|memory\.grow|allocation failed|array buffer allocation/i.test(message)) {
+      klog.log(LOG_ERR, `Out of memory: Killed process ${proc.pid} (${proc.comm}): ${message}`);
+    } else {
+      klog.log(LOG_INFO, `traps: ${proc.comm}[${proc.pid}] ${message}`);
+    }
   }
 
   private scheduleInitReap(proc: Process): void {
@@ -733,7 +768,7 @@ export class Kernel {
     if (path === '') return -A.ENOENT;
     // PATH_MAX 4096 with its NUL, NAME_MAX 255 per component
     if (path.length >= 4096 || path.split('/').some((c) => c.length > 255)) return -A.ENAMETOOLONG;
-    if (path.startsWith('/')) return normalize(path);
+    if (path.startsWith('/')) return this.throughFd(proc, normalize(path));
     let base = proc.cwd;
     if (dirfd !== A.AT_FDCWD) {
       const d = proc.fds.get(dirfd);
@@ -741,7 +776,24 @@ export class Kernel {
       if (d.kind !== 'dir' || !d.path) return -A.ENOTDIR;
       base = d.path;
     }
-    return normalize(base + '/' + path);
+    return this.throughFd(proc, normalize(base + '/' + path));
+  }
+
+  /**
+   * A path below an open directory's /proc/self/fd/N (or /dev/fd/N,
+   * /proc/PID/fd/N) names something in that directory, as on Linux, where
+   * the fd entry is a link to it: Claude Code pins a directory with an
+   * O_PATH fd and then mkdirs, opens and renames through /proc/self/fd/N/NAME.
+   */
+  private throughFd(proc: Process, p: string): string | number {
+    if (!p.startsWith('/proc/') && !p.startsWith('/dev/fd/')) return p;
+    const m = /^\/(?:proc\/(self|thread-self|\d+)|dev)\/fd\/(\d+)(\/.+)$/.exec(p);
+    if (!m) return p;
+    const owner = m[1] === undefined || m[1] === 'self' || m[1] === 'thread-self' ? proc : this.procs.get(Number(m[1]));
+    const d = owner?.fds.get(Number(m[2]));
+    if (!d) return -A.ENOENT;
+    if (d.kind !== 'dir' || !d.path) return -A.ENOTDIR;
+    return normalize(d.path + m[3]);
   }
 
   /** open(2) without the fd: returns the new OpenFile or -errno. */
@@ -1058,7 +1110,8 @@ export class Kernel {
     }
     if (stdio) await stdio.flush();
     if (proc.exiting) return code;
-    if (ctx.stdout) await this.writeAll(proc, 1, enc.encode(ctx.stdout));
+    // Byte-exact (src/utils/byte-text.ts): binary output of a builtin keeps its bytes
+    if (ctx.stdout) await this.writeAll(proc, 1, encodeText(ctx.stdout));
     if (ctx.stderr && !proc.exiting) await this.writeAll(proc, 2, enc.encode(ctx.stderr));
     if (shell.cwd !== proc.cwd) proc.cwd = shell.cwd;
     return code;
@@ -1144,7 +1197,7 @@ export class Kernel {
     shell.env.PS1 ??= '\\u@\\h:\\w\\$ ';
     let chain = Promise.resolve();
     const out = (fd: number) => (s: string) => {
-      chain = chain.then(async () => { if (!proc.exiting) await this.writeAll(proc, fd, enc.encode(s.replace(/\r\n/g, '\n'))); });
+      chain = chain.then(async () => { if (!proc.exiting) await this.writeAll(proc, fd, encodeText(s.replace(/\r\n/g, '\n'))); });
     };
     // Jobs get process groups of their own and the terminal while they run (Ctrl-Z, fg, bg, jobs)
     const f0 = proc.fds.get(0);
@@ -1157,7 +1210,7 @@ export class Kernel {
       const home = shell.env.HOME || '/home/user';
       const cwd = shell.cwd === home ? '~' : shell.cwd.startsWith(home + '/') ? '~' + shell.cwd.slice(home.length) : shell.cwd;
       return (shell.env.PS1 ?? '').replace(/\\([uhHwW$n\\])/g, (_, c: string) => ({
-        u: shell.env.USER || 'user', h: 'shiro', H: 'shiro', w: cwd, W: cwd === '~' ? '~' : cwd.slice(cwd.lastIndexOf('/') + 1) || '/',
+        u: shell.env.USER || 'user', h: this.hostname, H: this.hostname, w: cwd, W: cwd === '~' ? '~' : cwd.slice(cwd.lastIndexOf('/') + 1) || '/',
         $: '$', n: '\n', '\\': '\\',
       } as Record<string, string>)[c]);
     };
@@ -1222,7 +1275,7 @@ export class Kernel {
     if (!f) return '';
     if (f.kind === 'pipe' || f.kind === 'file' || f.kind === 'socket' || f instanceof BufferFile) {
       const r = await this.readAll(proc, 0);
-      return typeof r === 'number' ? '' : A.decodeText(r);
+      return typeof r === 'number' ? '' : decodeBytes(r);
     }
     return '';
   }
@@ -1730,7 +1783,7 @@ export class Kernel {
         case A.SYS_fsync: {
           const f = file(args[0]);
           if (!f) return -A.EBADF;
-          await f.sync?.();
+          try { await f.sync?.(); } catch (e) { return A.errnoFromError(e); }
           return 0;
         }
         case A.SYS_ftruncate: {
@@ -2012,9 +2065,16 @@ export class Kernel {
           dv.setBigInt64(8, BigInt(Math.floor((ms % 1000) * 1e6)), true);
           return 0;
         }
+        case A.SYS_syslog: {
+          // Reading the whole log and its size is open to everyone (dmesg_restrict=0); the rest needs root
+          const type = args[0];
+          const open = type === SYSLOG_ACTION_READ_ALL || type === SYSLOG_ACTION_SIZE_BUFFER || type === SYSLOG_ACTION_SIZE_UNREAD || type <= 1;
+          if (!open && proc.uid !== 0) return -A.EPERM;
+          return await klog.syslogAction(type, data, args[1] | 0, sig);
+        }
         case A.SYS_uname: { // → struct utsname (engines that report their own machine take the names from here)
           if (data.length < A.UTSNAME_FIELD * 6) return -A.EFAULT;
-          const fields = ['Linux', this.hostname, '6.1.0-shiro', '#1 Shiro', 'wasm32', '(none)'];
+          const fields = ['Linux', this.hostname, unameRelease(this.hostname), UNAME_VERSION, 'wasm32', '(none)'];
           data.fill(0, 0, A.UTSNAME_FIELD * 6);
           fields.forEach((f, i) => data.set(enc.encode(f).subarray(0, A.UTSNAME_FIELD - 1), i * A.UTSNAME_FIELD));
           return 0;
@@ -2446,9 +2506,9 @@ let singleton: Kernel | undefined;
 /** The page's kernel (created on first use; main.ts attaches the filesystem and shell). */
 export function getKernel(): Kernel {
   const w = typeof window !== 'undefined' ? (window as any) : undefined;
-  if (w?.__shiroKernel) return w.__shiroKernel;
+  if (w?.__tabcomputerKernel) return w.__tabcomputerKernel;
   if (!singleton) singleton = new Kernel();
-  if (w) w.__shiroKernel = singleton;
+  if (w) w.__tabcomputerKernel = singleton;
   return singleton;
 }
 

@@ -8,7 +8,7 @@ const serverPath = decodeURIComponent(new URL('../../../server.mjs', import.meta
 
 // Cross-origin isolation headers from server.mjs (see src/utils/isolation.ts).
 // The server runs as a real `node server.mjs` child, once with the default
-// (isolation on) and once with SHIRO_ISOLATION=0.
+// (isolation on) and once with TABCOMPUTER_ISOLATION=0.
 async function startServer(env: Record<string, string>): Promise<{ proc: ChildProcess; base: string }> {
   // PORT=0: the kernel picks a free port (a random one could be taken by another server test)
   const proc = spawn(process.execPath, [serverPath], {
@@ -36,8 +36,8 @@ describe('server cross-origin isolation headers', () => {
     writeFileSync(join(pub, 'favicon.svg'), '<svg/>');
     const env = { STATIC_DIR: pub, SEED_DIR: join(dir, 'seeds') };
     [on, off] = await Promise.all([
-      startServer({ ...env, SHIRO_ISOLATION: '' }),
-      startServer({ ...env, SHIRO_ISOLATION: '0' }),
+      startServer({ ...env, TABCOMPUTER_ISOLATION: '' }),
+      startServer({ ...env, TABCOMPUTER_ISOLATION: '0' }),
     ]);
   }, 20_000);
 
@@ -78,7 +78,7 @@ describe('server cross-origin isolation headers', () => {
     }
   });
 
-  it('SHIRO_ISOLATION=0 turns the headers off', async () => {
+  it('TABCOMPUTER_ISOLATION=0 turns the headers off', async () => {
     for (const path of ['/', '/assets/chunk.js', '/oauth/callback']) {
       const h = await headers(path, off.base);
       expect(h.get('cross-origin-opener-policy'), path).toBeNull();

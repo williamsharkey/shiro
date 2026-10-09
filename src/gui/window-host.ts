@@ -63,6 +63,8 @@ export interface CanvasWindowEvents {
 
 export interface CanvasWindow {
   setTitle(title: string): void;
+  /** An element over the canvas (same origin) for DOM layers: DOM-text mode's spans. */
+  overlay?(): HTMLElement;
   /**
    * The app moved/resized its window (X ConfigureWindow); the frame follows.
    * `fromUser`: the size answers the user's own resize (only the buffer changes).
@@ -85,8 +87,11 @@ export interface CanvasWindow {
 
 export interface WindowHost {
   readonly name: string;
+  /** Device pixels per CSS px (displayScale()); X pixels are device pixels. Default 1. */
+  readonly scale?: number;
   createCanvasWindow(opts: CanvasWindowOptions): CanvasWindow;
   /** The desktop area windows live in (the X root window size), CSS px. */
+  /** In X (device) pixels: CSS size × displayScale(). */
   desktopSize(): { width: number; height: number };
   /** Where a new window of this size should go (cascade/center). */
   placeWindow?(width: number, height: number): { x: number; y: number };
