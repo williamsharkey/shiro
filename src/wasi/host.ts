@@ -304,6 +304,7 @@ export function wasmRunner(
   return async (proc, kernel) => {
     const mode = wasmProcessMode();
     if (mode === 'none') throw new Error('WASM processes need SharedArrayBuffer or JSPI');
+    if (exe) proc.data.exe = exe; // /proc/PID/exe (procfs), however the guest spells the path
     if (!proc.env.PWD) {
       // The cwd as the program sees it (Go on wasip1 takes it from $PWD): under a
       // '/' mount, its path inside the mount, left unset when that is just "/"

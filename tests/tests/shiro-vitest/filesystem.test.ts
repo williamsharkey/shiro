@@ -54,6 +54,13 @@ describe('FileSystem', () => {
     await expect(fs.stat('/home/user/old.txt')).rejects.toThrow('ENOENT');
   });
 
+  it('rename keeps the modification time (rsync -a sets it on a temp file, then renames)', async () => {
+    await fs.writeFile('/home/user/tmp.XXXX', 'data');
+    await fs.utimes('/home/user/tmp.XXXX', 1_000_000_000_000, 1_000_000_000_000);
+    await fs.rename('/home/user/tmp.XXXX', '/home/user/final.txt');
+    expect((await fs.stat('/home/user/final.txt')).mtime.getTime()).toBe(1_000_000_000_000);
+  });
+
   it('should resolve paths with . and ..', () => {
     expect(fs.resolvePath('foo/bar', '/home')).toBe('/home/foo/bar');
     expect(fs.resolvePath('../tmp', '/home/user')).toBe('/home/tmp');

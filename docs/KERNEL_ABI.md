@@ -37,6 +37,10 @@ All changes so far are additive; nothing below renames or removes an earlier nam
     `FileSystem.lookupCached(path, follow)`. A `SyscallHandler` may carry
     `passSync(proc, nr, args, data, kernel)`: true when it would pass the
     call on, so registering it doesn't force every call onto the async path.
+  - **Change:** link/linkat return -EPERM instead of copying the file (the
+    filesystem has no hard links). The copy had its own inode, so `git
+    clone /local/repo` died with "hardlink different from source"; with
+    EPERM git, cp -l and others fall back to copying themselves.
   - While guests make syscalls back to back the page polls their channels
     for a few tens of µs after each reply (bounded by a 4 ms slice per
     task), so the next request is served without an event-loop round trip.
@@ -59,6 +63,28 @@ All changes so far are additive; nothing below renames or removes an earlier nam
     executable file (`binCommandStat`).
   - `FileSystem.writeFile` stores a compact copy of a typed-array view
     (IndexedDB cloned the whole underlying buffer).
+
+- **2026-10-09 (unix/compat-tools)** (additive)
+  - AF_UNIX stream sockets bound to paths and abstract names; `SYS_sendmsg`
+    (46) and `SYS_recvmsg` (47) in the kernel, with `SCM_RIGHTS`;
+    `getsockopt(SO_PEERCRED)` returns the peer's pid. Constants `SO_PEERCRED`,
+    `SCM_RIGHTS`, `SCM_CREDENTIALS`, `MSG_CTRUNC`, `MSG_CMSG_CLOEXEC`,
+    `SOCKADDR_UN_MAX`. `Kernel.socketPaths`: socket files stat as `S_IFSOCK`.
+    Layouts in [NETWORKING.md](NETWORKING.md).
+  - `ioctl(FIONBIO)` succeeds on every file (it only sets `O_NONBLOCK`).
+  - `/proc` in the kernel (`procfs.ts`, `Kernel.procfs`): open/stat/
+    readlink/getdents of `/proc/self`, `/proc/PID/...`, `/proc/stat`,
+    `/proc/loadavg`, `/proc/uptime` come from the process table (other
+    `/proc` files are still the FileSystem's). `Process.syscalls`,
+    `kernelMs`, `inSyscall`, `exitTime`; `Kernel.lastPid`.
+  - `SYS_clock_gettime` (228) for `CLOCK_REALTIME`, the monotonic clocks
+    and `CLOCK_BOOTTIME`, all counting from the kernel's boot (`procfs.ts`
+    `bootMs`) except realtime.
+  - ptys: `TIOCPKT`/`TIOCGPKT`. Stat of a device opens it `O_NOCTTY` and
+    closes it again.
+  - `sh` as a kernel process with no script on a terminal (or `-i`) runs
+    an interactive read-eval loop (`Shell.exited` marks `exit`).
+  - `link(2)` copies report the source's inode number.
 
 - **2026-10-08 (unix/compat-tools)**
   - **New syscalls:** `SYS_shiro_vfork` (1010) creates a child process with
@@ -295,7 +321,7 @@ offset 0. Lengths are bytes, without a trailing NUL.
 | unlinkat | dirfd, pathLen, flags (AT_REMOVEDIR) | path | 0 |
 | renameat / renameat2 | olddirfd, oldLen, newdirfd, newLen (, flags) | old, new | 0 |
 | symlink / symlinkat | targetLen, (dirfd,) linkLen | target, linkpath | 0 |
-| link / linkat | (olddirfd,) oldLen, (newdirfd,) newLen (, flags) | old, new | 0 (copies) |
+| link / linkat | (olddirfd,) oldLen, (newdirfd,) newLen (, flags) | old, new | -EPERM (no hard links; -ENOENT/-EEXIST checked first) |
 | readlinkat | dirfd, pathLen, bufsiz | path → target | length |
 | utimensat | dirfd, pathLen (0 = the fd), flags, hasTimes | path, then 2 struct timespec (32 B) at offset pathLen | 0 |
 | chmod / fchmod / fchmodat | pathLen or fd or (dirfd, pathLen), mode | path | 0 |

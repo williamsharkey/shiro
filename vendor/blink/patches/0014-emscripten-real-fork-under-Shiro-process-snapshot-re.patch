@@ -1,7 +1,7 @@
-From c52ab756eb33a9677a1f9b3a94df6f74fccc586d Mon Sep 17 00:00:00 2001
+From 4daa457b2c610398ed70a651744e79637e3018e9 Mon Sep 17 00:00:00 2001
 From: shiro <build@shiro>
 Date: Thu, 8 Oct 2026 04:22:31 +0000
-Subject: [PATCH 14/19] emscripten: real fork() under Shiro (process snapshot
+Subject: [PATCH 14/20] emscripten: real fork() under Shiro (process snapshot
  restored in a new worker)
 
 fork() and clone() without CLONE_VFORK snapshot the process: every mapped

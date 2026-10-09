@@ -10,12 +10,14 @@
 import { addProcInfoSource, type FileSystem } from '../filesystem';
 import type { Shell } from '../shell';
 import type { Command, CommandContext } from '../commands/index';
+import { ProcFs, bootMs } from './procfs';
 import { processTable, type ShiroProcess } from '../process-table';
-import { packageShadows, PKG_BIN_DIR } from '../pkg-manager';
+import { packageShadows, packageArgsForPath, PKG_BIN_DIR } from '../pkg-manager';
 import * as A from './abi';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
   RegularFile, DirFile, openInode, openInodeSync, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, flushInode, inodeStat, hasOpenInodes,
+  shareInodeNumber, forgetInodeNumber,
 } from './fd';
 import { createPipe } from './pipe';
 import { Process } from './process';
@@ -88,6 +90,9 @@ export interface WaitResult {
 
 const enc = new TextEncoder();
 
+/** Shell builtins that Unix systems also have as programs in /bin and /usr/bin. */
+const SHELL_PROGRAMS = new Set(['echo', 'printf', 'test', '[', 'true', 'false', 'pwd', 'kill']);
+
 function normalize(path: string): string {
   const stack: string[] = [];
   for (const part of path.split('/')) {
@@ -110,6 +115,8 @@ function shellQuote(s: string): string {
 
 export class Kernel {
   fs?: FileSystem;
+  /** Paths of AF_UNIX socket files (net.ts bind); they stat as sockets. */
+  socketPaths?: Set<string>;
   /** The page's shell: builtins run in forks of it. */
   shell?: Shell;
   readonly procs = new Map<number, Process>();
@@ -120,6 +127,9 @@ export class Kernel {
   private spawnHooks = new Set<(proc: Process) => void>();
   private syscallTable = new Map<number, SyscallHandler[]>();
   private allocPid: () => number;
+  /** The last pid handed out (/proc/stat, /proc/loadavg). */
+  lastPid = 0;
+  readonly procfs = new ProcFs(this);
   private detachTable?: () => void;
   /** How long an unreaped child of init stays a zombie before it is reaped automatically. */
   initReapDelayMs = 30_000;
@@ -127,7 +137,8 @@ export class Kernel {
   constructor(opts: { fs?: FileSystem; shell?: Shell; allocPid?: () => number; registerWithProcessTable?: boolean } = {}) {
     this.fs = opts.fs ?? opts.shell?.fs;
     this.shell = opts.shell;
-    this.allocPid = opts.allocPid ?? (() => processTable.allocatePid());
+    const alloc = opts.allocPid ?? (() => processTable.allocatePid());
+    this.allocPid = () => (this.lastPid = alloc());
     this.init = new Process({
       pid: 1, ppid: 0, pgid: 1, sid: 1, path: '/sbin/init', argv: ['init'],
       env: { ...(opts.shell?.env ?? { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: '/home/user' }) },
@@ -225,9 +236,20 @@ export class Kernel {
   async findProgram(path: string, proc: Process): Promise<Runner | null> {
     for (const l of this.loaders) {
       const r = await l(path, proc, this);
-      if (r) return r;
+      if (r) return this.withPackageArgs(path, r);
     }
     return null;
+  }
+
+  /** An installed command's own arguments (`egrep` runs `grep -E`) go in after argv[0]. */
+  private async withPackageArgs(path: string, run: Runner): Promise<Runner> {
+    if (!this.fs || !path.startsWith(PKG_BIN_DIR + '/')) return run;
+    const args = await packageArgsForPath(this.fs, path);
+    if (!args) return run;
+    return (p, k) => {
+      p.argv = [p.argv[0] ?? path, ...args, ...p.argv.slice(1)];
+      return run(p, k);
+    };
   }
 
   private async builtinLoader(path: string, _proc: Process): Promise<Runner | null> {
@@ -236,15 +258,59 @@ export class Kernel {
     const base = path.slice(path.lastIndexOf('/') + 1);
     const inBin = !path.includes('/') || /^\/(usr\/)?(local\/)?s?bin\//.test(path);
     const cmd = inBin ? shell.commands.get(base) : undefined;
+    if (cmd && (base === 'sh' || base === 'bash')) return proc => this.runShellProcess(proc);
     // An installed package's command replaces the builtin, as at the prompt
     // (a bin-dir path can name a builtin's PATH shim, or nothing on disk)
     const pkgBin = `${PKG_BIN_DIR}/${base}`;
     if (cmd && this.fs && path !== pkgBin && packageShadows(this.fs).has(base)) return this.findProgram(pkgBin, _proc);
+    if (cmd && SHELL_NAMES.has(base)) {
+      const direct = await this.shellCommandDirect(_proc);
+      if (direct) return direct;
+    }
     if (cmd) return proc => this.runBuiltin(proc, cmd);
+    // Shell builtins that are also programs (/bin/echo, /usr/bin/test, ...)
+    if (inBin && SHELL_PROGRAMS.has(base)) return proc => this.runViaShell(proc, base);
     // Scripts and other executables the shell knows how to start
     const found = path.includes('/') ? ((await this.fs?.exists(path)) ? path : null) : await shell.findExecutableInPath(path);
     if (found) return proc => this.runViaShell(proc);
     return null;
+  }
+
+  /**
+   * `sh -c 'prog args'` naming a program (not a builtin), with nothing for
+   * the shell to do but start it: run the program in this process, as a
+   * real shell execs its last command. Builtins see stdin only at EOF and
+   * write their output when they return, so a program talking to its parent
+   * over pipes (git clone and git-upload-pack) can't go through one.
+   */
+  private async shellCommandDirect(probe: Process): Promise<Runner | null> {
+    const a = probe.argv;
+    if (a.length < 3 || a[1] !== '-c') return null;
+    const words = simpleCommandWords(a[2]);
+    if (!words || !words.length || words[0].includes('=')) return null;
+    const name = words[0];
+    let path: string | null = null;
+    if (name.includes('/')) {
+      const p = this.resolvePath(probe, name);
+      if (typeof p === 'string' && (await this.fs?.exists(p))) path = p;
+    } else if (this.fs && this.shell?.commands.get(name) && packageShadows(this.fs).has(name)) {
+      path = `${PKG_BIN_DIR}/${name}`; // an installed package replaces the builtin
+    } else if (!this.shell?.commands.get(name)) {
+      for (const dir of (probe.env.PATH ?? '/usr/local/bin:/usr/bin:/bin').split(':')) {
+        if (!dir) continue;
+        const p = `${dir.replace(/\/$/, '')}/${name}`;
+        if (await this.fs?.exists(p)) { path = p; break; }
+      }
+    }
+    if (!path) return null;
+    const next = new Process({ pid: -1, ppid: probe.ppid, path, argv: words, env: probe.env, cwd: probe.cwd });
+    const runner = await this.findProgram(path, next);
+    if (!runner) return null;
+    return (proc, k) => {
+      proc.path = path!;
+      proc.argv = words;
+      return runner(proc, k);
+    };
   }
 
   // ── Process lifecycle ─────────────────────────────────────────────────────
@@ -521,6 +587,12 @@ export class Kernel {
     }
     const dev = this.devices.get(p);
     if (dev) return dev(proc, flags, p);
+    if (p === '/proc' || p.startsWith('/proc/')) {
+      const link = this.procfs.linkTarget(proc, p);
+      if (link) return link === p ? -A.ELOOP : this.open(proc, link, flags, mode);
+      const pf = this.procfs.open(proc, p, flags);
+      if (pf !== undefined) return pf;
+    }
     const fs = this.fs;
     if (!fs) return -A.ENOSYS;
     const statusFlags = flags & ~(A.O_CREAT | A.O_EXCL | A.O_TRUNC | A.O_CLOEXEC | A.O_NOCTTY | A.O_DIRECTORY | A.O_NOFOLLOW);
@@ -565,6 +637,13 @@ export class Kernel {
     }
   }
 
+  /** A registered device node, or a directory that holds one (/dev, /dev/pts). */
+  isDevicePath(p: string): boolean {
+    if (this.devices.has(p)) return true;
+    for (const d of this.devices.keys()) if (d.startsWith(p + '/')) return true;
+    return false;
+  }
+
   /**
    * open() of a file or directory the FileSystem has in memory, without
    * creating or truncating: the description, -errno, or undefined when it
@@ -592,7 +671,7 @@ export class Kernel {
     if (!fs || trailingSlash(path)) return undefined;
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
-    if (this.devices.has(p)) return undefined;
+    if (this.devices.has(p) || p === '/proc' || p.startsWith('/proc/') || this.socketPaths?.has(p)) return undefined;
     const hit = fs.lookupCached(p, follow);
     if (hit === undefined) return undefined;
     if (hit === null) return -A.ENOENT;
@@ -619,19 +698,31 @@ export class Kernel {
     if (typeof p === 'number') return p;
     const dev = this.devices.get(p);
     if (dev) {
-      const f = await dev(proc, A.O_RDONLY, p);
-      return typeof f === 'number' ? f : f.stat();
+      // A description just for the stat: O_NOCTTY (stat must not make a pty the
+      // caller's controlling tty), closed after (a slave left open hides hangups)
+      const f = await dev(proc, A.O_RDONLY | A.O_NOCTTY, p);
+      if (typeof f === 'number') return f;
+      try { return await f.stat(); } finally { if (f !== proc.ctty) await f.close(); }
+    }
+    if (p === '/proc' || p.startsWith('/proc/')) {
+      const pst = this.procfs.stat(proc, p, follow);
+      if (pst !== undefined) return pst;
+      const link = follow ? this.procfs.linkTarget(proc, p) : undefined;
+      if (link) return this.statPath(proc, link, true);
     }
     const fs = this.fs;
     if (!fs) return -A.ENOSYS;
     try {
       const st = follow ? await fs.stat(p) : await fs.lstat(p);
+      let type = st.isDirectory() ? A.S_IFDIR : st.isSymbolicLink() ? A.S_IFLNK : A.S_IFREG;
+      // The same file through a symlink is the same inode
+      const real = follow && type !== A.S_IFDIR ? await fs.realpath(p).catch(() => p) : p;
+      if (type === A.S_IFREG && this.socketPaths?.has(real)) type = A.S_IFSOCK;
       // A file open here: its size and times as the open descriptions see them
-      const open = st.isFile() && hasOpenInodes(fs) ? inodeStat(fs, follow ? await fs.realpath(p) : p) : undefined;
-      if (open) return { ...open, ino: inodeNumber(p) };
-      const type = st.isDirectory() ? A.S_IFDIR : st.isSymbolicLink() ? A.S_IFLNK : A.S_IFREG;
+      const open = type === A.S_IFREG && hasOpenInodes(fs) ? inodeStat(fs, real) : undefined;
+      if (open) return { ...open, ino: inodeNumber(real) };
       return {
-        dev: 1, ino: inodeNumber(p), mode: type | (st.mode & 0o7777), nlink: st.isDirectory() ? 2 : 1,
+        dev: 1, ino: inodeNumber(real), mode: type | (st.mode & 0o7777), nlink: st.isDirectory() ? 2 : 1,
         uid: 1000, gid: 1000, rdev: 0, size: st.size, blksize: 4096, blocks: Math.ceil(st.size / 512),
         atimeMs: st.atimeMs ?? st.mtime.getTime(), mtimeMs: st.mtime.getTime(), ctimeMs: st.ctime.getTime(),
         atimeNs: st.atimeNs, mtimeNs: st.mtimeNs,
@@ -708,9 +799,123 @@ export class Kernel {
   }
 
   /** Run argv through a forked shell (scripts, node programs, anything in PATH that is not a registered command). */
-  private async runViaShell(proc: Process): Promise<number> {
+  /**
+   * `sh`/`bash` as a kernel process (a program's system(), popen(), `sh -c
+   * CMD`, `#!/bin/sh` scripts): the forked shell is the process
+   * (`shell.kernelHost`), so programs it runs get its real fds and the tty.
+   * Builtins write to fd 1/2 as they go. Stdin is read up front only for a
+   * script on stdin or one that starts with a builtin (which takes its
+   * input as a string); a program at the start reads fd 0 itself.
+   */
+  private async runShellProcess(proc: Process): Promise<number> {
     const shell = this.forkShell(proc);
-    const line = proc.argv.length ? [proc.path, ...proc.argv.slice(1)].map(shellQuote).join(' ') : shellQuote(proc.path);
+    shell.kernelHost = { kernel: this, proc };
+    const args = proc.argv.slice(1);
+    let i = 0;
+    while (i < args.length && /^-[a-zA-Z]+$/.test(args[i]) && args[i] !== '-c') i++; // -e, -x, -l ...
+    let script: string;
+    let positional: string[] = [];
+    // No script and a terminal (or -i): an interactive shell (a tmux pane, screen window, `sh` from a program)
+    if (args[i] !== '-c' && (args.slice(0, i).includes('-i') || (i >= args.length && proc.fds.get(0)?.kind === 'pty'))) {
+      return this.interactiveShell(proc, shell);
+    }
+    if (args[i] === '-c') {
+      script = args[i + 1] ?? '';
+      positional = args.slice(i + 2);
+    } else if (i < args.length) {
+      try {
+        const p = this.resolvePath(proc, args[i]);
+        if (typeof p === 'number') throw new Error('bad path');
+        const raw = await this.fs!.readFile(p);
+        script = typeof raw === 'string' ? raw : A.decodeText(raw);
+      } catch {
+        await this.writeAll(proc, 2, enc.encode(`sh: ${args[i]}: No such file or directory\n`));
+        return 127;
+      }
+      positional = args.slice(i);
+    } else {
+      script = await this.stdinText(proc);
+    }
+    if (script.startsWith('#!')) script = script.slice(script.indexOf('\n') + 1);
+    const first = script.trim().split(/[\s;|&]/)[0] ?? '';
+    const { packageShadows } = await import('../pkg-manager');
+    const builtinFirst = (!!shell.commands.get(first) && !packageShadows(shell.fs).has(first)) || SHELL_PROGRAMS.has(first) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(first) ||
+      ['cd', 'read', 'while', 'if', 'for', 'case', 'until', 'exec', 'set', 'export', 'eval', '.', 'source', '{', '('].includes(first);
+    const stdin = args[i] === '-c' && builtinFirst ? await this.stdinText(proc) : '';
+    let chain = Promise.resolve();
+    const out = (fd: number) => (s: string) => {
+      chain = chain.then(async () => { if (!proc.exiting) await this.writeAll(proc, fd, enc.encode(s.replace(/\r\n/g, '\n'))); });
+    };
+    if (positional.length) shell.env['0'] = positional[0];
+    let code: number;
+    if (script.includes('\n')) {
+      // Multi-line: compound statements accumulate across lines
+      code = await shell.executeShellScript(script, positional.slice(1), { stdin } as CommandContext, out(1), out(2));
+    } else {
+      positional.slice(1).forEach((v, k) => { shell.env[String(k + 1)] = v; });
+      shell.env['#'] = String(Math.max(0, positional.length - 1));
+      shell.env['@'] = positional.slice(1).join(' ');
+      code = await shell.executeWithStdin(script, stdin, out(1), out(2));
+    }
+    await chain;
+    return code;
+  }
+
+  /**
+   * Read-eval loop on fd 0 for `sh` run as a kernel process on a terminal: the
+   * pty's line discipline edits the line; PS1 (default `\u@\h:\w\$ `) goes to
+   * fd 2. Like bash, it survives Ctrl-C/Ctrl-\/Ctrl-Z (its foreground
+   * children, in the same process group, get them) and ends at `exit` or EOF.
+   */
+  private async interactiveShell(proc: Process, shell: Shell): Promise<number> {
+    const jobSignals = new Set([A.SIGINT, A.SIGQUIT, A.SIGTSTP, A.SIGTTIN, A.SIGTTOU]);
+    const outer = proc.signalHook; // job control's
+    proc.signalHook = (p, sig) => {
+      if (!jobSignals.has(sig)) return outer?.(p, sig) ?? false;
+      if (sig === A.SIGINT) p.interruptSyscalls(); // a fresh prompt
+      return true;
+    };
+    shell.env.PS1 ??= '\\u@\\h:\\w\\$ ';
+    let chain = Promise.resolve();
+    const out = (fd: number) => (s: string) => {
+      chain = chain.then(async () => { if (!proc.exiting) await this.writeAll(proc, fd, enc.encode(s.replace(/\r\n/g, '\n'))); });
+    };
+    const prompt = () => {
+      const home = shell.env.HOME || '/home/user';
+      const cwd = shell.cwd === home ? '~' : shell.cwd.startsWith(home + '/') ? '~' + shell.cwd.slice(home.length) : shell.cwd;
+      return (shell.env.PS1 ?? '').replace(/\\([uhHwW$n\\])/g, (_, c: string) => ({
+        u: shell.env.USER || 'user', h: 'shiro', H: 'shiro', w: cwd, W: cwd === '~' ? '~' : cwd.slice(cwd.lastIndexOf('/') + 1) || '/',
+        $: '$', n: '\n', '\\': '\\',
+      } as Record<string, string>)[c]);
+    };
+    const buf = new Uint8Array(4096);
+    let pending = '';
+    let code = 0;
+    for (;;) {
+      await chain;
+      await this.writeAll(proc, 2, enc.encode(prompt()));
+      // one line from the terminal (canonical mode hands over whole lines)
+      let line: string | null = null;
+      while (line === null) {
+        const nl = pending.indexOf('\n');
+        if (nl >= 0) { line = pending.slice(0, nl); pending = pending.slice(nl + 1); break; }
+        const f = proc.fds.get(0);
+        const n = f ? await f.read(buf, proc.syscallSignal) : 0;
+        if (proc.exiting) return code;
+        if (n === -A.EINTR) { pending = ''; await this.writeAll(proc, 2, enc.encode('\n' + prompt())); continue; }
+        if (n <= 0) { if (pending) { line = pending; pending = ''; break; } await this.writeAll(proc, 2, enc.encode('exit\n')); return code; }
+        pending += A.decodeText(buf.subarray(0, n));
+      }
+      if (!line.trim()) continue;
+      code = await shell.execute(line, out(1), out(2));
+      await chain;
+      if (shell.exited) return code;
+    }
+  }
+
+  private async runViaShell(proc: Process, name = proc.path): Promise<number> {
+    const shell = this.forkShell(proc);
+    const line = proc.argv.length ? [name, ...proc.argv.slice(1)].map(shellQuote).join(' ') : shellQuote(name);
     const stdin = await this.stdinText(proc);
     let chain = Promise.resolve();
     const out = (fd: number) => (s: string) => {
@@ -762,6 +967,7 @@ export class Kernel {
    */
   syscallSync(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): number | undefined {
     if (proc.state !== 'running' || proc.exiting) return undefined;
+    proc.syscalls++; // (/proc CPU estimate: these take no time)
     const hs = this.syscallTable.get(nr);
     if (hs) for (const h of hs) if (!h.passSync?.(proc, nr, args, data, this)) return undefined;
     switch (nr) {
@@ -836,12 +1042,16 @@ export class Kernel {
   }
 
   async syscall(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): Promise<number> {
+    // Time inside syscalls is time the process isn't computing (/proc CPU estimate)
+    const t0 = Date.now();
+    proc.syscalls++;
     // While in a syscall the process counts as sleeping (S in /proc/PID/stat)
     proc.inSyscall++;
     try {
       return await this.syscallImpl(proc, nr, args, data);
     } finally {
       proc.inSyscall--;
+      proc.kernelMs += Date.now() - t0;
     }
   }
 
@@ -971,9 +1181,15 @@ export class Kernel {
           const arg = data.subarray(0, Math.min(args[2] >>> 0, data.length));
           if (req === A.FIOCLEX || req === A.FIONCLEX) return fds.setCloexec(args[0], req === A.FIOCLEX);
           if (req === A.FIONBIO && arg.length >= 4) {
+            // O_NONBLOCK is the open file's flag, so this works on any fd. A
+            // file's own ioctl may also look at it (sockets), but one that
+            // doesn't know it (/dev/null, pipes, files) mustn't fail it:
+            // libuv sets every fd non-blocking this way (cmake's spawns).
             const on = new DataView(arg.buffer, arg.byteOffset, 4).getInt32(0, true) !== 0;
             f.flags = on ? f.flags | A.O_NONBLOCK : f.flags & ~A.O_NONBLOCK;
             if (!f.ioctl) return 0;
+            const r = await f.ioctl(req, arg, sig);
+            return r === -A.ENOTTY ? 0 : r;
           }
           if (!f.ioctl) return -A.ENOTTY;
           return await f.ioctl(req, arg, sig);
@@ -1230,6 +1446,9 @@ export class Kernel {
           const moved = await renameInodes(fs(), from, to);
           await fs().rename(from, to);
           moved();
+          shareInodeNumber(from, to);
+          forgetInodeNumber(from);
+          if (this.socketPaths?.delete(from)) this.socketPaths.add(to);
           return 0;
         }
         case A.SYS_mkdir:
@@ -1261,7 +1480,7 @@ export class Kernel {
             return typeof t !== 'number' && (t.mode & A.S_IFMT) === A.S_IFDIR ? -A.EISDIR : -A.ENOTDIR;
           }
           if (isDir) await fs().rmdir(p);
-          else { await unlinkInode(fs(), p); await fs().unlink(p); }
+          else { await unlinkInode(fs(), p); await fs().unlink(p); forgetInodeNumber(p); this.socketPaths?.delete(p); }
           return 0;
         }
         case A.SYS_symlink:
@@ -1278,24 +1497,22 @@ export class Kernel {
         }
         case A.SYS_link:
         case A.SYS_linkat: {
-          // The filesystem has no hard links: link() makes an independent copy.
+          // The filesystem has no hard links (no inodes shared between names).
+          // EPERM, as Linux filesystems without them answer: programs fall back
+          // to copying (git clone of a local repo, cp -l), whereas a copy that
+          // claimed to be a link broke git's "same inode" check.
           const [od, ol, nd, nl, lflags] = nr === A.SYS_link
             ? [A.AT_FDCWD, args[0], A.AT_FDCWD, args[1], 0] : [args[0], args[1], args[2], args[3], args[4]];
           if (lflags & ~(A.AT_SYMLINK_FOLLOW | A.AT_EMPTY_PATH)) return -A.EINVAL;
-          let from = at(od, 0, ol);
+          const from = at(od, 0, ol);
           const to = at(nd, ol, nl);
           if (typeof from === 'number') return from;
           if (typeof to === 'number') return to;
           const st = await this.statPath(proc, str(0, ol), !!(lflags & A.AT_SYMLINK_FOLLOW), od);
           if (typeof st === 'number') return st;
-          if ((st.mode & A.S_IFMT) === A.S_IFDIR) return -A.EPERM;
           if (await fs().exists(to)) return -A.EEXIST;
           if (trailingSlash(str(ol, nl))) return -A.ENOENT;
-          if (lflags & A.AT_SYMLINK_FOLLOW) from = await fs().realpath(from);
-          // A link to a symlink is another symlink to the same target
-          if ((st.mode & A.S_IFMT) === A.S_IFLNK) await fs().symlink(await fs().readlink(from), to);
-          else await fs().writeFile(to, (await fs().readFile(from)) as Uint8Array, { mode: st.mode & 0o7777 });
-          return 0;
+          return -A.EPERM;
         }
         case A.SYS_readlink:
         case A.SYS_readlinkat: {
@@ -1303,7 +1520,11 @@ export class Kernel {
           const p = at(dirfd, 0, len);
           if (typeof p === 'number') return p;
           let target: string;
-          try { target = await fs().readlink(p); } catch (e) { return A.errnoFromError(e, A.EINVAL); }
+          const proct = p.startsWith('/proc/') ? this.procfs.readlink(proc, p) : undefined;
+          if (typeof proct === 'number') return proct;
+          if (proct !== undefined) target = proct;
+          else if (this.isDevicePath(p)) return -A.EINVAL; // a device node or /dev, /dev/pts: not links
+          else try { target = await fs().readlink(p); } catch (e) { return A.errnoFromError(e, A.EINVAL); }
           const b = enc.encode(target);
           const n = Math.min(b.length, bufsiz >>> 0 || data.length, data.length);
           data.set(b.subarray(0, n));
@@ -1323,7 +1544,9 @@ export class Kernel {
           } else if (nr === A.SYS_chmod) { p = at(A.AT_FDCWD, 0, args[0]); mode = args[1]; }
           else { p = at(args[0], 0, args[1]); mode = args[2]; }
           if (typeof p === 'number') return p;
-          await fs().chmod(await fs().realpath(p), mode & 0o7777);
+          const real = await fs().realpath(p);
+          await flushInode(fs(), real);
+          await fs().chmod(real, mode & 0o7777);
           return 0;
         }
         case A.SYS_utimensat: {
@@ -1365,6 +1588,17 @@ export class Kernel {
           const old = proc.umask;
           proc.umask = args[0] & 0o777;
           return old;
+        }
+        case A.SYS_clock_gettime: { // clockid → struct timespec; the clocks that count from boot
+          const id = args[0];
+          let ms: number;
+          if (id === 0 || id === 5) ms = Date.now(); // REALTIME(_COARSE)
+          else if (id === 1 || id === 4 || id === 6 || id === 7) ms = Date.now() - bootMs; // MONOTONIC*, BOOTTIME
+          else return -A.EINVAL;
+          const dv = new DataView(data.buffer, data.byteOffset, 16);
+          dv.setBigInt64(0, BigInt(Math.floor(ms / 1000)), true);
+          dv.setBigInt64(8, BigInt(Math.floor((ms % 1000) * 1e6)), true);
+          return 0;
         }
         case A.SYS_getdents64:
           return await this.getdents(proc, args[0], data.subarray(0, Math.min(args[1] >>> 0, data.length)));
@@ -1616,7 +1850,14 @@ export class Kernel {
     if (typeof path === 'number') return path;
     const st = await this.statPath(proc, path);
     // A Shiro command under /bin, /usr/bin, ... (sh, env, ls) has no file but runs
-    const builtin = st === -A.ENOENT && /^\/(usr\/)?(local\/)?s?bin\/[^/]+$/.test(path) && !!this.shell?.commands.get(path.slice(path.lastIndexOf('/') + 1));
+    // A Shiro command with no file anywhere runs as /bin/NAME and /usr/bin/NAME.
+    // (Not /usr/local/bin/NAME: execvp tries that first and must move on to
+    // a real /usr/bin/NAME a package installed.)
+    const base = path.slice(path.lastIndexOf('/') + 1);
+    const builtin = st === -A.ENOENT && /^\/(usr\/)?s?bin\/[^/]+$/.test(path) &&
+      (!!this.shell?.commands.get(base) || SHELL_PROGRAMS.has(base)) &&
+      typeof (await this.statPath(proc, `/bin/${base}`)) === 'number' &&
+      typeof (await this.statPath(proc, `/usr/bin/${base}`)) === 'number';
     if (typeof st === 'number' && !builtin) return st;
     if (typeof st !== 'number' && (st.mode & A.S_IFMT) !== A.S_IFREG) return -A.EACCES;
     const argv = Array.isArray(req.argv) ? req.argv.map(String) : [req.path];
@@ -1633,8 +1874,11 @@ export class Kernel {
     const isElf = head.length === 4 && head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46;
     const probe = new Process({ pid: -1, ppid: proc.pid, path, argv, env, cwd: proc.cwd });
     const embryo = !!proc.data.embryo;
-    const runner = embryo || !(isElf && req.inproc) ? await this.findProgram(path, probe) : null;
-    if ((embryo || !(isElf && req.inproc)) && !runner) return -A.ENOEXEC;
+    // A package command with its own arguments (zcat = gzip -dc) can't be
+    // reloaded in place with the caller's argv: start it like any program
+    const inproc = isElf && !!req.inproc && !(this.fs && (await packageArgsForPath(this.fs, path)));
+    const runner = embryo || !inproc ? await this.findProgram(path, probe) : null;
+    if ((embryo || !inproc) && !runner) return -A.ENOEXEC;
     // The point of no return: exec bookkeeping, as Linux does it
     await proc.fds.closeOnExec();
     proc.path = path;
@@ -1647,11 +1891,10 @@ export class Kernel {
     proc.signalFrames = [];
     this.notify();
     if (embryo) {
-      delete proc.data.embryo;
-      void this.start(proc, runner!);
+      this.startEmbryo(proc, runner!);
       return 0;
     }
-    if (isElf && req.inproc) {
+    if (inproc) {
       const b = enc.encode(path);
       if (b.length > data.length) return -A.ENAMETOOLONG;
       data.set(b);
@@ -1719,3 +1962,32 @@ export function getKernel(): Kernel {
   if (w) w.__shiroKernel = singleton;
   return singleton;
 }
+
+const SHELL_NAMES = new Set(['sh', 'bash', 'dash']);
+
+/** The words of a shell command that needs no shell: plain words and quoted
+ *  strings without expansions, redirections or operators (`exec` dropped). */
+export function simpleCommandWords(script: string): string[] | null {
+  const words: string[] = [];
+  let i = 0;
+  const s = script.trim();
+  if (/[\n;&|<>()$`\\*?[\]{}~#!]/.test(s)) return null;
+  while (i < s.length) {
+    while (s[i] === ' ' || s[i] === '\t') i++;
+    if (i >= s.length) break;
+    let w = '';
+    while (i < s.length && s[i] !== ' ' && s[i] !== '\t') {
+      const c = s[i];
+      if (c === "'" || c === '"') {
+        const end = s.indexOf(c, i + 1);
+        if (end < 0) return null;
+        w += s.slice(i + 1, end);
+        i = end + 1;
+      } else { w += c; i++; }
+    }
+    words.push(w);
+  }
+  if (words[0] === 'exec') words.shift();
+  return words;
+}
+

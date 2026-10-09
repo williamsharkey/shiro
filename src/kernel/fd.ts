@@ -598,11 +598,6 @@ export async function unlinkInode(fs: FileSystem, path: string): Promise<void> {
   await ino.flush();
 }
 
-/**
- * utimensat on `path`: an open inode writes back what it holds first (so a
- * later write-back doesn't stamp the current time over the new times) and
- * then reports the new times. Call before FileSystem.utimes.
- */
 /** Whether any file of `fs` is open (inodeStat can only answer then). */
 export function hasOpenInodes(fs: FileSystem): boolean {
   return !!inodeTables.get(fs)?.size;
@@ -631,6 +626,11 @@ export async function flushInode(fs: FileSystem, path: string): Promise<void> {
   await inodeTables.get(fs)?.get(path)?.flush();
 }
 
+/**
+ * utimensat on `path`: an open inode writes back what it holds first (so a
+ * later write-back doesn't stamp the current time over the new times) and
+ * then reports the new times. Call before FileSystem.utimes.
+ */
 export async function setInodeTimes(fs: FileSystem, path: string, t: { atimeMs: number; atimeNs: number; mtimeMs: number; mtimeNs: number }): Promise<void> {
   const ino = inodeTables.get(fs)?.get(path);
   if (!ino) return;
@@ -644,10 +644,23 @@ export async function setInodeTimes(fs: FileSystem, path: string, t: { atimeMs: 
 
 /** Stable small inode numbers for paths (the FileSystem has none). */
 const inoNumbers = new Map<string, number>();
+let nextIno = 2;
 export function inodeNumber(path: string): number {
   let n = inoNumbers.get(path);
-  if (!n) { n = inoNumbers.size + 2; inoNumbers.set(path, n); }
+  if (!n) { n = nextIno++; inoNumbers.set(path, n); }
   return n;
+}
+
+/**
+ * link() copies (no hard links), but the copy reports its source's inode
+ * number, as a hard link would: git's local clone checks that. A path that
+ * is removed or replaced gets a fresh number.
+ */
+export function shareInodeNumber(from: string, to: string): void {
+  inoNumbers.set(to, inodeNumber(from));
+}
+export function forgetInodeNumber(path: string): void {
+  inoNumbers.delete(path);
 }
 
 export class RegularFile implements OpenFile {

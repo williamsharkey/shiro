@@ -46,6 +46,7 @@ export const SYS_setsid = 112;
 export const SYS_getpgid = 121;
 export const SYS_getsid = 124;
 export const SYS_getdents64 = 217;
+export const SYS_clock_gettime = 228;
 export const SYS_exit_group = 231;
 export const SYS_openat = 257;
 export const SYS_dup3 = 292;
@@ -451,6 +452,7 @@ export const SO_KEEPALIVE = 9;
 export const SO_OOBINLINE = 10;
 export const SO_LINGER = 13;
 export const SO_REUSEPORT = 15;
+export const SO_PEERCRED = 17;
 export const SO_RCVLOWAT = 18;
 export const SO_SNDLOWAT = 19;
 export const SO_RCVTIMEO = 20;
@@ -466,16 +468,24 @@ export const IPV6_V6ONLY = 26;
 export const MSG_OOB = 0x1;
 export const MSG_PEEK = 0x2;
 export const MSG_DONTROUTE = 0x4;
+export const MSG_CTRUNC = 0x8;
 export const MSG_TRUNC = 0x20;
 export const MSG_DONTWAIT = 0x40;
 export const MSG_EOR = 0x80;
 export const MSG_WAITALL = 0x100;
 export const MSG_NOSIGNAL = 0x4000;
+export const MSG_CMSG_CLOEXEC = 0x40000000;
+/** cmsg type at level SOL_SOCKET: file descriptors */
+export const SCM_RIGHTS = 1;
+/** cmsg type at level SOL_SOCKET: struct ucred */
+export const SCM_CREDENTIALS = 2;
 export const SHUT_RD = 0;
 export const SHUT_WR = 1;
 export const SHUT_RDWR = 2;
 /** Room recvfrom/accept reserve after the payload for a sockaddr (sockaddr_in6 = 28 bytes). */
 export const SOCKADDR_ROOM = 28;
+/** Longest sockaddr_un (family + 108-byte sun_path). bind/connect/getsockname take it whole. */
+export const SOCKADDR_UN_MAX = 110;
 
 // ── ioctl (just the ones the core needs; termios is pty.ts) ─────────────────
 export const TCGETS = 0x5401;

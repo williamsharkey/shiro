@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   Pty, TtySession, openpty, makeRaw, cloneTermios, decodeTermios, encodeTermios, decodeWinsize,
   O_NONBLOCK, ICANON, ECHO, TOSTOP, VMIN, VTIME, TERMIOS_SIZE,
-  TCGETS, TCSETS, TIOCGWINSZ, TIOCSWINSZ, FIONREAD, TIOCGPGRP, TIOCSPGRP, TIOCSCTTY, POLLIN,
+  TCGETS, TCSETS, TIOCGWINSZ, TIOCSWINSZ, FIONREAD, TIOCGPGRP, TIOCSPGRP, TIOCSCTTY, POLLIN, TIOCPKT, TIOCGPKT,
   type PtyFile,
 } from '@shiro/kernel/pty';
 import {
@@ -181,6 +181,44 @@ describe('kernel pty: ioctls', () => {
     expect(new DataView(got.buffer).getInt32(0, true)).toBe(job.pgid);
     new DataView(arg.buffer).setInt32(0, 424242, true);
     expect(await slave.ioctl(TIOCSPGRP, arg, leader)).toBe(-3); // no such group
+  });
+});
+
+describe('kernel pty: packet mode and the controlling tty (screen)', () => {
+  it('TIOCPKT: master reads start with a TIOCPKT_DATA byte', async () => {
+    const { master, slave } = openpty({ jc: new JobControl() });
+    const on = new Uint8Array(4);
+    new DataView(on.buffer).setInt32(0, 1, true);
+    expect(await slave.ioctl(TIOCPKT, on)).toBe(-25); // master only
+    expect(await master.ioctl(TIOCPKT, on)).toBe(0);
+    const got = new Uint8Array(4);
+    expect(await master.ioctl(TIOCGPKT, got)).toBe(0);
+    expect(new DataView(got.buffer).getInt32(0, true)).toBe(1);
+    await slave.write(enc.encode('ab'));
+    const buf = new Uint8Array(16);
+    expect(await master.read(buf)).toBe(3);
+    expect([...buf.subarray(0, 3)]).toEqual([0, 0x61, 0x62]);
+    expect(await master.ioctl(TIOCPKT, new Uint8Array(4))).toBe(0);
+    await slave.write(enc.encode('c'));
+    expect(await readStr(master)).toBe('c');
+  });
+
+  it("stat of /dev/pts/N doesn't make it the caller's controlling tty, nor keep a slave open", async () => {
+    const { fs, shell } = await createTestShell();
+    const kernel = new Kernel({ fs, shell, registerWithProcessTable: false });
+    attachKernelTty(kernel);
+    const leader = kernel.spawn({ path: 'srv', fds: {}, setsid: true, run: () => new Promise<number>(() => {}) } as any);
+    const { pty } = openpty({ jc: jobControl });
+    const slaves = (pty as any).slaveCount;
+    const st = await kernel.statPath(leader, pty.name);
+    expect(typeof st !== 'number' && (st.mode & A.S_IFMT)).toBe(A.S_IFCHR);
+    expect(pty.sid).toBe(0);
+    expect((pty as any).slaveCount).toBe(slaves);
+    // ... while opening it (without O_NOCTTY) as a session leader does
+    const f = await kernel.open(leader, pty.name, A.O_RDWR);
+    expect(typeof f).not.toBe('number');
+    expect(pty.sid).toBe(leader.sid);
+    kernel.kill(leader.pid, A.SIGKILL);
   });
 });
 

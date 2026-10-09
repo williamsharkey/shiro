@@ -232,20 +232,26 @@ function readLEB128(bytes: Uint8Array, offset: number): { value: number; bytesRe
 
 // ── Public API ───────────────────────────────────────────────────────
 
+/** The WASM part of the package index (x86-64 packages run in Blink, not here). */
+function wasmIndex() {
+  const idx = builtinIndex();
+  return { ...idx, packages: idx.packages.filter(p => p.abi !== 'x86_64-linux') };
+}
+
 /** Get package metadata by name or command name */
 export function findPackage(name: string): WasmPackage | undefined {
-  const entry = findEntry(builtinIndex(), name);
+  const entry = findEntry(wasmIndex(), name);
   return entry && singleFile(entry) ? toWasmPackage(entry) : undefined;
 }
 
 /** Search packages by query string (matches name, description, section, commands) */
 export function searchPackages(query: string): WasmPackage[] {
-  return searchIndex(builtinIndex(), query).filter(singleFile).map(toWasmPackage);
+  return searchIndex(wasmIndex(), query).filter(singleFile).map(toWasmPackage);
 }
 
 /** List all available packages */
 export function listAvailable(): WasmPackage[] {
-  return builtinIndex().packages.filter(singleFile).map(toWasmPackage);
+  return wasmIndex().packages.filter(singleFile).map(toWasmPackage);
 }
 
 /** Get cached WASM binary. Returns null if not cached. */
@@ -258,7 +264,7 @@ export async function downloadPackage(
   name: string,
   onProgress?: (msg: string) => void,
 ): Promise<ArrayBuffer> {
-  const entry = findEntry(builtinIndex(), name);
+  const entry = findEntry(wasmIndex(), name);
   if (!entry) {
     throw new Error(`Package '${name}' not found in registry`);
   }
