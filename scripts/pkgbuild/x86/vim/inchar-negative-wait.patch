@@ -1,0 +1,17 @@
+diff --git a/src/ui.c b/src/ui.c
+index aa985e4..7f764e7 100644
+--- a/src/ui.c
++++ b/src/ui.c
+@@ -315,6 +315,12 @@ inchar_loop(
+ 	    elapsed_time = ELAPSED_FUNC(start_tv);
+ # endif
+ 	    wait_time -= elapsed_time;
++	    // Never below zero here: a negative time makes "wait_func" block
++	    // until input arrives.  With "wtime" zero and a millisecond elapsed
++	    // this happened on the first loop, which waits whatever "wait_time"
++	    // is, and a typed character was left unhandled until the next one.
++	    if (wait_time < 0)
++		wait_time = 0;
+ 
+ 	    // If the waiting time is now zero or less, we timed out.  However,
+ 	    // loop at least once to check for characters and events.  Matters
