@@ -85,8 +85,9 @@ describe('broker', () => {
     const t = setup({ 'https://site.example/login': { headers: [['Content-Type', 'text/html'], ['Set-Cookie', 'sid=1; Path=/; Secure']], body: '<html><head></head>hi</html>' } });
     const other = await t.broker.fetch(t.ctx() as any, t.msg({ url: 'https://bank.example/', navigation: true }));
     expect(other.type).toBe('error');
-    const r = await t.broker.fetch(t.ctx() as any, t.msg({ url: 'https://site.example/login', navigation: true, mode: 'navigate' as RequestMode }));
+    const r = await t.broker.fetch(t.ctx() as any, t.msg({ url: 'https://site.example/login', navigation: true, mode: 'navigate' as RequestMode, headers: [['upgrade-insecure-requests', '1']] }));
     expect(r.type).toBe('response');
+    expect(t.sent.at(-1)!.headers.filter(([k]) => k.toLowerCase() === 'upgrade-insecure-requests')).toHaveLength(1);
     if (r.type !== 'response') return;
     const html = new TextDecoder().decode(r.body as ArrayBuffer);
     expect(html).toMatch(/<head><script src="\/__tc\/client\.js" nonce="[0-9a-f]+" data-app="https:\/\/tc\.example" data-cookie="mine=1; sid=1"><\/script>/);

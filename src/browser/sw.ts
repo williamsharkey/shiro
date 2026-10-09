@@ -139,7 +139,7 @@ async function requestMsg(req: Request, url: string, navigation: boolean): Promi
   return {
     url, method: req.method, headers: headersOf(req), body,
     mode: req.mode, destination: req.destination, credentials: req.credentials, redirect: req.redirect,
-    referrer: req.referrer ? map!.toReal(req.referrer) : '', referrerPolicy: req.referrerPolicy, navigation,
+    referrer: req.referrer ? map!.toReal(req.referrer) : '', referrerPolicy: req.referrerPolicy, integrity: req.integrity || undefined, navigation,
   };
 }
 

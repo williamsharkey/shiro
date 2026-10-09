@@ -2,6 +2,7 @@
 // changes"). HTML is handled as latin1 text so every byte survives unchanged
 // whatever the page's real encoding; only ASCII patterns are touched.
 import type { OriginMap } from './origin-map';
+import { rewriteJs } from './jsrewrite';
 
 const FETCH_DIRECTIVES = new Set(['default-src', 'script-src', 'script-src-elem', 'script-src-attr', 'style-src', 'style-src-elem',
   'img-src', 'font-src', 'connect-src', 'media-src', 'object-src', 'frame-src', 'child-src', 'worker-src', 'manifest-src', 'prefetch-src', 'form-action']);
@@ -78,7 +79,7 @@ const ATTR_TARGETS: Record<string, string[]> = {
  * browse origins and put the runtime's <script> first in <head>. Subresource
  * URLs stay as they are: the service worker sees those requests anyway.
  */
-export function rewriteHtml(html: string, o: { map: OriginMap; baseUrl: string; scriptTag: string }): string {
+export function rewriteHtml(html: string, o: { map: OriginMap; baseUrl: string; scriptTag: string; nonce?: string; onSri?: (url: string, integrity: string) => void }): string {
   let base = o.baseUrl;
   const toBrowse = (v: string): string | null => {
     const raw = v.trim();
@@ -105,6 +106,7 @@ export function rewriteHtml(html: string, o: { map: OriginMap; baseUrl: string; 
   });
   out = out.replace(/(<meta\b[^>]*http-equiv\s*=\s*["']?refresh["']?[^>]*content\s*=\s*["']\s*\d+\s*;\s*url\s*=\s*)([^"'>]+)/gi,
     (m, pre: string, url: string) => { const b = toBrowse(url); return b ? pre + b : m; });
+  out = rewriteHtmlScripts(out, { baseUrl: base, nonce: o.nonce, onSri: o.onSri });
   // A <meta http-equiv=Content-Security-Policy> can't name our nonce: drop it (the header form is rewritten instead)
   out = out.replace(/<meta\b[^>]*http-equiv\s*=\s*["']?content-security-policy["']?[^>]*>/gi, '');
   // The runtime goes first in <head> (after <meta charset> if it comes first), else after <html>, else after the doctype
@@ -120,6 +122,61 @@ export function rewriteHtml(html: string, o: { map: OriginMap; baseUrl: string; 
   const doctype = /^\s*<!doctype[^>]*>/i.exec(out);
   const at = doctype ? doctype[0].length : 0;
   return out.slice(0, at) + o.scriptTag + out.slice(at);
+}
+
+const JS_TYPES = /^\s*(text\/javascript|application\/javascript|application\/x-javascript|text\/ecmascript|application\/ecmascript|text\/jscript|module)?\s*$/i;
+const attrOf = (attrs: string, name: string): { whole: string; value: string } | null => {
+  const m = new RegExp(`\\s${name}\\s*=\\s*("([^"]*)"|'([^']*)'|([^\\s"'>]+))`, 'i').exec(attrs);
+  return m ? { whole: m[0], value: m[2] ?? m[3] ?? m[4] ?? '' } : null;
+};
+const unescapeAttr = (v: string) => v.replace(/&(quot|apos|amp|lt|gt|#(\d+)|#x([0-9a-f]+));/gi, (m, n: string, d?: string, x?: string) =>
+  d ? String.fromCharCode(Number(d)) : x ? String.fromCharCode(parseInt(x, 16)) : ({ quot: '"', apos: "'", amp: '&', lt: '<', gt: '>' } as Record<string, string>)[n.toLowerCase()] ?? m);
+
+/**
+ * Scripts inside HTML get the same rewrite as script files (jsrewrite.ts):
+ * inline <script>s (given `nonce` when the rewrite changed them, so a hash
+ * in the page's CSP still lets them run), on* handler attributes and
+ * javascript: links. Subresource-integrity hashes on <script src> and <link>
+ * are taken out of the page and handed to `onSri`: the broker checks them
+ * against the original bytes, since the browser would check the rewritten ones.
+ */
+export function rewriteHtmlScripts(html: string, o: { baseUrl: string; nonce?: string; onSri?: (url: string, integrity: string) => void }): string {
+  const sri = (attrs: string, urlAttr: string): string => {
+    const integ = attrOf(attrs, 'integrity');
+    const u = attrOf(attrs, urlAttr);
+    if (!integ || !u || !o.onSri) return attrs;
+    try { o.onSri(new URL(unescapeAttr(u.value).trim(), o.baseUrl).href, unescapeAttr(integ.value)); } catch { return attrs; }
+    return attrs.replace(integ.whole, '');
+  };
+  const handlers = (attrs: string): string => attrs.replace(/(\s)(on[a-z]+|href)(\s*=\s*)("([^"]*)"|'([^']*)')/gi,
+    (m, sp: string, name: string, eq: string, _q: string, dq?: string, sq?: string) => {
+      const raw = unescapeAttr(dq ?? sq ?? '');
+      const isHref = name.toLowerCase() === 'href';
+      const js = isHref ? /^\s*javascript:([^%]*)$/i.exec(raw)?.[1] : raw;
+      if (js === undefined || !js.includes('location') && !js.includes('postMessage')) return m;
+      const r = rewriteJs(js, 'body');
+      if (!r.changed) return m;
+      const code = (isHref ? 'javascript:' : '') + r.code;
+      const q = dq !== undefined ? '"' : "'";
+      return `${sp}${name}${eq}${q}${code.replace(/&/g, '&amp;').replace(q === '"' ? /"/g : /'/g, q === '"' ? '&quot;' : '&#39;')}${q}`;
+    });
+  return html.replace(/(<script\b((?:[^>"']|"[^"]*"|'[^']*')*)>)([\s\S]*?)(<\/script\s*>)|<!--[\s\S]*?-->|<([a-z][a-z0-9-]*)(\s(?:[^>"']|"[^"]*"|'[^']*')*)>/gi,
+    (m, _open: string, sAttrs: string | undefined, body: string | undefined, close: string | undefined, tag: string | undefined, attrs: string | undefined) => {
+      if (sAttrs !== undefined) {
+        if (attrOf(sAttrs, 'src')) return `<script${sri(sAttrs, 'src')}>${body}${close}`;
+        const type = attrOf(sAttrs, 'type')?.value ?? '';
+        if (!JS_TYPES.test(type)) return m;
+        const r = rewriteJs(body!, /module/i.test(type) ? 'module' : 'script');
+        if (!r.changed) return m;
+        const a = o.nonce && !attrOf(sAttrs, 'nonce') ? `${sAttrs} nonce="${o.nonce}"` : sAttrs;
+        return `<script${a}>${r.code}${close}`;
+      }
+      if (tag === undefined || attrs === undefined) return m; // a comment
+      let a = attrs;
+      if (tag.toLowerCase() === 'link') a = sri(a, 'href');
+      if (/\son[a-z]+\s*=|javascript:/i.test(a)) a = handlers(a);
+      return a === attrs ? m : `<${tag}${a}>`;
+    });
 }
 
 /** X-Frame-Options / CSP frame-ancestors for a nested document, given its ancestors' real origins (null = unknown). */

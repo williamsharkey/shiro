@@ -301,8 +301,13 @@ async function interactive(d, site) {
     if (!handle) return { ok: false, why: `no ${sel}` };
     const changedText = await f.evaluate(() => document.body.innerText.length).catch(() => 0);
     await handle.evaluate((el) => { el.focus(); }).catch(() => {});
-    await handle.fill('web browser').catch(async () => { await handle.evaluate((el) => { el.value = 'web browser'; el.dispatchEvent(new Event('input', { bubbles: true })); }); });
-    await handle.press('Enter').catch(async () => { await handle.evaluate((el) => el.form?.requestSubmit?.()); });
+    const filled = await handle.fill('web browser').then(() => true, async () => {
+      await handle.evaluate((el) => { el.value = 'web browser'; el.dispatchEvent(new Event('input', { bubbles: true })); });
+      return false;
+    });
+    // A hidden box (a narrow layout folds it into an icon) ignores Enter: submit its form as Enter would
+    const submit = () => handle.evaluate((el) => el.form?.requestSubmit?.());
+    if (filled) await handle.press('Enter').catch(submit); else await submit().catch(() => {});
     const r = await until(async () => {
       const now = await d.url();
       if (now && now !== before) return 'navigated';
@@ -315,8 +320,9 @@ async function interactive(d, site) {
   }
   // link: click the first visible same-site link to another page
   const target = await f.evaluate(() => {
-    const here = location.href.split('#')[0];
-    const host = location.hostname;
+    // document.URL and a.href are the real URL in both modes (the Browser app's runtime reports real URLs)
+    const here = document.URL.split('#')[0];
+    const host = new URL(document.URL).hostname;
     const as = [];
     const collect = (root) => {
       for (const a of root.querySelectorAll('a[href]')) as.push(a);
@@ -327,7 +333,7 @@ async function interactive(d, site) {
       const href = a.href;
       if (!/^https?:/.test(href) || href.split('#')[0] === here || a.target === '_blank') continue;
       let u; try { u = new URL(href); } catch { continue; }
-      if (u.hostname !== host || u.pathname === '/' || u.pathname === location.pathname) continue;
+      if (u.hostname !== host || u.pathname === '/' || u.pathname === new URL(here).pathname) continue;
       const b = a.getBoundingClientRect();
       if (b.width < 4 || b.height < 4 || b.top < 0 || b.top > innerHeight * 3) continue;
       if (/login|signin|sign-in|logout|account|cart|javascript/i.test(href)) continue;
