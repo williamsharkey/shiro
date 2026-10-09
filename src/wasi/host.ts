@@ -258,7 +258,7 @@ async function binCommandStat(proc: Process, nr: number, args: ArrayLike<number>
   if ((await kernel.statPath(proc, p as string, false)) !== -A.ENOENT) return undefined;
   // A real /bin/NAME or /usr/bin/NAME (Debian's cat) is what execve runs: a
   // stat of /usr/sbin/cat claiming a file would stop bash's PATH search there
-  for (const real of [`/bin/${m[1]}`, `/usr/bin/${m[1]}`]) {
+  for (const real of [`/bin/${name}`, `/usr/bin/${name}`]) {
     if (real !== p && typeof (await kernel.statPath(proc, real)) !== 'number') return undefined;
   }
   if (nr === A.SYS_access || nr === A.SYS_faccessat) return 0;
