@@ -539,8 +539,9 @@ describe('argv[0] through a symlink', () => {
     it.skipIf(!haveArgv0)(`is the link's name, not the target's (${engine})`, async () => {
       const { shell } = await setup(readFileSync(argv0Bin));
       const env = engine === 'x86' ? 'TABCOMPUTER_X86_ENGINE=x86 ' : '';
-      const r = await run(shell, `ln -sf prog echo2; mkdir -p bin; ln -sf ../prog bin/redis-server; ${env}./echo2; ${env}./prog; PATH=$PWD/bin:$PATH ${env}redis-server`);
-      expect(r.output.replace(/\r\n/g, '\n')).toBe('argv0=./echo2\nargv0=./prog\nargv0=redis-server\n');
+      // (and through a hard link: dpkg links graphviz's libgvc6-config-update to dot, which picks its layout by argv[0])
+      const r = await run(shell, `ln -sf prog echo2; mkdir -p bin; ln -sf ../prog bin/redis-server; rm -f dot; ln prog dot; ${env}./echo2; ${env}./prog; PATH=$PWD/bin:$PATH ${env}redis-server; ${env}./dot`);
+      expect(r.output.replace(/\r\n/g, '\n')).toBe('argv0=./echo2\nargv0=./prog\nargv0=redis-server\nargv0=./dot\n');
     }, 60_000);
   }
 });
