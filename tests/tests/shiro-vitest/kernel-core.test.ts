@@ -426,6 +426,13 @@ describe('kernel processes', () => {
     const fd = proc.fds.alloc(f as any);
     expect(await readlink(`/proc/self/fd/${fd}`)).toBe('/tmp/procfd.txt');
     expect(await readlink('/proc/99999/cwd')).toBe(-A.ENOENT);
+    // exe is the resolved path, as on Linux (ld.so's $ORIGIN for a venv's bin/python symlink)
+    await fs.mkdir('/tmp/real/bin', { recursive: true }); await fs.mkdir('/tmp/venv/bin', { recursive: true });
+    await fs.writeFile('/tmp/real/bin/python3.12', 'x');
+    await fs.symlink('/tmp/real/bin/python3.12', '/tmp/venv/bin/python').catch(() => {});
+    const viaLink = kernel.spawn({ path: '/tmp/venv/bin/python', argv: ['python'], cwd: '/tmp', run: () => new Promise<number>(() => {}) });
+    expect(await readlink(`/proc/${viaLink.pid}/exe`)).toBe('/tmp/real/bin/python3.12');
+    kernel.kill(viaLink.pid, A.SIGKILL);
 
     const stat = (await cat(`/proc/${proc.pid}/stat`)) as string;
     const fields = stat.trim().split(' ');
