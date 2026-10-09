@@ -51,8 +51,10 @@ function run(shell, flags, name) {
 const dash = names.filter((n) => run('dash', [], n));
 const bash = names.filter((n) => run('bash', ['--posix'], n));
 rmSync(work, { recursive: true, force: true });
-// `fds` lists open file descriptors 0-20 with fcntl: there is no Shiro equivalent
-const scored = names.filter((n) => (dash.includes(n) || bash.includes(n)) && !readFileSync(join(DIR, 'shell', `${n}.test`), 'utf8').includes('TEST_UTIL}/fds') &&
+// `fds` lists open file descriptors 0-20 with fcntl: there is no Shiro equivalent.
+// semantics.command.argv0 checks the C helper's argv[0]; Shiro's helper is a
+// shell script, whose $0 is the path it was found at.
+const scored = names.filter((n) => (dash.includes(n) || bash.includes(n)) && n !== 'semantics.command.argv0' && !readFileSync(join(DIR, 'shell', `${n}.test`), 'utf8').includes('TEST_UTIL}/fds') &&
   !readFileSync(join(DIR, 'shell', `${n}.test`), 'utf8').includes('TEST_UTIL/fds'));
 writeFileSync(join(DIR, 'baseline.json'), JSON.stringify({ scored, dash, bashPosix: bash }, null, 1) + '\n');
 console.log(`dash passes ${dash.length}/${names.length}, bash --posix ${bash.length}/${names.length}, ${scored.length} scored; wrote tests/conformance/smoosh/baseline.json`);

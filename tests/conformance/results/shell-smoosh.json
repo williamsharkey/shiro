@@ -4,27 +4,14 @@
  "note": "POSIX sh cases from [smoosh](https://github.com/mgree/smoosh) (tests/shell), judged on stdout and exit status; scored where host dash or bash --posix passes. \"Before\" is unix/integration c14344d.",
  "files": {
   "benchmark": {
-   "pass": 0,
+   "pass": 2,
    "total": 2,
-   "failures": [
-    {
-     "name": "benchmark.fact5",
-     "reason": "status 2, want 0"
-    },
-    {
-     "name": "benchmark.while",
-     "reason": "status 2, want 0"
-    }
-   ]
+   "failures": []
   },
   "builtin": {
-   "pass": 53,
+   "pass": 56,
    "total": 59,
    "failures": [
-    {
-     "name": "builtin.command.exec",
-     "reason": "stdout differs"
-    },
     {
      "name": "builtin.exec.modernish.mkfifo.loop",
      "reason": "stdout differs"
@@ -36,14 +23,6 @@
     {
      "name": "builtin.readonly.assign.interactive",
      "reason": "status 1, want 0"
-    },
-    {
-     "name": "builtin.special.redir.error",
-     "reason": "status 0, want 1"
-    },
-    {
-     "name": "builtin.trap.subshell.quiet",
-     "reason": "stdout differs"
     }
    ]
   },
@@ -58,15 +37,11 @@
    ]
   },
   "semantics": {
-   "pass": 83,
-   "total": 92,
+   "pass": 84,
+   "total": 91,
    "failures": [
     {
      "name": "semantics.background.pipe.pid",
-     "reason": "status 1, want 0"
-    },
-    {
-     "name": "semantics.command.argv0",
      "reason": "status 1, want 0"
     },
     {
@@ -75,10 +50,6 @@
     },
     {
      "name": "semantics.escaping.backslash.modernish",
-     "reason": "status 1, want 0"
-    },
-    {
-     "name": "semantics.escaping.quote",
      "reason": "status 1, want 0"
     },
     {

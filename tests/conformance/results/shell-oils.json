@@ -399,20 +399,12 @@
    "failures": []
   },
   "builtin-eval-source": {
-   "pass": 18,
+   "pass": 20,
    "total": 23,
    "failures": [
     {
      "i": 2,
      "name": "eval usage"
-    },
-    {
-     "i": 4,
-     "name": "eval YSH block with 'break continue return error'"
-    },
-    {
-     "i": 9,
-     "name": "Source nonexistent"
     },
     {
      "i": 13,
@@ -523,7 +515,7 @@
    ]
   },
   "builtin-type": {
-   "pass": 3,
+   "pass": 4,
    "total": 6,
    "failures": [
     {
@@ -533,15 +525,11 @@
     {
      "i": 2,
      "name": "type of relative path"
-    },
-    {
-     "i": 5,
-     "name": "more special builtins"
     }
    ]
   },
   "builtin-vars": {
-   "pass": 32,
+   "pass": 33,
    "total": 38,
    "failures": [
     {
@@ -559,10 +547,6 @@
     {
      "i": 10,
      "name": "Exporting a parent func variable (dynamic scope)"
-    },
-    {
-     "i": 16,
-     "name": "Make an existing local variable readonly"
     },
     {
      "i": 38,
@@ -639,7 +623,7 @@
    "failures": []
   },
   "array": {
-   "pass": 75,
+   "pass": 76,
    "total": 78,
    "failures": [
     {
@@ -649,10 +633,6 @@
     {
      "i": 5,
      "name": "array with invalid token"
-    },
-    {
-     "i": 72,
-     "name": "a+=() modifies existing instance of BashArray"
     }
    ]
   },
@@ -723,7 +703,7 @@
    ]
   },
   "glob": {
-   "pass": 20,
+   "pass": 21,
    "total": 23,
    "failures": [
     {
@@ -733,10 +713,6 @@
     {
      "i": 36,
      "name": "\\ in unquoted substitutions escapes globchars"
-    },
-    {
-     "i": 38,
-     "name": "shopt -u globskipdots shows . and .."
     }
    ]
   },
@@ -948,7 +924,7 @@
    ]
   },
   "process-sub": {
-   "pass": 3,
+   "pass": 6,
    "total": 8,
    "failures": [
     {
@@ -958,18 +934,6 @@
     {
      "i": 3,
      "name": "Non-linear pipeline with >()"
-    },
-    {
-     "i": 5,
-     "name": "status code is available"
-    },
-    {
-     "i": 6,
-     "name": "shopt -s process_sub_fail"
-    },
-    {
-     "i": 7,
-     "name": "process subs and pipelines together"
     }
    ]
   },
@@ -993,7 +957,7 @@
    "failures": []
   },
   "background": {
-   "pass": 21,
+   "pass": 23,
    "total": 27,
    "failures": [
     {
@@ -1007,14 +971,6 @@
     {
      "i": 13,
      "name": "Wait for job and PIPESTATUS - cat"
-    },
-    {
-     "i": 24,
-     "name": "YSH wait --all"
-    },
-    {
-     "i": 25,
-     "name": "YSH wait --verbose"
     },
     {
      "i": 26,

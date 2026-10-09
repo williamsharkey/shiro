@@ -187,3 +187,29 @@ describe('traps, set -u, exec and loops', () => {
     expect(r.out).toBe('[] q r "lit"\n[a b]\n');
   });
 });
+
+describe('more POSIX details', () => {
+  it('times prints the shell and children times', async () => {
+    const r = await script('times\n');
+    expect(r.out).toMatch(/^\d+m\d+\.\d{3}s \d+m\d+\.\d{3}s\n\d+m\d+\.\d{3}s \d+m\d+\.\d{3}s\n$/);
+  });
+
+  it('an escaped or quoted & at the end is a word, not a background job', async () => {
+    const r = await script("printf '%s\\n' \\&\nx=`printf '%s' \\&`; echo \"[$x]\"\necho 'a &'\n");
+    expect(r.out).toBe('&\n[&]\na &\n');
+  });
+
+  it('command exec 8<file opens the fd; a redirection error of a special builtin ends an sh script', async () => {
+    let r = await script('echo hi >/tmp/f\ncommand exec 8</tmp/f\nread msg <&8\necho "[$msg]"\n');
+    expect(r.out).toBe('[hi]\n');
+    r = await script(': 2>&9\necho "oh no"\n');
+    expect(r.out).toBe('');
+    expect(r.status).toBe(1);
+  });
+
+  it('subshells keep readonly and shopt; a new shell starts without them', async () => {
+    const r = await script('readonly foo=bar\n(foo=baz) 2>/dev/null; echo "sub $?"\nshopt -s extglob\n(case ab in @(ab)) echo ext;; esac)\nset -e; sh -c \'false; echo no-errexit\'\nset -o bad@opt 2>/dev/null\necho unreached\n');
+    expect(r.out).toBe('sub 1\next\nno-errexit\n');
+    expect(r.status).toBe(2);
+  });
+});

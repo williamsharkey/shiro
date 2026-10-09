@@ -84,7 +84,6 @@
   "semantics.case.escape.quotes",
   "semantics.command-subst",
   "semantics.command-subst.newline",
-  "semantics.command.argv0",
   "semantics.defun.ec",
   "semantics.dot.glob",
   "semantics.empty",

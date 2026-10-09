@@ -321,6 +321,22 @@ async function runShell(ctx: CommandContext, invokedAs: 'sh' | 'bash'): Promise<
   }
 }
 
+/**
+ * times: user and system time of the shell, then of its children. The page
+ * has no CPU-time accounting: the shell's elapsed time stands in for its user
+ * time, the rest are 0.
+ */
+export const timesCmd: Command = {
+  name: 'times',
+  description: 'Print the accumulated times of the shell and its children',
+  async exec(ctx) {
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const t = (ms: number) => `${Math.floor(ms / 60000)}m${((ms % 60000) / 1000).toFixed(3)}s`;
+    ctx.stdout += `${t(Math.max(0, now - (ctx.shell.startTime ?? now)))} ${t(0)}\n${t(0)} ${t(0)}\n`;
+    return 0;
+  },
+};
+
 export const bashCmd: Command = {
   name: 'bash',
   description: 'Execute shell commands',
@@ -335,7 +351,7 @@ export const bashCmd: Command = {
  */
 export const shellBuiltins: Command[] = [
   cdCmd, exportCmd, helpCmd, commandCmd,
-  shCmd, bashCmd,
+  shCmd, bashCmd, timesCmd,
   // Re-exports that override unix.ts versions:
   grepCmd, egrepCmd, fgrepCmd, sedCmd, diffCmd,
   // POSIX test bracket alias (delegates to test command)

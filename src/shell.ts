@@ -76,6 +76,23 @@ const POSIX_CLASSES: Record<string, string> = {
 /** A tilde expansion's text: one field, never globbed, literal in [[ =~ ]] (as if quoted) */
 const tildeText = (dir: string) => `"${protectExpansion(dir)}"`;
 
+/** Does `cmd` end with the `&` operator (not &&, >&, an escaped \& or one in quotes)? */
+function endsWithBackgroundAmp(cmd: string): boolean {
+  if (!/[^&]&$/.test(cmd)) return false;
+  let q = '';
+  for (let i = 0; i < cmd.length - 1; i++) {
+    const c = cmd[i];
+    if (q) {
+      if (c === '\\' && q === '"') i++;
+      else if (c === q) q = '';
+      continue;
+    }
+    if (c === '\\') { if (i === cmd.length - 2) return false; i++; continue; }
+    if (c === "'" || c === '"') q = c;
+  }
+  return !q && !/[<>]$/.test(cmd.slice(0, -1));
+}
+
 /** A character for inside a RegExp class */
 const classChar = (c: string) => c.replace(/[\\\]\[^-]/g, '\\$&');
 
@@ -147,6 +164,11 @@ const SHOPT_OPTIONS = ['autocd', 'assoc_expand_once', 'cdable_vars', 'cdspell', 
   'localvar_unset', 'login_shell', 'mailwarn', 'no_empty_cmd_completion', 'nocaseglob', 'nocasematch',
   'noexpand_translation', 'nullglob', 'patsub_replacement', 'progcomp', 'progcomp_alias', 'promptvars',
   'restricted_shell', 'shift_verbose', 'sourcepath', 'varredir_close', 'xpg_echo'];
+/** POSIX special builtins (2.14): their errors end a non-interactive POSIX shell */
+const POSIX_SPECIAL_BUILTINS = new Set(['break', ':', 'continue', '.', 'eval', 'exec', 'exit', 'export', 'readonly', 'return', 'set', 'shift', 'times', 'trap', 'unset']);
+
+/** set -o options a shell starts with */
+const DEFAULT_OPTIONS = ['hashall', 'braceexpand', 'interactive-comments'];
 const SHOPT_DEFAULTS = ['checkwinsize', 'cmdhist', 'complete_fullquote', 'extquote', 'force_fignore', 'globasciiranges',
   'globskipdots', 'hostcomplete', 'interactive_comments', 'patsub_replacement', 'progcomp', 'promptvars', 'sourcepath'];
 /** set -o option names */
@@ -500,7 +522,7 @@ export class Shell {
   functions: Record<string, { body: string }> = {};
   backgroundJobs: Map<number, BackgroundJob> = new Map();
   /** Shell options: errexit (-e), xtrace (-x), nounset (-u), verbose (-v) */
-  options: Set<string> = new Set(['hashall', 'braceexpand', 'interactive-comments']);
+  options: Set<string> = new Set(DEFAULT_OPTIONS);
   /** $BASHPID: 1 (= $$) in the top shell, a new number in each subshell */
   bashPid = 1;
   /** $$ (a subshell keeps its parent's) and $PPID */
@@ -525,6 +547,8 @@ export class Shell {
   invokedAsSh = false;
   /** `export NAME` before NAME has a value */
   exportedUnset = new Set<string>();
+  /** When this shell process started (performance.now()), for `times` */
+  startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
   /** A fork of another shell (a subshell, or a new shell process) */
   isSubshell = false;
   /** In a subshell: the traps of the shell it was forked from, for a plain `trap` */
@@ -716,6 +740,11 @@ export class Shell {
     for (const n of this.localVars) delete this.env[n];
     this.localVars.clear();
     this.parentTraps = undefined;
+    this.startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    // ...and its own options; readonly is not passed on either
+    this.options = new Set(DEFAULT_OPTIONS);
+    this.shoptopts = new Set(SHOPT_DEFAULTS);
+    this.readonlyVars = new Set();
     // A shell starts with the default IFS, whatever its environment says (POSIX 2.5.3)
     this.env.IFS = ' \t\n';
     this.localVars.add('IFS');
@@ -790,9 +819,12 @@ export class Shell {
     child.env = { ...this.env };
     child.functions = { ...this.functions };
     child.options = new Set(this.options);
+    child.shoptopts = new Set(this.shoptopts);
+    child.readonlyVars = new Set(this.readonlyVars);
     child.logicalPwd = this.logicalPwd;
     child.bashPid = nextInPagePid++;
     child.isSubshell = true;
+    child.scriptShell = this.scriptShell; // a subshell of a script is non-interactive too
     child.lastExitCode = this.lastExitCode; // $? in a subshell or $(…) is the caller's
     child.forkParentPid = this.bashPid;
     child.shellPid = this.shellPid;
@@ -1376,7 +1408,7 @@ export class Shell {
     const trimmed = statements.length === 1 ? statements[0].text : source;
 
     // Check for background execution (&)
-    if (statements.length <= 1 && /[^&]&$/.test(trimmed) && this.parseCompound(trimmed).length === 1) {
+    if (statements.length <= 1 && endsWithBackgroundAmp(trimmed) && this.parseCompound(trimmed).length === 1) {
       const bgCmd = trimmed.slice(0, -1).trim();
       if (bgCmd) {
         this.executeDepth--;
@@ -1476,7 +1508,7 @@ export class Shell {
       if (this.scriptShell && !this.interactiveFlag && this.options.has('noexec')) break;
 
       // `cmd &` before more commands on the line
-      if (/[^&]&$/.test(compound.command) && compounds.length > 1) {
+      if (endsWithBackgroundAmp(compound.command) && compounds.length > 1) {
         const bgCmd = compound.command.slice(0, -1).trim();
         if (!(await this.launchKernelBackground(bgCmd, writeStdout, terminalOverride || this.terminal))) {
           this.executeBackground(bgCmd, writeStdout, stderrWriter);
@@ -2998,7 +3030,9 @@ export class Shell {
                     if (arg === '-o' && (mapped === 'vi' || mapped === 'emacs')) this.options.delete(mapped === 'vi' ? 'emacs' : 'vi');
                   } else {
                     stderrWriter(`set: ${optName}: invalid option name\r\n`);
-                    exitCode = 1;
+                    exitCode = 2;
+                    // set is a special builtin: a POSIX (sh) script ends on its error
+                    if (this.scriptShell && (this.invokedAsSh || this.options.has('posix'))) throw new ExitSignal(2);
                   }
                 }
                 continue;
@@ -3119,7 +3153,13 @@ export class Shell {
         // command [-p] NAME ARGS: run NAME skipping functions and aliases
         if (!_builtinDisabled && effectiveCmdName === 'command' && cmdArgs.length && !/^-[vV]+$/.test(cmdArgs[0])) {
           const rest = cmdArgs[0] === '-p' || cmdArgs[0] === '--' ? cmdArgs.slice(1) : cmdArgs;
-          if (rest.length) {
+          if (rest.length === 1 && rest[0] === 'exec') {
+            // `command exec 8<file`: exec's redirections change the shell's fds, as without `command`
+            const err = await this.applyExecRedirects(redirects);
+            if (err) stderrWriter(err + '\r\n');
+            exitCode = err ? 1 : 0;
+            redirects.length = 0;
+          } else if (rest.length) {
             const savedFn = this.functions[rest[0]];
             delete this.functions[rest[0]];
             const savedAlias = this.aliases.get(rest[0]);
@@ -3610,7 +3650,13 @@ export class Shell {
         if (prefixWasLocal.has(key) && value !== undefined) this.localVars.add(key);
       }
 
-      if (this.redirectFailed) { exitCode = 1; this.redirectFailed = false; }
+      if (this.redirectFailed) {
+        exitCode = 1;
+        this.redirectFailed = false;
+        // A redirection error of a special builtin ends a POSIX (sh) script (2.8.1)
+        const first = pipeline.length === 1 ? pipeline[0].trim().split(/\s+/)[0] : '';
+        if (POSIX_SPECIAL_BUILTINS.has(first) && this.scriptShell && (this.invokedAsSh || this.options.has('posix'))) throw new ExitSignal(1);
+      }
 
       // pipefail: use last non-zero exit code from any pipe segment
       if (this.options.has('pipefail') && pipeExitCodes.length > 1) {
@@ -5528,6 +5574,8 @@ export class Shell {
         const explicitDot = unmark(seg).startsWith('.');
         for (const c of cands) {
           const names = await this.fs.readdir(c.abs).catch(() => [] as string[]);
+          // . and .. are entries too, unless globskipdots (bash 5.2's default) hides them
+          if (explicitDot && !this.shoptopts.has('globskipdots')) names.unshift('.', '..');
           for (const n of [...names].sort()) {
             if (n.startsWith('.') && !explicitDot && !dotglob) continue;
             if (!re.test(n)) continue;
