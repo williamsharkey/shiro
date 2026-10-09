@@ -21,6 +21,7 @@ import {
   shareInodeNumber, forgetInodeNumber,
 } from './fd';
 import { createPipe, PipeEnd } from './pipe';
+import { LockTable, F_RDLCK, F_WRLCK, F_UNLCK } from './locks';
 import { Process } from './process';
 import { EpollFile, waitReady } from './epoll';
 import { EventFile } from './fd';
@@ -113,6 +114,15 @@ function trailingSlash(path: string): boolean {
   return path.length > 1 && path.endsWith('/') && !/^\/+$/.test(path);
 }
 
+const fileKeys = new WeakMap<object, number>();
+let nextFileKey = 1;
+/** A stable id for an open file description without a path (record locks on pipes, sockets) */
+function fileKey(f: object): number {
+  let k = fileKeys.get(f);
+  if (!k) { k = nextFileKey++; fileKeys.set(f, k); }
+  return k;
+}
+
 /** Syscalls an O_PATH fd fails with EBADF, by the argument holding the fd */
 const OPATH_FD_ARG: Record<number, number> = {
   0: 0, 1: 0, 16: 0, 17: 0, 18: 0, 19: 0, 20: 0, 74: 0, 75: 0, 77: 0, 91: 0, 93: 0, // read write ioctl pread pwrite readv writev fsync fdatasync ftruncate fchmod fchown
@@ -158,6 +168,8 @@ export class Kernel {
   /** The last pid handed out (/proc/stat, /proc/loadavg). */
   lastPid = 0;
   readonly procfs = new ProcFs(this);
+  /** fcntl record locks (F_SETLK, F_OFD_SETLK) */
+  readonly locks = new LockTable();
   private detachTable?: () => void;
   /** How long an unreaped child of init stays a zombie before it is reaped automatically. */
   initReapDelayMs = 30_000;
@@ -522,6 +534,7 @@ export class Kernel {
   async exit(proc: Process, status: number): Promise<void> {
     if (proc.pid === 1 || !proc.beginExit()) return;
     await proc.fds.closeAll();
+    this.locks.release(proc.pid);
     for (const child of this.procs.values()) {
       if (child.ppid === proc.pid) {
         child.ppid = 1;
@@ -1145,7 +1158,12 @@ export class Kernel {
     const hs = this.syscallTable.get(nr);
     if (hs) for (const h of hs) if (!h.passSync?.(proc, nr, args, data, this)) return undefined;
     switch (nr) {
-      case A.SYS_close: return proc.fds.closeSync(args[0]);
+      case A.SYS_close: {
+        const f = proc.fds.get(args[0]);
+        const r = proc.fds.closeSync(args[0]);
+        if (f && r === 0) this.releaseLocks(proc, f);
+        return r;
+      }
       case A.SYS_open:
       case A.SYS_openat: {
         const [dirfd, len, flags] = nr === A.SYS_open ? [A.AT_FDCWD, args[0], args[1]] : [args[0], args[1], args[2]];
@@ -1290,8 +1308,12 @@ export class Kernel {
           if (fd < 0 && refCount(f) === 0) await f.close();
           return fd;
         }
-        case A.SYS_close:
-          return await fds.close(args[0]);
+        case A.SYS_close: {
+          const f = file(args[0]);
+          const r = await fds.close(args[0]);
+          if (f && r === 0) this.releaseLocks(proc, f);
+          return r;
+        }
         case A.SYS_stat:
         case A.SYS_lstat:
         case A.SYS_fstat:
@@ -1569,7 +1591,7 @@ export class Kernel {
           return 0;
         }
         case A.SYS_fcntl:
-          return this.fcntl(proc, args[0], args[1], args[2]);
+          return this.fcntl(proc, args[0], args[1], args[2], data);
         case A.SYS_fsync: {
           const f = file(args[0]);
           if (!f) return -A.EBADF;
@@ -1895,11 +1917,56 @@ export class Kernel {
     }
   }
 
-  private fcntl(proc: Process, fd: number, cmd: number, arg: number): number | Promise<number> {
+  /** Closing any fd for a file drops the process's POSIX locks on it; the last close of a description, its OFD locks */
+  private releaseLocks(proc: Process, f: OpenFile): void {
+    if (f.path) this.locks.release(proc.pid, f.path);
+    if (refCount(f) === 0) this.locks.release(f);
+  }
+
+  /** fcntl record locks; `data` holds the struct flock (l_type, l_whence, l_start, l_len, l_pid) */
+  private async recordLock(proc: Process, f: OpenFile, cmd: number, data?: Uint8Array): Promise<number> {
+    if (!data || data.length < A.FLOCK_SIZE) return -A.EFAULT;
+    const dv = new DataView(data.buffer, data.byteOffset, A.FLOCK_SIZE);
+    const type = dv.getInt16(0, true), whence = dv.getInt16(2, true);
+    const start = Number(dv.getBigInt64(8, true)), len = Number(dv.getBigInt64(16, true));
+    if (type !== F_RDLCK && type !== F_WRLCK && type !== F_UNLCK) return -A.EINVAL;
+    const ofd = cmd === A.F_OFD_GETLK || cmd === A.F_OFD_SETLK || cmd === A.F_OFD_SETLKW;
+    if (ofd && dv.getInt32(24, true) !== 0) return -A.EINVAL;
+    const set = cmd !== A.F_GETLK && cmd !== A.F_OFD_GETLK;
+    const acc = f.flags & A.O_ACCMODE;
+    if (set && ((type === F_RDLCK && acc === A.O_WRONLY) || (type === F_WRLCK && acc === A.O_RDONLY))) return -A.EBADF;
+    let base = 0;
+    if (whence === A.SEEK_CUR) base = f.seek?.(0, A.SEEK_CUR) ?? 0;
+    else if (whence === A.SEEK_END) base = (await f.stat()).size;
+    else if (whence !== A.SEEK_SET) return -A.EINVAL;
+    let lo = base + start, hi = len > 0 ? lo + len : len === 0 ? Infinity : lo;
+    if (len < 0) lo += len;
+    if (lo < 0) return -A.EINVAL;
+    const path = f.path ?? `anon:${proc.pid}:${fileKey(f)}`;
+    const owner = ofd ? f : proc.pid;
+    if (!set) {
+      const l = this.locks.get(path, owner, type, lo, hi);
+      dv.setInt16(0, l ? l.type : F_UNLCK, true);
+      if (l) {
+        dv.setInt16(2, A.SEEK_SET, true);
+        dv.setBigInt64(8, BigInt(l.start), true);
+        dv.setBigInt64(16, BigInt(l.end === Infinity ? 0 : l.end - l.start), true);
+        dv.setInt32(24, l.pid, true);
+      }
+      return 0;
+    }
+    const wait = cmd === A.F_SETLKW || cmd === A.F_OFD_SETLKW;
+    return this.locks.set(path, owner, ofd ? -1 : proc.pid, type, lo, hi, wait, proc.syscallSignal);
+  }
+
+  private fcntl(proc: Process, fd: number, cmd: number, arg: number, data?: Uint8Array): number | Promise<number> {
     const fds = proc.fds;
     const f = fds.get(fd);
     if (!f) return -A.EBADF;
     switch (cmd) {
+      case A.F_GETLK: case A.F_SETLK: case A.F_SETLKW:
+      case A.F_OFD_GETLK: case A.F_OFD_SETLK: case A.F_OFD_SETLKW:
+        return this.recordLock(proc, f, cmd, data);
       case A.F_DUPFD: return fds.dup(fd, arg);
       case A.F_DUPFD_CLOEXEC: return fds.dup(fd, arg, true);
       case A.F_GETFD: return fds.getCloexec(fd) ? A.FD_CLOEXEC : 0;

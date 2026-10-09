@@ -118,4 +118,36 @@ describe('kernel syscalls found by LTP', () => {
     }
     expect(count).toEqual([2, 2, 2, 2]);
   });
+
+  it('fcntl14/15: record locks conflict across processes, F_GETLK names the holder, SETLKW waits, close releases', async () => {
+    const other = kernel.spawn({ path: 'other', cwd: '/tmp/kc', fds: {}, run: () => new Promise<number>(() => {}) });
+    const flock = (type: number, start: number, len: number) => {
+      const d = new Uint8Array(A.FLOCK_SIZE);
+      const dv = new DataView(d.buffer);
+      dv.setInt16(0, type, true);
+      dv.setBigInt64(8, BigInt(start), true);
+      dv.setBigInt64(16, BigInt(len), true);
+      return d;
+    };
+    const o = (p: Process) => kernel.syscall(p, A.SYS_openat, [A.AT_FDCWD, L('file'), A.O_RDWR, 0], enc.encode('file'));
+    const fa = await o(proc), fb = await o(other);
+    expect(await kernel.syscall(proc, A.SYS_fcntl, [fa, A.F_SETLK], flock(1, 0, 10))).toBe(0);
+    // overlapping write lock from another process: EAGAIN; a disjoint one is fine
+    expect(await kernel.syscall(other, A.SYS_fcntl, [fb, A.F_SETLK], flock(1, 5, 10))).toBe(-A.EAGAIN);
+    expect(await kernel.syscall(other, A.SYS_fcntl, [fb, A.F_SETLK], flock(1, 10, 5))).toBe(0);
+    const q = flock(0, 0, 0);
+    expect(await kernel.syscall(other, A.SYS_fcntl, [fb, A.F_GETLK], q)).toBe(0);
+    const qv = new DataView(q.buffer);
+    expect([qv.getInt16(0, true), Number(qv.getBigInt64(16, true)), qv.getInt32(24, true)]).toEqual([1, 10, proc.pid]);
+    // a bad l_type is EINVAL
+    expect(await kernel.syscall(proc, A.SYS_fcntl, [fa, A.F_SETLK], flock(7, 0, 1))).toBe(-A.EINVAL);
+    // F_SETLKW waits until the holder closes its fd
+    let done = false;
+    const waiting = kernel.syscall(other, A.SYS_fcntl, [fb, A.F_SETLKW], flock(1, 0, 10)).then((r) => { done = true; return r; });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(done).toBe(false);
+    expect(await kernel.syscall(proc, A.SYS_close, [fa], new Uint8Array(8))).toBe(0);
+    expect(await waiting).toBe(0);
+    kernel.kill(other.pid, A.SIGKILL);
+  });
 });
