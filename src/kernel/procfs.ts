@@ -199,7 +199,12 @@ export class ProcFs {
       case 'task': return { type: 'dir', list: () => [String(p.pid)] };
       case 'cwd': return { type: 'link', target: () => p.cwd };
       // A runner can name the program the process reports as itself (a WASI package's "self")
-      case 'exe': return { type: 'link', target: () => (typeof p.data.exe === 'string' ? p.data.exe : p.path) };
+      // Linux gives the resolved path: glibc's ld.so expands $ORIGIN from it, and a
+      // venv's bin/python is a symlink to an interpreter with RUNPATH $ORIGIN/../lib
+      case 'exe': return { type: 'link', target: () => {
+        const exe = typeof p.data.exe === 'string' ? p.data.exe : p.path;
+        return (exe.startsWith('/') && this.kernel.fs?.realpathCached?.(exe)) || exe;
+      } };
       case 'root': return { type: 'link', target: () => '/' };
       case 'cmdline': return { type: 'file', text: () => (p.state === 'zombie' ? '' : p.argv.map((a) => a + '\0').join('')) };
       case 'comm': return { type: 'file', text: () => p.comm.slice(0, 15) + '\n' };
