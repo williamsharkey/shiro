@@ -69,6 +69,8 @@ const forkSharedBin = join(out, 'forkshared');
 const haveForkShared = tryBuild('gcc', ['-static', '-O1', '-o', forkSharedBin, 'forkshared.c']);
 const mremapBin = join(out, 'mremap');
 const haveMremap = tryBuild('gcc', ['-static', '-O1', '-o', mremapBin, 'mremap.c']);
+const mmsgBin = join(out, 'mmsg');
+const haveMmsg = tryBuild('gcc', ['-static', '-O1', '-o', mmsgBin, 'mmsg.c']);
 const sendfileBin = join(out, 'sendfile');
 const haveSendfile = tryBuild('gcc', ['-static', '-O1', '-o', sendfileBin, 'sendfile.c']);
 const stropsBin = join(out, 'strops');
@@ -419,6 +421,18 @@ describe.skipIf(!haveTcp)('Blink engine: real TCP through the kernel relay', () 
     expect(r.output).toContain(`remote 127.0.0.1:${ports.echoPort}`);
     expect(r.exitCode).toBe(0);
   }, 120_000);
+
+  // glibc's resolver sends its A and AAAA queries with sendmmsg (pip, apt)
+  it.skipIf(!haveMmsg)('sendmmsg/recvmmsg on a kernel UDP socket (DNS over DoH)', async () => {
+    const { shell } = await setup(readFileSync(mmsgBin));
+    const r = await run(shell, './prog');
+    const out = r.output.replace(/\r\n/g, '\n');
+    expect(out).toContain('sendmmsg=2 lens 27 27');
+    expect(out).toContain('answer 0x11 rcode 0 answers 1 len>12 1');
+    expect(out).toContain('answer 0x22 rcode 3 answers 0 len>12 1');
+    expect(out).toContain('got 2 ids 3');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
 
   it('resolves a name over UDP 53 (kernel DoH) and dials it', async () => {
     const { shell } = await setup(readFileSync(tcpBin));
