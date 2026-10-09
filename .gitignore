@@ -11,3 +11,4 @@ tests/.pkg-cache/
 bench/.cache/
 .bench-seeds/
 .debian-build/
+dist-dev

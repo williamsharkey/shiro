@@ -325,7 +325,7 @@ export async function writeEngineWorkarounds(fs: FileSystem): Promise<void> {
 export async function noServicesFromPackages(fs: FileSystem): Promise<void> {
   const p = '/usr/sbin/policy-rc.d';
   if (await fs.exists(p)) return;
-  await fs.writeFile(p, '#!/bin/sh\n# Written by Shiro (src/debian/rootfs.ts): packages do not start services; see docs/DEBIAN.md\nexit 101\n', { mode: 0o755 });
+  await fs.writeFile(p, '#!/bin/sh\n# Written by tabcomputer (src/debian/rootfs.ts): packages do not start services; see docs/DEBIAN.md\nexit 101\n', { mode: 0o755 });
 }
 
 /**

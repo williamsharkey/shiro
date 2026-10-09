@@ -543,6 +543,27 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    5 ms, with its kernel round trips inside the sleep (off 3 ms before the
    deadline). LTP nanosleep01 and clock_nanosleep02 pass all rows again
    (they slept 0.4-1.3 ms too long).
+55. A same-instance fork child's fatal signal gets the crash report too
+   (`SHIRO_BLINK_CRASH=1`).
+56. `clock_gettime`'s fast path in `OpSyscall` leaves `CLOCK_REALTIME`
+   and `CLOCK_BOOTTIME` to the Shiro code: patch 49's sub-ms realtime
+   only reached `gettimeofday` before (musl's `gettimeofday`, which
+   Shiro's static vim uses, is `clock_gettime`). `SHIRO_BLINK_MMLOG=1`
+   logs the guest's mmap/mprotect/munmap/mremap/madvise calls to its
+   stderr; `=2` keeps the last 256 for the crash report (debugging aid).
+57. Instructions that cross into the next code page go to the interpreter
+   again, as before patch 41 (`BLINK_WJIT_STRADDLE=1` turns 41's decoding
+   back on). With it, a forked child decoding `.xz` with liblzma's
+   threaded decoder crashed in glibc's `_int_free` or reported corrupt
+   data (Debian mode's dpkg-deb), in one binary layout of two. Bisecting
+   by code address and by straddle site needs lzma_decode's three
+   straddling instructions together; each runs right on its own. Not yet
+   understood. No measurable cost on the x86 suite (vim_startup -3.5%,
+   gh_version +0.1%, both "same").
+58. `clock_nanosleep` (and so glibc's `nanosleep`) returns `EINVAL` for a
+   negative or out-of-range timespec before sleeping, as Linux's
+   `timespec64_valid` (LTP nanosleep04, broken by patch 54's path). Test:
+   `fixtures/x86/sleepintr.c`.
 
 The guest's kernel calls go over a pool of channels (`src/x86-engine/blink.ts`
 → `public/engines/blink/host.mjs`). It starts at 6, and host.mjs asks the
@@ -560,8 +581,8 @@ multi-threaded Go programs; the wasm build doesn't use it.
 ### Limits today
 
 - Needs `crossOriginIsolated` (pthreads and the kernel channel use
-  SharedArrayBuffer). On shiro.computer that depends on the unix/isolation
-  branch; until then `./binary` uses src/x86.
+  SharedArrayBuffer). tabcomputer.com is isolated (`server.mjs` sends
+  COOP/COEP); on a page that isn't, `./binary` uses src/x86.
 - The JIT compiles per thread and per run (nothing is cached across
   processes yet), and cold code still runs in the interpreter; most
   SSE/x87, string ops, xadd/cmpxchg and 16-bit shifts still call Blink's
@@ -570,7 +591,7 @@ multi-threaded Go programs; the wasm build doesn't use it.
   the binary is still copied on its way in (tabcomputer's FS, the kernel read,
   MEMFS).
 - Non-loopback TCP needs the relay (`TABCOMPUTER_TCP_RELAY`); without it `connect`
-  fails like an offline host. `socketpair` is ENOSYS.
+  fails like an offline host.
 - Signals sent before the guest has loaded are dropped. SIGTSTP is the
   kernel's default stop; a guest can't catch it.
 - The worker doesn't use the kernel's new `symlink`/`chmod` yet.
@@ -580,11 +601,12 @@ multi-threaded Go programs; the wasm build doesn't use it.
 
 Honest estimate for a ~200 MB static Go CLI that talks TLS to Google APIs:
 
-1. **Cross-origin isolation in production** (unix/isolation). Without it the
-   engine doesn't start.
-2. **A TCP relay deployed** for shiro.computer. The wiring is done (Go's own
-   DNS and TLS run over the kernel's sockets, tested against a local relay);
-   the relay itself has to run somewhere.
+1. **Cross-origin isolation in production.** Done: tabcomputer.com is
+   isolated. Without it the engine doesn't start.
+2. **A TCP relay deployed.** Done: tabcomputer.com runs it (Go's own DNS and
+   TLS run over the kernel's sockets). Since Blink patch 0040, `agy --version`
+   runs (11 s); a request needs a Google sign-in and is untested
+   ([COMPAT.md](COMPAT.md#agent-clis-unixagent-clis)).
 3. Interactive use works today (tty, raw mode, SIGWINCH, Ctrl-C).
 4. **Speed**: with the wasm JIT, `gh` (59 MB) prints its version in 5.0 s
    (first run) / 2.5 s (later runs) in Chromium on a machine where the

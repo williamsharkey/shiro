@@ -5,124 +5,124 @@
       "default": "shiro",
       "command": "shiro-apt-method",
       "stub": true,
-      "why": "Browsers can't open TCP connections: Shiro's transport fetches from the page's same-origin mirror. apt still verifies the signed InRelease and every hash."
+      "why": "Browsers can't open TCP connections: tabcomputer's transport fetches from the page's same-origin mirror. apt still verifies the signed InRelease and every hash."
     },
     "/usr/lib/apt/methods/store": {
       "default": "shiro",
       "command": "shiro-apt-store",
       "stub": true,
-      "why": "apt decompresses every downloaded index through this method; under the x86 engine xz-decoding trixie's 56 MB Packages took ~33 s of `apt-get update`. Shiro's runs the same codecs and hashes natively; apt still checks the result against the signed Release file."
+      "why": "apt decompresses every downloaded index through this method; under the x86 engine xz-decoding trixie's 56 MB Packages took ~33 s of `apt-get update`. tabcomputer's runs the same codecs and hashes natively; apt still checks the result against the signed Release file."
     },
     "/usr/sbin/dpkg-preconfigure": {
       "default": "shiro",
       "command": "shiro-dpkg-preconfigure",
       "stub": true,
-      "why": "apt-utils' 70debconf hook runs this before every dpkg run; under DEBIAN_FRONTEND=noninteractive it has nothing to ask but cost ~20 s per install under the x86 engine (Perl, debconf, apt-extracttemplates). Shiro's drains apt's list and exits 0 then (templates load at configure time through the confmodule, as without apt-utils) and runs Debian's script, kept as dpkg-preconfigure.debian, for any other frontend."
+      "why": "apt-utils' 70debconf hook runs this before every dpkg run; under DEBIAN_FRONTEND=noninteractive it has nothing to ask but cost ~20 s per install under the x86 engine (Perl, debconf, apt-extracttemplates). tabcomputer's drains apt's list and exits 0 then (templates load at configure time through the confmodule, as without apt-utils) and runs Debian's script, kept as dpkg-preconfigure.debian, for any other frontend."
     },
     "/usr/bin/base64": {
       "default": "shiro",
       "command": "base64",
-      "why": "Shiro's base64 matches Debian's on the overlay cases (2/2, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+      "why": "tabcomputer's base64 matches Debian's on the overlay cases (2/2, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
     },
     "/usr/bin/basename": {
       "default": "shiro",
       "command": "basename",
-      "why": "Shiro's basename matches Debian's on the overlay cases (3/3, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+      "why": "tabcomputer's basename matches Debian's on the overlay cases (3/3, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
     },
     "/usr/bin/cut": {
       "default": "shiro",
       "command": "cut",
-      "why": "Shiro's cut matches Debian's on the overlay cases (3/3, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+      "why": "tabcomputer's cut matches Debian's on the overlay cases (3/3, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
     },
     "/usr/bin/diff": {
       "default": "shiro",
       "command": "diff",
-      "why": "Shiro's diff matches Debian's on the overlay cases (2/2, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+      "why": "tabcomputer's diff matches Debian's on the overlay cases (2/2, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
     },
     "/usr/bin/dirname": {
       "default": "shiro",
       "command": "dirname",
-      "why": "Shiro's dirname matches Debian's on the overlay cases (3/3, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+      "why": "tabcomputer's dirname matches Debian's on the overlay cases (3/3, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
     },
     "/usr/bin/expr": {
       "default": "shiro",
       "command": "expr",
-      "why": "Shiro's expr matches Debian's on the overlay cases (4/4, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+      "why": "tabcomputer's expr matches Debian's on the overlay cases (4/4, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
     },
     "/usr/bin/find": {
       "default": "shiro",
       "command": "find",
-      "why": "Shiro's find matches Debian's on the overlay cases (4/4, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+      "why": "tabcomputer's find matches Debian's on the overlay cases (4/4, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
     },
     "/usr/bin/grep": {
       "default": "shiro",
       "command": "grep",
-      "why": "Shiro's grep matches Debian's on the overlay cases (11/11, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+      "why": "tabcomputer's grep matches Debian's on the overlay cases (11/11, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
     },
     "/usr/bin/head": {
       "default": "shiro",
       "command": "head",
-      "why": "Shiro's head matches Debian's on the overlay cases (4/4, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+      "why": "tabcomputer's head matches Debian's on the overlay cases (4/4, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
     },
     "/usr/bin/ls": {
       "default": "shiro",
       "command": "ls",
-      "why": "Shiro's ls matches Debian's on the overlay cases (3/3, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+      "why": "tabcomputer's ls matches Debian's on the overlay cases (3/3, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
     },
     "/usr/bin/md5sum": {
       "default": "shiro",
       "command": "md5sum",
-      "why": "Shiro's md5sum matches Debian's on the overlay cases (2/2, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+      "why": "tabcomputer's md5sum matches Debian's on the overlay cases (2/2, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
     },
     "/usr/bin/od": {
       "default": "shiro",
       "command": "od",
-      "why": "Shiro's od matches Debian's on the overlay cases (2/2, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+      "why": "tabcomputer's od matches Debian's on the overlay cases (2/2, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
     },
     "/usr/bin/paste": {
       "default": "shiro",
       "command": "paste",
-      "why": "Shiro's paste matches Debian's on the overlay cases (2/2, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+      "why": "tabcomputer's paste matches Debian's on the overlay cases (2/2, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
     },
     "/usr/bin/sed": {
       "default": "shiro",
       "command": "sed",
-      "why": "Shiro's sed matches Debian's on the overlay cases (9/9, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+      "why": "tabcomputer's sed matches Debian's on the overlay cases (9/9, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
     },
     "/usr/bin/seq": {
       "default": "shiro",
       "command": "seq",
-      "why": "Shiro's seq matches Debian's on the overlay cases (5/5, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+      "why": "tabcomputer's seq matches Debian's on the overlay cases (5/5, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
     },
     "/usr/bin/sha256sum": {
       "default": "shiro",
       "command": "sha256sum",
-      "why": "Shiro's sha256sum matches Debian's on the overlay cases (2/2, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+      "why": "tabcomputer's sha256sum matches Debian's on the overlay cases (2/2, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
     },
     "/usr/bin/sort": {
       "default": "shiro",
       "command": "sort",
-      "why": "Shiro's sort matches Debian's on the overlay cases (6/6, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+      "why": "tabcomputer's sort matches Debian's on the overlay cases (6/6, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
     },
     "/usr/bin/tail": {
       "default": "shiro",
       "command": "tail",
-      "why": "Shiro's tail matches Debian's on the overlay cases (4/4, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+      "why": "tabcomputer's tail matches Debian's on the overlay cases (4/4, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
     },
     "/usr/bin/tee": {
       "default": "shiro",
       "command": "tee",
-      "why": "Shiro's tee matches Debian's on the overlay cases (2/2, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+      "why": "tabcomputer's tee matches Debian's on the overlay cases (2/2, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
     },
     "/usr/bin/uniq": {
       "default": "shiro",
       "command": "uniq",
-      "why": "Shiro's uniq matches Debian's on the overlay cases (4/4, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+      "why": "tabcomputer's uniq matches Debian's on the overlay cases (4/4, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
     },
     "/usr/bin/xargs": {
       "default": "shiro",
       "command": "xargs",
-      "why": "Shiro's xargs matches Debian's on the overlay cases (2/2, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+      "why": "tabcomputer's xargs matches Debian's on the overlay cases (2/2, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
     }
   }
 }

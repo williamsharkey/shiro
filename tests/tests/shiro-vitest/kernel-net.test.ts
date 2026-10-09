@@ -15,7 +15,7 @@ import {
 } from '@shiro/kernel/net';
 import { MSG_PEEK, MSG_TRUNC } from '@shiro/kernel/abi';
 
-interface Ports { echoPort: number; firehosePort: number; relayA: number; relayB: number; relayC: number; relayD: number; relayE: number; mainPort: number; origin: string }
+interface Ports { echoPort: number; firehosePort: number; relayA: number; relayB: number; relayC: number; relayD: number; relayE: number; relayF: number; proxyLogPort: number; mainPort: number; origin: string }
 
 let harness: ChildProcess;
 let P: Ports;
@@ -97,6 +97,21 @@ describe('kernel sockets over the TCP relay', () => {
     expect(dec.decode(data)).toBe('hello, relay\n');
     expect(end).toBe(0);
     await s.close();
+  });
+
+  it('dials through an upstream CONNECT proxy, after the address policy', async () => {
+    const s = stream(stackFor(P.relayF));
+    expect(await s.connectHost('public.test', P.echoPort)).toBe(0);
+    expect(await s.write(enc.encode('via proxy\n'))).toBe(10);
+    s.shutdown(SHUT_WR);
+    expect(dec.decode((await readAll(s)).data)).toBe('via proxy\n');
+    await s.close();
+    // a name resolving to a private address never reaches the proxy; a proxy refusal is a refusal
+    expect(await stream(stackFor(P.relayF)).connectHost('rebind.test', P.echoPort)).toBeLessThan(0);
+    expect(await stream(stackFor(P.relayF)).connectHost('denied.test', P.echoPort)).toBeLessThan(0);
+    const seen: string[] = await (await fetch(`http://127.0.0.1:${P.proxyLogPort}/`)).json();
+    expect(seen.some((l) => l.startsWith('CONNECT public.test:'))).toBe(true);
+    expect(seen.some((l) => l.includes('rebind.test'))).toBe(false);
   });
 
   it('server.mjs itself (env-configured) relays 1 MiB both ways with flow control', async () => {

@@ -6,7 +6,8 @@ web, next to the host browser showing the same pages in a real tab. Like
 
 ```sh
 npm run build
-SHIRO_TCP_RELAY=1 SHIRO_TCP_ORIGINS=http://localhost:5299 PORT=5299 STATIC_DIR=$PWD/dist node server.mjs &
+TABCOMPUTER_TCP_RELAY=1 TABCOMPUTER_TCP_ORIGINS=http://localhost:5299 TABCOMPUTER_TCP_CONNECTS_PER_MIN=3000 TABCOMPUTER_TCP_MAX_CONNS_PER_IP=256 \
+  PORT=5299 STATIC_DIR=$PWD/dist node server.mjs &     # + TABCOMPUTER_TCP_UPSTREAM_PROXY=$HTTPS_PROXY in a proxied sandbox
 node tests/browser/web-score.mjs --speedometer --wpt --json /tmp/web.json --md docs/WEB_SCORE.md
 node tests/browser/web-score.mjs --only google,github --modes tab     # a few sites, one column
 node tests/browser/web-score.mjs --from-json /tmp/web.json --md docs/WEB_SCORE.md   # re-render
@@ -41,19 +42,24 @@ page; it shows up as part of the desktop's heap.
 
 ## Caveats of the sandbox this ran in
 
-- **The sandbox re-signs TLS.** Its egress gateway terminates TLS for every
-  host with its own CA, so `--extra-roots` adds that CA to the Browser's trust
-  store, as a user would add a company proxy's. That means the subtls
-  numbers here are TLS 1.3 against *the gateway*, not against each site.
-  Real-world TLS compatibility (TLS 1.2-only servers, unusual chain
-  algorithms) has to be measured on tabcomputer.com: the same command works
-  there without `--extra-roots`.
+- **TLS is mostly real.** The relay dials through the sandbox's HTTP proxy
+  (below). For most hosts that proxy passes the site's own certificate chain
+  through (BBC, Google, CNN, HN: GlobalSign, Google Trust Services, Let's
+  Encrypt). For some hosts (GitHub, …) it re-signs with its own CA, which
+  `--extra-roots` adds to the Browser's trust store, as a user would add a
+  company proxy's. So TLS failures here are, for most sites, the in-page TLS
+  meeting the real server.
 - **Headless Chromium meets bot checks** (Amazon's captcha page, 403s). They
   hit both columns, which is why the direct column is there.
-- **The relay ran with raised limits** (`SHIRO_TCP_CONNECTS_PER_MIN=3000`,
-  `SHIRO_TCP_MAX_CONNS_PER_IP=256`). With the production defaults (60/min,
-  16 concurrent) a news site alone exhausts them; see BROWSER.md, "Decisions
-  for the owner".
+- **The relay dialed through the sandbox's HTTP proxy**
+  (`TABCOMPUTER_TCP_UPSTREAM_PROXY=$HTTPS_PROXY`). Chromium uses that proxy for the
+  direct column, and the sandbox's direct egress blocks some hosts the proxy
+  allows (BBC, Reddit, Stack Overflow, …). Without it, the tab column lost
+  those sites to the environment rather than to the Browser.
+- **The relay ran with raised limits** (`TABCOMPUTER_TCP_CONNECTS_PER_MIN=3000`,
+  `TABCOMPUTER_TCP_MAX_CONNS_PER_IP=256`). With the production defaults (60/min,
+  16 concurrent) a news site alone exhausts them; see BROWSER.md, "Decisions".
+
 
 ## Results
 

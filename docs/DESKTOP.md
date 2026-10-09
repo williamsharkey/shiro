@@ -1,8 +1,9 @@
 # Desktop, window manager API, and /dom
 
-The Unix edition boots to a desktop: a menu bar, a dock, and windows. The
+tabcomputer boots to a desktop: a menu bar, a dock, and windows. The
 Terminal (the real tabcomputer terminal on a pty) opens front and center. The
-classic full-page terminal of shiro.computer is still there behind a flag.
+full-page terminal (the `shiro` profile's UI) is still there with
+`?ui=terminal`.
 
 - Code: `src/desktop/` (window manager `wm.ts`, shell `index.ts`, Terminal
   `terminal-app.ts`, network sheet `network.ts`, lazy apps in `apps/`),
@@ -19,6 +20,10 @@ classic full-page terminal of shiro.computer is still there behind a flag.
 
 All changes are additive. Nothing below renames or removes an earlier name.
 
+- **2026-10-09 (unix/desktop), v1.3.** `AppDescriptor.glyph`: the app's
+  glyph for the icon sets other than Classic (24-unit SVG path data, round
+  strokes; see "Icon sets"). Optional: without it an app gets a built-in
+  glyph if it has one, else a monogram.
 - **2026-10-09 (unix/desktop), v1.2.** Dock stacks: `AppDescriptor.group`,
   `DockGroup` (`{ id, name, order?, collapse?: 'always' | 'auto', maxLoose? }`),
   and optional `registerGroup(group)` / `groups()` on `DesktopAPI` (check
@@ -115,7 +120,7 @@ destroyed), and the next Terminal window adopts it again.
   (localStorage `tabcomputer-desktop-tour`); Help → Welcome Tour shows them again.
 - **About This Computer** lists measured status with the document that
   records each number (`STATUS` in `apps/about.ts`: keep it in step with
-  DEBIAN_SCORE.md and X86_ENGINES.md), and what is real, emulated and absent.
+  DEBIAN_SCORE.md and CONFORMANCE.md), and what is real, emulated and absent.
 
 - **Themes**: light, dark, or match the system (View menu, the sun/moon icon
   in the menu bar, or Settings → Appearance). Saved in localStorage
@@ -144,6 +149,49 @@ destroyed), and the next Terminal window adopts it again.
 - **Fonts** are self-hosted: Inter and JetBrains Mono (latin, variable,
   `public/fonts/`, SIL OFL, license files next to them). Only the desktop
   loads them.
+
+## Icon sets
+
+The dock, its stacks, the launcher and Settings draw app icons from one icon
+set (`src/desktop/iconsets.ts`; design: `docs/design/dock-icon-studies.html`
+on `design/dock-icons`). Every set draws the same glyphs, one geometry on a
+24-unit grid with round strokes, so the apps belong together; a set changes
+only the material. Settings → Dock & Icons picks one (localStorage
+`shiro-desktop-iconset`; a grid of cards, each a still mini dock).
+
+| set | kind | |
+|---|---|---|
+| Drafting (default) | static | graphite on vellum / chalk on slate, construction lines, SVG wobble filter |
+| Classic | static | the colorful tiles of `icons.ts` (each app's `icon`) |
+| Vaporwave, Aurora field, Soft clay, Swiss line, Neo-brutalist, Risograph, One-bit, E-ink paper | static | SVG and CSS (`iconsets.css`); One-bit rasterizes each glyph to 16×16 once |
+| Pearl, Holo foil | live | the mockup's fragment shader (`iconset-gl.ts`) |
+| Liquid glass | live | three.js transmission (`iconset-glass.ts`, three.js in its own chunk) |
+
+- **Glyphs**: every app the desktop knows has one, including the Debian GUI
+  apps (mapped onto what they are: GIMP → paint, Mousepad → editor…).
+  Others bring `AppDescriptor.glyph` or get a monogram in the set's style.
+- **Swapping changes no layout.** Every set's tile (`.sd-ic`) has Classic's
+  box; the static sets differ only by the `data-iconset` attribute on the
+  dock. A swap crossfades over 0.3 s: a copy of the old dock fades out over
+  the new one (opacity only; instant with reduced motion). A live set loads
+  its chunk, compiles its shaders and draws its first frame before the
+  crossfade starts, holds still during it, and animates after.
+- **Unused sets cost nothing.** While a static set is active no live-set or
+  three.js chunk is loaded, no WebGL context exists, and nothing requests
+  animation frames or listens to the pointer. Settings' previews of the live
+  sets are CSS stills. A live set draws all tiles with one WebGL context into
+  a row that is copied into a small canvas per tile; it pauses while the dock
+  is off screen or the tab hidden, draws one still frame under reduced
+  motion, and leaving it releases the context, loops and listeners. A saved
+  live set shows its still at load and comes alive after the desktop appears.
+- `AppContext.iconSet()`, `setIconSet(id)` (resolves once shown) and
+  `onIconSet(cb)` for apps; `globalThis.__shiroDesktopCtx` in the console.
+- `tests/browser/icon-sets.mjs` checks the default, zero cost (with Settings
+  open too), every swap (no layout shift, dock box unchanged, no long
+  animation frame during the crossfade), live sets animating, pausing and
+  tearing down, reduced motion and persistence; `--shots` writes
+  docs/screenshots/iconsets-*.png. Unit tests:
+  `tests/tests/shiro-vitest/desktop-iconsets.test.ts`.
 
 ## Loading: one draw
 
@@ -418,7 +466,7 @@ Examples:
 
 ```sh
 ls /dom                                   # ctl events windows html head body, plus element ids
-cat /dom/windows/terminal/title           # user@shiro: ~
+cat /dom/windows/terminal/title           # user@tabcomputer: ~
 echo 'move 40 40' > /dom/windows/terminal/ctl
 echo 'snap left'  > /dom/windows/terminal/ctl
 echo '0 0 900 500' > /dom/windows/terminal/geometry

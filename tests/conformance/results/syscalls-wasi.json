@@ -1,7 +1,7 @@
 {
  "suite": "wasi-testsuite",
  "title": "Syscalls: wasi-testsuite (wasm32-wasip1)",
- "note": "WebAssembly/wasi-testsuite prebuilt wasip1 modules (C, Rust, AssemblyScript) run as Shiro WASI processes with their root directory preopened as \"/\", judged like the suite's own runner (exit code, stdout when given). Wasmtime passes all of them.",
+ "note": "WebAssembly/wasi-testsuite prebuilt wasip1 modules (C, Rust, AssemblyScript) run as tabcomputer WASI processes with their root directory preopened as \"/\", judged like the suite's own runner (exit code, stdout when given). Wasmtime passes all of them.",
  "files": {
   "assemblyscript": {
    "pass": 12,

@@ -80,6 +80,8 @@ describe('origin map', () => {
     expect(m.toBrowse('https://www.example.com/a/b?c=1#d')).toBe('http://www-example-com.localhost:5299/a/b?c=1#d');
     expect(m.toReal('http://www-example-com.localhost:5299/a/b?c=1#d')).toBe('https://www.example.com/a/b?c=1#d');
     expect(m.toReal('https://cdn.other.net/x.js')).toBe('https://cdn.other.net/x.js');
+    // a page that writes 'https://' + location.host on an http template still means its own origin
+    expect(m.toReal('https://www-example-com.localhost:5299/api')).toBe('https://www.example.com/api');
     expect(m.isBrowseOrigin('http://localhost:5299')).toBe(false);
     expect(m.isBrowseOrigin('http://evil.localhost:5299')).toBe(false); // no dot: not a key
     expect(m.isBrowseOrigin('http://www-example-com.localhost:5300')).toBe(false);
@@ -192,6 +194,7 @@ describe('fetch over TLS 1.3 in JS (subtls) with keep-alive', () => {
       o('x509', '-req', '-in', 'leaf.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-days', '2', '-sha256', '-extfile', 'ext.cnf', '-out', 'leaf.pem');
     } catch { haveOpenssl = false; return; }
     caPem = readFileSync(path.join(dir, 'ca.pem'), 'utf8');
+    (globalThis as any).__ecdsaDir = dir;
     const srv = tls.createServer({ key: readFileSync(path.join(dir, 'leaf.key')), cert: readFileSync(path.join(dir, 'leaf.pem')), minVersion: 'TLSv1.3' });
     const h = http.createServer((req, res) => {
       let body = '';
@@ -234,6 +237,83 @@ describe('fetch over TLS 1.3 in JS (subtls) with keep-alive', () => {
     await expect(f.fetch({ url: `https://tls.test:${port}/`, method: 'GET', headers: [], body: null })).rejects.toThrow(/TLS/);
     setTrustRoots(async () => '', caPem);
   }, 20000);
+
+  it('refuses a chain whose CA may not sign certificates (keyUsage without keyCertSign)', async () => {
+    if (!haveOpenssl) return;
+    const dir = mkdtempSync(path.join(tmpdir(), 'tc-tls-bad-'));
+    const o = (...a: string[]) => execFileSync('openssl', a, { cwd: dir, stdio: 'pipe' });
+    o('ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', 'ca.key');
+    o('req', '-x509', '-new', '-key', 'ca.key', '-sha256', '-days', '2', '-subj', '/CN=Not A Signer', '-out', 'ca.pem',
+      '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,digitalSignature');
+    o('ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', 'leaf.key');
+    o('req', '-new', '-key', 'leaf.key', '-subj', '/CN=tls.test', '-out', 'leaf.csr');
+    writeFileSync(path.join(dir, 'ext.cnf'), 'subjectAltName=DNS:tls.test\nextendedKeyUsage=serverAuth\nkeyUsage=critical,digitalSignature\n');
+    o('x509', '-req', '-in', 'leaf.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-days', '2', '-sha256', '-extfile', 'ext.cnf', '-out', 'leaf.pem');
+    const srv = tls.createServer({ key: readFileSync(path.join(dir, 'leaf.key')), cert: readFileSync(path.join(dir, 'leaf.pem')), minVersion: 'TLSv1.3' }, (s: any) => s.end());
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+    const badPort = (srv.address() as NetT.AddressInfo).port;
+    setTrustRoots(async () => '', readFileSync(path.join(dir, 'ca.pem'), 'utf8'));
+    try {
+      const f = new NetFetcher({ dial: (_h, p) => nodeDial('127.0.0.1', p) });
+      await expect(f.fetch({ url: `https://tls.test:${badPort}/`, method: 'GET', headers: [], body: null })).rejects.toThrow(/keyCertSign/);
+    } finally {
+      srv.close();
+      setTrustRoots(async () => '', caPem);
+    }
+  }, 20000);
+
+  it('calls a server that hangs up on the ClientHello a TLS-version problem (the fallback case)', async () => {
+    const { TlsError } = await import('@shiro/browser/tls');
+    const srv = net.createServer((c: any) => { c.once('data', () => c.destroy()); });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+    const p = (srv.address() as NetT.AddressInfo).port;
+    try {
+      const f = new NetFetcher({ dial: (_h, q) => nodeDial('127.0.0.1', q) });
+      const err = await f.fetch({ url: `https://tls12.test:${p}/`, method: 'GET', headers: [], body: null }).catch((e) => e);
+      expect(err).toBeInstanceOf(TlsError);
+      expect(err.code).toBe('tls-version');
+    } finally { srv.close(); }
+  }, 20000);
+
+  it('falls back to TLS 1.2 (ECDHE + AES-GCM, extended master secret) with ECDSA and RSA certificates', async () => {
+    if (!haveOpenssl) return;
+    const dir = mkdtempSync(path.join(tmpdir(), 'tc-tls12-'));
+    const o = (...a: string[]) => execFileSync('openssl', a, { cwd: dir, stdio: 'pipe' });
+    o('req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'rca.key', '-sha256', '-days', '2', '-subj', '/CN=RSA Root', '-out', 'rca.pem',
+      '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign,cRLSign');
+    o('req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'rleaf.key', '-subj', '/CN=tls.test', '-out', 'rleaf.csr');
+    writeFileSync(path.join(dir, 'ext.cnf'), 'subjectAltName=DNS:tls.test\nextendedKeyUsage=serverAuth\nkeyUsage=critical,digitalSignature,keyEncipherment\n');
+    o('x509', '-req', '-in', 'rleaf.csr', '-CA', 'rca.pem', '-CAkey', 'rca.key', '-CAcreateserial', '-days', '2', '-sha256', '-extfile', 'ext.cnf', '-out', 'rleaf.pem');
+    const ecdsaDir = (globalThis as any).__ecdsaDir as string;
+    const rsaPem = readFileSync(path.join(dir, 'rca.pem'), 'utf8');
+    setTrustRoots(async () => '', caPem + '\n' + rsaPem);
+    const serve = async (key: string, cert: string, ciphers?: string) => {
+      const h = http.createServer((req, res) => res.end(`tls12 ${req.url}`));
+      const srv = tls.createServer({ key: readFileSync(key), cert: readFileSync(cert), maxVersion: 'TLSv1.2', ...(ciphers ? { ciphers } : {}) });
+      srv.on('secureConnection', (sock: any) => h.emit('connection', sock));
+      await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+      return srv;
+    };
+    for (const [key, cert] of [[path.join(ecdsaDir, 'leaf.key'), path.join(ecdsaDir, 'leaf.pem')], [path.join(dir, 'rleaf.key'), path.join(dir, 'rleaf.pem')]]) {
+      const srv = await serve(key, cert);
+      const p = (srv.address() as NetT.AddressInfo).port;
+      try {
+        const f = new NetFetcher({ dial: (_h, q) => nodeDial('127.0.0.1', q) });
+        for (const pathName of ['/one', '/two']) {
+          const r = await f.fetch({ url: `https://tls.test:${p}${pathName}`, method: 'GET', headers: [], body: null });
+          expect(await new Response(r.body).text()).toBe(`tls12 ${pathName}`);
+        }
+        f.closeAll();
+      } finally { srv.close(); }
+    }
+    // A 1.2 server that only offers CBC suites is refused (AEAD only)
+    const cbc = await serve(path.join(dir, 'rleaf.key'), path.join(dir, 'rleaf.pem'), 'ECDHE-RSA-AES128-SHA256');
+    const cp = (cbc.address() as NetT.AddressInfo).port;
+    try {
+      const f = new NetFetcher({ dial: (_h, q) => nodeDial('127.0.0.1', q) });
+      await expect(f.fetch({ url: `https://cbc.test:${cp}/`, method: 'GET', headers: [], body: null })).rejects.toThrow(/TLS/);
+    } finally { cbc.close(); setTrustRoots(async () => '', caPem); }
+  }, 30000);
 
   it('refuses a name mismatch', async () => {
     if (!haveOpenssl) return;

@@ -2,7 +2,7 @@
    body.sd-active, so the classic terminal UI is untouched. */
 
 body.sd-active { background: #0b0e18; }
-html.sd-light, html.sd-light body.sd-active { background: #eef0ff; }
+html.sd-theme-light, html.sd-theme-light body.sd-active { background: #eef0ff; } /* not .sd-light: that's the traffic lights */
 body.sd-active #shiro-layout { display: none; }
 /* Built out of sight, shown in one frame once complete (index.ts reveal) */
 .sd-desktop.sd-booting { visibility: hidden; }
@@ -292,6 +292,41 @@ body.sd-active #shiro-layout { display: none; }
 .sd-side-item:hover { background: var(--sd-hover); }
 .sd-desktop button:focus:not(:focus-visible), .sd-app:focus { outline: none; }
 .sd-side-item.sd-active { background: var(--sd-active); }
+/* Settings: a searchable, grouped sidebar with colored pane icons (apps/settings.ts) */
+.sd-settings .sd-sidebar { flex-basis: 200px; padding: 10px 10px; }
+.sd-set-search {
+  display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; margin: 2px 0 10px;
+  border-radius: 7px; background: var(--sd-field); border: 1px solid var(--sd-sep); color: var(--sd-text-3);
+}
+.sd-set-search svg { width: 13px; height: 13px; flex: none; }
+.sd-set-search input { flex: 1; min-width: 0; border: 0; background: none; color: var(--sd-text); font: inherit; outline: none; }
+.sd-set-search:focus-within { border-color: var(--sd-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sd-accent) 25%, transparent); }
+.sd-set-group + .sd-set-group { margin-top: 12px; }
+.sd-set-group[hidden], .sd-set-item[hidden] { display: none; }
+.sd-set-item { height: 30px; gap: 9px; }
+.sd-set-ico { width: 21px; height: 21px; flex: none; display: grid; place-items: center; border-radius: 6px; box-shadow: inset 0 0 0 .5px rgba(0,0,0,.15), 0 1px 1px rgba(0,0,0,.12); }
+.sd-side-item .sd-set-ico svg { width: 14px; height: 14px; color: #fff; }
+.sd-settings .sd-side-item.sd-active { background: var(--sd-accent); color: #fff; }
+
+/* The icon set picker: cards with a still mini dock each */
+.sd-iconsets { display: grid; grid-template-columns: repeat(auto-fill, minmax(188px, 1fr)); gap: 10px; }
+.sd-iconset-card {
+  display: flex; flex-direction: column; align-items: stretch; gap: 6px; padding: 10px; text-align: left;
+  border-radius: 12px; border: 1px solid var(--sd-sep); background: var(--sd-field); color: var(--sd-text); font: inherit; cursor: default;
+}
+.sd-iconset-card:hover { border-color: color-mix(in srgb, var(--sd-accent) 45%, var(--sd-sep)); }
+.sd-iconset-card.sd-active { border-color: var(--sd-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--sd-accent) 35%, transparent); }
+.sd-iconset-mini {
+  display: flex; justify-content: center; gap: 4px; padding: 6px; border-radius: 12px;
+  background: var(--sd-bar); box-shadow: inset 0 0 0 1px var(--sd-bar-border);
+}
+.sd-iconset-slot { width: 30px; height: 30px; flex: none; display: block; }
+.sd-iconset-slot > .sd-tile, .sd-iconset-slot > .sd-ic { width: 100%; height: 100%; margin: 0; }
+.sd-iconset-slot > svg, .sd-iconset-slot > img { width: 100%; height: 100%; display: block; }
+.sd-iconset-name { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.sd-iconset-live { font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 4px; background: color-mix(in srgb, var(--sd-accent) 18%, transparent); color: var(--sd-accent); }
+.sd-iconset-check { margin-left: auto; color: var(--sd-accent); font-weight: 700; }
+.sd-iconset-blurb { font-size: 11.5px; color: var(--sd-text-2); line-height: 1.35; }
 .sd-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .sd-toolbar { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--sd-sep); }
 .sd-toolbar .sd-path { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

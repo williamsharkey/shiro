@@ -788,7 +788,7 @@ async function execSeedGif(ctx: CommandContext): Promise<number> {
     }
 
     output += `\n  Downloaded: ${filename}\n`;
-    output += `  To restore: drag this GIF onto any shiro.computer tab.\n\n`;
+    output += `  To restore: drag this GIF onto a tabcomputer tab.\n\n`;
     ctx.stdout = output;
     return 0;
   } catch (e: any) {

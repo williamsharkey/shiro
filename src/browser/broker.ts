@@ -198,6 +198,7 @@ export class Broker {
       reply = { type: 'error', id: msg.id, message: String((e as Error)?.message ?? e), fallback };
       if (msg.navigation && !ctx.nested && fallback) ctx.tab.onFallback(fallback, msg.url);
     }
+    if (reply.type === 'error') console.debug('[browser]', msg.navigation ? 'navigation' : msg.destination || 'fetch', msg.method, msg.url, '→', reply.message);
     const transfer: Transferable[] = [];
     if (reply.type === 'response' && reply.body && typeof reply.body === 'object') transfer.push(reply.body as unknown as Transferable);
     try { port.postMessage(reply, transfer); } catch {
@@ -270,7 +271,9 @@ export class Broker {
       const setCookies = res.headers.filter(([k]) => k.toLowerCase() === 'set-cookie').map(([, v]) => v);
       if (setCookies.length && withCookies(url)) this.o.jar.setFromResponse(url, setCookies, rctx);
       const location = headerGet(res.headers, 'location');
-      if ([301, 302, 303, 307, 308].includes(res.status) && location && msg.redirect !== 'manual') {
+      // Navigations are always 'manual' at the SW: their redirects go back to the shell as browse URLs
+      // (handing the real Location to the browser would leave the proxy)
+      if ([301, 302, 303, 307, 308].includes(res.status) && location && (msg.navigation || msg.redirect !== 'manual')) {
         void res.body.cancel().catch(() => {});
         const next = new URL(location, url);
         if (msg.navigation) return { type: 'redirect', id: msg.id, location: next.href };
@@ -417,7 +420,7 @@ export class Broker {
     const port = Number(url.port) || (secure ? 443 : 80);
     try {
       let s = await this.o.dial(url.hostname, port);
-      if (secure) s = await tlsConnect(s, url.hostname);
+      if (secure) s = await tlsConnect(s, url.hostname, () => this.o.dial(url.hostname, port));
       const httpUrl = new URL(url.href.replace(/^ws/, 'http'));
       const rctx: RequestContext = { partition: ctx.partition, initiatorSite: siteOf(ctx.realOrigin), topLevelNavigation: false, method: 'GET' };
       const headers: HeaderList = [['Origin', ctx.realOrigin], ['User-Agent', navigator.userAgent], ['Pragma', 'no-cache'], ['Cache-Control', 'no-cache']];

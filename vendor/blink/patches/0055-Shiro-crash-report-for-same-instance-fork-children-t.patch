@@ -1,0 +1,44 @@
+From dcd62733cbbd345d8d8c27db779316f89a879320 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 15:54:58 +0000
+Subject: [PATCH 55/57] Shiro: crash report for same-instance fork children too
+
+---
+ blink/blink.c | 14 +++++++-------
+ 1 file changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/blink/blink.c b/blink/blink.c
+index 3897e26..72ff88f 100644
+--- a/blink/blink.c
++++ b/blink/blink.c
+@@ -158,6 +158,13 @@ void TerminateSignal(struct Machine *m, int sig, int code) {
+ #ifdef __EMSCRIPTEN__
+   // Under Shiro a stop signal's default action stops the process in the kernel
+   if (ShiroStopSelf(m, sig)) return;
++  if (IsSignalSerious(sig)) {  // (same-instance fork children too)
++    void ShiroCrashReport(struct Machine *, int, int);
++    ERRF("terminating due to %s (rip=%#" PRIx64 " code=%d faultaddr=%#" PRIx64 ")",
++         DescribeSignal(sig), m->ip, code, m->faultaddr);
++    PrintDiagnostics(m);
++    ShiroCrashReport(m, sig, code);
++  }
+   {
+     bool ShiroIsInstanceChild(struct Machine *);
+     _Noreturn void ShiroInstanceChildKilled(struct Machine *, int);
+@@ -165,13 +172,6 @@ void TerminateSignal(struct Machine *m, int sig, int code) {
+   }
+   // Reaping threads hangs here (see SysExitGroup); let the embedder end
+   // the process with the signal (Module.shiroKill), else exit 128+sig.
+-  if (IsSignalSerious(sig)) {
+-    void ShiroCrashReport(struct Machine *, int, int);
+-    ERRF("terminating due to %s (rip=%#" PRIx64 " code=%d faultaddr=%#" PRIx64 ")",
+-         DescribeSignal(sig), m->ip, code, m->faultaddr);
+-    PrintDiagnostics(m);
+-    ShiroCrashReport(m, sig, code);
+-  }
+   MAIN_THREAD_ASYNC_EM_ASM({
+     if (Module['shiroKill']) Module['shiroKill']($0);
+     else if (Module['shiroExit']) Module['shiroExit'](128 + $0);
+-- 
+2.43.0
+

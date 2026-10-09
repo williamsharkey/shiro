@@ -25,9 +25,10 @@
     "esbuild-wasm": "^0.27.2",
     "http-cache-semantics": "^4.1.1",
     "isomorphic-git": "^1.27.1",
-    "subtls": "0.5.0"
+    "three": "0.160.0"
   },
   "devDependencies": {
+    "@types/three": "0.160.0",
     "fake-indexeddb": "^6.2.5",
     "playwright-core": "^1.56.1",
     "typescript": "^5.7.0",
