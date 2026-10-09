@@ -28,6 +28,9 @@ export const debianCmd: Command = {
     if (sub === 'install' || sub === 'init') {
       const already = await rootfs.installedRootfs(ctx.fs);
       if (already && !rest.includes('--force')) {
+        // Make sure this shell is in Debian mode (loader, shadows, env) all the same
+        rootfs.attachRootfsLoader(ctx.fs, { [already.id]: already.base });
+        await enableDebianMode(ctx);
         out(`Debian ${already.version} is already installed (${already.id}); --force reinstalls the base files.`);
         return 0;
       }
