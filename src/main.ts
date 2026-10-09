@@ -87,7 +87,7 @@ import { initFileAssociations } from './file-associations';
 import { setActiveTerminal } from './active-terminal';
 import { initPanes } from './panes';
 import { uiMode } from './ui-mode';
-import { bootDesktop, type Desktop } from './desktop/index';
+import type { Desktop } from './desktop/index';
 import { installDomFs } from './dom-fs';
 import { desktopCmd } from './commands/desktop';
 import buildNumber from '../build-number.txt?raw';
@@ -113,6 +113,11 @@ function registerCommand(commands: CommandRegistry, cmd: Command, sourcePath?: s
 async function main() {
   console.log(`[shiro] Starting... (build #${buildNumber.trim()})`);
   logIsolationStatus();
+
+  // The desktop (src/desktop) is its own chunk: shiro.computer's terminal UI
+  // never loads it, and the desktop's download overlaps IndexedDB opening
+  const mode = uiMode();
+  const desktopModule = mode === 'desktop' ? import('./desktop/index') : null;
 
   // Request persistent storage so browser never evicts IndexedDB data (credentials, etc.)
   navigator.storage?.persist?.().then(granted => {
@@ -479,12 +484,19 @@ async function main() {
   // The Unix edition boots a desktop (src/desktop); shiro.computer keeps the
   // full-page terminal (src/ui-mode.ts). The desktop puts #terminal in its
   // first window before the terminal is created, so it measures its real size.
-  const mode = uiMode();
   const container = document.getElementById('terminal')!;
-  performance.mark('shiro:desktop:start');
-  const desktop: Desktop | null = mode === 'desktop'
-    ? bootDesktop({ fs, shell, kernel, makeShell, terminalEl: container })
-    : null;
+  let desktop: Desktop | null = null;
+  if (desktopModule) {
+    try {
+      const { bootDesktop } = await desktopModule;
+      performance.mark('shiro:desktop:start');
+      desktop = bootDesktop({ fs, shell, kernel, makeShell, terminalEl: container });
+    } catch (e) {
+      // A chunk that fails to load leaves the full-page terminal, which always works
+      console.error('[shiro] desktop failed to load; using the terminal UI', e);
+      document.body.classList.remove('sd-active');
+    }
+  }
   performance.mark('shiro:desktop:end');
   // /dom: the live page as files (docs/DESKTOP.md)
   installDomFs(fs, kernel, () => desktop?.wm ?? null);

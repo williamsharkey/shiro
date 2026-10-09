@@ -76,7 +76,7 @@ export class Harness {
     page.on('pageerror', (e) => this.log(`[pageerror] ${e.message}`));
     const t0 = Date.now();
     if (page.url().startsWith(this.origin)) await page.reload({ waitUntil: 'commit' });
-    else await page.goto(this.origin + '/', { waitUntil: 'commit' });
+    else await page.goto(this.origin + (process.env.BENCH_PATH || '/'), { waitUntil: 'commit' });
     await page.waitForFunction(() => window.__bench?.marks.firstPrompt, null, { timeout: 120000, polling: 50 });
     // Time to interactive: first prompt, then no long task for settleQuietMs
     let tti;

@@ -187,7 +187,7 @@ Production is `https://shiro.computer` on a DigitalOcean droplet. `deploy.sh` ha
 - The window manager API (`window.__shiro.desktop`, `src/desktop/wm.ts`) is a contract with unix/gui (X11/Wayland windows as `surface` content): keep it additive and log changes in docs/DESKTOP.md.
 - `#terminal` moves into the first Terminal window before `ShiroTerminal` is created, so `window.__shiro.terminal` is the same in both UIs (scripts and the bench rely on it). Closing that tab parks it in `#sd-parking`; the next Terminal window adopts it. Panes (`initPanes`) are classic-only.
 - Desktop shortcuts are Alt+Shift+… and Alt+\` (`isDesktopShortcut`), caught in the capture phase before xterm. Don't take plain Alt keys: readline uses them.
-- Only the WM, menu bar, dock and Terminal are in the entry chunk; apps under `src/desktop/apps/` are `import()`ed on launch. Fonts (`public/fonts`, OFL) are injected by the desktop only.
+- The desktop is a separate chunk that `main()` starts importing before IndexedDB opens (the terminal UI never loads it); apps under `src/desktop/apps/` are further chunks `import()`ed on launch. Keep `src/desktop` out of static imports from the entry; measure both UIs (`BENCH_PATH='/?ui=terminal'`). Fonts (`public/fonts`, OFL) are injected by the desktop only.
 - `/dom` (`src/dom-fs.ts`) is a FileSystem virtual provider (`fs.addVirtualProvider`, `mountPoint`) plus kernel devices for `/dom/events/<type>`; `cat` follows those live at a terminal.
 - Network sign-in: call `requireNetworkSignIn()` (`src/net-signin.ts`) before outbound network that needs a signed-in user; never for same-origin requests. The relay token fetch does; `SHIRO_TCP_REQUIRE_SIGNIN=1` makes server.mjs demand a GitHub token.
 

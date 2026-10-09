@@ -161,33 +161,48 @@ metrics swing ±25% between identical runs here, so a flag on them was re-run
 
 ### unix/desktop — the desktop shell (menu bar, dock, windows) on the boot path
 
-The Unix edition boots to the desktop (docs/DESKTOP.md). The bench loads `/` on
-localhost, so its boot numbers are now the desktop's. Only the window manager,
-menu bar, dock and Terminal are in the entry chunk; Files, Settings, Activity
-and About are separate chunks (`files-*.js`, `settings-*.js`, …). Quick suite,
-`--suites boot`, base db9f698 (the worktree of the branch point) vs. the
-desktop, runs alternated on the same machine; medians pooled over runs:
+The Unix edition boots to the desktop (docs/DESKTOP.md); shiro.computer keeps
+the full-page terminal. The bench loads `/` on localhost, which is the desktop;
+`BENCH_PATH='/?ui=terminal'` boots the terminal UI instead.
 
-| metric | base | desktop | change |
+The integration run of the first push (`integration-68dbbbc-quick.json`) showed
+cold first prompt 198 → 249 ms, 2 long tasks and +13% transfer, and the terminal
+UI carried the desktop's code and CSS. Since then:
+
+- **The desktop is its own chunk** (`import('./desktop/index')` at the top of
+  `main()`: 53 KB JS + 22 KB CSS, fetched while IndexedDB opens). The terminal
+  UI loads none of it; Files, Settings, Activity and About are further chunks
+  loaded on launch.
+- **Boot-path work removed:** the clock no longer builds `Intl.DateTimeFormat`s
+  (≈9 ms); `workArea()` uses the CSS sizes instead of reading layout (it forced the
+  first style+layout pass before the terminal existed); the main terminal gets
+  its theme and font at construction (`ShiroTerminal.optionOverrides`) instead
+  of a re-theme; the mono-font swap re-measure (≈9 ms of xterm `_measure`) runs
+  on idle; `term.focus()` (forced layout of the whole desktop) waits for the
+  first frame; the menu bar and dock join the page after the main terminal is
+  created. Marks `shiro:desktop:start`, `shiro:desktop:end`, `shiro:terminal:ready`.
+
+Quick suite, `--suites boot`, base db9f698 (before the desktop) vs. this branch
+in both UIs, two rounds alternated base/desktop/terminal on one machine; medians
+of the 6 samples per metric:
+
+| metric | base | desktop | terminal UI |
 |---|---:|---:|---:|
-| boot.cold.first_prompt | 198 ms | 190 ms | noise (base 181–226, desktop 176–227) |
-| boot.warm.first_prompt (first sample of each run dropped) | 94 ms | 109 ms | +15 ms; in-page `shiro:terminal:ready` mark: 81 vs 83–94 ms |
-| boot.cold.transfer | 1370 KiB | 1547 KiB | +177 KiB: Inter + JetBrains Mono woff2 (88 KiB, `font-display: swap`, not render-blocking) and the desktop code |
-| boot.cold.requests | 5 | 10 | +2 fonts, +3 `data:` SVGs (traffic-light glyphs) that CDP counts |
-| boot.mem.js_heap | 3.72 MiB | 3.83 MiB | +3% |
-| boot.mem.renderer_rss | 207.5 MiB | 231 MiB | +11%: composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts, each a few MiB |
-| boot.mem.dom_nodes | 258 | 353 | menu bar, dock, window frame |
+| boot.cold.first_prompt | 192 ms | 209 ms (+9%) | 196 ms |
+| boot.warm.first_prompt | 99 ms | 109 ms (+10%) | 97 ms |
+| boot.cold.long_tasks | 1 | 0 | 1 |
+| boot.cold.requests | 5 | 12 | 5 |
+| boot.cold.transfer | 1370 KiB | 1550 KiB | 1389 KiB |
+| boot.mem.js_heap | 3.7 MiB | 3.8 MiB | 3.7 MiB |
+| boot.mem.renderer_rss | 206 MiB | 228 MiB | 206 MiB |
+| boot.mem.dom_nodes | 258 | 355 | 258 |
 
-What it took to get first prompt back to par (a first version cost +30 ms):
-`Intl.DateTimeFormat` for the clock (≈9 ms, now formatted by hand); reading
-layout in `workArea()` before the terminal existed (forced the first style and
-layout pass, now computed from the CSS sizes); re-theming the main terminal
-after creation (`ShiroTerminal.optionOverrides` gives the theme and font at
-construction); the mono-font swap re-measure (≈9 ms of xterm `_measure`, now
-on idle); and `term.focus()` forcing layout of the whole desktop (now on the
-first animation frame). The menu bar and dock are appended right after the
-main terminal is created, so xterm's first measurement lays out only the window.
-Marks `shiro:desktop:start`, `shiro:desktop:end` and `shiro:terminal:ready` time the desktop's part.
+Desktop requests: the desktop chunk and its CSS, Inter and JetBrains Mono
+(woff2, latin, 88 KiB together, `font-display: swap`, not render-blocking), and
+three `data:` SVGs (traffic-light glyphs) that CDP counts. The +22 MiB RSS is
+composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts,
+a few MiB each. The terminal UI's +19 KiB is /dom, the sign-in hook and the
+other integration changes since db9f698, not desktop code.
 
 ### unix/shell-stdio — a shell run as a kernel process uses its fds
 
