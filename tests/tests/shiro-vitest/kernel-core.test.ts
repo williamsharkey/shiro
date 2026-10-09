@@ -427,6 +427,23 @@ describe('kernel processes', () => {
     kernel.kill(proc.pid, A.SIGKILL);
   });
 
+  it('a fork child starts though its parent exited first (daemon: fork, then _exit at once)', async () => {
+    const parent = kernel.spawn({ path: 'daemon', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
+    const other = kernel.spawn({ path: 'other', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
+    const child = kernel.vfork(parent);
+    await kernel.exit(parent, 0); // the parent's exit is served before its engine's fork message
+    expect(child.ppid).toBe(1);
+    let ran = false;
+    const run = async () => { ran = true; return 0; };
+    expect(kernel.startForkChild(other, child.pid, run)).toBe(false); // only the process that forked it
+    expect(kernel.startForkChild(parent, child.pid, run)).toBe(true);
+    expect(kernel.startForkChild(parent, child.pid, run)).toBe(false); // once
+    const r = await kernel.waitpid(child.pid, 0, kernel.init);
+    expect(ran).toBe(true);
+    expect(r.pid).toBe(child.pid);
+    kernel.kill(other.pid, A.SIGKILL);
+  });
+
   it('uname(2) reports the kernel hostname', async () => {
     const proc = kernel.spawn({ path: 'un', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
     const data = new Uint8Array(4096).fill(0xff);

@@ -61,6 +61,11 @@ const relayB = await mount({ ports: [echoPort, 80, 443] }, {
 // C: tight connect rate
 const relayC = await mount({ ports: [echoPort], allowCidrs: ['127.0.0.1/32'], connectsPerMinute: 2 });
 
+// D: requires a GitHub sign-in (SHIRO_TCP_REQUIRE_SIGNIN); the verifier accepts the token "good-token"
+const relayD = await mount({ ports: [echoPort], allowCidrs: ['127.0.0.1/32'], requireSignin: true }, {
+  verifySignin: async (t) => (t === 'good-token' ? 'octocat' : null),
+});
+
 // server.mjs as deployed, configured only through the environment
 const mainPort = await new Promise((r) => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
 const child = spawn(process.execPath, [serverPath], {
@@ -88,4 +93,4 @@ process.on('SIGINT', stop);
 process.stdin.on('end', stop); // parent went away
 process.stdin.resume();
 
-console.log(JSON.stringify({ echoPort, firehosePort, relayA, relayB, relayC, mainPort, origin: ORIGIN }));
+console.log(JSON.stringify({ echoPort, firehosePort, relayA, relayB, relayC, relayD, mainPort, origin: ORIGIN }));

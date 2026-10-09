@@ -591,7 +591,7 @@ describe('tmux', () => {
     expect(term.screen).toContain('[detached (from session main)]');
     // Scripted: the server kept running
     expect((await sh("tmux list-panes -t main -F '#{pane_index}'")).out).toBe('0\n1\n');
-    // uname's nodename is the kernel's hostname (Blink patch 0025), not emscripten's
+    // uname's nodename is the kernel's hostname (Blink patch 0026), not emscripten's
     expect((await sh("tmux display -p -t main '#{host}'")).out).toBe('shiro\n');
     await sh("tmux send-keys -t main.0 'echo scripted > /home/user/w/from-tmux.txt' Enter");
     for (let i = 0; i < 200 && !(await fs.exists('/home/user/w/from-tmux.txt')); i++) await new Promise((r) => setTimeout(r, 50));
@@ -776,7 +776,7 @@ describe('gnupg', () => {
     await install('gnupg');
     expect((await sh('gpg --version')).out).toMatch(/^gpg \(GnuPG\) 2\.5\.24\nlibgcrypt 1\.12\.4\n/);
     const batch = 'gpg -q --batch --pinentry-mode loopback --passphrase pw';
-    // no "insecure memory" warning: mlock succeeds (Blink patch 0024)
+    // no "insecure memory" warning: mlock succeeds (Blink patch 0025)
     expect((await sh(`${batch} --quick-gen-key 'Test User <t@shiro>' default default never 2>&1 | grep -c insecure`)).out).toBe('0\n');
     expect((await sh("gpg -k --with-colons t@shiro | cut -d: -f1,4,12 | grep -E '^(pub|sub)'")).out).toBe('pub:22:scESC\nsub:18:e\n');
     await fs.writeFile('/home/user/w/m.txt', 'hello gpg\n');

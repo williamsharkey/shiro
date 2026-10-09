@@ -340,13 +340,9 @@
    "failures": []
   },
   "func-parsing": {
-   "pass": 6,
+   "pass": 9,
    "total": 12,
    "failures": [
-    {
-     "i": 6,
-     "name": "Hard case, function with } token in it"
-    },
     {
      "i": 8,
      "name": "= in function name"
@@ -358,14 +354,6 @@
     {
      "i": 10,
      "name": "Function name with command sub"
-    },
-    {
-     "i": 11,
-     "name": "Function name with !"
-    },
-    {
-     "i": 13,
-     "name": "Break after ) is OK."
     }
    ]
   },
@@ -384,20 +372,12 @@
    ]
   },
   "builtin-printf": {
-   "pass": 49,
+   "pass": 51,
    "total": 55,
    "failures": [
     {
-     "i": 0,
-     "name": "printf with no args"
-    },
-    {
      "i": 38,
      "name": "printf %c unicode - prints the first BYTE of a string - it does not respect UTF-8"
-    },
-    {
-     "i": 39,
-     "name": "printf invalid format"
     },
     {
      "i": 51,
@@ -817,32 +797,12 @@
    ]
   },
   "errexit": {
-   "pass": 29,
+   "pass": 34,
    "total": 35,
    "failures": [
     {
-     "i": 9,
-     "name": "More && ||"
-    },
-    {
-     "i": 22,
-     "name": "set errexit while it's ignored in a subshell (moot with strict_errexit)"
-    },
-    {
-     "i": 24,
-     "name": "errexit double guard"
-    },
-    {
      "i": 26,
      "name": "pipeline process respects errexit"
-    },
-    {
-     "i": 27,
-     "name": "simple command / assign - redir failure DOES respect errexit"
-    },
-    {
-     "i": 29,
-     "name": "bash atoms [[ (( - redir failure checked"
     }
    ]
   },

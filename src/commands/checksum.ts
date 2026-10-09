@@ -144,7 +144,8 @@ function makeCommand(algo: Algo): Command {
           let lineText = raw;
           const esc = lineText.startsWith('\\');
           if (esc) lineText = lineText.slice(1);
-          const re1 = new RegExp(`^([0-9a-fA-F]{${algo.hexLen}}) [ *](.*)$`);
+          // (one space between sum and name is accepted too)
+          const re1 = new RegExp(`^([0-9a-fA-F]{${algo.hexLen}}) [ *]?(.*)$`);
           const re2 = new RegExp(`^${algo.tag} \\((.*)\\) = ([0-9a-fA-F]{${algo.hexLen}})$`);
           let want: string, file: string;
           const m1 = re1.exec(lineText), m2 = re2.exec(lineText);

@@ -1930,6 +1930,7 @@ export class Kernel {
     child.uid = parent.uid;
     child.gid = parent.gid;
     child.data.embryo = true;
+    child.data.forkParent = parent.pid; // startForkChild: the parent may have exited (and the child been reparented) by then
     this.procs.set(pid, child);
     for (const h of [...this.spawnHooks]) {
       try { h(child); } catch (e) { console.warn('[kernel] onSpawn hook failed', e); }
@@ -1950,6 +1951,18 @@ export class Kernel {
     if (!proc.data.embryo || proc.exiting) return;
     delete proc.data.embryo;
     void this.start(proc, run);
+  }
+
+  /**
+   * The engine of `parent` finished copying it for its fork() child `pid`:
+   * start the child. The parent may already have exited (daemon() forks and
+   * exits at once), so the child is found by who forked it, not its ppid.
+   */
+  startForkChild(parent: Process, pid: number, run: Runner): boolean {
+    const child = this.procs.get(pid);
+    if (!child || !child.data.embryo || child.data.forkParent !== parent.pid) return false;
+    this.startEmbryo(child, run);
+    return true;
   }
 
   /** SYS_shiro_execve (see abi.ts). */

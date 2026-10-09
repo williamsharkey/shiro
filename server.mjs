@@ -8,7 +8,7 @@ import { createServer } from 'node:http';
 import { readFile, writeFile, stat, readdir, unlink, mkdir, rename } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 import { WebSocketServer } from 'ws';
-import { randomBytes, createHmac, timingSafeEqual } from 'node:crypto';
+import { randomBytes, createHmac, createHash, timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import net from 'node:net';
 import dns from 'node:dns/promises';
@@ -791,6 +791,8 @@ export function tcpRelayConfigFromEnv(env = process.env) {
     allowCidrs: envList(env.SHIRO_TCP_ALLOW_CIDRS) || [],
     denyCidrs: envList(env.SHIRO_TCP_DENY_CIDRS) || [],
     secret: env.SHIRO_TCP_SECRET || '',
+    // Token requests need a GitHub sign-in (Authorization: Bearer <github token>); docs/DESKTOP.md
+    requireSignin: env.SHIRO_TCP_REQUIRE_SIGNIN === '1',
     trustProxy: env.SHIRO_TRUST_PROXY || 'loopback', // 'loopback' | 'always' | 'never'
     tokenTtlMs: envInt(env.SHIRO_TCP_TOKEN_TTL_MS, 10 * 60_000),
     maxConns: envInt(env.SHIRO_TCP_MAX_CONNS, 512),
@@ -835,7 +837,25 @@ const HOSTNAME_RE = /^(?=.{1,253}$)[a-zA-Z0-9_]([a-zA-Z0-9_-]{0,62})(\.[a-zA-Z0-
  * Create the relay. Returns { handleUpgrade(req, socket, head), handleToken(req, res), close(), stats() }.
  * `lookup(host)` → [{address, family}] can be injected (tests); defaults to dns.lookup(all).
  */
-export function createTcpRelay(config, { lookup, log = console.log } = {}) {
+/** GitHub login for a token, or null (cached 10 min per token hash, both ways). */
+function githubSigninVerifier(fetchImpl = globalThis.fetch) {
+  const cache = new Map();
+  return async (token) => {
+    const key = createHash('sha256').update(token).digest('base64url');
+    const hit = cache.get(key);
+    if (hit && hit.until > Date.now()) return hit.login;
+    let login = null;
+    try {
+      const r = await fetchImpl('https://api.github.com/user', { headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'user-agent': 'shiro-relay' } });
+      if (r.ok) login = (await r.json())?.login || null;
+    } catch { return null; } // GitHub unreachable: don't cache
+    if (cache.size > 10000) cache.clear();
+    cache.set(key, { login, until: Date.now() + 10 * 60_000 });
+    return login;
+  };
+}
+
+export function createTcpRelay(config, { lookup, log = console.log, verifySignin } = {}) {
   const cfg = { ...tcpRelayConfigFromEnv({}), ...config };
   const secret = cfg.secret || randomBytes(32).toString('hex');
   const allow = cidrBlockList(cfg.allowCidrs);
@@ -883,6 +903,7 @@ export function createTcpRelay(config, { lookup, log = console.log } = {}) {
     return peer;
   };
 
+  const verify = verifySignin || githubSigninVerifier();
   const sign = (exp, ip) => createHmac('sha256', secret).update(`shiro-tcp.${exp}.${ip}`).digest('base64url');
   const issueToken = (ip) => {
     const exp = Date.now() + cfg.tokenTtlMs;
@@ -900,11 +921,23 @@ export function createTcpRelay(config, { lookup, log = console.log } = {}) {
   function handleToken(req, res) {
     const origin = req.headers['origin'];
     const ok = originAllowed(origin, cfg.allowedOrigins);
-    const headers = ok ? { 'access-control-allow-origin': origin, 'vary': 'Origin', 'access-control-allow-methods': 'POST, OPTIONS' } : {};
+    const headers = ok ? { 'access-control-allow-origin': origin, 'vary': 'Origin', 'access-control-allow-methods': 'POST, OPTIONS', 'access-control-allow-headers': 'authorization' } : {};
     if (req.method === 'OPTIONS') { res.writeHead(ok ? 204 : 403, headers); return res.end(); }
     if (req.method !== 'POST' || !ok) {
       res.writeHead(403, { 'content-type': 'text/plain', ...headers });
       return res.end('Forbidden');
+    }
+    if (cfg.requireSignin) {
+      const m = /^Bearer\s+(\S+)$/i.exec(String(req.headers['authorization'] || ''));
+      (m ? verify(m[1]) : Promise.resolve(null)).then((login) => {
+        if (!login) {
+          res.writeHead(401, { 'content-type': 'application/json', 'cache-control': 'no-store', ...headers });
+          return res.end(JSON.stringify({ error: 'signin_required', provider: 'github' }));
+        }
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store', ...headers });
+        res.end(JSON.stringify(issueToken(clientIp(req))));
+      });
+      return;
     }
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store', ...headers });
     res.end(JSON.stringify(issueToken(clientIp(req))));

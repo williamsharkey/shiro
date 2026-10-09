@@ -363,6 +363,12 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
 26. Under Shiro `uname` takes the kernel's host and domain names (Blink's
    kernel version and machine otherwise; emscripten's nodename was
    "emscripten", which tmux showed).
+27. `mremap` grows (in place, or with `MREMAP_MAYMOVE` by mapping, copying
+   and unmapping), shrinks and moves to a fixed place (it always failed
+   with ENOMEM; apt's DynamicMMap needs it). Under Shiro `getgroups`
+   reports the process's gid (it reached emscripten: EINVAL for size 0,
+   which broke coreutils `id`). Tests: `fixtures/x86/mremap.c`,
+   `getgroups.c`.
 
 Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.

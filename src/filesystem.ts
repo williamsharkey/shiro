@@ -96,7 +96,7 @@ export interface StatResult {
   isSymbolicLink(): boolean;
 }
 
-function makeStat(node: FSNode): StatResult {
+export function makeStat(node: FSNode): StatResult {
   const mtime = new Date(node.mtime);
   const ctime = new Date(node.ctime);
   const atime = node.atime === undefined ? mtime : new Date(node.atime);
@@ -168,6 +168,8 @@ export interface VirtualFSProvider {
   exists(path: string): boolean;
   /** Write (returns true if handled, even if silently discarded) */
   writeFile(path: string, data: Uint8Array | string): boolean;
+  /** Top-level directory name this provider adds to `ls /` (e.g. 'dom') */
+  mountPoint?: string;
 }
 
 /** /dev virtual provider */
@@ -462,6 +464,11 @@ export class FileSystem {
   private _flushError: unknown = null;
   private _changeListeners: Set<FSChangeListener> = new Set();
   private virtualProviders: VirtualFSProvider[] = [new DevProvider(), new ProcProvider(), new VarLogProvider()];
+
+  /** Mount a virtual provider (e.g. /dom, src/dom-fs.ts); consulted after the built-in ones. */
+  addVirtualProvider(vp: VirtualFSProvider): void {
+    if (!this.virtualProviders.includes(vp)) this.virtualProviders.push(vp);
+  }
 
   /** Subscribe to filesystem change events. Returns unsubscribe function. */
   onChange(listener: FSChangeListener): () => void {
@@ -1267,6 +1274,7 @@ export class FileSystem {
         for (const name of ['dev', 'proc']) {
           if (vp.handles('/' + name)) vdirs.add(name);
         }
+        if (vp.mountPoint) vdirs.add(vp.mountPoint);
       }
       for (const vd of vdirs) {
         if (!entries.includes(vd)) entries.push(vd);
