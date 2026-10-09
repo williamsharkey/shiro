@@ -8,7 +8,7 @@ conformance work started (fc0af54).
 |---|---|---|
 | [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1322/1567 (84.4%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1275/1567 (81.4%)** |
-| [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **608/635 (95.7%)** |
+| [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **612/635 (96.4%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **0/320 (0.0%)** |
 | [Syscalls: wasi-testsuite (wasm32-wasip1)](#syscalls-wasi-testsuite-wasm32-wasip1) | — | **71/72 (98.6%)** |
 
@@ -272,7 +272,7 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Sh
 | cat (old-style) | 2/2 | 2/2 | 0 |
 | cmp (old-style) | 1/1 | 1/1 | 0 |
 | comm | 0/8 | 8/8 | 0 |
-| cp | 0/6 | 3/6 | 3 |
+| cp | 0/6 | 6/6 | 0 |
 | cp (old-style) | 17/17 | 16/17 | 1 |
 | cut | 0/22 | 22/22 | 0 |
 | cut (old-style) | 5/5 | 5/5 | 0 |
@@ -289,7 +289,7 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Sh
 | find | 0/11 | 11/11 | 0 |
 | find (old-style) | 1/1 | 1/1 | 0 |
 | fold | 0/3 | 3/3 | 0 |
-| grep | 0/48 | 47/48 | 1 |
+| grep | 0/48 | 48/48 | 0 |
 | gunzip (old-style) | 1/1 | 1/1 | 0 |
 | gzip (old-style) | 3/3 | 3/3 | 0 |
 | head | 0/3 | 3/3 | 0 |
@@ -344,12 +344,10 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Sh
 
 <details><summary>Failing cases</summary>
 
-- **cp**: cp -RL; cp -RH; cp -RHL
 - **cp (old-style)**: cp-preserves-hard-links
 - **du (old-style)**: du-s-works; du-works
 - **echo (old-style)**: echo-prints-slash_41
 - **false (old-style)**: false-is-silent
-- **grep**: grep -r on symlink to dir
 - **mv (old-style)**: mv-preserves-hard-links
 - **readlink**: readlink -f on an invalid link
 - **rmdir (old-style)**: rmdir-removes-parent-directories
@@ -525,6 +523,6 @@ WebAssembly/wasi-testsuite prebuilt wasip1 modules (C, Rust, AssemblyScript) run
 
 <details><summary>Failing cases</summary>
 
-- **rust**: path_link — exit 134, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/path_link.rs:38:5: assertion `left == right` failed: ino should be equal left: 177 right: 178 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace wasm trap: unreachable
+- **rust**: path_link — exit 134, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/path_link.rs:89:10: creating a link in the same directory: Errno { code: 63, name: "PERM", message: "Operation not permitted." } note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace wasm trap: unreachable
 
 </details>

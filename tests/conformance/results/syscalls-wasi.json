@@ -19,7 +19,7 @@
    "failures": [
     {
      "name": "path_link",
-     "reason": "exit 134, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/path_link.rs:38:5: assertion `left == right` failed: ino should be equal left: 177 right: 178 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace wasm trap: unreachable"
+     "reason": "exit 134, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/path_link.rs:89:10: creating a link in the same directory: Errno { code: 63, name: \"PERM\", message: \"Operation not permitted.\" } note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace wasm trap: unreachable"
     }
    ]
   }
