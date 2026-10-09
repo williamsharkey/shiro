@@ -302,10 +302,15 @@ function handleOAuthCallback(req, res) {
 // --- Branding of the app shell ---
 // The Unix edition (desktop UI: every host but shiro.computer, src/ui-mode.ts)
 // is "tabcomputer": src/brand.json names it. Link previews don't run JS, so the
-// shared index.html gets its title and meta tags here. Without the file (the
-// shiro.computer deploy uploads only server.mjs) nothing changes.
+// shared index.html gets its title and meta tags here. The file is read from
+// src/ next to this script (a checkout) or from STATIC_DIR (the build copies it
+// into dist/; tabcomputer.com's releases carry only dist/ and server.mjs).
+// Without it nothing changes.
 const BRAND = (() => {
-  try { return JSON.parse(readFileSync(new URL('./src/brand.json', import.meta.url), 'utf8')); } catch { return null; }
+  for (const at of [new URL('./src/brand.json', import.meta.url), join(STATIC_DIR, 'brand.json')]) {
+    try { return JSON.parse(readFileSync(at, 'utf8')); } catch {}
+  }
+  return null;
 })();
 
 /** index.html with the brand's title and meta tags, for hosts that get the desktop. */
