@@ -452,8 +452,20 @@ tabcomputer changes these programs needed (tests in `x86-engine.test.ts`,
 `src/commands/git.ts`; the plumbing in `src/commands/git-plumbing.ts`). It
 answers what git UIs (tig, lazygit) and agents call; tests in
 `git.test.ts` (plumbing) and `compat-tools.test.ts` (tig, lazygit).
-`pkg install git` replaces it with the real git (in Blink), for what is
-missing here.
+`pkg install git` replaces it with the real git (in Blink).
+
+What the built-in doesn't have goes to the real git: a subcommand it lacks
+(`blame`, `bisect`, `submodule`, `describe`, `restore`, `clean`,
+`worktree add`, ...), or an option it doesn't know (each subcommand lists
+its options in `src/commands/git-route.ts`), runs `/usr/bin/git` with the
+same command line, installing the package on first use (a note on stderr;
+`pkg remove git` goes back). `rebase`, `cherry-pick` and `revert` go to it
+too, as the built-in's versions replay whole files. Without the x86 engine
+or offline, the built-in says what it didn't understand as git does
+(`error: unknown option`, exit 129; `git: 'blame' is not a git command`,
+exit 1) instead of ignoring it. Combined short options (`-qb NAME`,
+`-qam MSG`) are split first. tig and lazygit only use what the built-in
+has (their tests check that nothing went to the full git).
 
 | Command | Supported |
 | --- | --- |
@@ -465,8 +477,8 @@ missing here.
 | refs | `for-each-ref --format` (`refname[:short\|lstrip=N]`, `objectname[:short]`, `objecttype`, `HEAD`, `subject`, `body`, author/committer name/email/date, `upstream[:short\|track\|trackshort\|remotename]`), `--sort`, `--count`, `--points-at`; `show-ref`; `symbolic-ref`; `branch -v -vv --format --show-current` |
 | objects, index | `cat-file -t -s -p -e`, `REV:path`, `--batch[-check]`; `ls-files -z -m -o -d -s --exclude-standard`; `update-index --add --remove [--stdin -z]`; `merge-base [--is-ancestor\|--all]`; `rev-list [--count --left-right --parents]`; `worktree list [--porcelain]` |
 | `config` | `--get --get-all --get-regexp --list -z/--null --name-only --type=bool\|int --default`, `--global/--local/--system`, `/etc/gitconfig` and `-c` overrides |
-| porcelain fixes | `commit -am`/`-qam` (`-a` stages tracked changes), `-q`, `-F`; `checkout -q -b NAME [START]`, `-B`, `checkout REV -- paths` (HEAD stays on the branch), a remote branch, a commit; `switch`; `add -u`/`-A`/`--`/deletions; `stash -q`, `stash push -m`, `stash list --format/-z` (`%gd %gs %ct`), `stash@{N}` from the newest; `fetch --all` with no remotes |
-| not here | `apply` (hunk staging), `rebase -i`, `blame`, `notes`, signing, submodules: `pkg install git` |
+| porcelain fixes | `merge --no-ff --ff-only -m -q` (the work tree follows the merge); `log --graph` (topo order); `ls-remote URL` outside a repository; `fetch -q`; `push -f -u`; `clone --branch --depth=N`; `commit -am`/`-qam` (`-a` stages tracked changes), `-q`, `-F`; `checkout -q -b NAME [START]`, `-qb`, `-B`, `checkout REV -- paths` (HEAD stays on the branch), a remote branch, a commit; `switch`; `add -u`/`-A`/`--`/deletions; `stash -q`, `stash push -m`, `stash list --format/-z` (`%gd %gs %ct`), `stash@{N}` from the newest; `fetch --all` with no remotes |
+| the full git's | `apply` (hunk staging), `rebase`, `cherry-pick`, `revert`, `blame`, `bisect`, `describe`, `restore`, `clean`, `submodule`, `worktree add`, `notes`, signing, `log --since`, ...: run by `/usr/bin/git`, installed on first use |
 
 ### Popular CLI tools from Debian (apt)
 

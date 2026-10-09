@@ -666,6 +666,11 @@ export class Shell {
   constructor(fs: FileSystem, commands: CommandRegistry) {
     this.fs = fs;
     this.commands = commands;
+    // Commands that read or write a named pipe by name (cat fifo, tee fifo) go through the kernel's pipe
+    fs.fifoIO ??= {
+      read: async (path) => new TextEncoder().encode(await fifo.readFifo(this, path)),
+      write: (path, data) => fifo.writeFifo(this, path, typeof data === 'string' ? data : new TextDecoder().decode(data)),
+    };
     // Which builtins installed packages replace (read once, kept current by pkg)
     loadPackageShadows(fs).catch(() => {});
     this.env = {
@@ -2322,6 +2327,20 @@ export class Shell {
               if (eqIdx >= 0) {
                 this.namerefs.set(arg.slice(0, eqIdx), arg.slice(eqIdx + 1));
               }
+            }
+            continue;
+          }
+          // declare -f [NAME...]: function definitions; -F: just the names
+          const fnFlag = effectiveCmdName === 'local' ? undefined : cmdArgs.find(a => /^-[a-zA-Z]*[fF]/.test(a));
+          if (fnFlag) {
+            const names = cmdArgs.filter(a => !a.startsWith('-'));
+            exitCode = 0;
+            for (const name of names.length ? names : Object.keys(this.functions).sort()) {
+              const fn = this.functions[name];
+              if (!fn) { exitCode = 1; continue; }
+              if (fnFlag.includes('F')) { writeStdout(names.length ? `${name}\r\n` : `declare -f ${name}\r\n`); continue; }
+              const body = fn.body.split('\n').filter((l) => l.trim()).map((l) => '    ' + l.trim().replace(/;$/, '')).join('\r\n');
+              writeStdout(`${name} () \r\n{ \r\n${body}\r\n}\r\n`);
             }
             continue;
           }
