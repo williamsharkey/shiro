@@ -52,7 +52,7 @@ it as open source or giving schools a clear free licence.
 | Val Town | public by default | cloud (Deno) | HTTP handlers | SQLite | no | no | no | not a general Linux |
 | E2B / Daytona / Modal / Vercel / Cloudflare sandboxes | credits; E2B Pro $150/mo floor | cloud microVMs | yes | yes | yes | no | E2B infra Apache-2.0; Daytona archived | per-second billing, cold starts, all cloud |
 | WebVM (CheerpX) | individuals | browser (x86 JIT) | yes | possible | 32-bit x86 Debian | after load | engine proprietary; orgs incl. academia need a licence ([cheerpx.io](https://cheerpx.io/docs/licensing), re-checked) | "sluggish", networking only via Tailscale |
-| **tabcomputer** | free, no account | browser | **yes: Node (fast shim) and Python (Debian), verified** | apt packages (Redis/Postgres: see below) | **yes: x86-64 Debian 13, gcc, rust, go** | **yes: files stay in the browser** | (to decide) | emulation is slow for heavy CPU; no inbound ports; outbound needs the relay |
+| **tabcomputer** | free, no account | browser | **yes: Node (fast shim) and Python (Debian), verified** | Redis from apt works (with `--maxclients 1000`); Postgres blocked on signalfd (§6) | **yes: x86-64 Debian 13, gcc, rust, go** | **yes: files stay in the browser** | (to decide) | emulation is slow for heavy CPU; no inbound ports; outbound needs the relay |
 
 ## 3. Pain points, with what solves them today
 
@@ -88,8 +88,8 @@ it as open source or giving schools a clear free licence.
 2. **Any language's backend**, not only Node: Python (Debian), PHP
    (`pkg install php` / `apt install php-cli`), Ruby, Go (wasip1) and
    Rust (cargo). All are in COMPAT.md.
-3. **Real databases from apt.** Status is in §6. Redis needs the argv[0]
-   fix that is now on unix/integration.
+3. **Real databases from apt.** Redis works today with one flag;
+   PostgreSQL waits on signalfd (§6).
 4. **Native addons and real binaries.** These are what fail on
    WebContainers. They work here, slowly.
 5. **Outbound TCP without a VPN signup**, through the relay.
@@ -169,8 +169,10 @@ overridden, so they go to the real `localhost` of the user's machine.
 
 | Server | Result (verified) |
 |---|---|
-| Redis 8 (`apt install redis-server`) | `redis-server` ran as `redis-check-rdb` (argv[0] bug, now fixed on unix/integration). Started with `exec -a redis-server`, it aborted on its IPv6 bind ("Address already in use" for `::*:6379` after binding `*:6379`): kernel bug, reported. With `--bind 127.0.0.1`: see below |
-| PostgreSQL 17 (`apt install postgresql`) | installs in 19 min (under contention). The postinst created no `postgres` user. `initdb` and the server as the normal user: see below |
+| **Redis 8.0.2** (`sudo apt install redis-server`, 131 s) | ✅ **with `--maxclients 1000`**: `redis-server --bind 127.0.0.1 --maxclients 1000 &`, then `redis-cli ping` PONG (1.2 s), SET/GET/INCR correct. Without it Redis aborts ("Guru Meditation: aeApiPoll: epoll_wait, Invalid argument"): Blink rejects `epoll_wait` maxevents > 4096 (patch 0011), and Redis asks for maxclients+128. `redis-benchmark` crashes the same way. Before the argv[0] fix, `redis-server` ran as `redis-check-rdb`; the default `bind * -::*` also fails (IPv6 wildcard after IPv4 is EADDRINUSE), hence `--bind 127.0.0.1` |
+| **PostgreSQL 17** (`sudo apt install postgresql`, 12 min) | ❌ **blocked**. `initdb` (run as the normal user) fails in bootstrap with "FATAL: signalfd() failed", as does `postgres`. The package's own cluster creation also fails earlier: "su: cannot open session: Permission denied", "Could not change user id". Until signalfd exists, use the builtin `psql` (PGlite, `src/commands/postgres.ts`) for Postgres lessons |
+| SQLite | ✅ `pkg install sqlite` (COMPAT.md), and Python's `sqlite3` module |
 
-Pending rows are filled from `batch-db2` when it finishes; see the end of this
-file.
+All three are reported to the coordinator. With signalfd, an epoll maxevents
+clamp and working `su`, "a real Postgres and Redis next to your app, in a
+tab, offline" becomes a headline no other in-browser sandbox can claim.

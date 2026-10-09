@@ -52,7 +52,7 @@ summarised in the sections below.
 | 6 | **Legacy document rescue** (WordPerfect, MS Works, ClarisWorks/MacWrite, CorelDraw, Visio, Keynote/Pages/Numbers) | 2 | 5 | 4 | 40 | c | `wpd2text` and `wpd2html` convert a WordPerfect 5.1 file in 0.7 s; libmwaw, libcdr, libvisio and libetonyek tools install (`mwaw2html`, `cdr2xhtml`, `vsd2xhtml`, `key2text`, `numbers2csv`, `pages2html`) | libmwaw's in-browser converter last updated ~2018; online converters upload, with "so-so" results ([thread](https://www.secretprojects.co.uk/threads/converting-coreldraw-cdr-and-old-adobe-illustrator-ai-files-to-open-formats.51130/)) |
 | 7 | **Full TeX Live, offline** (biber, latexmk, any package; no 10 s limit) | 4 | 3 | 3 | 36 | c | pending: see "Verified in tabcomputer" | Overleaf free compile limit cut to 10 s ([Overleaf, 2025-06-16](https://www.overleaf.com/blog/changes-to-free-compile-timeout)); Git sync is paid; latex.to (CheerpX + Alpine, full TeX Live, [HN 2026-08-03](https://news.ycombinator.com/item?id=49158317)) proves the approach |
 | 8 | **Coding agents in a local sandbox** (Claude Code, Codex, Gemini, Grok, aider in the tab) | 4 | 3 | 3 | 36 | b | all reach their APIs ([COMPAT.md](../COMPAT.md#agent-clis-unixagent-clis)); the inner edit-test-commit loop is fast ([AGENT-EXPERIMENTS.md](AGENT-EXPERIMENTS.md)) | E2B Pro has a $150/mo floor; agent sandboxes are all cloud; BrowserCode runs Claude Code and Gemini in-browser but "doesn't yet support native binaries" |
-| 9 | **Real databases for teaching** (`apt install postgresql redis-server`) | 3 | 4 | 3 | 36 | b | pending (Redis needs the argv[0] fix, now committed; Postgres's postinst made no `postgres` user) | WebContainers has no raw TCP, so `pg`/Mongo drivers time out; nothing in-browser runs Redis or MySQL; PGlite is Postgres-only |
+| 9 | **Real databases for teaching** (`apt install postgresql redis-server`) | 3 | 4 | 2 | 24 | b | Redis 8: works with `--maxclients 1000` (PONG in 1.2 s; SET/GET/INCR); crashes without it (Blink epoll cap). PostgreSQL 17: **blocked** ("signalfd() failed") | WebContainers has no raw TCP, so `pg`/Mongo drivers time out; nothing in-browser runs Redis or MySQL; PGlite is Postgres-only |
 | 10 | **Ebook conversion** (calibre `ebook-convert`: epub↔azw3/mobi/docx) | 3 | 5 | 2 | 30 | c | pending | no wasm calibre exists; online converters upload; Send-to-Kindle dropped MOBI (Dec 2023) |
 | 11 | **Data wrangling pipelines** (sqlite, jq, csvkit, visidata, miller, awk) | 3 | 2 | 5 | 30 | a | `pkg` sqlite and jq; csvkit and visidata from apt | DuckDB-Wasm, play.jqlang.org and Datasette Lite already serve single tools locally |
 | 12 | **Crypto chores** (gpg, openssl, ssh-keygen, age) | 2 | 3 | 5 | 30 | a | `pkg` gnupg, openssl and openssh (static builds) | "online PGP decrypt" sites ask for private keys |
@@ -106,8 +106,10 @@ summarised in the sections below.
    TeX Live with biber, and chains of tools. Lead with "nothing is
    uploaded" and a demo like "drop a 1995 .wpd, get .html/.odt".
 5. **Fix the platform bugs these workloads hit** (details in "Bugs found"
-   below). The argv[0] bug alone broke Redis, graphviz `dot`, ImageMagick
-   `convert` and busybox; the fix is committed on unix/research.
+   below). The worst for users is intermittent dpkg failures that leave apt
+   broken for the rest of the session. The argv[0] bug (now fixed) broke
+   Redis, graphviz `dot`, ImageMagick `convert` and busybox. signalfd
+   blocks PostgreSQL, and the epoll cap crashes Redis.
 
 ## Verified in tabcomputer
 
@@ -145,20 +147,23 @@ contention; "Run" is the command shown.
 
 ### Bugs found by these workloads
 
-Reported to the coordinator; fixes marked "fixed" are committed on unix/research.
+All reported to the coordinator, who routed them to the owning workers. "Fixed" means fixed on unix/integration.
 
 | Bug | Effect | Status |
 |---|---|---|
-| A program run through a symlink got the target's path as argv[0] (`src/shell-kernel.ts`) | redis-server ran as redis-check-rdb; `dot` asked for engine "libgvc6-config-update"; `convert` printed magick's usage; busybox links broke | **fixed**, with a test |
-| `page :PORT` picked a hidden, empty iframe that `serve open` leaves behind | "element not found" in 3 of 4 runs | **fixed** |
-| A deploy deletes the previous build's lazy chunks (`deploy/tabcomputer/release.sh`) | apt's preconfigure import 404'd mid-session; dpkg failed and apt stayed broken | reported: keep old `assets/` for a few releases |
-| IPv6 wildcard bind after an IPv4 one on the same port is EADDRINUSE | Redis's default `bind * -::*` aborts; `--bind 127.0.0.1` works around it | reported |
-| `fs.watch` in tabcomputer's node delivers no events | nodemon, vite HMR and `--watch` modes are dead | reported |
-| builtin `ffmpeg` shim builds a cross-origin Worker from esm.sh | "Failed to construct 'Worker'" on tabcomputer.com | reported |
-| PostgreSQL's postinst creates no `postgres` user | `sudo -u postgres` fails; `initdb` as the user is the workaround | reported, cause not found |
-| dpkg "returned an error code (2)", intermittently (gnat, ocaml-nox) under heavy load | dpkg left "interrupted"; a retry worked | reported, not reproduced alone |
-| `git maintenance run --auto --detach` | 3 background processes at 11–18 s CPU each | suggest `maintenance.auto=false` |
-| Storage quota | in a private window (Playwright's default context) the quota is ~890 MB and apt hit ENOSPC after 5 packages; a normal profile had 162 GB | suggest: auto `apt-get clean` (downloaded .debs double the space) and show storage in Settings |
+| A program run through a symlink got the target's path as argv[0] | redis-server ran as redis-check-rdb; `dot` asked for engine "libgvc6-config-update"; `convert` printed magick's usage; busybox links broke | **fixed** (958ecd5, conformance; live on tabcomputer.com: redis-server now starts as itself) |
+| `page :PORT` picked a hidden, empty iframe that `serve open` leaves behind | "element not found" in 3 of 4 runs | **fixed** (research; cherry-picked) |
+| A deploy deleted the previous build's lazy chunks | apt's preconfigure import 404'd mid-session; dpkg failed and apt stayed broken | **fixed** (release.sh keeps a week of old assets) |
+| Blink's `epoll_wait` returns EINVAL for maxevents > 4096 (patch 0011, `ShiroEpollWait`) | Redis 8 crashes at start ("aeApiPoll: epoll_wait, Invalid argument"); so does `redis-benchmark` | reported; workaround `redis-server --maxclients 1000` (then PONG, SET/GET/INCR work) |
+| No `signalfd(2)` | PostgreSQL 17: "FATAL: signalfd() failed" in initdb and postgres | reported |
+| `su` can't open a PAM session ("su: cannot open session: Permission denied") | postgresql-common can't create the default cluster ("Could not change user id") | reported |
+| `clock_gettime(CLOCK_THREAD_CPUTIME_ID)` (or similar) unsupported | GHC 9.6: "getCurrentThreadCPUTime: no supported: Inappropriate ioctl for device"; nothing compiles | reported |
+| IPv6 wildcard bind after an IPv4 one on the same port is EADDRINUSE | Redis's default `bind * -::*` aborts; `--bind 127.0.0.1` works around it | reported (conformance) |
+| `fs.watch` in tabcomputer's node delivers no events; no `assert.match` | nodemon, vite HMR and `--watch` modes are dead | reported (compat-dev) |
+| builtin `ffmpeg` shim | was a cross-origin Worker (fixed by compat-tools); now a second run on the same input fails: "ArrayBuffer at index 0 is already detached" | first part fixed; second reported |
+| dpkg "returned an error code (1/2)" or "pre-installation script … exit status 1", intermittently (gnat, ocaml-nox, postgresql-17, ghostscript, gdal-bin) | dpkg left interrupted; every later install in that page fails with "Unmet dependencies"; a retry in a fresh page worked each time | reported (debian); the biggest reliability problem for apt users |
+| `git maintenance run --auto --detach`; builtin `wget -qO-` | 3 background processes at 11–18 s CPU each; wget saved to a file | reported (compat-tools) |
+| Storage quota | in a private window (Playwright's default context) the quota is ~890 MB, and apt hit ENOSPC after 5 packages; a normal profile had 162 GB | suggested: don't keep downloaded .debs; show storage in Settings |
 
 ## The evidence, by opportunity
 
