@@ -673,8 +673,11 @@ async function handleGitProxy(req, res, targetUrl) {
       res.end();
     }
   } catch (err) {
+    // fetch's own message is just "fetch failed": the reason is in err.cause
+    const cause = err.cause?.code || err.cause?.message;
+    console.error(`[git-proxy] ${req.method} ${targetUrl}: ${err.message}${cause ? ` (${cause})` : ''}`);
     res.writeHead(502, { 'content-type': 'application/json', ...cors });
-    res.end(JSON.stringify({ error: err.message }));
+    res.end(JSON.stringify({ error: err.message, ...(cause ? { cause: String(cause) } : {}) }));
   }
 }
 
