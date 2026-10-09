@@ -9,7 +9,7 @@
    "failures": []
   },
   "builtin": {
-   "pass": 56,
+   "pass": 57,
    "total": 59,
    "failures": [
     {
@@ -17,56 +17,27 @@
      "reason": "stdout differs"
     },
     {
-     "name": "builtin.hash.nonposix",
-     "reason": "status 1, want 0"
-    },
-    {
      "name": "builtin.readonly.assign.interactive",
-     "reason": "status 1, want 0"
+     "reason": "stdout differs"
     }
    ]
   },
   "parse": {
-   "pass": 2,
+   "pass": 3,
    "total": 3,
-   "failures": [
-    {
-     "name": "parse.eval.error",
-     "reason": "status 1, want 0"
-    }
-   ]
+   "failures": []
   },
   "semantics": {
-   "pass": 84,
+   "pass": 89,
    "total": 91,
    "failures": [
-    {
-     "name": "semantics.background.pipe.pid",
-     "reason": "status 1, want 0"
-    },
     {
      "name": "semantics.dot.glob",
      "reason": "stdout differs"
     },
     {
-     "name": "semantics.escaping.backslash.modernish",
-     "reason": "status 1, want 0"
-    },
-    {
      "name": "semantics.evalorder.fun",
      "reason": "status 1, want 0"
-    },
-    {
-     "name": "semantics.pattern.modernish",
-     "reason": "status 1, want 0"
-    },
-    {
-     "name": "semantics.redir.close",
-     "reason": "status 0, want 1"
-    },
-    {
-     "name": "semantics.special.assign.visible.nonposix",
-     "reason": "stdout differs"
     }
    ]
   },
