@@ -8,7 +8,7 @@ import { createTestShell } from './helpers';
  * host directory with the agent CLI, its ELF interpreter and libraries) into
  * the test FS, run one command line in Blink as a kernel process, and report
  * wall time, the node process's peak RSS, the kernel syscalls that failed
- * (by number and errno) and the output. docs/COMPAT.md "Agent CLIs".
+ * (by number and errno), the time spent in each syscall number, and the output. docs/COMPAT.md "Agent CLIs".
  * AGENT_PROBE_ROOT may list several directories (comma-separated), loaded
  * in order over each other.
  *
@@ -97,13 +97,19 @@ srv.listen(0, '127.0.0.1', () => console.log(JSON.stringify({ port: srv.address(
   }
 
   // Count failing kernel syscalls by number and errno
+  // and the wall time spent in each syscall number (blocking waits included)
   const fails = new Map<string, number>();
   const counts = new Map<number, number>();
+  const spent = new Map<number, number>();
   const origSys = kernel.syscall.bind(kernel);
   (kernel as any).syscall = (proc: any, nr: number, args: any, data: any) => {
     counts.set(nr, (counts.get(nr) || 0) + 1);
+    const t0 = performance.now();
     const r = origSys(proc, nr, args, data);
-    r.then((v: number) => { if (v < 0 && v > -4096) { const k = `${nr}:${-v}`; fails.set(k, (fails.get(k) || 0) + 1); } }, () => {});
+    r.then((v: number) => {
+      spent.set(nr, (spent.get(nr) || 0) + performance.now() - t0);
+      if (v < 0 && v > -4096) { const k = `${nr}:${-v}`; fails.set(k, (fails.get(k) || 0) + 1); }
+    }, () => {});
     return r;
   };
 
@@ -137,6 +143,7 @@ srv.listen(0, '127.0.0.1', () => console.log(JSON.stringify({ port: srv.address(
     maxRssMB: Math.round(process.resourceUsage().maxRSS / 1024),
     failedSyscalls: Object.fromEntries([...fails].sort((a, b) => b[1] - a[1])),
     syscalls: Object.fromEntries([...counts].sort((a, b) => b[1] - a[1]).slice(0, 25)),
+    syscallMs: Object.fromEntries([...spent].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([k, v]) => [k, Math.round(v)])),
   }, null, 1));
   console.log('--- output ---\n' + text.slice(-8000));
   closeRelay();

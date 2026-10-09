@@ -184,3 +184,85 @@ describe('claude --native', () => {
     expect(r.output).toContain('status=7');
   }, 60_000);
 });
+
+describe('claude install --native', () => {
+  // A .deb: ar archive with an uncompressed data.tar holding `files`
+  function tarOf(files: Record<string, Uint8Array>): Uint8Array {
+    const blocks: Uint8Array[] = [];
+    for (const [name, data] of Object.entries(files)) {
+      const h = new Uint8Array(512);
+      const put = (s: string, off: number) => h.set(new TextEncoder().encode(s), off);
+      put(name, 0); put('0000755\0', 100); put('0000000\0', 108); put('0000000\0', 116);
+      put(data.length.toString(8).padStart(11, '0') + '\0', 124); put('00000000000\0', 136);
+      put('        ', 148); put('0', 156); put('ustar\0', 257); put('00', 263);
+      put(h.reduce((a, b) => a + b, 0).toString(8).padStart(6, '0') + '\0 ', 148);
+      blocks.push(h, data, new Uint8Array((512 - (data.length % 512)) % 512));
+    }
+    blocks.push(new Uint8Array(1024));
+    const out = new Uint8Array(blocks.reduce((n, b) => n + b.length, 0));
+    let o = 0; for (const b of blocks) { out.set(b, o); o += b.length; }
+    return out;
+  }
+  function debOf(tar: Uint8Array): Uint8Array {
+    const enc = new TextEncoder();
+    const member = (name: string, data: Uint8Array) => {
+      const h = enc.encode(`${name.padEnd(16)}${'0'.padEnd(12)}${'0'.padEnd(6)}${'0'.padEnd(6)}${'100644'.padEnd(8)}${String(data.length).padEnd(10)}\`\n`);
+      return [h, data, data.length & 1 ? enc.encode('\n') : new Uint8Array(0)];
+    };
+    const parts = [enc.encode('!<arch>\n'), ...member('debian-binary', enc.encode('2.0\n')), ...member('data.tar', tar)];
+    const out = new Uint8Array(parts.reduce((n, b) => n + b.length, 0));
+    let o = 0; for (const b of parts) { out.set(b, o); o += b.length; }
+    return out;
+  }
+  const hex = async (b: Uint8Array) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', b as BufferSource)), (x) => x.toString(16).padStart(2, '0')).join('');
+
+  async function setup(binary: Uint8Array, manifestSum: string) {
+    const { installNativeClaude } = await import('@shiro/commands/claude-native');
+    const { fs } = await createTestShell();
+    // The test FileSystem is shared between tests (one IndexedDB)
+    for (const p of ['/home/user/.local/bin/claude', '/lib/ld-musl-x86_64.so.1']) await fs.unlink(p).catch(() => {});
+    await fs.mkdir('/usr/lib/pkg/curl/bin', { recursive: true });
+    await fs.writeFile('/usr/lib/pkg/curl/bin/curl', new Uint8Array([0x7f, 0x45, 0x4c, 0x46]), { mode: 0o755 });
+    const libc = new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 1, 2, 3]);
+    const deb = debOf(tarOf({ './usr/lib/x86_64-linux-musl/libc.so': libc }));
+    const urls: Record<string, Uint8Array | string> = {
+      'https://downloads.claude.ai/claude-code-releases/latest': '9.9.9\n',
+      'https://downloads.claude.ai/claude-code-releases/9.9.9/manifest.json': JSON.stringify({ platforms: { 'linux-x64-musl': { checksum: manifestSum, size: binary.length } } }),
+      'https://downloads.claude.ai/claude-code-releases/9.9.9/linux-x64-musl/claude': binary,
+      'https://mirror.test/musl.deb': deb,
+    };
+    const lines: string[] = [];
+    const shell = {
+      async execute(line: string, out: (s: string) => void) {
+        lines.push(line);
+        const url = /(https:\/\/[^\s']+)'?\s*$/.exec(line)?.[1];
+        const body = url ? urls[url] : undefined;
+        if (body === undefined) return 22;
+        const o = /-o '?([^\s']+)'?/.exec(line)?.[1];
+        if (o) await fs.writeFile(o, body);
+        else out(typeof body === 'string' ? body : '');
+        return 0;
+      },
+    };
+    const ctx: any = { fs, shell, env: { HOME: '/home/user', HTTPS_PROXY: 'http://proxy.test:3128' }, cwd: '/', stdout: '', stderr: '', args: [] };
+    const muslDeb = { urls: ['https://mirror.test/musl.deb'], sha256: await hex(deb), libc: 'usr/lib/x86_64-linux-musl/libc.so' };
+    return { fs, ctx, lines, run: () => installNativeClaude(ctx, '/home/user/.local/bin/claude', undefined, muslDeb), libc };
+  }
+
+  it('downloads the latest musl build, checks its sha256 and installs musl\'s loader', async () => {
+    const binary = new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 9, 9, 9]);
+    const { fs, ctx, lines, run, libc } = await setup(binary, await hex(binary));
+    expect(await run()).toBe(0);
+    expect(Array.from(await fs.readFile('/home/user/.local/bin/claude') as Uint8Array)).toEqual(Array.from(binary));
+    expect(Array.from(await fs.readFile('/lib/ld-musl-x86_64.so.1') as Uint8Array)).toEqual(Array.from(libc));
+    expect(ctx.stdout).toContain('Installed Claude Code 9.9.9');
+    expect(lines.every((l) => !l.includes('/usr/lib/pkg/curl/bin/curl') || l.startsWith("HTTPS_PROXY='http://proxy.test:3128' "))).toBe(true);
+  });
+
+  it('refuses a binary whose sha256 differs from the manifest', async () => {
+    const { fs, ctx, run } = await setup(new Uint8Array([1, 2, 3]), 'f'.repeat(64));
+    expect(await run()).toBe(1);
+    expect(ctx.stderr).toContain('sha256 mismatch');
+    expect(await fs.exists('/home/user/.local/bin/claude')).toBe(false);
+  });
+});
