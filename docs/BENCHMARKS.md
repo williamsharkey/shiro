@@ -816,6 +816,22 @@ at 194–211 ms) made no measurable difference:
 22 KiB, also not committed. The remaining levers are the entry's size
 (compile) and the cost of the desktop's first layout, which xterm forces.
 
+### unix/perf-fs-shell 6 — npm, upload/download/shiro, hc, remote, cw and the template palette load on first use
+
+Entry chunk 1405 → 1291 KB. `ab.mjs HEAD --suites boot`, 6 rounds × 5 runs,
+isolated, against integration 045feaa:
+
+| metric | base | new | |
+|---|---:|---:|---|
+| boot.cold.transfer | 1576 KiB | 1464 KiB | −7.1% (exact) |
+| boot.mem.uasm | 6.83 MiB | 6.51 MiB | −4.7%, p = 3e-11, all rounds |
+| boot.mem.js_heap | 3.9 MiB | 3.8 MiB | −2.6%, p = 7e-12 (under the 3% bar) |
+| boot.cold.first_prompt | 270.6 ms | 262.0 ms | −3.6%, p = 0.15: not significant |
+| boot.settled.requests | 12 | 13 | the split-out chunk fetched once used |
+
+The remote-session auto-reconnect reads its localStorage key directly and
+loads `commands/remote` only when there is a session to resume.
+
 ## Results
 
 <!-- bench:table:begin -->

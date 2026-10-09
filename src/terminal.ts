@@ -4,10 +4,8 @@ import { installOsc52 } from './utils/osc52';
 import { Shell } from './shell';
 import buildNumber from '../build-number.txt?raw';
 import { bufferToString } from './utils/copy-utils';
-import { openRemotePanel } from './commands/remote';
 import { setActiveTerminal } from './active-terminal';
 import { createHudPanel, HudPanel } from './hud-panel';
-import { showTemplatePalette } from './template-palette';
 import { spawnInWindow } from './commands/spawn';
 import { TtySession } from './kernel/pty';
 
@@ -120,7 +118,7 @@ export class ShiroTerminal {
             return;
           }
           if (uri === 'shiro://remote') {
-            openRemotePanel();
+            void import('./commands/remote').then(m => m.openRemotePanel());
             return;
           }
           if (uri === 'shiro://about') {
@@ -128,7 +126,7 @@ export class ShiroTerminal {
             return;
           }
           if (uri === 'shiro://templates') {
-            showTemplatePalette(
+            void import('./template-palette').then(({ showTemplatePalette }) => showTemplatePalette(
               (name, cmd, splitPort) => spawnInWindow(this.shell, cmd, name, splitPort),
               (templateId) => {
                 import('./living-templates').then(({ livingTemplates }) => {
@@ -138,7 +136,7 @@ export class ShiroTerminal {
                   });
                 });
               },
-            );
+            ));
             return;
           }
           if (uri === 'shiro://claude') {
