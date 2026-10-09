@@ -102,7 +102,7 @@ const DOC_HEADERS = { 'cross-origin-embedder-policy': 'credentialless', 'cross-o
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 function shell(token: string): Response {
   const html = `<!doctype html><html><head><meta charset="utf-8"><title></title>`
-    + `<script src="/__tc/boot.js" data-apps="${esc(APPS)}" data-token="${esc(token)}"></script></head><body></body></html>`;
+    + `<script src="/__tc/boot.js" data-apps="${esc(APPS)}" data-token="${esc(token)}"></script></head><body><img src="/__tc/hold" alt="" hidden></body></html>`;
   return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', ...DOC_HEADERS } });
 }
 
@@ -146,6 +146,12 @@ async function requestMsg(req: Request, url: string, navigation: boolean): Promi
 sw.addEventListener('fetch', (e: any) => {
   const req: Request = e.request;
   const url = new URL(req.url);
+  if (url.origin === sw.location.origin && url.pathname === '/__tc/hold') {
+    // The shell's pending subresource: it keeps the shell's `load` event from firing, so the frame's
+    // load event belongs to the real document (pages that wait for a frame's load and then use it)
+    e.respondWith(new Promise<Response>((r) => setTimeout(() => r(new Response('', { status: 204 })), 120_000)));
+    return;
+  }
   if (url.origin === sw.location.origin && url.pathname.startsWith('/__tc/')) return; // the server's own files
   if (!map) return;
   if (!/^https?:$/.test(url.protocol)) return;

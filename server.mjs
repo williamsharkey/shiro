@@ -941,6 +941,8 @@ export function tcpRelayConfigFromEnv(env = process.env) {
     idleTimeoutMs: envInt(env.TABCOMPUTER_TCP_IDLE_TIMEOUT_MS, 5 * 60_000),
     maxLifetimeMs: envInt(env.TABCOMPUTER_TCP_MAX_LIFETIME_MS, 4 * 60 * 60_000),
     window: envInt(env.TABCOMPUTER_TCP_WINDOW, 512 * 1024),
+    // http://host:port of an HTTP CONNECT proxy to dial through (egress that only allows proxied traffic)
+    upstreamProxy: env.TABCOMPUTER_TCP_UPSTREAM_PROXY || '',
   };
 }
 
@@ -1203,25 +1205,53 @@ export function createTcpRelay(config, { lookup, log = console.log, verifySignin
       target = `${host === address ? '' : host + '→'}${address}:${port}`;
       log(`[tcp] #${id} ${ip} connect ${target}`);
       phase = 'connecting';
-      // Connect to the vetted IP literal: no second lookup, so no rebinding window.
-      // allowHalfOpen: the peer's FIN must not end our side; the client decides with {"op":"shutdown"}
-      tcp = net.connect({ host: address, port, timeout: cfg.connectTimeoutMs, allowHalfOpen: true });
-      tcp.setNoDelay(true);
-      tcp.once('timeout', () => { if (phase === 'connecting') fail('ETIMEDOUT', 'connect timeout'); });
-      tcp.once('connect', () => {
-        tcp.setTimeout(0);
-        if (isBlockedAddress(tcp.remoteAddress, { allow, deny })) return fail('EACCES', 'address blocked by relay policy');
-        phase = 'open';
-        touch();
-        send({ op: 'connected', remoteAddress: tcp.remoteAddress, remotePort: tcp.remotePort, family: net.isIP(tcp.remoteAddress) });
-      });
-      tcp.on('data', (chunk) => {
+      const forward = (chunk) => {
         down += chunk.length;
         inflight += chunk.length;
         if (!account(chunk.length)) return;
         ws.send(chunk, { binary: true });
         updateFlow();
-      });
+      };
+      const opened = (remoteAddress, remotePort) => {
+        phase = 'open';
+        touch();
+        send({ op: 'connected', remoteAddress, remotePort, family: net.isIP(remoteAddress) });
+      };
+      if (cfg.upstreamProxy) {
+        // Through an HTTP CONNECT proxy (egress that only allows proxied traffic). The address
+        // policy above already vetted what the name resolves to; the proxy dials the name.
+        const proxy = new URL(cfg.upstreamProxy);
+        tcp = net.connect({ host: proxy.hostname, port: Number(proxy.port) || 80, timeout: cfg.connectTimeoutMs, allowHalfOpen: true });
+        tcp.setNoDelay(true);
+        tcp.once('timeout', () => { if (phase === 'connecting') fail('ETIMEDOUT', 'connect timeout'); });
+        tcp.once('connect', () => tcp.write(`CONNECT ${net.isIP(host) === 6 ? `[${host}]` : host}:${port} HTTP/1.1\r\nHost: ${host}:${port}\r\n\r\n`));
+        let head = Buffer.alloc(0);
+        const onHead = (chunk) => {
+          head = Buffer.concat([head, chunk]);
+          const end = head.indexOf('\r\n\r\n');
+          if (end < 0) { if (head.length > 16384) fail('EPROTO', 'proxy reply too long'); return; }
+          tcp.off('data', onHead);
+          const status = Number(/^HTTP\/1\.[01] (\d{3})/.exec(head.subarray(0, end).toString('latin1'))?.[1]);
+          if (status !== 200) return fail(status === 403 || status === 407 ? 'EACCES' : 'ECONNREFUSED', `proxy answered ${status || '?'}`);
+          tcp.setTimeout(0);
+          opened(address, port);
+          tcp.on('data', forward);
+          if (head.length > end + 4) forward(head.subarray(end + 4));
+        };
+        tcp.on('data', onHead);
+      } else {
+        // Connect to the vetted IP literal: no second lookup, so no rebinding window.
+        // allowHalfOpen: the peer's FIN must not end our side; the client decides with {"op":"shutdown"}
+        tcp = net.connect({ host: address, port, timeout: cfg.connectTimeoutMs, allowHalfOpen: true });
+        tcp.setNoDelay(true);
+        tcp.once('timeout', () => { if (phase === 'connecting') fail('ETIMEDOUT', 'connect timeout'); });
+        tcp.once('connect', () => {
+          tcp.setTimeout(0);
+          if (isBlockedAddress(tcp.remoteAddress, { allow, deny })) return fail('EACCES', 'address blocked by relay policy');
+          opened(tcp.remoteAddress, tcp.remotePort);
+        });
+        tcp.on('data', forward);
+      }
       tcp.on('drain', () => { tcpWriteBlocked = false; updateFlow(); });
       tcp.on('end', () => send({ op: 'eof' }));
       tcp.on('error', (err) => { reason ||= err.code || 'error'; send({ op: 'error', code: err.code || 'EIO', message: 'socket error' }); });

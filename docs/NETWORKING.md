@@ -151,6 +151,10 @@ The egress policy is the security boundary; everything else limits abuse.
   and the rightmost entry is used, i.e. the address nginx saw.
 - **Logging.** One line per connect, refusal and close: client IP, target
   host/IP:port, byte counts, duration, close reason. Never payloads.
+- **Upstream proxy** (`TABCOMPUTER_TCP_UPSTREAM_PROXY=http://host:port`, off by
+  default): dial through an HTTP CONNECT proxy, for hosts whose egress only
+  allows proxied traffic. The address policy still vets what the name resolves
+  to; the proxy then dials the name itself.
 - **Token secret.** Random per process unless `TABCOMPUTER_TCP_SECRET` is set (set
   it if several server processes sit behind one balancer).
 

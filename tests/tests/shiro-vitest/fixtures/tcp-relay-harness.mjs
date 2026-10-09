@@ -69,6 +69,28 @@ const relayD = await mount({ ports: [echoPort], allowCidrs: ['127.0.0.1/32'], re
 // E: tokens not bound to the client IP (TABCOMPUTER_TCP_TOKEN_BIND_IP=0, tabcomputer.com)
 const relayE = await mount({ ports: [echoPort], allowCidrs: ['127.0.0.1/32'], tokenBindIp: false });
 
+// F: through an HTTP CONNECT proxy (TABCOMPUTER_TCP_UPSTREAM_PROXY) that dials the echo server
+const proxyLog = [];
+const proxyPort = await listen(net.createServer((c) => {
+  c.on('error', () => {});
+  c.once('data', (d) => {
+    const line = d.toString('latin1').split('\r\n')[0];
+    proxyLog.push(line);
+    if (!line.startsWith(`CONNECT public.test:${echoPort} `)) { c.end('HTTP/1.1 403 Forbidden\r\n\r\n'); return; }
+    const up = net.connect(echoPort, '127.0.0.1', () => { c.write('HTTP/1.1 200 Connection Established\r\n\r\n'); c.pipe(up); up.pipe(c); });
+    up.on('error', () => c.destroy());
+  });
+}));
+const relayF = await mount({ ports: [echoPort], upstreamProxy: `http://127.0.0.1:${proxyPort}` }, {
+  lookup: async (host) => {
+    if (host === 'public.test' || host === 'denied.test') return [{ address: '93.184.216.34', family: 4 }];
+    if (host === 'rebind.test') return [{ address: '10.1.2.3', family: 4 }];
+    const e = new Error('nx'); e.code = 'ENOTFOUND'; throw e;
+  },
+});
+createServer((req, res) => res.end(JSON.stringify(proxyLog))).listen(0, '127.0.0.1', function () { globalThis.proxyLogPort = this.address().port; });
+await new Promise((r) => setTimeout(r, 50));
+
 // server.mjs as deployed, configured only through the environment
 const mainPort = await new Promise((r) => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
 const child = spawn(process.execPath, [serverPath], {
@@ -96,4 +118,4 @@ process.on('SIGINT', stop);
 process.stdin.on('end', stop); // parent went away
 process.stdin.resume();
 
-console.log(JSON.stringify({ echoPort, firehosePort, relayA, relayB, relayC, relayD, relayE, mainPort, origin: ORIGIN }));
+console.log(JSON.stringify({ echoPort, firehosePort, relayA, relayB, relayC, relayD, relayE, relayF, proxyLogPort: globalThis.proxyLogPort, mainPort, origin: ORIGIN }));
