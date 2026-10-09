@@ -519,6 +519,13 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    word at once (LTP checkpoints: the value never changes) could take its
    own grant and return, leaving the peer to time out (fork04, waitpid13).
    Test: `fixtures/x86/futexpingpong.c`.
+52. `getsockname`/`getpeername` take the kernel's address length, so an
+   abstract `AF_UNIX` name keeps its trailing NULs (LTP bind04/05);
+   `AF_NETLINK` addresses are 12 bytes (nft's libmnl, glibc's
+   `getifaddrs`, which looped forever); `readlink("/proc/self/exe")` asks
+   the kernel, which resolves symlinks (ld.so's `$ORIGIN`: uv's Python
+   venvs, aider); `fallocate` is `EOPNOTSUPP` (Go's linker falls back).
+   Test: `fixtures/x86/sockaddrs.c`.
 
 The guest's kernel calls go over a pool of channels (`src/x86-engine/blink.ts`
 → `public/engines/blink/host.mjs`). It starts at 6, and host.mjs asks the

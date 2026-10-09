@@ -1,0 +1,100 @@
+From 5801cecf5d5e5eae900a891eb926c9f15ed72c11 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 14:10:53 +0000
+Subject: [PATCH 52/52] Shiro: socket address lengths, /proc/self/exe from the
+ kernel, fallocate EOPNOTSUPP
+
+- getsockname/getpeername use the kernel's length (its result): an
+  abstract AF_UNIX name bound with the whole sockaddr_un keeps its
+  trailing NULs, so the name connects again (LTP bind04/05)
+- AF_NETLINK addresses are 12 bytes (libmnl's mnl_socket_bind, glibc's
+  getifaddrs looped forever on a zero-length sender)
+- readlink(/proc/self/exe) asks the kernel, which resolves symlinks
+  (ld.so's $ORIGIN: a uv venv's python finds ../lib); Blink's own name
+  only when the kernel has none
+- fallocate is EOPNOTSUPP rather than ENOSYS: Go's linker falls back
+---
+ blink/shiro.inc | 24 ++++++++++++++++++------
+ 1 file changed, 18 insertions(+), 6 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index a04093c..5cde1ff 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -479,13 +479,17 @@ static i64 ShiroReadlinkAt(struct Machine *m, int dirfd, i64 path, i64 out,
+   i64 r;
+   if (size <= 0) return -EINVAL_LINUX;
+   if ((n = ShiroPath(m, path, buf, 0)) < 0) return n;
+-  if (n == 14 && !memcmp(buf, "/proc/self/exe", 14) && m->system->elf.execfn) {
++  // the kernel's /proc/self/exe is the resolved path (ld.so expands $ORIGIN
++  // from it: a symlinked python3 finds ../lib); Blink's own name for the
++  // program only when the kernel has none
++  bool self = n == 14 && !memcmp(buf, "/proc/self/exe", 14) && m->system->elf.execfn;
++  r = ShiroCall(m, 267, A12(dirfd, n, (int)MIN(size, 4096)), buf, n, 4096, true, true);
++  if (self && (r <= 0 || buf[0] != '/')) {  // (glibc asserts an absolute path)
+     const char *exe = m->system->elf.prog ? m->system->elf.prog : m->system->elf.execfn;
+     r = MIN((i64)strlen(exe), size);
+     if (CopyToUserWrite(m, out, (void *)exe, r) == -1) return -EFAULT_LINUX;
+     return r;
+   }
+-  r = ShiroCall(m, 267, A12(dirfd, n, (int)MIN(size, 4096)), buf, n, 4096, true, true);
+   if (r > 0 && CopyToUserWrite(m, out, buf, r) == -1) return -EFAULT_LINUX;
+   return r;
+ }
+@@ -650,6 +654,7 @@ static int ShiroAddrLen(const u8 *sa) {
+   switch (Read16(sa)) {
+     case 2: return 16;   // AF_INET
+     case 10: return 28;  // AF_INET6
++    case 16: return 12;  // AF_NETLINK: family, pad, nl_pid, nl_groups
+     case 1: {            // AF_UNIX: unnamed, a NUL-terminated path, or an abstract name
+       int n;
+       if (!sa[2]) {
+@@ -663,18 +668,25 @@ static int ShiroAddrLen(const u8 *sa) {
+   }
+ }
+ 
+-static int ShiroPutAddr(struct Machine *m, const u8 *sa, i64 addr, i64 lenp) {
++// `len` < 0: the length is worked out from the address (an abstract
++// AF_UNIX name then ends at its first NUL; getsockname/getpeername have the
++// kernel's length, which keeps the name's trailing NULs)
++static int ShiroPutAddrLen(struct Machine *m, const u8 *sa, int len, i64 addr, i64 lenp) {
+   u8 *lp;
+   u32 cap, n;
+   if (!addr || !lenp) return 0;
+   if (!(lp = (u8 *)SchlepRW(m, lenp, 4))) return -EFAULT_LINUX;
+   cap = Read32(lp);
+-  n = ShiroAddrLen(sa);
++  n = len >= 0 ? len : ShiroAddrLen(sa);
+   if (CopyToUserWrite(m, addr, (void *)sa, MIN(cap, n)) == -1) return -EFAULT_LINUX;
+   Write32(lp, n);
+   return 0;
+ }
+ 
++static int ShiroPutAddr(struct Machine *m, const u8 *sa, i64 addr, i64 lenp) {
++  return ShiroPutAddrLen(m, sa, -1, addr, lenp);
++}
++
+ static i64 ShiroAddrCall(struct Machine *m, int nr, int fd, i64 addr, u32 len) {
+   u8 buf[128];
+   if (len > sizeof(buf)) len = sizeof(buf);
+@@ -697,7 +709,7 @@ static i64 ShiroSockName(struct Machine *m, int nr, int fd, i64 addr, i64 lenp)
+   memset(buf, 0, sizeof(buf));
+   r = ShiroCall(m, nr, A12(fd), buf, 0, 110, false, false);
+   if (r < 0) return r;
+-  return ShiroPutAddr(m, buf, addr, lenp);
++  return ShiroPutAddrLen(m, buf, r > 0 && r <= 110 ? (int)r : -1, addr, lenp);
+ }
+ 
+ static i64 ShiroSendto(struct Machine *m, int fd, i64 data, u64 len, int flags,
+@@ -2218,7 +2230,7 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       if (r == -ENOSYS_LINUX) r = -EPERM_LINUX;  // a kernel without them
+       break;
+     case 0x0FD: case 0x0FE: case 0x0FF: case 0x126: r = -ENOSYS_LINUX; break;  // inotify
+-    case 0x11D: r = -ENOSYS_LINUX; break;                             // fallocate
++    case 0x11D: r = -EOPNOTSUPP_LINUX; break;                         // fallocate (Go's linker then writes)
+     case 0x11B: r = KS(m, 283, A12(a, b)); break;                     // timerfd_create
+     case 0x11E: r = ShiroTimerfd(m, a, b, c, d); break;               // timerfd_settime
+     case 0x11F: r = ShiroTimerfd(m, a, -1, 0, b); break;              // timerfd_gettime
+-- 
+2.43.0
+
