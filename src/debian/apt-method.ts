@@ -145,7 +145,7 @@ export async function aptMethodProgram(proc: Process, kernel: Kernel): Promise<n
     pending.push(report);
   }
   await Promise.allSettled(pending);
-  await fs.flushed();
+  await fs.flushed().catch(() => {}); // storage full: the writes above already reported ENOSPC
   return 0;
 }
 

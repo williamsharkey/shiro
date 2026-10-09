@@ -12,7 +12,7 @@ import {
   type KStat, EBADF, EMFILE, EINVAL, EISDIR, ESPIPE, ENOTTY, EAGAIN, EINTR,
   O_ACCMODE, O_RDONLY, O_WRONLY, O_APPEND, O_NONBLOCK, O_DSYNC, OPEN_MAX,
   POLLIN, POLLOUT, SEEK_SET, SEEK_CUR, SEEK_END,
-  S_IFCHR, S_IFREG, S_IFDIR, S_IFIFO, FIONREAD,
+  S_IFCHR, S_IFREG, S_IFDIR, S_IFIFO, FIONREAD, errnoFromError,
 } from './abi';
 
 export type OpenFileKind = 'file' | 'dir' | 'pipe' | 'pty' | 'socket' | 'dev' | 'epoll';
@@ -141,7 +141,7 @@ export class FdTable {
     retain(file);
     const old = this.fds.get(fd);
     this.fds.set(fd, { file, cloexec });
-    if (old) await release(old.file);
+    if (old) await release(old.file).catch(() => {}); // dup2 drops close errors, as Linux does
     return fd;
   }
 
@@ -164,7 +164,8 @@ export class FdTable {
     const e = this.fds.get(fd);
     if (!e) return -EBADF;
     this.fds.delete(fd);
-    await release(e.file);
+    // The fd is gone either way; a failed write-back is reported (ENOSPC)
+    try { await release(e.file); } catch (err) { return errnoFromError(err); }
     return 0;
   }
 
@@ -518,7 +519,9 @@ class Inode {
     // Paced by the IndexedDB commit: writes made meanwhile go into one later snapshot
     // With the times this inode reports (the last write's, or utimensat's), not the write-back's
     const times = { mtime: this.mtimeMs, mtimeNs: this.mtimeNs, ...(this.atimeMs === null ? {} : { atime: this.atimeMs, atimeNs: this.atimeNs }) };
-    this.flushing = this.fs.writeFile(this.path, snapshot, { times }).then(() => this.fs.flushed()).finally(() => { this.flushing = null; });
+    // Refused (storage full: ENOSPC): the data stays here for a retry by fsync or close
+    this.flushing = this.fs.writeFile(this.path, snapshot, { times }).catch((e) => { this.dirty = true; throw e; })
+      .then(() => this.fs.flushed()).finally(() => { this.flushing = null; });
     await this.flushing;
   }
 }
@@ -569,9 +572,12 @@ function closeInodeSync(ino: Inode): boolean {
 
 async function closeInode(ino: Inode): Promise<void> {
   ino.opens--;
-  await ino.flush();
-  const table = inodeTables.get(ino.fs);
-  if (ino.opens === 0 && table?.get(ino.path) === ino) table.delete(ino.path);
+  try {
+    await ino.flush();
+  } finally {
+    const table = inodeTables.get(ino.fs);
+    if (ino.opens === 0 && table?.get(ino.path) === ino) table.delete(ino.path);
+  }
 }
 
 /**

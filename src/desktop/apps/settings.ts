@@ -1,6 +1,6 @@
 /**
  * Settings: Appearance (theme), Network (connection status, Sign in with
- * GitHub, other ways to connect), and About.
+ * GitHub, other ways to connect), Storage (browser quota, persistence), and About.
  */
 
 import { keybarMode, setKeybarMode, type KeybarMode } from '../mobile';
@@ -11,10 +11,12 @@ import { networkCredential, networkStatus, onNetworkStatus, ownRelay, setOwnRela
 import { openSignIn, probeRelay, signedInAccount, signOut, statusText, testOwnRelay } from '../network';
 import { BRAND } from '../../brand';
 import buildNumber from '../../../build-number.txt?raw';
+import { formatBytes, storageInfo } from '../../storage';
 
 const PANES = [
   { id: 'appearance', label: 'Appearance', glyph: GLYPHS.sun },
   { id: 'network', label: 'Network', glyph: GLYPHS.net },
+  { id: 'storage', label: 'Storage', glyph: GLYPHS.folder },
   { id: 'about', label: 'About', glyph: GLYPHS.file },
 ] as const;
 type PaneId = typeof PANES[number]['id'];
@@ -53,6 +55,7 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
     win.setTitle(`Settings — ${PANES.find(p => p.id === id)!.label}`);
     if (id === 'appearance') appearance();
     else if (id === 'network') network();
+    else if (id === 'storage') storage();
     else about();
   }
 
@@ -172,6 +175,33 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
       }
     };
     void signedInAccount().then(a => { account = a; readDraft(); render(); });
+  }
+
+  function storage(): void {
+    panel.innerHTML = `
+      <h2>Storage</h2><p class="sd-muted">Files live in this browser's storage for the site (IndexedDB). The browser sets the quota; persistent storage keeps it from clearing them when the disk runs low.</p>
+      <div class="sd-card">
+        <div class="sd-row"><span class="sd-grow">Used</span><span data-k="usage">…</span></div>
+        <div class="sd-row"><span class="sd-grow">Quota</span><span data-k="quota">…</span></div>
+        <div class="sd-row"><span class="sd-grow">Persistent</span><span data-k="persisted">…</span></div>
+        <div class="sd-row"><span class="sd-grow">Status</span><span data-k="state">…</span></div>
+      </div>
+      <div class="sd-row" style="margin-top:14px;gap:8px"><button class="sd-btn" data-act="persist" hidden>Keep my files (persistent storage)</button></div>
+      <p class="sd-small sd-muted">To free space: <code>sudo apt clean</code> drops downloaded packages; <code>du -sh /*</code> shows what is large.</p>`;
+    const set = (k: string, v: string) => { const n = panel.querySelector(`[data-k=${k}]`); if (n) n.textContent = v; };
+    const btn = panel.querySelector<HTMLButtonElement>('[data-act=persist]')!;
+    const refresh = () => void storageInfo().then((s) => {
+      set('usage', s.usage === null ? 'unknown' : formatBytes(s.usage) + (s.quota ? ` (${((s.usage / s.quota) * 100).toFixed(s.usage / s.quota < 0.1 ? 1 : 0)}%)` : ''));
+      set('quota', s.quota === null ? 'unknown' : formatBytes(s.quota));
+      set('persisted', s.persisted === null ? 'not supported' : s.persisted ? 'Yes' : 'No');
+      set('state', ctx.fs.storageFull ? 'Full: writes fail until files are deleted' : `OK${ctx.fs.pendingWrites ? `, ${ctx.fs.pendingWrites} writes pending` : ''}`);
+      btn.hidden = s.persisted !== false;
+    });
+    btn.addEventListener('click', () => void navigator.storage?.persist?.().catch(() => false).then(refresh));
+    const off = ctx.fs.onStorageFull(refresh);
+    const timer = setInterval(refresh, 5000);
+    cleanup = () => { off(); clearInterval(timer); };
+    refresh();
   }
 
   function about(): void {
