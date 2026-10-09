@@ -297,6 +297,25 @@ describe('kernel syscalls found by LTP', () => {
     off();
   });
 
+  it('paths below /proc/self/fd/N (and /dev/fd/N) name entries of that open directory', async () => {
+    await fs.mkdir('/tmp/kc/pinned', { recursive: true });
+    const dfd = await open('/tmp/kc/pinned', A.O_PATH | A.O_DIRECTORY | A.O_NOFOLLOW);
+    expect(dfd).toBeGreaterThanOrEqual(0);
+    const via = `/proc/self/fd/${dfd}`;
+    expect(await call(A.SYS_mkdir, [L(`${via}/sub`), 0o700], `${via}/sub`)).toBe(0);
+    expect((await fs.stat('/tmp/kc/pinned/sub')).isDirectory()).toBe(true);
+    const f = await open(`/dev/fd/${dfd}/sub/new.tmp`, A.O_WRONLY | A.O_CREAT | A.O_EXCL);
+    expect(f).toBeGreaterThanOrEqual(0);
+    await kernel.syscall(proc, A.SYS_close, [f], new Uint8Array(8));
+    const from = `${via}/sub/new.tmp`, to = `/proc/${proc.pid}/fd/${dfd}/sub/new.txt`;
+    expect(await call(A.SYS_rename, [L(from), L(to)], from, to)).toBe(0);
+    expect(await fs.exists('/tmp/kc/pinned/sub/new.txt')).toBe(true);
+    expect(await call(A.SYS_stat, [L('/proc/self/fd/999/x')], '/proc/self/fd/999/x')).toBe(-A.ENOENT);
+    const file = await open('file', A.O_RDONLY);
+    expect(await call(A.SYS_stat, [L(`/proc/self/fd/${file}/x`)], `/proc/self/fd/${file}/x`)).toBe(-A.ENOTDIR);
+    for (const fd of [dfd, file]) await kernel.syscall(proc, A.SYS_close, [fd], new Uint8Array(8));
+  });
+
   it('epoll_wait: a full events array rotates, so every ready fd gets reported (no starvation)', async () => {
     const ep = await call(A.SYS_epoll_create1, [0]);
     const reads: number[] = [];
@@ -355,5 +374,52 @@ describe('kernel syscalls found by LTP', () => {
     expect(await bindTo(dual2, A.AF_INET6, '::')).toBe(0);
     await call(A.SYS_close, [dual2]);
     off();
+  });
+
+  it('signalfd: blocked signals in its mask are read as signalfd_siginfo; poll/epoll readiness; mask updates (PostgreSQL 17)', async () => {
+    const p = kernel.spawn({ path: 'pg', cwd: '/tmp/kc', fds: {}, run: () => new Promise<number>(() => {}) });
+    const sys = (nr: number, args: number[], data = new Uint8Array(256)) => kernel.syscall(p, nr, args, data);
+    const set = (...sigs: number[]) => {
+      const d = new Uint8Array(16);
+      const [lo, hi] = A.sigsetToWords(sigs);
+      new DataView(d.buffer).setUint32(0, lo, true); new DataView(d.buffer).setUint32(4, hi, true);
+      return d;
+    };
+    const SIGUSR1 = 10, SIGUSR2 = 12, SIGURG = 23;
+    expect(await sys(A.SYS_rt_sigprocmask, [A.SIG_BLOCK, 1, 0], set(SIGUSR1, SIGUSR2, SIGURG))).toBe(0);
+    expect(await sys(A.SYS_signalfd4, [-1, 8, 0x40], set(SIGUSR1))).toBe(-A.EINVAL); // bad flags
+    expect(await sys(A.SYS_signalfd4, [-1, 4, 0], set(SIGUSR1))).toBe(-A.EINVAL); // bad sigset size
+    const fd = await sys(A.SYS_signalfd4, [-1, 8, A.SFD_NONBLOCK | A.SFD_CLOEXEC], set(SIGUSR1, SIGURG));
+    expect(fd).toBeGreaterThanOrEqual(0);
+    expect(await sys(A.SYS_fcntl, [fd, A.F_GETFD])).toBe(A.FD_CLOEXEC);
+    const buf = new Uint8Array(256);
+    expect(await sys(A.SYS_read, [fd, 128], buf)).toBe(-A.EAGAIN);
+    expect(await sys(A.SYS_read, [fd, 64], buf)).toBe(-A.EINVAL); // smaller than one record
+    // epoll sees it readable once a signal in its mask is pending
+    const ep = await sys(A.SYS_epoll_create1, [0]);
+    expect(await sys(A.SYS_epoll_ctl, [ep, A.EPOLL_CTL_ADD, fd, A.EPOLLIN, 7, 0])).toBe(0);
+    const waiting = sys(A.SYS_epoll_wait, [ep, 1, 2000], new Uint8Array(A.EPOLL_EVENT_SIZE));
+    expect(kernel.kill(p.pid, SIGUSR1)).toBe(0);
+    expect(await waiting).toBe(1);
+    expect(p.state).not.toBe('zombie'); // blocked: not delivered (SIGUSR1 would terminate)
+    kernel.kill(p.pid, SIGURG); // ignored by default, but blocked: it stays pending for the fd
+    kernel.kill(p.pid, SIGUSR2); // pending, not in the mask
+    expect(await sys(A.SYS_read, [fd, 256], buf)).toBe(256);
+    const dv = new DataView(buf.buffer);
+    expect([dv.getUint32(0, true), dv.getUint32(128, true)]).toEqual([SIGUSR1, SIGURG]);
+    expect(await sys(A.SYS_read, [fd, 128], buf)).toBe(-A.EAGAIN);
+    // signalfd(fd, …) replaces the mask: now SIGUSR2 is readable
+    expect(await sys(A.SYS_signalfd4, [fd, 8, 0], set(SIGUSR2))).toBe(fd);
+    expect(await sys(A.SYS_read, [fd, 128], buf)).toBe(128);
+    expect(dv.getUint32(0, true)).toBe(SIGUSR2);
+    // a blocking read waits for the signal
+    const blocking = await sys(A.SYS_signalfd, [-1, 8], set(SIGUSR1));
+    const r = sys(A.SYS_read, [blocking, 128], buf);
+    await new Promise((res) => setTimeout(res, 10));
+    kernel.kill(p.pid, SIGUSR1);
+    expect(await r).toBe(128);
+    expect(await sys(A.SYS_signalfd4, [99, 8, 0], set(SIGUSR1))).toBe(-A.EBADF);
+    expect(await sys(A.SYS_signalfd4, [ep, 8, 0], set(SIGUSR1))).toBe(-A.EINVAL); // not a signalfd
+    kernel.kill(p.pid, A.SIGKILL);
   });
 });

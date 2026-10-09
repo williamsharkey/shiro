@@ -1,5 +1,5 @@
 import { decodeBytes, encodeText } from './utils/byte-text';
-import { activeProfile } from './profile';
+import { activeProfile, unameRelease, UNAME_VERSION } from './profile';
 
 function globPatternToRegex(pattern: string, base: string, caseInsensitive?: boolean): RegExp {
   // Resolve the pattern relative to base
@@ -80,6 +80,30 @@ export interface FSNode {
    * empty regular file; the kernel attaches opens of it to a pipe.
    */
   special?: 'fifo';
+  /**
+   * Inode number (st_ino), assigned when the node is created and kept by
+   * writes, chmod, utimes and rename, so it is stable across reloads. Nodes
+   * stored before this field (and streamed root filesystem placeholders) have
+   * none: their number is a hash of their path, written into the node when it
+   * is renamed. See FileSystem.inoOf.
+   */
+  ino?: number;
+}
+
+/** A 52-bit number from two 32-bit hashes of `path` (inode number of a node without one). */
+function pathIno(path: string): number {
+  let a = 0x811c9dc5, b = 0x9747b28c;
+  for (let i = 0; i < path.length; i++) {
+    const c = path.charCodeAt(i);
+    a = Math.imul(a ^ c, 0x01000193);
+    b = Math.imul(b ^ c, 0x5bd1e995); b ^= b >>> 15;
+  }
+  return ((a >>> 0) & 0xfffff) * 0x100000000 + (b >>> 0) || 3;
+}
+
+/** A fresh random 52-bit inode number (unique enough; not a secret, so no crypto: one per created file) */
+function newIno(): number {
+  return Math.floor(Math.random() * 0x10000000000000) || 3;
 }
 
 /** Where a lazy file's bytes are: `len` bytes at `off` in chunk `chunk` of source `src`. */
@@ -124,8 +148,9 @@ export function makeStat(node: FSNode): StatResult {
     mtimeNs: node.mtimeNs ?? 0,
     atimeNs: node.atime === undefined ? node.mtimeNs ?? 0 : node.atimeNs ?? 0,
     birthtimeMs: ctime.getTime(),
-    dev: 0,
-    ino: 0,
+    // The kernel's st_dev and st_ino (src/kernel/fd.ts inodeNumber), for node programs and ls -i
+    dev: 1,
+    ino: node.ino ?? pathIno(node.path),
     nlink: 1,
     uid: 1000,
     gid: 1000,
@@ -269,7 +294,8 @@ class ProcProvider implements VirtualFSProvider {
       const secs = ((Date.now() - this.startTime) / 1000).toFixed(2);
       return `${secs} ${secs}\n`;
     },
-    '/proc/version': () => `Linux version 6.1.0-shiro (shiro@browser) (TypeScript) #1 SMP ${new Date().toUTCString()}\n`,
+    // What uname(2) says, as on Linux (`uname -rv`, Node's os.release())
+    '/proc/version': () => `Linux version ${unameRelease()} (user@${activeProfile().hostname}) ${UNAME_VERSION} ${new Date(this.startTime).toUTCString()}\n`,
     '/proc/meminfo': () => {
       const total = (typeof performance !== 'undefined' && (performance as any).memory?.jsHeapSizeLimit) || 256 * 1024 * 1024;
       const used = (typeof performance !== 'undefined' && (performance as any).memory?.usedJSHeapSize) || 64 * 1024 * 1024;
@@ -499,6 +525,17 @@ export class FileSystem {
   /** Mount a virtual provider (e.g. /dom, src/dom-fs.ts); consulted after the built-in ones. */
   addVirtualProvider(vp: VirtualFSProvider): void {
     if (!this.virtualProviders.includes(vp)) this.virtualProviders.push(vp);
+  }
+
+  /** st_ino of the node at canonical `path` (see FSNode.ino); the node is normally cached (just stat'ed). */
+  inoOf(path: string): number {
+    return this.cache.get(path)?.ino ?? pathIno(path);
+  }
+
+  /** Give the node at canonical `path` inode number `ino` (link(), which copies, makes the copy share its source's). */
+  setIno(path: string, ino: number): void {
+    const node = this.cache.get(path);
+    if (node && node.ino !== ino) this._putNow({ ...node, ino });
   }
 
   /** Browser storage is full (see _full). */
@@ -999,6 +1036,8 @@ export class FileSystem {
   /** Synchronous part of a put: cache + key index now, IndexedDB on the next flush. */
   private _putNow(node: FSNode, move = false): void {
     const prev = this.cache.get(node.path);
+    // A new node gets its inode number (writes and renames carry the old one)
+    if (node.ino === undefined && prev === undefined) node.ino = newIno();
     const grow = (node.content?.byteLength ?? 0) - (prev?.content?.byteLength ?? 0);
     // A new node or more bytes needs space; a rename (move) moves what is stored
     if (this._full && !move && (prev === undefined || grow > 0)) throw this._enospc(node.path);
@@ -1282,6 +1321,7 @@ export class FileSystem {
       path,
       type: 'file',
       content,
+      ...(existing ? { ino: existing.ino } : {}),
       mode: options?.mode ?? existing?.mode ?? 0o644,
       mtime: options?.times?.mtime ?? now,
       ctime: existing?.ctime ?? now,
@@ -1438,7 +1478,7 @@ export class FileSystem {
     const prev = this.cache.get(path);
     const now = Date.now();
     this.cache.set(path, {
-      path, type: 'file', content,
+      path, type: 'file', content, ino: prev ? prev.ino : newIno(),
       mode: prev?.mode ?? 0o644, mtime: now, ctime: prev?.ctime ?? now, size: content.length,
     } as FSNode);
     this._noteKey(path, true);
@@ -1521,7 +1561,7 @@ export class FileSystem {
           const child = await this._get(key);
           if (child) {
             const newChildPath = newPath + key.slice(oldPath.length);
-            await this._put({ ...child, path: newChildPath }, true);
+            await this._put({ ...child, path: newChildPath, ino: child.ino ?? pathIno(key) }, true);
             await this._delete(key);
           }
         }
@@ -1530,7 +1570,7 @@ export class FileSystem {
       // Prevent renaming a file over a directory
       const existing = await this._get(newPath);
       if (existing?.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, rename '${newPath}'`);
-      await this._put({ ...node, path: newPath, ctime: Date.now() }, true); // rename keeps mtime (rsync -a, make)
+      await this._put({ ...node, path: newPath, ctime: Date.now(), ino: node.ino ?? pathIno(oldPath) }, true); // rename keeps mtime (rsync -a, make)
       await this._delete(oldPath);
     }
     this._emitChange('rename', oldPath, newPath);
@@ -1559,6 +1599,27 @@ export class FileSystem {
   }
 
   // isomorphic-git compatibility: symlink support
+  /**
+   * symlink() whose effect on the in-memory cache is immediate when the
+   * parent is in memory, for synchronous callers (node's fs.symlinkSync then
+   * lstatSync/readlinkSync/realpathSync). Falls back to symlink() otherwise.
+   */
+  symlinkNow(target: string, path: string): Promise<void> {
+    const canon = this._canonCached(path, false, { n: 0 });
+    if (canon === undefined) return this.symlink(target, path);
+    const existing = this._getCached(canon);
+    if (existing === undefined) return this.symlink(target, path);
+    if (existing) return Promise.reject(fsError('EEXIST', `EEXIST: file already exists, symlink '${target}' -> '${path}'`));
+    const parentPath = canon.substring(0, canon.lastIndexOf('/')) || '/';
+    const parent = this._getCached(parentPath);
+    if (parent === undefined) return this.symlink(target, path);
+    if (!parent || parent.type !== 'dir') return Promise.reject(fsError('ENOENT', `ENOENT: no such file or directory, symlink '${target}' -> '${path}'`));
+    const now = Date.now();
+    this._putNow({ path: canon, type: 'symlink', content: new TextEncoder().encode(target), mode: 0o120000, mtime: now, ctime: now, size: target.length, symlinkTarget: target } as FSNode);
+    this._emitChange('write', canon);
+    return Promise.resolve();
+  }
+
   async symlink(target: string, path: string): Promise<void> {
     path = await this._canon(path, false);
     const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';

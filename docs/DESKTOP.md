@@ -1,8 +1,9 @@
 # Desktop, window manager API, and /dom
 
-The Unix edition boots to a desktop: a menu bar, a dock, and windows. The
+tabcomputer boots to a desktop: a menu bar, a dock, and windows. The
 Terminal (the real tabcomputer terminal on a pty) opens front and center. The
-classic full-page terminal of shiro.computer is still there behind a flag.
+full-page terminal (the `shiro` profile's UI) is still there with
+`?ui=terminal`.
 
 - Code: `src/desktop/` (window manager `wm.ts`, shell `index.ts`, Terminal
   `terminal-app.ts`, network sheet `network.ts`, lazy apps in `apps/`),
@@ -119,7 +120,7 @@ destroyed), and the next Terminal window adopts it again.
   (localStorage `tabcomputer-desktop-tour`); Help → Welcome Tour shows them again.
 - **About This Computer** lists measured status with the document that
   records each number (`STATUS` in `apps/about.ts`: keep it in step with
-  DEBIAN_SCORE.md and X86_ENGINES.md), and what is real, emulated and absent.
+  DEBIAN_SCORE.md and CONFORMANCE.md), and what is real, emulated and absent.
 
 - **Themes**: light, dark, or match the system (View menu, the sun/moon icon
   in the menu bar, or Settings → Appearance). Saved in localStorage
@@ -149,6 +150,28 @@ destroyed), and the next Terminal window adopts it again.
   `public/fonts/`, SIL OFL, license files next to them). Only the desktop
   loads them.
 
+## Accounts
+
+Settings → Accounts (and the Accounts part of the menu bar's network
+popover) lists the two accounts this computer signs in with, each with its
+state and Sign In… / Sign Out… (`src/desktop/accounts.ts`):
+
+- **GitHub**: the network sign-in (device flow, "Network sign-in" below);
+  `git` and `gh` use it too.
+- **Claude**: Claude Code's account. The state comes from Claude Code's own
+  files, `~/.claude/.credentials.json` (signed in, and the plan when it is
+  recorded) and `~/.claude.json` (the email); tokens are never shown. Sign
+  In… opens a sheet: open the sign-in page, paste the code it shows
+  (`src/claude-signin.ts` runs the OAuth PKCE exchange and writes
+  `~/.claude/.credentials.json`, which both Claude Code builds read). Sign
+  Out… asks in place, then removes that file. Signing in from the terminal
+  (`claude`'s own /login) shows up here as it happens.
+
+`openClaudeSignIn()` shows the desktop's sheet while the desktop runs
+(`setClaudeSignInUI` in `src/claude-signin-ui.ts`), else a floating panel
+in the same style. Screenshots: docs/screenshots/accounts-*.png,
+claude-signin-sheet-*.png, claude-signin-panel-*.png.
+
 ## Icon sets
 
 The dock, its stacks, the launcher and Settings draw app icons from one icon
@@ -156,7 +179,7 @@ set (`src/desktop/iconsets.ts`; design: `docs/design/dock-icon-studies.html`
 on `design/dock-icons`). Every set draws the same glyphs, one geometry on a
 24-unit grid with round strokes, so the apps belong together; a set changes
 only the material. Settings → Dock & Icons picks one (localStorage
-`shiro-desktop-iconset`; a grid of cards, each a still mini dock).
+`tabcomputer-desktop-iconset`; a grid of cards, each a still mini dock).
 
 | set | kind | |
 |---|---|---|
@@ -465,7 +488,7 @@ Examples:
 
 ```sh
 ls /dom                                   # ctl events windows html head body, plus element ids
-cat /dom/windows/terminal/title           # user@shiro: ~
+cat /dom/windows/terminal/title           # user@tabcomputer: ~
 echo 'move 40 40' > /dom/windows/terminal/ctl
 echo 'snap left'  > /dom/windows/terminal/ctl
 echo '0 0 900 500' > /dom/windows/terminal/geometry

@@ -40,7 +40,7 @@ import { rgCmd } from './commands/rg';
 import { spawnCmd } from './commands/spawn';
 import { scCmd, claudeWindowCmd } from './commands/sc';
 import { claudeCmd } from './commands/claude';
-import { pbcopyCmd, xclipCmd, wlCopyCmd } from './commands/pbcopy';
+import { pbcopyCmd, pbpasteCmd, xclipCmd, xselCmd, wlCopyCmd } from './commands/pbcopy';
 import { ensureClaudeCodeInstalled } from './claude-code-version';
 import { setupCmd } from './commands/setup';
 import { psCmd, killCmd } from './commands/ps';
@@ -68,7 +68,7 @@ import { cvCmd } from './commands/cv';
 import { spiritCmd } from './commands/spirit';
 // wasi and pkg are lazy-loaded (pulls in ~960-line wasi-runtime.ts)
 import { processTable } from './process-table';
-import { createPathShims } from './path-shims';
+import { createPathShims, installAlwaysShims } from './path-shims';
 import { getKernel } from './kernel/kernel';
 import { startDisplay } from './x11/display';
 import { installNet } from './kernel/net';
@@ -322,6 +322,8 @@ async function main() {
   registerCommand(commands, claudeCmd, 'src/commands/claude.ts');
   registerCommand(commands, pbcopyCmd, 'src/commands/pbcopy.ts');
   registerCommand(commands, xclipCmd, 'src/commands/pbcopy.ts');
+  registerCommand(commands, xselCmd, 'src/commands/pbcopy.ts');
+  registerCommand(commands, pbpasteCmd, 'src/commands/pbcopy.ts');
   registerCommand(commands, wlCopyCmd, 'src/commands/pbcopy.ts');
   registerCommand(commands, claudeWindowCmd, 'src/commands/sc.ts');
   registerCommand(commands, scCmd, 'src/commands/sc.ts');
@@ -500,6 +502,7 @@ async function main() {
   const debianBoot = import('./debian/rootfs').then(async (m) => {
     const st = await m.bootRootfs(fs);
     if (!st) { void createPathShims(fs).catch(() => {}); return; } // no Debian: nothing for commands to wait for
+    void installAlwaysShims(fs).catch(() => {}); // xdg-open, xclip, ... on PATH in Debian mode too
     const ov = await import('./debian/overlay');
     await ov.enableDebianShadows(fs, (n) => !!commands.get(n));
     for (const [k, v] of Object.entries(m.DEBIAN_ENV)) shell.env[k] ??= v;
@@ -521,6 +524,8 @@ async function main() {
   // X11 display :0 (src/x11, docs/GUI.md): `Xshiro :0` listens on /tmp/.X11-unix/X0 now;
   // the server and its fonts load on the first client, windows open on the desktop
   shell.env['DISPLAY'] ??= ':0';
+  // Programs that open a web page (Python's webbrowser, git web--browse) find a real tab this way
+  shell.env['BROWSER'] ??= 'xdg-open';
   // HiDPI: X apps started from the shell scale like the dock's (src/gui/display-scale.ts)
   for (const [k, v] of Object.entries(toolkitScaleEnv())) shell.env[k] ??= v;
   void startDisplay(kernel, 0).catch(e => console.warn('[Xshiro]', e));

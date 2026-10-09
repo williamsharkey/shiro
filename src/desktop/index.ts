@@ -23,6 +23,7 @@ import { initNetwork } from './network';
 import { loadSession, place, restoreSession, trackSession } from './session';
 import { maybeShowTour, showTour } from './tour';
 import { BRAND } from '../brand';
+import { setClaudeSignInUI } from '../claude-signin-ui';
 
 export interface DesktopDeps {
   fs: FileSystem;
@@ -686,6 +687,8 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
 
   // ── Network ──
   initNetwork(wm, deps.fs, netBtn, deps.kernel);
+  // Claude Code's sign-in shows as a desktop sheet (accounts.ts, loaded when asked for)
+  setClaudeSignInUI((o) => import('./accounts').then(m => m.openClaudeSheet(wm, deps.fs, o)));
 
   // ── Keyboard shortcuts (capture: before xterm sees them) ──
   window.addEventListener('keydown', (e) => {

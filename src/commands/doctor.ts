@@ -208,6 +208,10 @@ export async function runDoctorChecks(ctx: CommandContext): Promise<Check[]> {
     guard('debian', () => debianCheck(ctx)),
     guard('storage', storageCheck),
     guard('kernel', () => kernelCheck(ctx)),
+    guard('agents', async () => {
+      const { agentChecks, agentSummary } = await import('./doctor-agents');
+      return agentSummary(await agentChecks(ctx));
+    }, 45_000),
   ]);
   return parts.flat();
 }
@@ -222,8 +226,14 @@ export const doctorCmd: Command = {
   description: 'Check this tab (deploy, browser, engine, network, sign-ins, storage) for a bug report',
   async exec(ctx) {
     if (ctx.args[0] === '--help' || ctx.args[0] === '-h') {
-      ctx.stdout = 'Usage: doctor\n\nPrints the deploy, browser, x86 engine, internet relay, sign-ins, Debian,\nstorage and kernel state, one OK/WARN/FAIL line each, to paste into a bug\nreport. No tokens or secrets are printed. Also: tabinfo\n';
+      ctx.stdout = 'Usage: doctor [--agents]\n\nPrints the deploy, browser, x86 engine, internet relay, sign-ins, Debian,\nstorage, kernel and agent-readiness state, one OK/WARN/FAIL line each, to\npaste into a bug report. No tokens or secrets are printed. Also: tabinfo\n\n--agents: what agent CLIs (Claude Code, Codex) need, step by step, through\nboth runtimes: a native x86-64 probe under Blink and the Node runtime\n(mkdir -p 0700, O_EXCL + rename, stat/lstat/fstat, realpath, a child\nsh -c with output to a file), and the native claude binary\'s --version.\n';
       return 0;
+    }
+    if (ctx.args.includes('--agents')) {
+      const { agentChecks } = await import('./doctor-agents');
+      const checks = await guard('agents', () => agentChecks(ctx, { claudeVersion: true }), 120_000);
+      ctx.stdout = formatChecks(checks);
+      return checks.some((c) => c.status === 'FAIL') ? 1 : 0;
     }
     const checks = await runDoctorChecks(ctx);
     ctx.stdout = formatChecks(checks);

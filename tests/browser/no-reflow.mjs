@@ -41,6 +41,11 @@ const CASES = [
   { name: 'desktop-light', ctx: { viewport: { width: 1280, height: 800 }, colorScheme: 'light' }, hover: true },
   { name: 'iphone-dark', ctx: { ...devices['iPhone 15 Pro'], colorScheme: 'dark' } },
   { name: 'iphone-light', ctx: { ...devices['iPhone 15 Pro'], colorScheme: 'light' } },
+  // The classic full-page terminal (?ui=terminal) and the shiro.computer profile: the
+  // terminal fills the page and keeps its size (a lost display:contents once shrank it
+  // to 2 columns); at 1100 px that is at least 80 columns
+  { name: 'classic', query: '?ui=terminal', ctx: { viewport: { width: 1100, height: 700 } }, minCols: 80 },
+  { name: 'profile-shiro', query: '?profile=shiro', ctx: { viewport: { width: 1100, height: 700 } }, minCols: 80 },
 ].filter(c => !only || c.name === only);
 
 /** In the page, before any script: layout shifts and per-frame rects of the desktop's parts */
@@ -69,9 +74,28 @@ function recorder() {
     }
     return out;
   };
+  const CLASSIC = '#shiro-layout, #shiro-layout > *, #terminal, #terminal .xterm-screen';
+  const snapClassic = () => {
+    const out = {};
+    let n = 0;
+    for (const el of document.querySelectorAll(CLASSIC)) {
+      const r = el.getBoundingClientRect();
+      out[`${el.id || el.className}#${++n}`] = [r.x, r.y, r.width, r.height].map(v => Math.round(v * 10) / 10);
+    }
+    return out;
+  };
   const tick = () => {
     const root = document.getElementById('shiro-desktop');
-    if (root && !root.classList.contains('sd-booting') && getComputedStyle(root).visibility === 'visible') {
+    const term = window.__tabcomputer?.terminal?.term;
+    if (!root && term && document.querySelector('#terminal .xterm-screen')) {
+      // Classic UI: from the first frame the terminal exists
+      const s = snapClassic();
+      if (!rec.first) { rec.first = s; rec.firstAt = Math.round(performance.now()); }
+      rec.last = s;
+      rec.frames++;
+      rec.minCols = Math.min(rec.minCols ?? Infinity, term.cols);
+      rec.cols = term.cols;
+    } else if (root && !root.classList.contains('sd-booting') && getComputedStyle(root).visibility === 'visible') {
       const s = snap();
       if (!rec.first) { rec.first = s; rec.firstAt = Math.round(performance.now()); }
       rec.last = s;
@@ -114,7 +138,7 @@ for (const c of CASES) {
   const page = await ctx.newPage();
   await page.addInitScript(recorder);
   // The tour card is an overlay that appears later by design; keep it out of the frames
-  await page.addInitScript(() => { try { localStorage.setItem('shiro-desktop-tour', '1'); } catch {} });
+  await page.addInitScript(() => { try { localStorage.setItem('tabcomputer-desktop-tour', '1'); } catch {} });
   const cdp = await ctx.newCDPSession(page);
   const frames = [];
   let t0 = 0;
@@ -124,7 +148,7 @@ for (const c of CASES) {
   });
   await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 60, everyNthFrame: 1 });
   t0 = Date.now();
-  await page.goto(url, { waitUntil: 'load' });
+  await page.goto(new URL(c.query ?? '', url).href, { waitUntil: 'load' });
   await page.waitForFunction(() => window.__reflow?.first && window.__tabcomputer?.terminal, null, { timeout: 60_000 });
   await page.waitForTimeout(SETTLE_MS);
   await cdp.send('Page.stopScreencast').catch(() => {});
@@ -137,6 +161,7 @@ for (const c of CASES) {
   const moved = diff(r.first, r.last);
   if (moved.length) problems.push(`moved after the first visible frame (${r.firstAt} ms):\n      ${moved.join('\n      ')}`);
   const tracked = Object.keys(r.first).length;
+  if (c.minCols && !(r.minCols >= c.minCols)) problems.push(`terminal ${r.minCols} columns at its narrowest (now ${r.cols}); want ≥ ${c.minCols}`);
 
   let hovered = 0;
   if (c.hover) {
@@ -159,7 +184,7 @@ for (const c of CASES) {
   await ctx.close();
   const ok = problems.length === 0;
   if (!ok) failed++;
-  console.log(`${ok ? 'ok  ' : 'FAIL'} ${c.name}: CLS ${r.cls.toFixed(4)}, ${tracked} elements stable over ${r.frames} frames${c.hover ? `, ${hovered} dock hovers` : ''}, ${frames.length} screencast frames`);
+  console.log(`${ok ? 'ok  ' : 'FAIL'} ${c.name}: CLS ${r.cls.toFixed(4)}, ${tracked} elements stable over ${r.frames} frames${c.minCols ? `, ${r.minCols}–${r.cols} columns` : ''}${c.hover ? `, ${hovered} dock hovers` : ''}, ${frames.length} screencast frames`);
   for (const p of problems) console.log(`    ${p}`);
 }
 await browser.close();

@@ -1,0 +1,84 @@
+From e7cae2f43ae09a0eab9d5c981bf0d053e49b4b1e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 18:47:48 +0000
+Subject: [PATCH 62/62] Shiro: getpriority/setpriority keep a nice value per
+ process
+
+su and runuser failed with "cannot open session: Permission denied":
+pam_limits always calls setpriority(PRIO_PROCESS, 0, prio), and
+emscripten's stubs answered getpriority -ENODEV and setpriority EPERM.
+Each process now has a nice value (0 to start, inherited on fork, in the
+fork header): getpriority's raw result is 20 - nice, setpriority clamps
+to -20..19, and only root (euid 0) may lower it (EACCES otherwise). Other
+processes read as nice 0 (ESRCH if they don't exist).
+---
+ blink/machine.h |  1 +
+ blink/shiro.inc | 19 +++++++++++++++++++
+ 2 files changed, 20 insertions(+)
+
+diff --git a/blink/machine.h b/blink/machine.h
+index f252b62..4fe0f35 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -305,6 +305,7 @@ struct System {
+   struct sigaction_linux hands[64];
+   u64 blinksigs;  // signals blink itself handles
+   struct rlimit_linux rlim[RLIM_NLIMITS_LINUX];
++  int nice;  // getpriority/setpriority (Shiro: nothing is scheduled by it)
+ #ifdef HAVE_THREADS
+   pthread_cond_t_ machines_cond;
+   pthread_mutex_t_ machines_lock;
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 64a17ea..e71b959 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -1331,6 +1331,7 @@ struct ShiroForkHeader {
+   struct sigaction_linux hands[64];
+   u64 blinksigs;
+   struct rlimit_linux rlim[RLIM_NLIMITS_LINUX];
++  int nice;
+   i64 elfbase, at_base, at_phdr, at_phent, at_entry, at_phnum;
+   u8 rng[16];
+   u32 proglen, execfnlen, interplen;
+@@ -1500,6 +1501,7 @@ static int ShiroSnapshot(struct Machine *m, u64 flags, i64 stack, i64 ctid,
+   UNLOCK(&s->sig_lock);
+   h.blinksigs = s->blinksigs;
+   memcpy(h.rlim, s->rlim, sizeof(h.rlim));
++  h.nice = s->nice;
+   h.elfbase = s->elf.base;
+   h.at_base = s->elf.at_base, h.at_phdr = s->elf.at_phdr, h.at_phent = s->elf.at_phent;
+   h.at_entry = s->elf.at_entry, h.at_phnum = s->elf.at_phnum;
+@@ -1637,6 +1639,7 @@ static void ShiroRestoreFrom(struct Machine *m, const u8 *p, size_t len) {
+   memcpy(s->hands, h.hands, sizeof(h.hands));
+   s->blinksigs = h.blinksigs;
+   memcpy(s->rlim, h.rlim, sizeof(h.rlim));
++  s->nice = h.nice;
+   memcpy(m->beg, h.regs, sizeof(h.regs));
+   memcpy(m->xmm, h.xmm, sizeof(h.xmm));
+   m->ip = h.ip;
+@@ -2095,6 +2098,22 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       }
+       break;
+     }
++    case 0x08C:                                                       // getpriority
++    case 0x08D: {                                                     // setpriority
++      // A nice value per process, as Linux reports and checks it (pam_limits
++      // sets it for every su/runuser session); emscripten's stubs said
++      // -ENODEV / EPERM. The raw getpriority result is 20 - nice.
++      int which = (int)a, who = (int)b, self, nice;
++      if (which < 0 || which > 2) { r = -EINVAL_LINUX; break; }
++      self = !who || (which == 0 && who == m->system->pid);
++      if (!self && which == 0 && KS(m, 62, A12(who, 0)) < 0) { r = -ESRCH_LINUX; break; }
++      if (nr == 0x08C) { r = 20 - (self ? m->system->nice : 0); break; }
++      nice = (int)c < -20 ? -20 : (int)c > 19 ? 19 : (int)c;
++      if (nice < m->system->nice && KS(m, 107, A12(0)) != 0) { r = -EACCES_LINUX; break; }
++      if (self) m->system->nice = nice;
++      r = 0;
++      break;
++    }
+     case 0x000: r = ShiroRead(m, a, b, c); break;
+     case 0x001: r = ShiroWrite(m, a, b, c); break;
+     case 0x011: r = ShiroPread(m, 17, a, b, c, d); break;
+-- 
+2.43.0
+

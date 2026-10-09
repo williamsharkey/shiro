@@ -178,6 +178,12 @@ describe('shell constructs real scripts use (venv activate, build scripts)', () 
     expect(r.err).toBe('');
   });
 
+  it('/bin/sh and /bin/bash by path take options as sh does (Claude Code runs `$SHELL -c -l CMD`)', async () => {
+    const r = await sh(shell, `/bin/sh -c -l 'echo hi'; /bin/bash -c -l 'echo "$0 $1"' name one; /bin/sh -lc 'echo lc'; /bin/bash -c -e 'false; echo not reached'; echo "e=$?"; /bin/sh -c 'echo "$-"' | grep -c c`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('hi\nname one\nlc\ne=1\n1\n');
+  });
+
   it('${1:-default} and [ ! a = b ] inside if', async () => {
     const r = await sh(shell, 'f() { echo "${1:-none}"; if [ ! "${1:-}" = "x" ]; then echo notx; fi; }; f; f x');
     expect(r.out).toBe('none\nnotx\nx\n');
@@ -758,6 +764,14 @@ try { process.exit(3); } catch (e) { console.log('caught', e.message); }`);
     expect(Date.now() - start).toBeLessThan(20_000);
   }, 60_000);
 
+  it("a script's timers end with it (an interval left by process.exit() doesn't keep the next script alive)", async () => {
+    await fs.writeFile('/home/user/m/iv.js', `setInterval(() => { setTimeout(() => {}, 200); }, 20); setTimeout(() => process.exit(0), 50);`);
+    expect((await sh(shell, 'cd /home/user/m && node iv.js; echo rc=$?')).out).toBe('rc=0\n');
+    const start = Date.now();
+    expect(await node(`setTimeout(() => console.log('next done'), 30);`)).toBe('next done\n');
+    expect(Date.now() - start).toBeLessThan(5_000);
+  }, 60_000);
+
   it('worker_threads: a pool worker gets workerData and answers messages', async () => {
     await fs.writeFile('/home/user/m/w.js', `const { parentPort, workerData, isMainThread } = require('worker_threads');
 parentPort.on('message', (m) => parentPort.postMessage({ sum: m.a + m.b + workerData.base, main: isMainThread }));`);
@@ -830,6 +844,71 @@ c.on('close', (code) => console.log('closed', code));`)).toBe('true\nchild done\
     expect(Date.now() - start).toBeLessThan(30_000);
   }, 60_000);
 
+  it('fs.watch, watchFile and fs.promises.watch see writes from another process (rename vs change)', async () => {
+    await fs.mkdir('/home/user/m/w/sub', { recursive: true });
+    await fs.writeFile('/home/user/m/w/old.txt', 'old');
+    await fs.writeFile('/home/user/m/watch.js', `const fs = require('fs'); const path = require('path');
+const dir = '/home/user/m/w'; const ev = [];
+const w = fs.watch(dir, (type, name) => ev.push('dir ' + type + ' ' + name));
+const r = fs.watch(dir, { recursive: true }, (type, name) => { if (name.startsWith('sub')) ev.push('rec ' + type + ' ' + name); });
+const f = fs.watch(path.join(dir, 'old.txt'), (type, name) => ev.push('file ' + type + ' ' + name + ' ' + fs.readFileSync(path.join(dir, 'old.txt'), 'utf8').trim()));
+fs.watchFile(path.join(dir, 'old.txt'), (curr, prev) => ev.push('stat ' + prev.size + '->' + curr.size));
+(async () => { for await (const e of fs.promises.watch(dir)) { if (e.filename === 'done') break; } ev.push('iter ended'); })();
+setInterval(() => {
+  if (!fs.existsSync(dir + '/done')) return;
+  setTimeout(() => {
+    w.close(); r.close(); f.close(); fs.unwatchFile(path.join(dir, 'old.txt'));
+    console.log([...new Set(ev)].sort().join('\\n'));
+    process.exit(0);
+  }, 300);
+}, 50);
+console.log('watching');`);
+    const watcher = sh(shell, 'cd /home/user/m && node watch.js');
+    await new Promise((r) => setTimeout(r, 1500));
+    // Another process writes: a new file, a change, a subdirectory file, a rename, a delete
+    const other = (shell as any).fork();
+    await sh(other, 'cd /home/user/m/w && echo hi > new.txt && echo more >> old.txt && echo s > sub/deep.txt && mv new.txt moved.txt && rm moved.txt && sleep 0.3 && touch done');
+    const r = await watcher;
+    // (Like Linux: a new file is 'rename' then 'change'; a non-recursive
+    // directory watch doesn't see inside subdirectories)
+    expect(r.out).toBe(`watching
+dir change done
+dir change new.txt
+dir change old.txt
+dir rename done
+dir rename moved.txt
+dir rename new.txt
+file change old.txt oldmore
+iter ended
+rec change sub/deep.txt
+rec rename sub/deep.txt
+stat 3->8
+`);
+  }, 60_000);
+
+  it('node:assert: match, rejects, deep equality and AssertionError like node', async () => {
+    expect(await node(`const assert = require('assert'); const strict = require('node:assert/strict'); const r = [];
+const t = (n, fn) => { try { fn(); r.push(n + ':ok'); } catch (e) { r.push(n + ':' + (e.code || e.name)); } };
+t('match', () => assert.match('abc', /b/)); t('matchFail', () => assert.match('abc', /x/)); t('doesNotMatch', () => assert.doesNotMatch('abc', /b/));
+t('dse', () => assert.deepStrictEqual({ a: [1, { b: new Map([[1, new Set([2])]]) }] }, { a: [1, { b: new Map([[1, new Set([2])]]) }] }));
+t('dseProto', () => assert.deepStrictEqual(Object.create(null), {})); t('deProto', () => assert.deepEqual(Object.create(null), {}));
+t('dseNaN', () => assert.deepStrictEqual([NaN], [NaN])); t('dseZero', () => assert.deepStrictEqual(-0, 0)); t('deLoose', () => assert.deepEqual({ a: 1 }, { a: '1' }));
+t('dseCycle', () => { const a = {}; a.s = a; const b = {}; b.s = b; assert.deepStrictEqual(a, b); });
+t('throwsWrong', () => assert.throws(() => { throw new TypeError('x'); }, RangeError));
+t('throwsObj', () => assert.throws(() => { throw Object.assign(new Error('m'), { code: 'E1' }); }, { code: 'E1', message: /m/ }));
+t('throwsNone', () => assert.throws(() => {})); t('strictMode', () => strict.equal(1, '1')); t('loose', () => assert.equal(1, '1'));
+t('ifError', () => assert.ifError(new Error('e')));
+try { assert.strictEqual(1, 2); } catch (e) { r.push([e.name, e.code, e.actual, e.expected, e.operator, e.generatedMessage, e instanceof assert.AssertionError].join(',')); }
+(async () => {
+  const at = async (n, p) => { try { await p; r.push(n + ':ok'); } catch (e) { r.push(n + ':' + (e.code || e.name)); } };
+  await at('rejects', assert.rejects(Promise.reject(new TypeError('a')), TypeError)); await at('rejectsNone', assert.rejects(Promise.resolve(1)));
+  await at('doesNotReject', assert.doesNotReject(async () => { throw new Error('w'); }));
+  console.log(r.join(' '), assert.strict === strict, require('util').isDeepStrictEqual([1], ['1']));
+})();`)).toBe('match:ok matchFail:ERR_ASSERTION doesNotMatch:ERR_ASSERTION dse:ok dseProto:ERR_ASSERTION deProto:ok dseNaN:ok dseZero:ERR_ASSERTION deLoose:ok dseCycle:ok '
+      + 'throwsWrong:ERR_ASSERTION throwsObj:ok throwsNone:ERR_ASSERTION strictMode:ERR_ASSERTION loose:ok ifError:ERR_ASSERTION '
+      + 'AssertionError,ERR_ASSERTION,1,2,strictEqual,true,true rejects:ok rejectsNone:ERR_ASSERTION doesNotReject:ERR_ASSERTION true false\n');
+  }, 60_000);
+
   it('fs streams: binary round trip through pipe, append, events', async () => {
     expect(await node(`const fs = require('fs'); const { pipeline, Transform } = require('stream');
 const bin = Buffer.from([0, 255, 128, 10, 200, 1]);
@@ -859,6 +938,130 @@ ws.write(bin.subarray(0, 3)); ws.end(bin.subarray(3), () => {
 import('dual').then(ns => console.log(ns.default.kind, ns.kind));
 const dyn = new Function('m', 'return import(m)'); dyn('./node_modules/dual/n.js').then(ns => console.log(ns.default));`))
       .toBe('cjs browser\ncjs cjs\nnode\n');
+  }, 60_000);
+
+  // Expected values are real node 22's (cases ported from node's
+  // test/parallel/test-fs-open-flags, test-fs-write-file*, test-fs-lstat* and test-fs-realpath*)
+  const fsCase = `const fs = require('fs'); const path = require('path'); const C = fs.constants;
+const D = '/home/user/m/fsf'; fs.rmSync(D, { recursive: true, force: true }); fs.mkdirSync(D, { recursive: true });
+const j = (n) => path.join(D, n); const r = [];
+const t = (name, fn) => { try { r.push(name + '=' + fn()); } catch (e) { r.push(name + '=' + e.code); } };
+const perm = (n) => (fs.statSync(j(n)).mode & 0o777).toString(8);`;
+
+  it('fs open flags: O_CREAT without a write bit creates, wx/O_EXCL is EEXIST, a missing file without O_CREAT is ENOENT', async () => {
+    expect(await node(`${fsCase}
+t('creat', () => { fs.closeSync(fs.openSync(j('c1'), C.O_CREAT)); return fs.existsSync(j('c1')); });
+t('creatExcl', () => { const fd = fs.openSync(j('c2'), C.O_CREAT | C.O_EXCL | C.O_WRONLY); fs.writeSync(fd, 'x'); fs.closeSync(fd); return fs.readFileSync(j('c2'), 'utf8'); });
+fs.writeFileSync(j('e'), 'keep');
+t('wx', () => fs.openSync(j('e'), 'wx')); t('wxs', () => fs.openSync(j('e'), 'wx+'));
+t('excl', () => fs.openSync(j('e'), C.O_CREAT | C.O_EXCL | C.O_RDWR));
+t('ax', () => fs.openSync(j('e'), 'ax'));
+t('kept', () => fs.readFileSync(j('e'), 'utf8'));
+t('r', () => fs.openSync(j('nope'), 'r')); t('rplus', () => fs.openSync(j('nope'), 'r+')); t('rdwr', () => fs.openSync(j('nope'), C.O_RDWR));
+t('a', () => { fs.closeSync(fs.openSync(j('a1'), 'a')); return fs.existsSync(j('a1')); });
+t('rplusKeeps', () => { const fd = fs.openSync(j('e'), 'r+'); fs.closeSync(fd); return fs.readFileSync(j('e'), 'utf8'); });
+t('trunc', () => { fs.closeSync(fs.openSync(j('e'), C.O_WRONLY | C.O_TRUNC)); return JSON.stringify(fs.readFileSync(j('e'), 'utf8')); });
+t('openMode', () => { fs.closeSync(fs.openSync(j('om'), 'w', 0o600)); return perm('om'); });
+fs.open(j('c1'), 'wx', (e) => { r.push('cbwx=' + (e && e.code));
+  fs.open(j('nope'), (e2) => { r.push('cbr=' + (e2 && e2.code));
+    fs.promises.open(j('c1'), 'wx').then(() => r.push('pwx=opened'), (e3) => r.push('pwx=' + e3.code)).then(() => console.log(r.join(' ')));
+  });
+});`)).toBe('creat=true creatExcl=x wx=EEXIST wxs=EEXIST excl=EEXIST ax=EEXIST kept=keep r=ENOENT rplus=ENOENT rdwr=ENOENT a=true rplusKeeps=keep trunc="" openMode=600 cbwx=EEXIST cbr=ENOENT pwx=EEXIST\n');
+  }, 60_000);
+
+  it('fs writeFile options: flag, mode and encoding (sync, callback and promise)', async () => {
+    expect(await node(`${fsCase}
+fs.writeFileSync(j('w'), 'one');
+t('flagA', () => { fs.writeFileSync(j('w'), 'two', { flag: 'a' }); return fs.readFileSync(j('w'), 'utf8'); });
+t('wx', () => fs.writeFileSync(j('w'), 'no', { flag: 'wx' })); t('kept', () => fs.readFileSync(j('w'), 'utf8'));
+t('mode', () => { fs.writeFileSync(j('m'), 'x', { mode: 0o600 }); return perm('m'); });
+t('modeStr', () => { fs.writeFileSync(j('ms'), 'x', { mode: '0640' }); return perm('ms'); });
+t('modeUmask', () => { fs.writeFileSync(j('mu'), 'x', { mode: 0o777 }); return perm('mu'); });
+t('modeKeepsExisting', () => { fs.writeFileSync(j('m'), 'y', { mode: 0o644 }); return perm('m'); });
+t('hex', () => { fs.writeFileSync(j('h'), '6869', 'hex'); return fs.readFileSync(j('h'), 'utf8'); });
+t('base64', () => { fs.writeFileSync(j('b'), 'aGk=', { encoding: 'base64' }); return fs.readFileSync(j('b'), 'utf8'); });
+t('latin1', () => { fs.writeFileSync(j('l'), '\\u00e9', 'latin1'); return fs.statSync(j('l')).size; });
+t('append', () => { fs.appendFileSync(j('w'), '3'); return fs.readFileSync(j('w'), 'utf8'); });
+t('appendMode', () => { fs.appendFileSync(j('am'), 'x', { mode: 0o640 }); return perm('am'); });
+t('appendAx', () => fs.appendFileSync(j('am'), 'x', { flag: 'ax' }));
+t('fd', () => { const fd = fs.openSync(j('fd'), 'w'); fs.writeFileSync(fd, 'via fd'); fs.closeSync(fd); return fs.readFileSync(j('fd'), 'utf8'); });
+fs.writeFile(j('w'), 'Z', { flag: 'a' }, (e) => { r.push('cbFlagA=' + (e ? e.code : fs.readFileSync(j('w'), 'utf8')));
+  fs.writeFile(j('cm'), 'x', { mode: 0o600 }, () => { r.push('cbMode=' + perm('cm'));
+    fs.appendFile(j('w'), 'Q', (e2) => { r.push('cbAppend=' + (e2 ? e2.code : fs.readFileSync(j('w'), 'utf8')));
+      fs.writeFile(j('w'), 'no', { flag: 'wx' }, (e3) => { r.push('cbWx=' + (e3 && e3.code));
+        (async () => {
+          await fs.promises.writeFile(j('w'), 'P', { flag: 'a' }); r.push('pFlagA=' + await fs.promises.readFile(j('w'), 'utf8'));
+          await fs.promises.writeFile(j('w'), 'no', 'wx').catch(() => {});
+          await fs.promises.writeFile(j('w'), 'no', { flag: 'wx' }).then(() => r.push('pWx=wrote'), (e4) => r.push('pWx=' + e4.code));
+          await fs.promises.appendFile(j('pa'), 'x', { mode: 0o600 }); r.push('pAppendMode=' + perm('pa'));
+          await fs.promises.writeFile(j('ph'), '6869', 'hex'); r.push('pHex=' + fs.readFileSync(j('ph'), 'utf8'));
+          const h = await fs.promises.open(j('fh'), 'w'); await h.writeFile('handle'); await h.close(); r.push('handle=' + fs.readFileSync(j('fh'), 'utf8'));
+          console.log(r.join(' '));
+        })();
+      });
+    });
+  });
+});`)).toBe('flagA=onetwo wx=EEXIST kept=onetwo mode=600 modeStr=640 modeUmask=755 modeKeepsExisting=600 hex=hi base64=hi latin1=1 append=onetwo3 appendMode=640 appendAx=EEXIST fd=via fd ' +
+      'cbFlagA=onetwo3Z cbMode=600 cbAppend=onetwo3ZQ cbWx=EEXIST pFlagA=onetwo3ZQP pWx=EEXIST pAppendMode=600 pHex=hi handle=handle\n');
+    // the modes reach the filesystem once the script is done
+    expect((await sh(shell, 'stat -c %a /home/user/m/fsf/m /home/user/m/fsf/am')).out).toBe('600\n640\n');
+  }, 60_000);
+
+  it('fs mkdir mode applies to each directory it creates (sync, callback and promise)', async () => {
+    expect(await node(`${fsCase}
+fs.mkdirSync(j('a/b/c'), { recursive: true, mode: 0o700 }); r.push('rec=' + perm('a') + ',' + perm('a/b') + ',' + perm('a/b/c'));
+fs.mkdirSync(j('a/b/d'), { recursive: true, mode: 0o750 }); r.push('existingKept=' + perm('a/b') + ' new=' + perm('a/b/d'));
+fs.mkdirSync(j('plain'), 0o711); r.push('num=' + perm('plain'));
+fs.mkdirSync(j('dflt')); r.push('default=' + perm('dflt'));
+fs.mkdir(j('cb'), { mode: 0o700 }, () => { r.push('cb=' + perm('cb'));
+  fs.promises.mkdir(j('p/q'), { recursive: true, mode: 0o700 }).then(() => { r.push('p=' + perm('p') + ',' + perm('p/q')); console.log(r.join(' ')); });
+});`)).toBe('rec=700,700,700 existingKept=700 new=750 num=711 default=755 cb=700 p=700,700\n');
+    expect((await sh(shell, 'stat -c %a /home/user/m/fsf/a/b/c /home/user/m/fsf/p/q')).out).toBe('700\n700\n');
+  }, 60_000);
+
+  it('fs lstat and realpath see symlinks; ino and dev are stable', async () => {
+    expect(await node(`${fsCase}
+fs.writeFileSync(j('f'), 'data'); fs.mkdirSync(j('dir')); fs.writeFileSync(j('dir/in'), 'x');
+fs.symlinkSync('f', j('L')); fs.symlinkSync(j('dir'), j('DL')); fs.symlinkSync('gone', j('dangling'));
+t('lstatLink', () => fs.lstatSync(j('L')).isSymbolicLink() + '/' + fs.lstatSync(j('L')).isFile());
+t('lstatMode', () => (fs.lstatSync(j('L')).mode & C.S_IFMT) === C.S_IFLNK);
+t('lstatSize', () => fs.lstatSync(j('L')).size);
+t('statLink', () => fs.statSync(j('L')).isSymbolicLink() + '/' + fs.statSync(j('L')).isFile() + '/' + fs.statSync(j('L')).size);
+t('lstatFile', () => fs.lstatSync(j('f')).isSymbolicLink());
+t('lstatDir', () => fs.lstatSync(j('dir')).isDirectory());
+t('lstatDirLink', () => fs.lstatSync(j('DL')).isSymbolicLink() + '/' + fs.statSync(j('DL')).isDirectory());
+t('lstatDangling', () => fs.lstatSync(j('dangling')).isSymbolicLink());
+t('statDangling', () => fs.statSync(j('dangling')));
+t('lstatMissing', () => fs.lstatSync(j('nope')));
+t('noThrow', () => fs.lstatSync(j('nope'), { throwIfNoEntry: false }));
+t('direntLink', () => fs.readdirSync(D, { withFileTypes: true }).find((d) => d.name === 'L').isSymbolicLink());
+t('existsSymlink', () => fs.symlinkSync('f', j('L')));
+t('realLink', () => path.relative(D, fs.realpathSync(j('L'))));
+t('realThroughDir', () => path.relative(D, fs.realpathSync(j('DL/in'))));
+t('realDot', () => fs.realpathSync(D + '/./dir/../f') === fs.realpathSync(j('f')));
+t('realDangling', () => fs.realpathSync(j('dangling')));
+t('realMissing', () => fs.realpathSync(j('later')));
+t('realLater', () => { const before = fs.existsSync(j('later')); fs.writeFileSync(j('later'), 'x'); return before + '/' + (fs.realpathSync(j('later')) === j('later')) + '/' + (fs.realpathSync(j('later')) === fs.realpathSync(j('later'))); });
+t('realLaterViaLink', () => { fs.writeFileSync(j('DL/later'), 'y'); return path.relative(D, fs.realpathSync(j('DL/later'))); });
+const s1 = fs.statSync(j('f')), s2 = fs.statSync(j('f'));
+t('inoStable', () => s1.ino === s2.ino && s1.dev === s2.dev && s1.ino > 0);
+t('inoAfterWrite', () => { fs.writeFileSync(j('f'), 'more'); return fs.statSync(j('f')).ino === s1.ino; });
+t('inoDistinct', () => fs.statSync(j('dir')).ino !== s1.ino && fs.statSync(j('dir/in')).ino !== s1.ino);
+t('inoViaLink', () => fs.statSync(j('L')).ino === s1.ino && fs.lstatSync(j('L')).ino !== s1.ino);
+(async () => {
+  r.push('pLstat=' + (await fs.promises.lstat(j('L'))).isSymbolicLink() + '/' + (await fs.promises.stat(j('L'))).isFile());
+  r.push('pIno=' + ((await fs.promises.stat(j('L'))).ino === s1.ino));
+  r.push('pReal=' + path.relative(D, await fs.promises.realpath(j('DL/in'))));
+  await fs.promises.realpath(j('nope2')).catch((e) => r.push('pRealMissing=' + e.code));
+  await fs.promises.symlink('f', j('L')).catch((e) => r.push('pSymlinkExists=' + e.code));
+  await fs.promises.lstat(j('nope')).catch((e) => r.push('pLstatMissing=' + e.code));
+  fs.lstat(j('L'), (e, st) => { r.push('cbLstat=' + st.isSymbolicLink());
+    fs.stat(j('L'), (e2, st2) => { r.push('cbStat=' + st2.isFile() + '/' + (st2.ino === s1.ino)); console.log(r.join(' ')); });
+  });
+})();`)).toBe('lstatLink=true/false lstatMode=true lstatSize=1 statLink=false/true/4 lstatFile=false lstatDir=true lstatDirLink=true/true lstatDangling=true ' +
+      'statDangling=ENOENT lstatMissing=ENOENT noThrow=undefined direntLink=true existsSymlink=EEXIST realLink=f realThroughDir=dir/in realDot=true realDangling=ENOENT ' +
+      'realMissing=ENOENT realLater=false/true/true realLaterViaLink=dir/later inoStable=true inoAfterWrite=true inoDistinct=true inoViaLink=true ' +
+      'pLstat=true/true pIno=true pReal=dir/in pRealMissing=ENOENT pSymlinkExists=EEXIST pLstatMissing=ENOENT cbLstat=true cbStat=true/true\n');
   }, 60_000);
 });
 
@@ -939,6 +1142,21 @@ lockfileVersion: '9.0'
     r = await sh(shell, `cd /home/user/yq && rm -rf node_modules && ${yarn} install --offline > /dev/null && node app.js`);
     expect(r.out).toBe('true 1.2.3\n');
   }, 300_000);
+
+  it('chokidar 3 reports add, change, unlink and addDir for another process\'s writes', async () => {
+    let r = await sh(shell, 'mkdir -p /home/user/ck/src/lib && cd /home/user/ck && npm init -y > /dev/null && npm install chokidar@3.6.0 > /dev/null; echo $?');
+    expect(r.out).toBe('0\n');
+    await fs.writeFile('/home/user/ck/src/a.js', 'a');
+    await fs.writeFile('/home/user/ck/w.js', `const chokidar = require('chokidar'); const fs = require('fs'); const ev = [];
+const w = chokidar.watch('src', { ignoreInitial: true });
+w.on('all', (e, p) => { ev.push(e + ' ' + p); if (p.endsWith('stop')) setTimeout(() => { w.close().then(() => { console.log([...new Set(ev)].filter((x) => !x.includes('stop')).sort().join('\\n')); process.exit(0); }); }, 300); });
+w.on('ready', () => console.log('ready'));`);
+    const watcher = sh(shell, 'cd /home/user/ck && node w.js');
+    await new Promise((res) => setTimeout(res, 2000));
+    await sh((shell as any).fork(), 'cd /home/user/ck/src && echo b > b.js && echo aa >> a.js && mkdir lib/deep && echo c > lib/c.js && rm b.js && sleep 0.5 && touch stop');
+    r = await watcher;
+    expect(r.out).toBe('ready\nadd src/b.js\nadd src/lib/c.js\naddDir src/lib/deep\nchange src/a.js\nunlink src/b.js\n');
+  }, 180_000);
 
   it('a CLI on commander, chalk, dayjs and uuid', async () => {
     // commander declares `const process = require('node:process')` at top level

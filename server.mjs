@@ -425,8 +425,10 @@ async function handleStatic(req, res) {
       const override = new URL(req.url, 'http://localhost').searchParams.get('profile');
       data = Buffer.from(brandAppShell(data.toString('utf8'), req.headers['host'], profileFor(req.headers['host'], override)?.brand));
     }
-    // The streamed Debian rootfs's chunks are content-addressed (named by sha256)
-    const immutable = pathname.startsWith('/debian/chunks/') ? { 'cache-control': 'public, max-age=31536000, immutable' } : {};
+    // The streamed Debian rootfs's chunks are content-addressed (named by sha256),
+    // and so are the engines' hashed wasm copies (vite-plugin-engines.ts)
+    const immutable = pathname.startsWith('/debian/chunks/') || /^\/engines\/.*\.[0-9a-f]{12}\.wasm$/.test(pathname)
+      ? { 'cache-control': 'public, max-age=31536000, immutable' } : {};
     res.writeHead(200, { 'content-type': MIME[ext] || 'application/octet-stream', ...staticHeaders, ...isolation, ...immutable });
     res.end(data);
   } catch {
@@ -930,8 +932,8 @@ export function tcpRelayConfigFromEnv(env = process.env) {
     // connection (proxy pools, iCloud Private Relay, dual-stack) fail with it on.
     tokenBindIp: env.TABCOMPUTER_TCP_TOKEN_BIND_IP !== '0',
     maxConns: envInt(env.TABCOMPUTER_TCP_MAX_CONNS, 512),
-    maxConnsPerIp: envInt(env.TABCOMPUTER_TCP_MAX_CONNS_PER_IP, 16),
-    connectsPerMinute: envInt(env.TABCOMPUTER_TCP_CONNECTS_PER_MIN, 60),
+    maxConnsPerIp: envInt(env.TABCOMPUTER_TCP_MAX_CONNS_PER_IP, 64),
+    connectsPerMinute: envInt(env.TABCOMPUTER_TCP_CONNECTS_PER_MIN, 300),
     bytesPerSecPerIp: envInt(env.TABCOMPUTER_TCP_BYTES_PER_SEC, 4 * 1024 * 1024),
     byteBurstPerIp: envInt(env.TABCOMPUTER_TCP_BYTE_BURST, 16 * 1024 * 1024),
     maxBytesPerIpPerHour: envInt(env.TABCOMPUTER_TCP_BYTES_PER_HOUR, 4 * 1024 ** 3),

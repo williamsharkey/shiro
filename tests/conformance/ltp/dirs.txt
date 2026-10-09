@@ -1,7 +1,7 @@
 read write open openat creat close lseek pread pwrite readv writev
 pipe pipe2 dup dup2 dup3 fcntl
 poll ppoll select pselect epoll_create epoll_create1 epoll_ctl epoll_wait
-signal sigaction rt_sigaction sigprocmask rt_sigprocmask kill alarm pause
+signal sigaction rt_sigaction sigprocmask rt_sigprocmask kill alarm pause signalfd signalfd4
 wait4 waitpid waitid fork vfork execve clone
 stat fstat lstat rename unlink unlinkat mkdir mkdirat rmdir symlink readlink link getdents
 chdir fchdir getcwd access faccessat umask truncate ftruncate chmod fchmod

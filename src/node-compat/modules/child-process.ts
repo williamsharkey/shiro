@@ -1,4 +1,5 @@
 import type { CommandContext } from '../../commands/index';
+import { parseShellArgs } from '../../shell-args';
 import { activeProfile } from '../../profile';
 
 export interface ChildProcessDeps {
@@ -163,13 +164,13 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
   };
   // Extract command from spawn-style args array for shell binaries
   const extractShellArgs = (args: string[]): string => {
-    const cIdx = args.findIndex(a => /^-\w*c$/.test(a));
-    if (cIdx >= 0 && cIdx + 1 < args.length) {
-      // Options may follow -c (Claude Code runs `zsh -c -l <cmd>`); skip them so they
-      // don't end up inside the command, where a cwd prefix would make `-l` a command
-      const rest = args.slice(cIdx + 1);
-      while (rest.length > 1 && /^-[a-zA-Z]+$/.test(rest[0])) rest.shift();
-      return rest.join(' ');
+    // bash's options, before or after -c (Claude Code runs `zsh -c -l <cmd>`): src/shell-args.ts
+    const parsed = parseShellArgs(args);
+    if (parsed.command && parsed.rest.length) {
+      // One command string and nothing that changes how it runs: run it directly
+      if (parsed.rest.length === 1 && !parsed.on.length && !parsed.off.length) return parsed.rest[0];
+      // $0, $1… after the string (bash -c 'echo $1' x y) or -e/-o …: the shell's own sh -c
+      return shellQuoteArgs(['sh', ...parsed.on.flatMap((o) => ['-o', o]), ...parsed.off.flatMap((o) => ['+o', o]), '-c', ...parsed.rest]);
     }
     // No -c: find non-flag args (file paths to source)
     const scripts = args.filter(a => !a.startsWith('-'));
@@ -198,28 +199,6 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       }
       // Pass through to Shiro's builtin rg command (handles --files, --sort, all flags)
       normalized = `rg ${rgArgs}`;
-    }
-
-    // Suppress OAuth browser popup — it doesn't work in Shiro (wrong redirect domain).
-    // Claude Code will fall back to showing the URL in terminal, which we make clickable.
-    // The URL may be wrapped in single quotes by shellQuoteArgs, so strip them.
-    const oauthOpenMatch = normalized.match(/^(open|xdg-open)\s+['"]*?(https:\/\/claude\.ai\/oauth\/\S+?)['"]*$/);
-    if (oauthOpenMatch) {
-      // The `open` URL has redirect_uri=http://localhost:PORT/callback (local server).
-      // On Shiro this doesn't work — replace with the manual-flow redirect that
-      // shows a code the user can paste back into the terminal.
-      const oauthUrl = oauthOpenMatch[2].replace(
-        /redirect_uri=http%3A%2F%2Flocalhost%3A\d+%2F[^&]*/,
-        'redirect_uri=' + encodeURIComponent('https://platform.claude.com/oauth/code/callback')
-      );
-      // Write clickable sign-in buttons to terminal
-      if (ctx.terminal) {
-        const copyUri = `shiro://copy?text=${encodeURIComponent(oauthUrl)}`;
-        const copyBtn = `\x1b]8;;${copyUri}\x07\x1b[1;33m[ Copy URL ]\x1b[0m\x1b]8;;\x07`;
-        const openBtn = `\x1b]8;;${oauthUrl}\x07\x1b[1;36m[ Open in Browser ]\x1b[0m\x1b]8;;\x07`;
-        ctx.terminal.writeOutput(`\r\n  ${copyBtn}  ${openBtn}\r\n`);
-      }
-      return { stdout: '', stderr: '', exitCode: 1 };
     }
 
     // Drain pending IDB writes so shell commands can see files written by

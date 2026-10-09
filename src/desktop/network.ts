@@ -245,39 +245,48 @@ function togglePopover(wm: WindowManager, anchor: HTMLElement): void {
   if (popover) { closePopover(); return; }
   const p = el('div', 'sd-popover');
   p.setAttribute('role', 'dialog');
-  p.setAttribute('aria-label', 'Network');
+  p.setAttribute('aria-label', 'Network and accounts');
   const r = anchor.getBoundingClientRect();
   p.style.top = `${r.bottom + 6}px`;
   p.style.right = `${Math.max(8, window.innerWidth - r.right - 8)}px`;
-  const render = (s: NetworkStatus, account: string | null) => {
+  // The connection (re-rendered as the probe answers), then the accounts (accounts.ts)
+  p.innerHTML = `<div class="sd-pop-net"></div>
+    <div class="sd-pop-h sd-small sd-muted">Accounts</div><div class="sd-accounts sd-pop-accounts"></div>
+    <div class="sd-row" style="padding-top:6px;border:0"><button class="sd-link sd-small" data-act="accounts" type="button">Accounts…</button>
+      <span class="sd-grow"></span><button class="sd-link sd-small" data-act="settings" type="button">Network settings…</button></div>`;
+  const net = p.querySelector<HTMLElement>('.sd-pop-net')!;
+  const render = (s: NetworkStatus) => {
     const dot = s === 'signed-in' || s === 'online' ? 'ok' : s === 'needs-sign-in' ? 'warn' : 'off';
-    p.innerHTML = `
+    net.innerHTML = `
       <div class="sd-row"><span class="sd-dot ${dot}"></span><b class="sd-grow">Network</b><span class="sd-small sd-muted">${esc(statusText(s))}</span></div>
-      <div class="sd-row sd-small sd-muted">${account ? `Signed in as <b style="color:var(--sd-text)">@${esc(account)}</b>` : networkCredential() ? 'Signed in with GitHub' : 'Not signed in. Downloads from this site work anyway.'}</div>
-      <div class="sd-row" style="padding-top:8px">
-        ${networkCredential() ? `<button class="sd-btn" data-act="signout" type="button">Sign out</button>` : `<button class="sd-btn sd-primary" data-act="signin" type="button">Sign in with GitHub</button>`}
-        <span class="sd-grow"></span><button class="sd-link sd-small" data-act="settings" type="button">Network settings…</button>
-      </div>`;
+      ${networkCredential() ? '' : '<div class="sd-row sd-small sd-muted">Downloads from this site work without signing in.</div>'}`;
   };
-  render(networkStatus(), null);
+  render(networkStatus());
   p.addEventListener('click', (e) => {
     e.stopPropagation();
     const act = (e.target as HTMLElement).closest<HTMLElement>('[data-act]')?.dataset.act;
-    if (act === 'signin') { closePopover(); void openSignIn(); }
-    if (act === 'signout') { signOut(); render(networkStatus(), null); }
     if (act === 'settings') { closePopover(); void wm.openApp('settings', { pane: 'network' }); }
+    if (act === 'accounts') { closePopover(); void wm.openApp('settings', { pane: 'accounts' }); }
   });
   wm.root.appendChild(p);
   popover = p;
   setTimeout(() => document.addEventListener('pointerdown', outside, true));
-  void probeRelay().then(async (s) => { if (popover === p) render(s, await signedInAccount()); });
+  const host = p.querySelector<HTMLElement>('.sd-pop-accounts')!;
+  void import('./accounts').then((m) => {
+    if (popover !== p || !fsRef) return;
+    popoverCleanup = m.renderAccounts(host, { wm, fs: fsRef, compact: true, onOpenSheet: closePopover });
+  });
+  void probeRelay().then((s) => { if (popover === p) render(s); });
 }
+let popoverCleanup: (() => void) | null = null;
 
 function outside(e: Event): void {
   if (popover && !popover.contains(e.target as Node)) closePopover();
 }
 
 function closePopover(): void {
+  popoverCleanup?.();
+  popoverCleanup = null;
   popover?.remove();
   popover = null;
   document.removeEventListener('pointerdown', outside, true);

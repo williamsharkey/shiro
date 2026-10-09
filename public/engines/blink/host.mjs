@@ -664,6 +664,8 @@ async function run(msg) {
   try {
     const { default: createBlink } = await import(msg.moduleUrl || './blink.mjs');
     M = await createBlink({
+      // blink.wasm's content-hashed URL when the page has one (cached for good)
+      ...(msg.wasmUrl ? { locateFile: (p, prefix) => (p.endsWith('.wasm') ? msg.wasmUrl : prefix + p) } : {}),
       shiroKernel: kernel,
       thisProgram: 'blink',
       noInitialRun: true,

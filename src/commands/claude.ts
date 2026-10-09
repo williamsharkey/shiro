@@ -1,14 +1,14 @@
 /**
  * claude - Run Claude Code in this terminal.
  *
- * Wraps the npm CLI so it just works in Shiro:
- *   - installs the pinned JS build on first use (normally done at boot)
- *   - shows the sign-in panel when there are no saved credentials
- *   - skips permission prompts by default, as `sc` always did
+ * Claude Code signs itself in, in the terminal: signed out, it opens the
+ * sign-in page in a new browser tab (xdg-open, src/open-url.ts) and asks for
+ * the code that page shows. Settings → Accounts has the page's own sign-in
+ * panel (src/claude-signin.ts) as an alternative; `claude` never opens it.
  *
  *   claude                   # Interactive session
  *   claude -p "fix the bug"  # Print mode
- *   claude login             # Sign in (or switch accounts) via the panel
+ *   claude login             # Sign in, or switch accounts (`claude auth login`)
  *
  * Which build plain `claude` runs is the profile's `shims.claude`: tabcomputer
  * runs Anthropic's native binary in the x86-64 emulator, shiro the pinned npm
@@ -25,7 +25,6 @@ import {
   ensureClaudeCodeInstalled,
   isClaudeCodeInstalled,
 } from '../claude-code-version';
-import { hasClaudeCredentials, openClaudeSignIn } from '../claude-signin';
 import { activeProfile } from '../profile';
 
 // Flags that make Claude print something and exit instead of starting a session
@@ -35,6 +34,11 @@ export function needsSession(args: string[]): boolean {
   if (args.some(a => INFO_FLAGS.has(a))) return false;
   // Subcommands (mcp, config, doctor, ...) take their own flags
   return args.length === 0 || args[0].startsWith('-');
+}
+
+/** `claude login` (and `/login`) is Claude Code's own `claude auth login`. */
+export function loginArgs(args: string[]): string[] {
+  return args[0] === 'login' || args[0] === '/login' ? ['auth', 'login', ...args.slice(1)] : args;
 }
 
 /** Where `claude --native` looks for the binary: $CLAUDE_NATIVE_PATH, else ~/.local/bin/claude. */
@@ -54,8 +58,9 @@ const quote = (a: string) => `'${a.replace(/'/g, `'\\''`)}'`;
 async function runNative(ctx: Parameters<Command['exec']>[0], args: string[]): Promise<number> {
   const path = nativeClaudePath(ctx.env);
   let elf = false;
+  let raw: Uint8Array | string | null = null;
   try {
-    const raw = await ctx.fs.readFile(path);
+    raw = await ctx.fs.readFile(path);
     elf = typeof raw !== 'string' && raw.length > 4 && raw[0] === 0x7f && raw[1] === 0x45 && raw[2] === 0x4c && raw[3] === 0x46;
   } catch { /* missing */ }
   if (!elf) {
@@ -65,6 +70,7 @@ async function runNative(ctx: Parameters<Command['exec']>[0], args: string[]): P
       + '(CLAUDE_NATIVE_PATH picks another path for the linux-x64-musl binary.)\n';
     return 1;
   }
+  args = loginArgs(args);
   // Same settings cleanup as the npm build's start (e.g. drop the "mcp__*"
   // allow rule older Shiro seeded, which current Claude Code warns about)
   try {
@@ -74,13 +80,20 @@ async function runNative(ctx: Parameters<Command['exec']>[0], args: string[]): P
   // JSC's JIT costs more than it saves under Blink: -p took 85 s without it
   // and 107 s with it (musl build, docs/COMPAT.md). Export BUN_JSC_useJIT=1 to keep it.
   const jit = ctx.env.BUN_JSC_useJIT === undefined ? 'BUN_JSC_useJIT=0 ' : '';
-  const line = jit + [path, ...args].map(quote).join(' ');
+  // URLs as OSC 8 links: the sign-in URL Claude prints wraps over several
+  // lines, and a click on the link opens it (no popup blocker involved)
+  const links = ctx.env.FORCE_HYPERLINK === undefined ? 'FORCE_HYPERLINK=1 ' : '';
+  // Which build an agent inside is (~/AGENTS.md, src/agent-docs.ts)
+  const { nativeClaudeVersion } = await import('./claude-native');
+  const version = await nativeClaudeVersion(ctx.fs, path, raw as Uint8Array);
+  const build = `TABCOMPUTER_CLAUDE_BUILD=native TABCOMPUTER_CLAUDE_VERSION=${quote(version ?? 'unknown')} `;
+  const line = jit + links + build + [path, ...args].map(quote).join(' ');
   return ctx.shell.execute(line, (s) => { ctx.stdout += s.replace(/\r\n/g, '\n'); }, (s) => { ctx.stderr += s.replace(/\r\n/g, '\n'); }, false, ctx.terminal, true);
 }
 
 export const claudeCmd: Command = {
   name: 'claude',
-  description: 'Run Claude Code (installed and signed in automatically)',
+  description: 'Run Claude Code (installed automatically; it signs itself in)',
   async exec(ctx) {
     const args = [...ctx.args];
     // The build: --npm/--native first (or after `install`), then CLAUDE_NATIVE=0/1, then the profile
@@ -129,16 +142,7 @@ export const claudeCmd: Command = {
       }
     }
 
-    const wantsLogin = args[0] === 'login' || args[0] === '/login';
-    const canShowPanel = typeof window !== 'undefined' && !!ctx.terminal;
-    if (canShowPanel && (wantsLogin || (needsSession(args) && !(await hasClaudeCredentials(ctx.fs))))) {
-      write('Sign in with the panel that just opened (or choose "Skip for now").\n');
-      const signedIn = await openClaudeSignIn({ fs: ctx.fs, cwd: ctx.cwd });
-      write(signedIn ? '\x1b[32mSigned in.\x1b[0m\n' : 'Sign-in skipped. You can run /login inside Claude Code later.\n');
-      // The panel had keyboard focus; hand it back so Claude gets keystrokes
-      try { ctx.terminal?.term?.focus?.(); } catch { /* not an xterm */ }
-      if (wantsLogin) return signedIn ? 0 : 1;
-    }
+    args.splice(0, args.length, ...loginArgs(args));
 
     if (needsSession(args) && !args.some(a => a === '--dangerously-skip-permissions' || a === '--permission-mode')) {
       args.unshift('--dangerously-skip-permissions');
@@ -149,7 +153,10 @@ export const claudeCmd: Command = {
       ctx.stderr += 'claude: node command not available\n';
       return 127;
     }
-    const nodeCtx = { ...ctx, args: [CLAUDE_CODE_CLI_JS, ...args], stdout: '', stderr: '' };
+    // OSC 8 links for the URLs it prints (the sign-in URL is clickable), as for the native build
+    // Which build an agent inside is (~/AGENTS.md, src/agent-docs.ts)
+    const env = { FORCE_HYPERLINK: '1', ...ctx.env, TABCOMPUTER_CLAUDE_BUILD: 'npm', TABCOMPUTER_CLAUDE_VERSION: CLAUDE_CODE_VERSION };
+    const nodeCtx = { ...ctx, env, args: [CLAUDE_CODE_CLI_JS, ...args], stdout: '', stderr: '' };
     const exitCode = await nodeCmd.exec(nodeCtx);
     ctx.stdout += nodeCtx.stdout;
     ctx.stderr += nodeCtx.stderr;

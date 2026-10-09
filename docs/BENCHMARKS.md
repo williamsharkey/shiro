@@ -3,7 +3,9 @@
 Speed and memory baseline for tabcomputer, measured by the harness in [`bench/`](../bench/README.md)
 (`npm run bench`; `npm run bench:quick` in ~2.5 min). Every number is a median
 and nearest-rank p90 of the samples in the linked results file; compare two
-runs with `node bench/compare.mjs base.json new.json` (flags >10% regressions).
+runs with `node bench/compare.mjs base.json new.json`, which flags only
+regressions measured on the same machine and confirmed by an A/B of the two
+commits (bench/README.md, "Comparing runs").
 
 How to read it:
 
@@ -32,6 +34,82 @@ Noise: two runs of the same commit on this 4-vCPU container differ by up to
 more on the `hygiene.*_delta` ones. Compare full runs with full runs and
 quick with quick (`--quick` uses smaller sizes for some metrics), and re-run
 a flagged metric (`--suites X --only name`) before acting on one regression.
+
+## Real workloads
+
+What a user waits for, end to end, in the isolated (production) page:
+`bench/suites/workloads.mjs` (in `--quick` and full runs) and
+`workloads-slow.mjs` (opt-in, `--suites workloads-slow`). Recorded
+2026-10-09 on `unix/integration` 407d92f + the harness commit 4b37213, in
+`bench/results/2026-10-09-4b37213-workloads.json`.
+
+**Machine `e57125c23b92`**: 4× Intel Xeon @ 2.10 GHz (cloud container),
+15.7 GiB, Linux 6.18.44 x64, Chromium 141.0.7390.37 headless, Node 22.22.
+Only compare these numbers with runs on the same machine id
+(`compare.mjs` prints it and refuses to flag across machines).
+
+The cheap suite has 5 fresh-profile samples per metric. The slow suite has
+3 Debian rounds, each a fresh profile: install, update, cowsay, python3,
+python3 runs. It also has 3 git clones after one first clone. apt reads
+packages from server.mjs's mirror disk cache, which was warm for these
+runs, so the numbers measure the machine, not deb.debian.org. Native
+Claude Code wasn't cached on this machine, so it's recorded as skipped (see
+bench/README.md for where to put the binary).
+
+| metric | median | p90 | unit | n | notes |
+|---|---:|---:|---|---:|---|
+| `workload.desktop.reveal` | 254.8 | 276.4 | ms | 5 | navigation → `shiro:desktop:revealed` (the desktop's one visible frame), fresh profile, `/?ui=desktop` |
+| `workload.desktop.reveal_warm` | 230.6 | 282.7 | ms | 5 | same, reloading a visited profile |
+| `workload.desktop.peak_rss` | 218.5 | 218.6 | MiB | 5 | renderer RSS peak from navigation to the first prompt (absolute, not a delta) |
+| `workload.desktop.rss` | 216 | 216.2 | MiB | 5 | renderer RSS once the desktop is up |
+| `workload.desktop.js_heap` | 4.036 | 4.036 | MiB | 5 | main-thread JS heap after GC once the desktop is up |
+| `workload.ffmpeg.first` | 253.6 | 267.4 | ms | 5 | `ffmpeg -version`, first run of the page: loads ffmpeg.wasm's core (~31 MB, from the app origin) |
+| `workload.ffmpeg.warm` | 1.895 | 2.51 | ms | 10 | the next two `ffmpeg -version` runs |
+| `workload.peak_rss.ffmpeg_first` | 110.3 | 110.8 | MiB | 5 | renderer RSS peak above the pre-run level, first run |
+| `workload.peak_rss.ffmpeg_warm` | 0.482 | 1.531 | MiB | 10 | same, warm runs |
+| `workload.claude_npm.first` | 2937 | 3137 | ms | 5 | `claude --npm --version`, first run of a fresh profile (npm tarball from the bench cache, install + load of cli.js) |
+| `workload.claude_npm.warm` | 989.6 | 1047 | ms | 10 | the next two runs (installed, module load only) |
+| `workload.peak_rss.claude_npm_first` | 414 | 417.8 | MiB | 5 | renderer RSS peak above the pre-run level, first run |
+| `workload.peak_rss.claude_npm_warm` | 183.9 | 184.7 | MiB | 10 | same, warm runs |
+| `workload.debian.install_to_prompt` | 1077 | 1282 | ms | 3 | `debian install` + the first `/usr/bin/bash -c true` (Debian's bash, its chunks fetched on first use), fresh profile |
+| `workload.debian.install` | 508.7 | 528.6 | ms | 3 | `debian install` alone (manifest, index, placeholders) |
+| `workload.debian.first_bash` | 567.8 | 753.5 | ms | 3 | the first Debian bash after install |
+| `workload.peak_rss.debian_install` | 22.75 | 25.51 | MiB | 3 | renderer RSS peak above the pre-run level |
+| `workload.apt.update` | 42717 | 46450 | ms | 3 | `apt-get update` (trixie + updates + security, ~10 MB of indexes) from the mirror cache |
+| `workload.peak_rss.apt_update` | 577.5 | 587.5 | MiB | 3 | renderer RSS peak above the pre-run level |
+| `workload.apt.install_cowsay` | 62625 | 64875 | ms | 3 | `apt-get install -y cowsay` (pulls perl), dpkg in Blink |
+| `workload.peak_rss.apt_cowsay` | 847.4 | 892.3 | MiB | 3 | renderer RSS peak above the pre-run level |
+| `workload.apt.cowsay_run` | 5896 | 6547 | ms | 3 | first `/usr/games/cowsay moo` after install (perl in Blink) |
+| `workload.apt.install_python3` | 251330 | 253970 | ms | 3 | `apt-get install -y python3` (after cowsay, so perl is already there) |
+| `workload.peak_rss.apt_python3` | 771.7 | 818.7 | MiB | 3 | renderer RSS peak above the pre-run level |
+| `workload.python3.cold` | 3003 | 3703 | ms | 3 | first `python3 -c 'print(1)'` after the install (Debian's CPython in Blink) |
+| `workload.python3.warm` | 2884 | 3621 | ms | 9 | the next three runs |
+| `workload.peak_rss.python3_cold` | 36.45 | 43.82 | MiB | 3 | renderer RSS peak above the pre-run level |
+| `workload.peak_rss.python3_warm` | 46.04 | 59.75 | MiB | 9 | same, warm runs |
+| `workload.debian.storage` | 327.3 | 329.8 | MiB | 3 | navigator.storage.estimate().usage after install + update + cowsay + python3 |
+| `workload.git.clone_relay.first` | 3720 | 3720 | ms | 1 | first clone of the page (git binary not yet compiled/cached), one sample |
+| `workload.git.clone_relay` | 2783 | 3263 | ms | 3 | `git clone git://<host>:<port>/small.git` (pkg git in Blink; 41 files, 5 commits) through server.mjs's TCP relay to a local git daemon; pkg install git took 431 ms |
+| `workload.peak_rss.git_clone` | 30.75 | 32.11 | MiB | 3 | renderer RSS peak above the pre-run level |
+| `workload.claude_native.version` | — | — | ms | 0 | native Claude Code not cached: put the linux-x64-musl binary at bench/.cache/fixtures/claude-native and musl's loader at bench/.cache/fixtures/ld-musl-x86_64.so.1 (bench/README.md); never downloaded by the bench |
+
+What stands out:
+
+- **apt is the slow path.** `apt-get install -y python3` takes 251 s.
+  `apt-get update` takes 43 s and peaks at **+578 MiB** renderer RSS, and the
+  cowsay install peaks at **+847 MiB**. A phone-class device won't survive
+  those peaks. The profile to take is dpkg/apt-get in Blink (where the 43 s
+  of an update goes: index decompression, `apt-get`'s own sorting, or
+  syscalls). Debian storage after these three commands is 327 MiB.
+- **First runs are expensive in memory, not time.** ffmpeg's first run loads
+  its core in 0.25 s but adds +110 MiB. `claude --npm --version` takes 2.9 s
+  the first time and peaks at **+414 MiB** (+184 MiB warm, 0.99 s).
+- **Python in Debian starts in ~2.9 s** cold and warm alike. The cost is
+  CPython's startup in the interpreter, not first-use fetching.
+- **git clone over the relay** of a 41-file, 5-commit repo takes 2.8 s
+  (3.7 s for the page's first clone). It's `pkg git` in Blink speaking
+  `git://` to a local daemon through server.mjs's TCP relay.
+- Boot is fine: the desktop is revealed at 255 ms cold and 231 ms warm,
+  with 216 MiB renderer RSS once it's up.
 
 ## Hotspots (ranked by expected payoff)
 
@@ -471,6 +549,31 @@ proc/s within one run); two further 15-run passes on the new code gave
 medians 1240 and 1215 proc/s, base 1200. One of those passes stalled at
 ≈10 proc/s for its last 11 samples and did not recur in two more; worth
 watching if it shows up on other branches.
+
+### unix/perf-blink 6 — content-hashed engine wasm
+
+`vite-plugin-engines.ts` writes a content-hashed copy of each engine's
+wasm (`engines/blink/blink.<sha12>.wasm`) and `engines/manifest.json`;
+the page resolves blink.wasm through the manifest (host.mjs passes it to
+emscripten's `locateFile`) and server.mjs serves the hashed names with
+`cache-control: public, max-age=31536000, immutable`, so a returning page
+skips revalidation and a new build is a new URL. The plain names stay.
+
+`node bench/ab.mjs <base> <new> --suites x86first --gh` (isolated, 3
+rounds): no measurable change locally (localhost revalidation is nearly
+free). gh visit 1 second run -5.2% (p=0.10), everything else "same":
+
+| metric (isolated) | base | new | shift | verdict |
+|---|---:|---:|---:|---|
+| x86first.gh.visit1.first | 4495 ms | 4384 ms | -2.5% | same |
+| x86first.gh.visit1.second | 4493 ms | 4387 ms | -5.2% | improved (p=0.10) |
+| x86first.gh.visit2.first | 4256 ms | 4447 ms | +4.5% | same |
+| x86first.vim.visit1.first | 2789 ms | 2638 ms | -5.3% | same |
+| x86first.vim.visit2.first | 2787 ms | 2904 ms | +2.2% | same |
+
+Note: on this machine and build gh's first and second runs on a first
+visit are now equal (~4.4 s; the earlier 5.4 s vs 2.2 s gap is gone), so
+there is little first-run penalty left for a JIT-module code cache to win.
 
 ### unix/perf-blink 5 — threads end before the worker is terminated
 
@@ -1419,6 +1522,55 @@ pkgcache.bin and srcpkgcache.bin (42.5 MB each). Options measured:
   used to write the plain list under that name, and `apt-get update` failed.
   It now refuses cleanly. Keeping lists compressed would need an lz4 encoder
   in the store method, for about −40 MiB; not done.
+
+### unix/perf-fs-shell 12 — file identity: persistent inode numbers, symlinked dirfds
+
+These are correctness fixes for native programs (Claude Code's Bun binary
+checks its temp and task directories by st_dev/st_ino and by realpath
+through `/proc/self/fd`). perf-kernel's f33e8f1 (`/proc/self/fd/N/NAME`
+resolution) fixes the main write path; these are the VFS side.
+
+- **Directories opened through a symlinked path** (O_DIRECTORY, O_PATH) kept
+  the unresolved path. Their fstat st_ino, getdents d_ino and
+  `/proc/self/fd/N` link disagreed with stat of the directory, and *at()
+  calls resolved against the symlink spelling. The DirFile now holds the
+  physical path, as on Linux.
+- **Inode numbers** were per-path counters in memory: new on every reload,
+  and the children of a renamed directory got new ones. Now:
+  - each node stores its number (`FSNode.ino`, random 52-bit at creation);
+  - writes, chmod, utimes and rename keep it, including the children of a
+    renamed directory;
+  - older nodes and rootfs placeholders use a 52-bit path hash, which rename
+    writes into the node;
+  - link() copies share the source's number;
+  - getdents writes all 64 bits of d_ino;
+  - `makeStat` (node programs, ls -i, find -inum) reports the kernel's dev 1
+    and ino instead of 0.
+
+Test: fixtures/x86/fileid.c under Blink (`file-identity.test.ts`). It checks:
+- stat/lstat/fstat on O_DIRECTORY and O_PATH fds, `AT_EMPTY_PATH`, statx,
+  newfstatat and getdents agree, also through a symlinked dir;
+- inodes follow renames and differ between files;
+- O_CREAT|O_EXCL (including on a dangling symlink), O_NOFOLLOW, O_TMPFILE,
+  renameat2 RENAME_NOREPLACE, linkat (nlink 2), mkdirat;
+- *at() on an O_PATH dirfd;
+- musl-style realpath via `/proc/self/fd`, getcwd after `cd` through a
+  symlink;
+- `/tmp/claude-1000` at 0700 reports uid 1000 and mode 0700;
+- the same dev:ino after a reload.
+
+Before the fix, the 4 symlinked-dir checks failed.
+
+`bench/ab.mjs origin/unix/integration HEAD --quick --rounds 3`:
+- 81 metrics the same; boot +1 KiB;
+- `node.e1` −4.9%;
+- `wasm.tree_create` was flagged +38% (11.3 → 15.7 ms, one sample per run).
+  A `crypto.getRandomValues` per created file was the likely part of it, so
+  numbers now come from `Math.random`. Re-run over 5 rounds it is
+  14.8 → 16.9 ms, CI −17..+43%, "same".
+
+`kernel-net` "dials through an upstream CONNECT proxy" fails about 3 runs in
+4 on origin/unix/integration too; it is not from this change.
 
 ## Results
 

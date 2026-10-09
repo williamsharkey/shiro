@@ -7,7 +7,7 @@ import { prepareFixtures } from './lib/fixtures.mjs';
 prepareFixtures({ cacheDir: 'bench/.cache', publishDir: 'dist/__bench' });
 const mode = process.env.MODE || 'isolated';
 const tcp = await startTcpTestServer();
-const server = await startShiroServer({ staticDir: join(process.cwd(), 'dist'), isolated: mode === 'isolated', tcpPorts: Object.values(tcp.ports), allowCidrs: [hostAddress() + '/32'], log: process.env.SERVER_LOG ? (l) => console.log('[server]', l) : null });
+const server = await startShiroServer({ staticDir: join(process.cwd(), 'dist'), isolated: mode === 'isolated', tcpPorts: [...Object.values(tcp.ports), ...(process.env.EXTRA_PORTS || '').split(',').filter(Boolean)], allowCidrs: [hostAddress() + '/32'], log: process.env.SERVER_LOG ? (l) => console.log('[server]', l) : null });
 const h = new Harness({ mode, origin: server.origin, netcache: new NetCache('bench/.cache/net', { log: console.log }), runs: 1, log: console.log, results: [] });
 await h.launch();
 await h.boot({ waitSettled: !!process.env.SETTLE });

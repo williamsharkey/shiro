@@ -141,8 +141,11 @@ export const ffmpegCmd: Command = {
       bridged.add(inputPath);
       try {
         const data = await ctx.fs.readFile(resolved);
+        // A copy: writeFile transfers its buffer to the worker, which would
+        // detach the bytes the filesystem (and its cache) still hold, and the
+        // next run on the same file fails ("ArrayBuffer ... already detached")
         const uint8 = data instanceof Uint8Array
-          ? data
+          ? data.slice()
           : new TextEncoder().encode(data as string);
         // Use just the filename in ffmpeg's flat MEMFS
         const name = inputPath.split('/').pop() || inputPath;

@@ -564,6 +564,39 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    negative or out-of-range timespec before sleeping, as Linux's
    `timespec64_valid` (LTP nanosleep04, broken by patch 54's path). Test:
    `fixtures/x86/sleepintr.c`.
+59. `uname` takes the Shiro kernel's `release` and `version` too
+   (`6.1.0-<hostname>`, `#1 SMP ...`; Node's `os.release()` said
+   `4.5.0-blink-1.1.0`), keeping Blink's `sysname` and `machine`. Test:
+   `fixtures/x86/uname.c`.
+60. `syslog(2)` (klogctl) goes to the kernel's log, `SYS_syslog`: the read
+   actions copy its text out (util-linux `dmesg -S`). From the unix/kernel
+   session (their 0055, 9c3f7a1). Test: `debian.test.ts` dmesg.
+61. `epoll_wait` takes any `maxevents` > 0 (at most 4096 events per call;
+   Redis 8 passes maxclients + 128 and aborted on `EINVAL`), and the CPU
+   clock ids from `clock_getcpuclockid`/`pthread_getcpuclockid` work, as
+   the time since the first CPU-clock read (emscripten has no CPU clocks;
+   GHC's `getCurrentThreadCPUTime` failed). Test: `fixtures/x86/cpuclock.c`.
+62. `getpriority`/`setpriority` keep a nice value per process (0 to start,
+   inherited on fork; raw `getpriority` is 20 − nice; only root lowers
+   it, `EACCES` otherwise). emscripten's stubs said `-ENODEV`/`EPERM`, so
+   pam_limits failed every `su`/`runuser` session. Test: `fixtures/x86/nice.c`.
+63. uids and gids are the kernel's: `set*id`, `setgroups`, `setfs*id`,
+   `getresuid/gid`, `getgroups`, `geteuid/getegid` go to it (real,
+   effective and saved ids and groups per process) instead of Blink
+   answering success with real = effective; a kernel without them
+   (`ENOSYS`) gets the old answers, and root checks use the effective uid.
+   `signalfd`/`signalfd4` go to the kernel, which now learns the process's
+   signal mask (the main thread's: before a kernel call when it changed,
+   right after `rt_sigprocmask`/`rt_sigreturn`/`rt_sigsuspend`, and around
+   sigsuspend's wait), so a blocked signal is held for signalfd instead of
+   being delivered, dropped or fatal. For PostgreSQL (initdb, its latch).
+   Tests: `fixtures/x86/ids.c` (needs the kernel's `SYS_setresuid`),
+   `fixtures/x86/signalfd.c`.
+64. `SHIRO_BLINK_PROFILE=<file>` writes where a guest's time goes: the wall
+   time, the JIT's compile time and count, and per syscall number its
+   count, total and longest time (with its kernel call and waits), every
+   5 s and at the first read of stdin (a TUI's prompt is up). Debugging
+   aid, for profiling programs where they run.
 
 The guest's kernel calls go over a pool of channels (`src/x86-engine/blink.ts`
 → `public/engines/blink/host.mjs`). It starts at 6, and host.mjs asks the
@@ -581,8 +614,8 @@ multi-threaded Go programs; the wasm build doesn't use it.
 ### Limits today
 
 - Needs `crossOriginIsolated` (pthreads and the kernel channel use
-  SharedArrayBuffer). On shiro.computer that depends on the unix/isolation
-  branch; until then `./binary` uses src/x86.
+  SharedArrayBuffer). tabcomputer.com is isolated (`server.mjs` sends
+  COOP/COEP); on a page that isn't, `./binary` uses src/x86.
 - The JIT compiles per thread and per run (nothing is cached across
   processes yet), and cold code still runs in the interpreter; most
   SSE/x87, string ops, xadd/cmpxchg and 16-bit shifts still call Blink's
@@ -591,7 +624,7 @@ multi-threaded Go programs; the wasm build doesn't use it.
   the binary is still copied on its way in (tabcomputer's FS, the kernel read,
   MEMFS).
 - Non-loopback TCP needs the relay (`TABCOMPUTER_TCP_RELAY`); without it `connect`
-  fails like an offline host. `socketpair` is ENOSYS.
+  fails like an offline host.
 - Signals sent before the guest has loaded are dropped. SIGTSTP is the
   kernel's default stop; a guest can't catch it.
 - The worker doesn't use the kernel's new `symlink`/`chmod` yet.
@@ -601,11 +634,12 @@ multi-threaded Go programs; the wasm build doesn't use it.
 
 Honest estimate for a ~200 MB static Go CLI that talks TLS to Google APIs:
 
-1. **Cross-origin isolation in production** (unix/isolation). Without it the
-   engine doesn't start.
-2. **A TCP relay deployed** for shiro.computer. The wiring is done (Go's own
-   DNS and TLS run over the kernel's sockets, tested against a local relay);
-   the relay itself has to run somewhere.
+1. **Cross-origin isolation in production.** Done: tabcomputer.com is
+   isolated. Without it the engine doesn't start.
+2. **A TCP relay deployed.** Done: tabcomputer.com runs it (Go's own DNS and
+   TLS run over the kernel's sockets). Since Blink patch 0040, `agy --version`
+   runs (11 s); a request needs a Google sign-in and is untested
+   ([COMPAT.md](COMPAT.md#agent-clis-unixagent-clis)).
 3. Interactive use works today (tty, raw mode, SIGWINCH, Ctrl-C).
 4. **Speed**: with the wasm JIT, `gh` (59 MB) prints its version in 5.0 s
    (first run) / 2.5 s (later runs) in Chromium on a machine where the

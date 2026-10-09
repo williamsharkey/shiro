@@ -48,47 +48,113 @@ function bootSection(ctx: ShiroRuntimeContext, name: string): string {
   ].join('\n');
 }
 
+/**
+ * Known problems an agent here should plan around, rendered into AGENTS.md.
+ * Facts about this build only: remove an entry in the change that fixes it.
+ * Live state (what is installed, signed in, reachable) is `doctor`'s job.
+ */
+export const KNOWN_ISSUES: { issue: string; workaround?: string }[] = [
+  {
+    issue: "Images can't be pasted into Claude Code: `xclip` and `xsel` here are text only.",
+    workaround: 'Save the image to a file and give its path.',
+  },
+  {
+    issue: "In Debian mode, dpkg-deb's `.xz` decompression sometimes crashes or reports corrupt data under the x86-64 emulator, so `apt install` stops with a dpkg error.",
+    workaround: 'Run the install again.',
+  },
+];
+
+function knownIssues(): string {
+  return KNOWN_ISSUES.map((k) => `- ${k.issue}${k.workaround ? ` ${k.workaround}` : ''}`).join('\n');
+}
+
 /** ~/AGENTS.md for this boot. */
 export function buildAgentsMd(ctx: ShiroRuntimeContext): string {
   const p = activeProfile();
   const name = p.name;
   const site = p.brand?.domain ?? 'shiro.computer';
   const source = SOURCE[p.id] ?? SOURCE.tabcomputer;
+  const claude = p.shims.claude === 'native'
+    ? `- Plain \`claude\` runs Anthropic's native build in the x86-64 emulator. \`claude install\`
+  downloads it (about 240 MB) and \`claude update\` fetches a newer one. It is slow: one
+  \`claude -p\` request takes a minute or two.
+- \`claude --npm\` runs the pinned pure-JavaScript build on ${name}'s Node runtime
+  instead: installed at boot, starts fast.`
+    : `- Plain \`claude\` runs the pinned pure-JavaScript build on ${name}'s Node runtime.
+- \`claude install --native\` then \`claude --native\` runs Anthropic's native build in
+  the x86-64 emulator (about 240 MB; one request takes a minute or two).`;
   return `# AGENTS.md
 
-You are on ${name} (${site}): a Unix-like computer that runs entirely inside a
-browser tab. The kernel, filesystem, shell and programs all run in this page;
-there is no VM or server-side machine behind it.
+You are on ${name} (${site}): a computer that lives in a browser tab. You are a
+coding agent inside it. The kernel, filesystem, shell and programs all run in
+this page; there is no VM or server-side machine behind it.
 
 ## This boot
 
 ${bootSection(ctx, name)}
 
+## Orient yourself
+
+- \`doctor\` prints this tab's state, one OK/WARN/FAIL line per subsystem.
+  \`doctor --agents\` checks, step by step, what agent CLIs need from both
+  runtimes.
+- \`echo $TABCOMPUTER_CLAUDE_BUILD $TABCOMPUTER_CLAUDE_VERSION\` tells you which
+  Claude Code you are, when ${name}'s \`claude\` started you. \`native\` is Anthropic's
+  binary in the x86-64 emulator: about 2 minutes per request. \`npm\` is the pinned
+  pure-JavaScript build on ${name}'s Node runtime: much faster.
+- Read "Known issues" below before working around something that fails.
+
 ## The machine
 
+- A Unix kernel written in TypeScript runs in the page: processes, fork/exec,
+  pipes, ptys, signals, job control, sockets, \`/proc\`. \`ps\` lists kernel
+  processes.
+- The shell is ${name}'s own bash-compatible shell, with many builtins:
+  coreutils, grep/sed/awk, \`rg\`, \`jq\`, \`git\`, \`gh\`, \`curl\`, \`vi\`, \`nano\`, \`tmux\`.
 - Home is \`/home/user\`. Files persist in this browser's storage for this site
   across reloads. They are not synced anywhere else: commit and push work you
-  want to keep.
-- The shell is ${name}'s own bash-compatible shell, with pipes, redirects,
-  functions, job control and ptys. About 220 commands are built in: coreutils,
-  grep/sed/awk, \`rg\`, \`jq\`, \`git\`, \`gh\`, \`curl\`, \`vi\`, \`tmux\`, and more.
+  want to keep. You run as uid 1000; \`sudo\` gives root inside ${name}.
+- x86-64 Linux programs run in the Blink emulator, compiled to WebAssembly:
+  correct, but big programs take seconds to start. WASM programs run directly.
 - \`node\`, \`npm\` and \`npx\` are a Node.js-compatible runtime built into the page,
-  not real Node. Most pure-JS npm packages work. Native addons (\`.node\`) don't.
-- Real Linux programs: \`apt install <package>\` installs Debian 13 packages (the
-  first install streams Debian in; \`debian status\` shows it). They run in an
-  x86-64 emulator: correct, but much slower than native. Big programs (CPython,
-  compilers) can take many seconds to start.
-- \`python3\` is Pyodide until Debian's python3 is installed.
-- Network: outbound HTTP(S) works. Linux programs also get TCP (git over ssh,
-  pip, ssh) through the site's relay when it is enabled. Nothing on the internet
-  can connect in: servers you start are reachable only from this tab (\`serve DIR\`
-  opens a preview window).
+  not real Node. Most pure-JS npm packages work; native addons (\`.node\`) don't.
+- Network: outbound HTTP(S) works. Linux programs get TCP through the site's
+  relay when it is on (ports 22, 80, 443, 9418); UDP is DNS only. Nothing on the
+  internet can connect in.
 - \`/dom\` is the page itself as files (\`ls /dom\`).
+
+## Installing software
+
+- Real Debian: \`debian install\` streams in Debian 13, then \`sudo apt update\` (about
+  45 s) and \`sudo apt install -y NAME\` (Debian's own apt and dpkg, x86-64 in the
+  emulator: about a minute for a small package, python3 about 4 minutes). 496 of
+  popcon's top 500 packages pass a smoke test.
+- Prebuilt: \`pkg install NAME\` installs one of ${name}'s 72 prebuilt programs
+  (WebAssembly or static x86-64: vim, htop, git, python3, jq, curl, make, clang,
+  go, ...) in about a second, and they start faster than Debian's. \`pkg available\`
+  lists them. Before \`debian install\`, \`apt\` is \`pkg\`; after it, \`apt\` is Debian's.
+- \`/usr/bin/NAME\` is whichever was installed last. To go back from Debian's to the
+  prebuilt one: \`sudo apt remove -y NAME && pkg install --reinstall NAME\`.
+  \`tabcomputer-alternatives --list\` shows which programs are ${name}'s builtins
+  and which are Debian's; \`--set NAME debian\` and \`--auto NAME\` switch one.
+- \`npm install\` works; \`pip install\` installs pure-Python wheels.
+- \`python3\` is Pyodide until a \`pkg\` or Debian python3 is installed.
+- \`gui\` lists X11 desktop apps; \`gui NAME\` opens one in a window.
+
+## Useful here
+
+- \`serve DIR\` serves a folder in a preview window; a program that \`listen()\`s on
+  a port is served the same way. Both are reachable only from this tab.
+- \`page :PORT text|click|input|eval ...\` drives that page, so you can test a UI
+  without a browser automation tool.
+- \`gh auth login\` signs in to GitHub; git and gh then use the token.
 
 ## What doesn't work
 
-- Docker, VMs, kernel modules, GPU access.
-- \`sudo\` runs commands as root inside ${name}, but nothing escapes the tab.
+- File watching: \`fs.watch\` never fires and inotify is ENOSYS, so watch modes
+  and hot reload don't react to edits. Re-run commands instead.
+- \`time\` reports no user/sys CPU time.
+- Docker, VMs, kernel modules, GPU access, a D-Bus session bus.
 - \`systemctl\` is a small built-in service manager, not systemd.
 - Everything stops when the tab is closed or reloaded, including background jobs.
 - Many processes or agents at once is slow. Prefer doing one thing at a time.
@@ -97,18 +163,29 @@ ${bootSection(ctx, name)}
 
 - \`doctor\` prints one OK/WARN/FAIL line per subsystem: the build, browser
   isolation, the x86 engine, the network relay, sign-ins, Debian, storage and
-  the kernel. Include its output when you report a problem.
+  the kernel. It never prints secrets. Run it first.
+- \`dmesg\` shows the kernel log; relay refusals land there when curl or git
+  only say "Could not connect".
 - \`console -g PATTERN\` searches the page's console log (\`--prev\` includes the
   load before the last reload).
+- Report bugs at ${source}/issues (\`gh issue create\` works here): the command,
+  what happened, what you expected, and the \`doctor\` output.
 
 ## Source
 
 ${name} is open source: ${source}. The source is not checked out on this
-machine; \`git clone ${source}\` if you need to read it. Report bugs there.
+machine; \`git clone --depth 1 ${source}\` if you need to read it. Its docs/
+folder has the details and the measured scoreboards.
+
+## Known issues
+
+${knownIssues()}
 
 ## Claude Code here
 
-- \`claude\` runs Claude Code. \`claude --native\` runs Anthropic's native binary in the x86 emulator.
+${claude}
+- Signed out, Claude Code opens the sign-in page in a new browser tab and asks for the
+  code it shows; \`claude login\` signs in again.
 - Credentials are in \`~/.claude/.credentials.json\`; never print them or any other token.
 `;
 }

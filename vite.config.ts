@@ -3,6 +3,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
 import { inlineAssets } from './vite-plugin-inline';
+import { hashEngineWasm } from './vite-plugin-engines';
 import { execSync } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -35,6 +36,7 @@ export default defineConfig({
       },
     }),
     inlineAssets(),
+    hashEngineWasm(),
   ],
   build: {
     target: 'es2022',

@@ -1,0 +1,248 @@
+From 7566b283dd1d7a95b4731c8e4e7b96b404a72de9 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 19:31:19 +0000
+Subject: [PATCH 63/63] Shiro: uids and gids are the kernel's; signalfd; the
+ kernel learns the signal mask
+
+PostgreSQL in Debian mode (debian, conformance):
+- set*id, setgroups, setfs*id, getresuid/gid, getgroups and geteuid/
+  getegid go to the kernel (real, effective, saved ids and groups per
+  process) instead of Blink answering success and real = effective;
+  initdb, su and runuser switch users for real. A kernel without them
+  (ENOSYS) gets the old answers. Root checks (capget, setpriority) use
+  the effective uid.
+- signalfd/signalfd4 go to the kernel with the 8-byte mask.
+- The kernel learns the process's signal mask (the main thread's): before
+  a kernel call when it changed, right after rt_sigprocmask, rt_sigreturn
+  and rt_sigsuspend, and around sigsuspend's wait. A signal the guest
+  blocked is held by the kernel (signalfd, sigwait) instead of being
+  delivered, dropped as ignored, or killing the process.
+---
+ blink/machine.h |   2 +
+ blink/shiro.inc | 105 ++++++++++++++++++++++++++++++++++++++----------
+ blink/syscall.c |   7 ++++
+ 3 files changed, 93 insertions(+), 21 deletions(-)
+
+diff --git a/blink/machine.h b/blink/machine.h
+index 4fe0f35..33d48e7 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -306,6 +306,8 @@ struct System {
+   u64 blinksigs;  // signals blink itself handles
+   struct rlimit_linux rlim[RLIM_NLIMITS_LINUX];
+   int nice;  // getpriority/setpriority (Shiro: nothing is scheduled by it)
++  bool kmask_ok;  // Shiro: the kernel has this process's signal mask...
++  u64 kmask;      // ...this one (the main thread's)
+ #ifdef HAVE_THREADS
+   pthread_cond_t_ machines_cond;
+   pthread_mutex_t_ machines_lock;
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index e71b959..fbaa384 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -103,11 +103,14 @@ static void *ShiroAlloc(struct Machine *m, size_t n) {
+ // Calls the kernel. `restart` and `intr` pick what an -EINTR means: with
+ // `intr`, a signal for the guest is delivered (CheckInterrupt) and the call
+ // restarts when the handler allows it (SA_RESTART) or no handler ran.
++static void ShiroSyncMask(struct Machine *);
++
+ static i64 ShiroCall(struct Machine *m, int nr, const int a[12], void *data,
+                      int inlen, int outcap, bool restart, bool intr) {
+   int args[12], r, as;
+   bool held;
+   i64 res;
++  if (m && nr != 14) ShiroSyncMask(m);
+   as = t_vfork ? t_vfork->pid
+                : m && m->system->pid && m->system->pid != g_shiro_pid ? m->system->pid : 0;
+   for (;;) {
+@@ -128,10 +131,31 @@ static i64 ShiroCall(struct Machine *m, int nr, const int a[12], void *data,
+ 
+ #define A12(...) ((const int[12]){__VA_ARGS__})
+ 
++// The kernel learns the process's signal mask (the main thread's): it holds
++// a signal the guest blocked (for signalfd, sigwait, sigpending) instead of
++// delivering, ignoring or dying of it. Sent before a kernel call when it
++// changed, and right after the calls that change it.
++static void ShiroSyncMask(struct Machine *m) {
++  u8 d[16];
++  struct System *s = m->system;
++  if (!g_shiro_pid || t_vfork || m->tid != s->pid) return;
++  if (s->kmask_ok && s->kmask == m->sigmask) return;
++  s->kmask_ok = true;
++  s->kmask = m->sigmask;
++  Write32(d, (u32)m->sigmask), Write32(d + 4, (u32)(m->sigmask >> 32));
++  ShiroCall(m, 14, A12(2, 1, 0), d, 8, 0, false, false);  // SIG_SETMASK
++}
++
+ static i64 KS(struct Machine *m, int nr, const int a[12]) {
+   return ShiroCall(m, nr, a, 0, 0, 0, false, false);
+ }
+ 
++// the effective uid (a kernel without geteuid: the uid)
++static i64 ShiroEuid(struct Machine *m) {
++  i64 r = KS(m, 107, A12(0));
++  return r == -ENOSYS_LINUX ? KS(m, 102, A12(0)) : r;
++}
++
+ // A blocking wait Blink does itself (a futex) in the process's main thread:
+ // the kernel shows the process sleeping meanwhile, as during its syscalls
+ // (LTP waits for state S in /proc/PID/stat before signalling a child).
+@@ -2109,7 +2133,7 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       if (!self && which == 0 && KS(m, 62, A12(who, 0)) < 0) { r = -ESRCH_LINUX; break; }
+       if (nr == 0x08C) { r = 20 - (self ? m->system->nice : 0); break; }
+       nice = (int)c < -20 ? -20 : (int)c > 19 ? 19 : (int)c;
+-      if (nice < m->system->nice && KS(m, 107, A12(0)) != 0) { r = -EACCES_LINUX; break; }
++      if (nice < m->system->nice && ShiroEuid(m) != 0) { r = -EACCES_LINUX; break; }
+       if (self) m->system->nice = nice;
+       r = 0;
+       break;
+@@ -2363,15 +2387,38 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+     case 0x07C: r = KS(m, 124, A12(a)); break;                        // getsid
+     case 0x06D: r = KS(m, 109, A12(a, b)); break;                     // setpgid
+     case 0x070: r = KS(m, 112, A12(0)); break;                        // setsid
+-    case 0x066: case 0x06B: r = KS(m, 102, A12(0)); break;            // getuid, geteuid
+-    case 0x068: case 0x06C: r = KS(m, 104, A12(0)); break;            // getgid, getegid
++    // uids and gids are the kernel's: real, effective and saved ids and the
++    // groups, per process (su, runuser, PostgreSQL's initdb). A kernel without
++    // the set*id calls (ENOSYS) gets the old answers: success, real = effective.
++    case 0x066: r = KS(m, 102, A12(0)); break;                        // getuid
++    case 0x068: r = KS(m, 104, A12(0)); break;                        // getgid
++    case 0x06B: case 0x06C:                                           // geteuid, getegid
++      if ((r = KS(m, nr == 0x06B ? 107 : 108, A12(0))) == -ENOSYS_LINUX) {
++        r = KS(m, nr == 0x06B ? 102 : 104, A12(0));
++      }
++      break;
++    case 0x069: case 0x06A:                                           // setuid, setgid
++      if ((r = KS(m, nr == 0x069 ? 105 : 106, A12((int)a))) == -ENOSYS_LINUX) r = 0;
++      break;
++    case 0x071: case 0x072:                                           // setreuid, setregid
++      if ((r = KS(m, nr == 0x071 ? 113 : 114, A12((int)a, (int)b))) == -ENOSYS_LINUX) r = 0;
++      break;
++    case 0x075: case 0x077:                                           // setresuid, setresgid
++      if ((r = KS(m, nr == 0x075 ? 117 : 119, A12((int)a, (int)b, (int)c))) == -ENOSYS_LINUX) r = 0;
++      break;
++    case 0x07A: case 0x07B:                                           // setfsuid, setfsgid
++      if ((r = KS(m, nr == 0x07A ? 122 : 123, A12((int)a))) == -ENOSYS_LINUX) r = 0;
++      break;
+     case 0x076: case 0x078: {                                         // getresuid/gid
+-      u8 id[4];
+-      i64 v = KS(m, nr == 0x076 ? 102 : 104, A12(0));
+-      Write32(id, v);
+-      r = 0;
+-      if ((a && CopyToUserWrite(m, a, id, 4) == -1) || (b && CopyToUserWrite(m, b, id, 4) == -1) ||
+-          (c && CopyToUserWrite(m, c, id, 4) == -1)) r = -EFAULT_LINUX;
++      u8 id[12];
++      r = ShiroCall(m, nr == 0x076 ? 118 : 120, A12(0), id, 0, 12, false, false);
++      if (r == -ENOSYS_LINUX) {
++        i64 v = KS(m, nr == 0x076 ? 102 : 104, A12(0));
++        Write32(id, v), Write32(id + 4, v), Write32(id + 8, v);
++        r = 0;
++      }
++      if (r == 0 && ((a && CopyToUserWrite(m, a, id, 4) == -1) || (b && CopyToUserWrite(m, b, id + 4, 4) == -1) ||
++                     (c && CopyToUserWrite(m, c, id + 8, 4) == -1))) r = -EFAULT_LINUX;
+       break;
+     }
+     // ITIMER_REAL and alarm live in the kernel, per process (Blink's used
+@@ -2401,7 +2448,7 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+         break;
+       }
+       if (nr == 0x07E || !b) { r = 0; break; }  // capset: accepted
+-      if (KS(m, 102, A12(0)) == 0) {  // uid 0
++      if (ShiroEuid(m) == 0) {  // effective uid 0
+         Write32(data + 0, 0xffffffff), Write32(data + 4, 0xffffffff);  // effective, permitted
+         if (words == 2) Write32(data + 12, 0x1ff), Write32(data + 16, 0x1ff);
+       }
+@@ -2409,22 +2456,38 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       break;
+     }
+     case 0x073: {                                                     // getgroups
+-      // one supplementary group: the process's gid (the kernel's)
+-      u8 g[4];
+-      if ((i64)(i32)a < 0) {
+-        r = -EINVAL_LINUX;
+-      } else if (!(i32)a) {
+-        r = 1;
+-      } else {
++      int n = (int)a;
++      u8 *g;
++      if (n < 0) { r = -EINVAL_LINUX; break; }
++      if (n > 65536) n = 65536;
++      g = (u8 *)ShiroAlloc(m, n ? n * 4 : 4);
++      r = ShiroCall(m, 115, A12(n), g, 0, n * 4, false, false);
++      if (r == -ENOSYS_LINUX) {  // one supplementary group: the process's gid
++        if (!n) { r = 1; break; }
+         Write32(g, KS(m, 104, A12(0)));
+-        r = CopyToUserWrite(m, b, g, 4) == -1 ? -EFAULT_LINUX : 1;
++        r = 1;
+       }
++      if (r > 0 && n && CopyToUserWrite(m, b, g, r * 4) == -1) r = -EFAULT_LINUX;
+       break;
+     }
+-    case 0x069: case 0x06A: case 0x071: case 0x072: case 0x075: case 0x077:
+-    case 0x074: case 0x07A: case 0x07B:                               // set*id, setgroups, setfs*id
+-      r = 0;
++    case 0x074: {                                                     // setgroups
++      int n = (int)a;
++      u8 *g;
++      if (n < 0 || n > 65536) { r = -EINVAL_LINUX; break; }
++      g = (u8 *)ShiroAlloc(m, n ? n * 4 : 4);
++      if (n && CopyFromUserRead(m, g, b, n * 4) == -1) { r = -EFAULT_LINUX; break; }
++      if ((r = ShiroCall(m, 116, A12(n), g, n * 4, 0, false, false)) == -ENOSYS_LINUX) r = 0;
+       break;
++    }
++    // signalfd: the kernel's (it holds the signals this process blocks,
++    // ShiroSyncMask); the mask is 8 bytes
++    case 0x11A: case 0x121: {                                         // signalfd, signalfd4
++      u8 mask[8];
++      if (!b || CopyFromUserRead(m, mask, b, 8) == -1) { r = -EFAULT_LINUX; break; }
++      r = nr == 0x11A ? ShiroCall(m, 282, A12((int)a, (int)c), mask, 8, 0, false, false)
++                      : ShiroCall(m, 289, A12((int)a, (int)c, (int)d), mask, 8, 0, false, false);
++      break;
++    }
+     case 0x039:                                                       // fork
+       r = ShiroSameInstanceFork()          ? ShiroForkSame(m, 0, 0, 0)
+           : ShiroHasSharedMemory(m->system) ? ShiroVfork(m, 0, true)
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 17d2bb2..5994ad4 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -706,8 +706,10 @@ static int LoadTimespecRW(struct Machine *m, i64 addr, struct timespec *ts) {
+ #ifdef __EMSCRIPTEN__
+ static void ShiroSleeping(struct Machine *, int);
+ static double ShiroRealtime(void);
++static void ShiroSyncMask(struct Machine *);
+ #else
+ #define ShiroSleeping(m, n) (void)0
++#define ShiroSyncMask(m) (void)0
+ #endif
+ 
+ static int SysFutexWait(struct Machine *m,  //
+@@ -4439,6 +4441,7 @@ static int SigsuspendPolyfill(struct Machine *m, u64 mask) {
+   struct timespec ts;
+   oldmask = m->sigmask;
+   m->sigmask = mask;
++  ShiroSyncMask(m);  // the kernel delivers what the suspended mask lets through
+   nanos = 1;
+   ShiroSleeping(m, 1);
+   while (!CheckInterrupt(m, false) &&
+@@ -4462,6 +4465,7 @@ static int SigsuspendPolyfill(struct Machine *m, u64 mask) {
+   }
+   ShiroSleeping(m, -1);
+   m->sigmask = oldmask;
++  ShiroSyncMask(m);
+   return -1;
+ }
+ 
+@@ -6256,6 +6260,9 @@ void OpSyscall(P) {
+ #ifdef __EMSCRIPTEN__
+ ShiroDone:
+   if (g_shiro_mmlog) ShiroMmLog(m, shnr, di, si, dx, r0);
++  // a changed signal mask takes effect in the kernel at once (an unblocked
++  // signal it held is delivered now, not at the next kernel call)
++  if (shnr == 0x00E || shnr == 0x00F || shnr == 0x082) ShiroSyncMask(m);
+ #endif
+   unassert(--m->sysdepth >= 0);
+   CollectPageLocks(m);
+-- 
+2.43.0
+

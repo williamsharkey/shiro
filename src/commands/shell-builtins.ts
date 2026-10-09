@@ -5,6 +5,7 @@
  * Also re-exports grep/sed/diff so they override the unix.ts versions.
  */
 import { Command, type CommandContext } from './index';
+import { parseShellArgs } from '../shell-args';
 import { grepCmd, egrepCmd, fgrepCmd } from './grep';
 import { sedCmd } from './sed';
 import { diffCmd } from './diff';
@@ -123,8 +124,22 @@ export const exportCmd: Command = {
 const GETTING_STARTED = `tabcomputer: a computer that lives in your browser tab. Files persist in this
 site's storage, in this browser.
 
+Install software
+  debian install         stream in Debian 13 (real Debian, x86-64 in an emulator)
+  sudo apt update        then: sudo apt install -y NAME   (Debian's apt; about a
+                         minute per small package, python3 about 4 minutes)
+  pkg install NAME       tabcomputer's 72 prebuilt programs (WebAssembly or static
+                         x86-64): vim, htop, git, python3, jq, ... in about a second;
+                         pkg available lists them. Before debian install, apt is pkg.
+  tabcomputer-alternatives --list   builtin or Debian's, per program (Debian mode)
+  gui                    Linux desktop apps (X11) that open in windows
+
 Claude Code
-  claude                 run Claude Code here (installs itself; sign-in panel if needed)
+  claude                 run Claude Code (the profile picks the native or npm build;
+                         a missing native build says how to install it)
+  claude install --native
+                         download the native build (about 240 MB; slow in the emulator)
+  claude --npm           the pinned JavaScript build: installed at boot, starts fast
   claude --continue      resume the last conversation in this directory
   claude-window          run it in a new window
   claude login           sign in again / switch accounts
@@ -141,15 +156,15 @@ Connect an outside agent
 
 Everyday
   ls, cat, grep, sed, rg, find, jq, vi, nano    the usual tools
-  node, npm, npx         Node.js (shimmed) and real npm packages
+  node, npm, npx         Node.js (tabcomputer's runtime) and real npm packages
   serve DIR              serve a folder in a preview window
+  page :PORT text        read or drive that page (click, input, eval)
   finder                 file manager
 
 Something wrong?
   doctor                 check this tab (deploy, browser, network, sign-ins, storage):
                          paste its output into a bug report (also: tabinfo)
-
-Try: claude "make a small page that plays a drum loop, then serve it"
+  Issues: https://github.com/williamsharkey/tabcomputer/issues
 
 help --all lists every command; help NAME describes one.
 Source and docs: https://github.com/williamsharkey/tabcomputer
@@ -239,29 +254,14 @@ export const shCmd: Command = {
 
 async function runShell(ctx: CommandContext, invokedAs: 'sh' | 'bash'): Promise<number> {
   {
-    // Options before the command string / script: -c, -e, -u, -x, -v, -f, -o NAME, and combined (-ec, -lc)
-    const shortOpts: Record<string, string> = { e: 'errexit', u: 'nounset', x: 'xtrace', v: 'verbose', n: 'noexec', f: 'noglob' };
-    const options: string[] = [];
-    const shopts: [string, boolean][] = [];
-    let commandMode = false;
-    let interactive = false;
-    let i = 0;
-    for (; i < ctx.args.length; i++) {
-      const a = ctx.args[i];
-      if (a === '--' || a === '-') { i++; break; }
-      if (a === '-o' || a === '+o') { if (a === '-o' && ctx.args[i + 1]) options.push(ctx.args[i + 1]); i++; continue; }
-      // -O NAME / +O NAME: shopt options
-      if (a === '-O' || a === '+O') { if (ctx.args[i + 1]) shopts.push([ctx.args[i + 1], a === '-O']); i++; continue; }
-      if (a === '--rcfile' || a === '--init-file') { i++; continue; }
-      if (/^--(norc|noprofile|posix)$/.test(a)) continue;
-      if (!/^[-+][a-zA-Z]+$/.test(a)) break;
-      for (const ch of a.slice(1)) {
-        if (ch === 'c') commandMode = true;
-        else if (ch === 'i' && a[0] === '-') interactive = true;
-        else if (a[0] === '-' && shortOpts[ch]) options.push(shortOpts[ch]);
-      }
-    }
-    const rest = ctx.args.slice(i);
+    // bash's options, before or after -c (src/shell-args.ts)
+    const parsed = parseShellArgs(ctx.args);
+    if (parsed.error) { ctx.stderr += `${invokedAs}: ${parsed.error}\n`; return 2; }
+    const commandMode = parsed.command;
+    const interactive = parsed.interactive;
+    const options = parsed.on;
+    const shopts = parsed.shopts;
+    const rest = parsed.rest;
     const out = (code: number, stdout: string, stderr: string) => {
       ctx.stdout += stdout.replace(/\r\n/g, '\n');
       ctx.stderr += stderr.replace(/\r\n/g, '\n');
@@ -276,7 +276,7 @@ async function runShell(ctx: CommandContext, invokedAs: 'sh' | 'bash'): Promise<
       script = rest[0];
       argv0 = rest[1] ?? 'sh';
       positional = rest.slice(2);
-    } else if (rest.length > 0) {
+    } else if (rest.length > 0 && !parsed.stdin) {
       const scriptPath = ctx.fs.resolvePath(rest[0], ctx.cwd);
       try {
         const content = await ctx.fs.readFile(scriptPath, 'utf8');
@@ -291,11 +291,11 @@ async function runShell(ctx: CommandContext, invokedAs: 'sh' | 'bash'): Promise<
       // The script is fd 0 (a shell running as a kernel process, shell-stdio.ts)
       script = await ctx.shell.kernelStdio.readAll();
       argv0 = 'sh';
-      positional = [];
+      positional = rest; // (sh -s ARGS)
     } else if (ctx.stdin) {
       script = ctx.stdin;
       argv0 = 'sh';
-      positional = [];
+      positional = rest;
     } else {
       return 0;
     }
@@ -306,14 +306,17 @@ async function runShell(ctx: CommandContext, invokedAs: 'sh' | 'bash'): Promise<
     ctx.shell.execPid = ctx.shell.execPpid = undefined;
     child.setPositional(positional, argv0);
     for (const o of options) child.options.add(o);
+    for (const o of parsed.off) child.options.delete(o);
+    if (parsed.posix) child.options.add('posix');
     for (const [o, on] of shopts) { if (on) child.shoptopts.add(o); else child.shoptopts.delete(o); }
     child.commandStringFlag = commandMode;
     // An interactive shell starts in emacs editing mode
     if (interactive) { child.interactiveFlag = true; child.options.add('emacs'); }
     // `sh -c` reads the caller's stdin; a script read from stdin has none left.
     // When stdin is the shell's fd 0 the child reads it as it goes.
-    if (!ctx.liveStdin && (commandMode || rest.length > 0)) child.setInjectedStdin(ctx.stdin || '');
-    else if (ctx.liveStdin && !(commandMode || rest.length > 0)) child.kernelStdinLive = false;
+    const fromStdin = !commandMode && (rest.length === 0 || parsed.stdin);
+    if (!ctx.liveStdin && !fromStdin) child.setInjectedStdin(ctx.stdin || '');
+    else if (ctx.liveStdin && fromStdin) child.kernelStdinLive = false;
     // Output goes out as each command finishes where nothing captures it
     if (ctx.streamStdout && ctx.streamStderr) {
       return child.runScriptText(script, ctx.terminal, ctx.streamStdout, ctx.streamStderr);

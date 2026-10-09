@@ -1,0 +1,680 @@
+{
+ "format": 1,
+ "env": {
+  "date": "2026-10-09T18:37:57.490Z",
+  "git": {
+   "sha": "4b3721305feca744c40a2aadd3cb647298022b83",
+   "short": "4b37213",
+   "branch": "unix/bench",
+   "dirty": false
+  },
+  "node": "v22.22.0",
+  "chromium": "141.0.7390.37",
+  "os": "Linux 6.18.44-fc-v80 x64",
+  "cpu": {
+   "model": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+   "count": 4
+  },
+  "memoryGiB": 15.7,
+  "quick": false,
+  "runs": 5,
+  "machine": {
+   "id": "e57125c23b92",
+   "label": "4× Intel(R) Xeon(R) Processor @ 2.10GHz, 15.7 GiB, Linux 6.18.44-fc-v80 x64, Chromium 141.0.7390.37"
+  },
+  "durationSec": 1195,
+  "netcache": {
+   "hits": 5,
+   "misses": 0,
+   "failed": 0
+  },
+  "note": "workloads at --runs 5; workloads-slow at --runs 3 (3 Debian rounds, git clone 3+1)"
+ },
+ "results": [
+  {
+   "name": "workload.desktop.reveal",
+   "suite": "workloads",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 254.8,
+   "p90": 276.4,
+   "min": 214.3,
+   "max": 276.4,
+   "n": 5,
+   "samples": [
+    254.8,
+    268.3,
+    240.5,
+    276.4,
+    214.3
+   ],
+   "notes": "navigation → `shiro:desktop:revealed` (the desktop's one visible frame), fresh profile, `/?ui=desktop`"
+  },
+  {
+   "name": "workload.desktop.reveal_warm",
+   "suite": "workloads",
+   "mode": "isolated",
+   "cache": "warm",
+   "unit": "ms",
+   "median": 230.6,
+   "p90": 282.7,
+   "min": 213.9,
+   "max": 282.7,
+   "n": 5,
+   "samples": [
+    282.7,
+    256.7,
+    230.6,
+    220.9,
+    213.9
+   ],
+   "notes": "same, reloading a visited profile"
+  },
+  {
+   "name": "workload.desktop.peak_rss",
+   "suite": "workloads",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 218.5,
+   "p90": 218.6,
+   "min": 218,
+   "max": 218.6,
+   "n": 5,
+   "samples": [
+    218.6,
+    218.4,
+    218.6,
+    218.5,
+    218
+   ],
+   "notes": "renderer RSS peak from navigation to the first prompt (absolute, not a delta)"
+  },
+  {
+   "name": "workload.desktop.rss",
+   "suite": "workloads",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 216,
+   "p90": 216.2,
+   "min": 215.6,
+   "max": 216.2,
+   "n": 5,
+   "samples": [
+    216.2,
+    216,
+    216,
+    215.8,
+    215.6
+   ],
+   "notes": "renderer RSS once the desktop is up"
+  },
+  {
+   "name": "workload.desktop.js_heap",
+   "suite": "workloads",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 4.036,
+   "p90": 4.036,
+   "min": 4.034,
+   "max": 4.036,
+   "n": 5,
+   "samples": [
+    4.036,
+    4.036,
+    4.034,
+    4.036,
+    4.034
+   ],
+   "notes": "main-thread JS heap after GC once the desktop is up"
+  },
+  {
+   "name": "workload.ffmpeg.first",
+   "suite": "workloads",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 253.6,
+   "p90": 267.4,
+   "min": 214.1,
+   "max": 267.4,
+   "n": 5,
+   "samples": [
+    253.6,
+    267.4,
+    214.1,
+    262.4,
+    224.3
+   ],
+   "notes": "`ffmpeg -version`, first run of the page: loads ffmpeg.wasm's core (~31 MB, from the app origin)"
+  },
+  {
+   "name": "workload.ffmpeg.warm",
+   "suite": "workloads",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 1.895,
+   "p90": 2.51,
+   "min": 1.23,
+   "max": 5.125,
+   "n": 10,
+   "samples": [
+    1.885,
+    1.23,
+    2.275,
+    1.905,
+    5.125,
+    1.265,
+    1.555,
+    2.39,
+    2.51,
+    1.37
+   ],
+   "notes": "the next two `ffmpeg -version` runs"
+  },
+  {
+   "name": "workload.peak_rss.ffmpeg_first",
+   "suite": "workloads",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 110.3,
+   "p90": 110.8,
+   "min": 109.6,
+   "max": 110.8,
+   "n": 5,
+   "samples": [
+    110.3,
+    110.3,
+    110,
+    109.6,
+    110.8
+   ],
+   "notes": "renderer RSS peak above the pre-run level, first run"
+  },
+  {
+   "name": "workload.peak_rss.ffmpeg_warm",
+   "suite": "workloads",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 0.482,
+   "p90": 1.531,
+   "min": 0,
+   "max": 1.695,
+   "n": 10,
+   "samples": [
+    1.695,
+    0.012,
+    1.531,
+    0.172,
+    0.781,
+    0.023,
+    1.531,
+    0,
+    1.426,
+    0.184
+   ],
+   "notes": "same, warm runs"
+  },
+  {
+   "name": "workload.claude_npm.first",
+   "suite": "workloads",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 2937,
+   "p90": 3137,
+   "min": 2882,
+   "max": 3137,
+   "n": 5,
+   "samples": [
+    2964,
+    3137,
+    2937,
+    2882,
+    2925
+   ],
+   "notes": "`claude --npm --version`, first run of a fresh profile (npm tarball from the bench cache, install + load of cli.js)"
+  },
+  {
+   "name": "workload.claude_npm.warm",
+   "suite": "workloads",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 989.6,
+   "p90": 1047,
+   "min": 920.1,
+   "max": 1078,
+   "n": 10,
+   "samples": [
+    1047,
+    1078,
+    1043,
+    1005,
+    997.2,
+    924,
+    920.3,
+    920.7,
+    920.1,
+    982
+   ],
+   "notes": "the next two runs (installed, module load only)"
+  },
+  {
+   "name": "workload.peak_rss.claude_npm_first",
+   "suite": "workloads",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 414,
+   "p90": 417.8,
+   "min": 411.3,
+   "max": 417.8,
+   "n": 5,
+   "samples": [
+    417.8,
+    413.3,
+    411.3,
+    414,
+    417.4
+   ],
+   "notes": "renderer RSS peak above the pre-run level, first run"
+  },
+  {
+   "name": "workload.peak_rss.claude_npm_warm",
+   "suite": "workloads",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 183.9,
+   "p90": 184.7,
+   "min": 104.4,
+   "max": 184.8,
+   "n": 10,
+   "samples": [
+    184.5,
+    104.5,
+    184,
+    104.4,
+    184.8,
+    130.6,
+    184.2,
+    183.7,
+    184.7,
+    130.8
+   ],
+   "notes": "same, warm runs"
+  },
+  {
+   "name": "workload.debian.install_to_prompt",
+   "suite": "workloads-slow",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 1077,
+   "p90": 1282,
+   "min": 1027,
+   "max": 1282,
+   "n": 3,
+   "samples": [
+    1027,
+    1077,
+    1282
+   ],
+   "notes": "`debian install` + the first `/usr/bin/bash -c true` (Debian's bash, its chunks fetched on first use), fresh profile"
+  },
+  {
+   "name": "workload.debian.install",
+   "suite": "workloads-slow",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 508.7,
+   "p90": 528.6,
+   "min": 487.6,
+   "max": 528.6,
+   "n": 3,
+   "samples": [
+    487.6,
+    508.7,
+    528.6
+   ],
+   "notes": "`debian install` alone (manifest, index, placeholders)"
+  },
+  {
+   "name": "workload.debian.first_bash",
+   "suite": "workloads-slow",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 567.8,
+   "p90": 753.5,
+   "min": 538.9,
+   "max": 753.5,
+   "n": 3,
+   "samples": [
+    538.9,
+    567.8,
+    753.5
+   ],
+   "notes": "the first Debian bash after install"
+  },
+  {
+   "name": "workload.peak_rss.debian_install",
+   "suite": "workloads-slow",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 22.75,
+   "p90": 25.51,
+   "min": 22.69,
+   "max": 25.51,
+   "n": 3,
+   "samples": [
+    22.69,
+    22.75,
+    25.51
+   ],
+   "notes": "renderer RSS peak above the pre-run level"
+  },
+  {
+   "name": "workload.apt.update",
+   "suite": "workloads-slow",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 42717,
+   "p90": 46450,
+   "min": 41808,
+   "max": 46450,
+   "n": 3,
+   "samples": [
+    42717,
+    46450,
+    41808
+   ],
+   "notes": "`apt-get update` (trixie + updates + security, ~10 MB of indexes) from the mirror cache"
+  },
+  {
+   "name": "workload.peak_rss.apt_update",
+   "suite": "workloads-slow",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 577.5,
+   "p90": 587.5,
+   "min": 575,
+   "max": 587.5,
+   "n": 3,
+   "samples": [
+    577.5,
+    587.5,
+    575
+   ],
+   "notes": "renderer RSS peak above the pre-run level"
+  },
+  {
+   "name": "workload.apt.install_cowsay",
+   "suite": "workloads-slow",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 62625,
+   "p90": 64875,
+   "min": 59648,
+   "max": 64875,
+   "n": 3,
+   "samples": [
+    62625,
+    64875,
+    59648
+   ],
+   "notes": "`apt-get install -y cowsay` (pulls perl), dpkg in Blink"
+  },
+  {
+   "name": "workload.peak_rss.apt_cowsay",
+   "suite": "workloads-slow",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 847.4,
+   "p90": 892.3,
+   "min": 840.1,
+   "max": 892.3,
+   "n": 3,
+   "samples": [
+    847.4,
+    892.3,
+    840.1
+   ],
+   "notes": "renderer RSS peak above the pre-run level"
+  },
+  {
+   "name": "workload.apt.cowsay_run",
+   "suite": "workloads-slow",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 5896,
+   "p90": 6547,
+   "min": 5495,
+   "max": 6547,
+   "n": 3,
+   "samples": [
+    5495,
+    6547,
+    5896
+   ],
+   "notes": "first `/usr/games/cowsay moo` after install (perl in Blink)"
+  },
+  {
+   "name": "workload.apt.install_python3",
+   "suite": "workloads-slow",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 251330,
+   "p90": 253970,
+   "min": 240401,
+   "max": 253970,
+   "n": 3,
+   "samples": [
+    251330,
+    240401,
+    253970
+   ],
+   "notes": "`apt-get install -y python3` (after cowsay, so perl is already there)"
+  },
+  {
+   "name": "workload.peak_rss.apt_python3",
+   "suite": "workloads-slow",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 771.7,
+   "p90": 818.7,
+   "min": 752.8,
+   "max": 818.7,
+   "n": 3,
+   "samples": [
+    752.8,
+    771.7,
+    818.7
+   ],
+   "notes": "renderer RSS peak above the pre-run level"
+  },
+  {
+   "name": "workload.python3.cold",
+   "suite": "workloads-slow",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 3003,
+   "p90": 3703,
+   "min": 2693,
+   "max": 3703,
+   "n": 3,
+   "samples": [
+    3703,
+    2693,
+    3003
+   ],
+   "notes": "first `python3 -c 'print(1)'` after the install (Debian's CPython in Blink)"
+  },
+  {
+   "name": "workload.python3.warm",
+   "suite": "workloads-slow",
+   "mode": "isolated",
+   "cache": "warm",
+   "unit": "ms",
+   "median": 2884,
+   "p90": 3621,
+   "min": 2683,
+   "max": 3621,
+   "n": 9,
+   "samples": [
+    3621,
+    3035,
+    3002,
+    2683,
+    2744,
+    2814,
+    2858,
+    2884,
+    2905
+   ],
+   "notes": "the next three runs"
+  },
+  {
+   "name": "workload.peak_rss.python3_cold",
+   "suite": "workloads-slow",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 36.45,
+   "p90": 43.82,
+   "min": 24.33,
+   "max": 43.82,
+   "n": 3,
+   "samples": [
+    24.33,
+    43.82,
+    36.45
+   ],
+   "notes": "renderer RSS peak above the pre-run level"
+  },
+  {
+   "name": "workload.peak_rss.python3_warm",
+   "suite": "workloads-slow",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 46.04,
+   "p90": 59.75,
+   "min": 24.02,
+   "max": 59.75,
+   "n": 9,
+   "samples": [
+    59.71,
+    41.96,
+    52.83,
+    24.08,
+    46.1,
+    59.75,
+    46.04,
+    24.02,
+    44.22
+   ],
+   "notes": "same, warm runs"
+  },
+  {
+   "name": "workload.debian.storage",
+   "suite": "workloads-slow",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 327.3,
+   "p90": 329.8,
+   "min": 327.1,
+   "max": 329.8,
+   "n": 3,
+   "samples": [
+    329.8,
+    327.3,
+    327.1
+   ],
+   "notes": "navigator.storage.estimate().usage after install + update + cowsay + python3"
+  },
+  {
+   "name": "workload.git.clone_relay.first",
+   "suite": "workloads-slow",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 3720,
+   "p90": 3720,
+   "min": 3720,
+   "max": 3720,
+   "n": 1,
+   "samples": [
+    3720
+   ],
+   "notes": "first clone of the page (git binary not yet compiled/cached), one sample"
+  },
+  {
+   "name": "workload.git.clone_relay",
+   "suite": "workloads-slow",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 2783,
+   "p90": 3263,
+   "min": 2664,
+   "max": 3263,
+   "n": 3,
+   "samples": [
+    2664,
+    2783,
+    3263
+   ],
+   "notes": "`git clone git://<host>:<port>/small.git` (pkg git in Blink; 41 files, 5 commits) through server.mjs's TCP relay to a local git daemon; pkg install git took 431 ms"
+  },
+  {
+   "name": "workload.peak_rss.git_clone",
+   "suite": "workloads-slow",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 30.75,
+   "p90": 32.11,
+   "min": 30.64,
+   "max": 32.11,
+   "n": 3,
+   "samples": [
+    30.75,
+    30.64,
+    32.11
+   ],
+   "notes": "renderer RSS peak above the pre-run level"
+  },
+  {
+   "name": "workload.claude_native.version",
+   "suite": "workloads-slow",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": null,
+   "p90": null,
+   "n": 0,
+   "samples": [],
+   "notes": "native Claude Code not cached: put the linux-x64-musl binary at bench/.cache/fixtures/claude-native and musl's loader at bench/.cache/fixtures/ld-musl-x86_64.so.1 (bench/README.md); never downloaded by the bench",
+   "error": true
+  }
+ ]
+}

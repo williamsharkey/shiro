@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, onTestFinished, beforeAll, afterAll } from 'vitest';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import type { Server } from 'node:http';
 import { join, resolve } from 'node:path';
@@ -53,6 +53,11 @@ const forkBin = join(out, 'forkcopy');
 const haveFork = tryBuild('gcc', ['-static', '-O1', '-o', forkBin, 'forkcopy.c']);
 const mtchildBin = join(out, 'mtchild');
 const haveMtchild = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', mtchildBin, 'mtchild.c']);
+const fsidentBin = join(out, 'fsident');
+const haveFsident = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', fsidentBin, 'fsident.c']);
+// musl's libc (native Claude Code's) resolves paths and stats files its own way
+const fsidentMuslBin = join(out, 'fsident-musl');
+const haveFsidentMusl = tryBuild('musl-gcc', ['-static', '-O1', '-o', fsidentMuslBin, 'fsident.c']);
 const statnullBin = join(out, 'statnull');
 const haveStatnull = tryBuild('gcc', ['-static', '-O1', '-o', statnullBin, 'statnull.c']);
 const futexwakeBin = join(out, 'futexwake');
@@ -85,6 +90,14 @@ const sockaddrsBin = join(out, 'sockaddrs');
 const haveSockaddrs = tryBuild('gcc', ['-static', '-O1', '-o', sockaddrsBin, 'sockaddrs.c']);
 const sleepintrBin = join(out, 'sleepintr');
 const haveSleepintr = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', sleepintrBin, 'sleepintr.c']);
+const unameBin = join(out, 'uname');
+const haveUname = tryBuild('gcc', ['-static', '-O1', '-o', unameBin, 'uname.c']);
+const cpuclockBin = join(out, 'cpuclock');
+const haveCpuclock = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', cpuclockBin, 'cpuclock.c']);
+const niceBin = join(out, 'nice');
+const haveNice = tryBuild('gcc', ['-static', '-O1', '-o', niceBin, 'nice.c']);
+const idsBin = join(out, 'ids');
+const haveIds = 'SYS_setresuid' in Abi && tryBuild('gcc', ['-static', '-O1', '-o', idsBin, 'ids.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -120,6 +133,10 @@ const haveFionbio = tryBuild('gcc', ['-static', '-O1', '-o', fionbioBin, 'fionbi
 const fuzzBin = join(out, 'jitfuzz');
 const haveFuzz = tryBuild('gcc', ['-static', '-O1', '-o', fuzzBin, 'jitfuzz.c']);
 
+// signalfd needs Blink to forward signalfd/signalfd4 and the signal mask to the kernel (a patch named for it)
+const signalfdBin = join(out, 'signalfd');
+const blinkForwardsSignalfd = readdirSync(resolve(__dirname, '../../../vendor/blink/patches')).some((f) => /signalfd/i.test(f));
+const haveSignalfd = blinkForwardsSignalfd && tryBuild('gcc', ['-static', '-O1', '-o', signalfdBin, 'signalfd.c']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -573,6 +590,13 @@ describe.skipIf(!haveTty)('Blink engine: interactive program on a kernel pty', (
 });
 
 // Blink patch 0011: the guest's fds and processes are the kernel's.
+// PostgreSQL 17's latch: blocked SIGUSR1 and SIGURG (ignored by default) read from a signalfd
+it.skipIf(!haveSignalfd)('signalfd reads blocked signals; poll sees it readable', async () => {
+  const { shell } = await setup(readFileSync(signalfdBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('empty 1 poll 1 read 256 signo 10 23 pid-ok 1 again-empty 1\n');
+}, 60_000);
+
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
 // (busybox picks its applet by it; Debian's redis-server -> redis-check-rdb)
 describe('argv[0] through a symlink', () => {
@@ -762,6 +786,39 @@ describe('Blink engine: CPU and syscall fixes', () => {
       'threads parked: exit 7 within 3s 1\n');
   }, 60_000);
 
+  // Node's os.release() in native Claude Code; glibc's minimum-kernel check
+  it.skipIf(!haveUname)("uname has the kernel's release and version, Blink's sysname and machine", async () => {
+    const { shell } = await setup(readFileSync(unameBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('sysname Linux machine x86_64 release-6.1 1 version-SMP 1 nodename-in-release 1\n');
+  }, 60_000);
+
+  // GHC's runtime (getCurrentThreadCPUTime), Redis 8 (epoll_wait with maxclients + 128)
+  it.skipIf(!haveCpuclock)('CPU-time clocks, including getcpuclockid ids; epoll_wait maxevents 10000', async () => {
+    const { shell } = await setup(readFileSync(cpuclockBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('process 1 thread 1 getcpuclockid 0 0 pid-clock 1 thread-clock 1\n' +
+      'epoll_wait maxevents 10000: 0\n');
+  }, 60_000);
+
+  // pam_limits (su, runuser) calls setpriority for every session
+  it.skipIf(!haveNice)('getpriority/setpriority keep a nice value per process, inherited on fork', async () => {
+    const { shell } = await setup(readFileSync(niceBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('get 0 errno 0 raw 20 set0 0 set5 0 get 5 child 5 lower-as-user EACCES\n');
+  }, 60_000);
+
+  // su, runuser, PostgreSQL's initdb (the kernel's set*id; skipped on a kernel without them)
+  it.skipIf(!haveIds)('uids and gids are the kernel\'s: real, effective and saved ids, groups', async () => {
+    const { shell } = await setup(readFileSync(idsBin));
+    const r = await run(shell, './prog; sudo ./prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('user 1: setuid(0) -1 EPERM\n' +
+      'root: setgroups 0 getgroups 2 {100,65534} 1\n' +
+      'setresgid 0 setresuid 0: uid 65534 euid 65534 saved 0 gid 65534 egid 65534\n' +
+      'seteuid(0) via saved 0: euid 0 uid 65534\n' +
+      'dropped 0: setuid(0) -1 EPERM\n');
+  }, 60_000);
+
   // vim's typeahead check blocked for a key when two reads straddled a ms tick
   it.skipIf(!haveRealtime)('CLOCK_REALTIME and gettimeofday have sub-ms resolution', async () => {
     const { shell } = await setup(readFileSync(realtimeBin));
@@ -796,6 +853,37 @@ describe('Blink engine: CPU and syscall fixes', () => {
   }, 60_000);
 
   // LTP fstat03
+  // Claude Code's atomic writes and its task-output swap check (docs/COMPAT.md "Agent CLIs")
+  it.each([['glibc', fsidentBin, haveFsident, ''], ['musl', fsidentMuslBin, haveFsidentMusl, ''], ['glibc-thread', fsidentBin, haveFsident, '--thread '], ['musl-thread', fsidentMuslBin, haveFsidentMusl, '--thread ']] as const)(
+    'O_CREAT|O_EXCL, mkdir -p + openat(dirfd), O_PATH dirs, one dev/ino from stat, lstat, fstat and statx (%s)', async (_libc, bin, have, flag) => {
+      if (!have) return;
+      const { shell } = await setup(readFileSync(bin));
+      const r = await run(shell, `./prog ${flag}/tmp/claude-1000/-home-user-${_libc}`);
+      expect(r.output.replace(/\r\n/g, '\n')).toBe('fsident: ok\n');
+      expect(r.exitCode).toBe(0);
+    }, 60_000);
+
+  it.skipIf(!haveFsident)('a path has one dev:ino in every process (the kernel\'s), whatever order they look it up in', async () => {
+    const { shell, fs } = await setup(readFileSync(fsidentBin));
+    await fs.mkdir('/tmp/inod/sub', { recursive: true });
+    await fs.writeFile('/tmp/inod/f', 'x');
+    const paths = ['/tmp/inod', '/tmp/inod/f', '/tmp/inod/sub', '/home/user/work', '/tmp'];
+    const ids = async (ps: string[]) => (await run(shell, `./prog --ino ${ps.join(' ')}`)).output.trim().split(/\r?\n/);
+    const a = await ids(paths);
+    const b = (await ids([...paths].reverse())).reverse();
+    expect(b).toEqual(a);
+    expect(new Set(a).size).toBe(paths.length);
+    // what the kernel (and WASM programs) report
+    const { kernelForContext } = await import('@shiro/wasi/run-command');
+    const kernel = kernelForContext({ fs, shell } as any);
+    const proc = { pid: 1, cwd: '/', uid: 1000 } as any;
+    for (const [i, p] of paths.entries()) {
+      const st = await kernel.statPath(proc, p, false);
+      expect(typeof st).not.toBe('number');
+      expect(a[i]).toBe(`${(st as any).dev}:${(st as any).ino}`);
+    }
+  }, 60_000);
+
   it.skipIf(!haveStatnull)('the stat family with a NULL buffer is EFAULT once the file is found', async () => {
     const { shell } = await setup(readFileSync(statnullBin));
     const r = await run(shell, './prog');

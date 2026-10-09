@@ -17,6 +17,8 @@ import type { OpenFile } from './kernel/fd';
 import { getCompiledModule } from './wasi-packages';
 import { builtinIndex, findEntry, packageStatus, packageShadows, pkgOwnShadows, loadPackageShadows, packageOfPath, runPackageBinary, PKG_BIN_DIR } from './pkg-manager';
 import { activeProfile } from './profile';
+import { BUILTIN_SHIM_INTERP } from './path-shims';
+import { parseShellArgs } from './shell-args';
 
 // Lazy-load the WASI runtime (~960 lines) only when WASM execution is needed
 let _wasiRuntime: typeof import('./wasi-runtime') | null = null;
@@ -747,8 +749,8 @@ export class Shell {
     }
   }
 
-  /** The parent's Ctrl-C controller, so interrupting the parent stops a forked child */
-  private inheritedAbort: AbortController | null = null;
+  /** The abort of the shell this one was forked from (Ctrl-C reaches it); timeout gives its child its own */
+  inheritedAbort: AbortController | null = null;
 
   /** Set when this shell runs as a kernel process: its fds 0-2 are its stdio (shell-stdio.ts) */
   kernelStdio?: KernelStdio;
@@ -1049,6 +1051,9 @@ export class Shell {
     }
   }
 
+  /** `exec -a NAME prog`: argv[0] for the next kernel program named `name` */
+  execArgv0?: { name: string; argv0: string };
+
   /** The terminal of the execute() in progress (undefined: the shell's own) */
   private activeTerminal: any = undefined;
   /** A builtin (Command.exec) is running: an execute() it makes is its own */
@@ -1057,9 +1062,21 @@ export class Shell {
   /** Run a builtin; execute() calls it makes without a terminal collect their output */
   private async runCommand(cmd: { exec(ctx: CommandContext): Promise<number> }, ctx: CommandContext): Promise<number> {
     this.inCommand++;
+    // Ctrl-C (or a timeout's abort) ends a builtin even if it never looks at the
+    // signal (one stuck awaiting something): the shell stops waiting, status 130
+    const abort = (this.abortController ?? this.inheritedAbort)?.signal;
+    let off = () => {};
     try {
-      return await cmd.exec(ctx);
+      if (!abort) return await cmd.exec(ctx);
+      if (abort.aborted) return 130;
+      const interrupted = new Promise<number>((resolve) => {
+        const on = () => resolve(130);
+        abort.addEventListener('abort', on, { once: true });
+        off = () => abort.removeEventListener('abort', on);
+      });
+      return await Promise.race([cmd.exec(ctx), interrupted]);
     } finally {
+      off();
       this.inCommand--;
     }
   }
@@ -1973,15 +1990,19 @@ export class Shell {
 
         // Handle /bin/sh, /bin/bash, /bin/zsh — dispatch to shell
         if (/^\/bin\/(sh|bash|zsh)$/.test(cmdName)) {
-          const cIdx = cmdArgs.findIndex(a => /^-\w*c$/.test(a));
-          if (cIdx >= 0 && cIdx + 1 < cmdArgs.length) {
-            // /bin/sh -c "command" → execute command
+          // Options parse as the sh builtin's do: `/bin/sh -c -l CMD` (Claude
+          // Code's Bash tool) took -l for the command
+          const parsedSh = parseShellArgs(cmdArgs);
+          if (parsedSh.command && parsedSh.rest.length) {
             // `sh -c CMD [NAME ARGS...]`: only CMD is the command string
-            const shellCmd = cmdArgs[cIdx + 1];
+            const shellCmd = parsedSh.rest[0];
             const child = this.fork();
             child.startProcess();
-            const rest = cmdArgs.slice(cIdx + 2);
+            const rest = parsedSh.rest.slice(1);
             child.setPositional(rest.slice(1), rest[0] ?? cmdName);
+            for (const o of parsedSh.on) child.options.add(o);
+            for (const o of parsedSh.off) child.options.delete(o);
+            child.commandStringFlag = true;
             child.injectedStdin = nestedStdin;
             if (!this.liveStdin(i, heredocStdin, hereString, redirects)) child.kernelStdinLive = false;
             exitCode = await child.runScriptText(shellCmd, terminalOverride || this.terminal, writeStdout, stderrWriter);
@@ -3317,10 +3338,38 @@ export class Shell {
             redirects.length = 0;
             continue;
           }
-          if (cmdArgs.length > 0) {
-            const execCmd = quoteArgsForShell(cmdArgs);
+          // exec [-cl] [-a NAME] COMMAND: -a NAME is the program's argv[0] (Claude Code's
+          // `(exec -a ugrep "$_cc_bin" …)` multicall), -l prefixes it with '-', -c empties the environment
+          let execWords = cmdArgs;
+          let argv0: string | undefined;
+          let login = false;
+          let clearEnv = false;
+          while (execWords.length && /^-[acl]+$/.test(execWords[0])) {
+            const flags = execWords[0];
+            execWords = execWords.slice(1);
+            if (flags.includes('c')) clearEnv = true;
+            if (flags.includes('l')) login = true;
+            if (flags.includes('a')) { argv0 = execWords[0]; execWords = execWords.slice(1); }
+          }
+          if (execWords[0] === '--') execWords = execWords.slice(1);
+          if (cmdArgs.length > 0 && execWords.length === 0) {
+            if (argv0 === undefined && cmdArgs.some((a) => a === '-a')) { stderrWriter('exec: -a: option requires an argument\r\n'); exitCode = 2; }
+            else exitCode = 0;
+            this.lastExitCode = exitCode;
+            this.env['?'] = String(exitCode);
+            lastOutput = '';
+            continue;
+          }
+          if (execWords.length > 0) {
+            if (login) argv0 = '-' + (argv0 ?? execWords[0].replace(/^.*\//, ''));
+            const execCmd = quoteArgsForShell(clearEnv ? ['env', '-i', ...execWords] : execWords);
+            this.execArgv0 = argv0 !== undefined ? { name: execWords[0], argv0 } : undefined;
             this.injectedStdin = nestedStdin;
-            exitCode = await this.execute(execCmd, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
+            try {
+              exitCode = await this.execute(execCmd, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
+            } finally {
+              this.execArgv0 = undefined;
+            }
             // The command replaced the shell: a script or subshell ends with its status
             // (the interactive prompt goes on: it is the session)
             if (this.scriptShell || this.isSubshell) {
@@ -3712,7 +3761,9 @@ export class Shell {
           stderr: '',
           shell: this,
           terminal: terminalOverride || this.terminal,
-          stdoutIsTTY: i === pipeline.length - 1 && !redirects.some(r => r.type === '>' || r.type === '>>'),
+          // (not when the caller collects stdout: $(...), a builtin's own sink)
+          stdoutIsTTY: i === pipeline.length - 1 && !redirects.some(r => r.type === '>' || r.type === '>>') &&
+            !(terminalOverride || this.terminal)?.captureStdout,
         };
 
         // Check shell functions first
@@ -6407,6 +6458,17 @@ export class Shell {
     return result;
   }
 
+  /**
+   * The condition of if/while/until, ready for evalCondition. One with [[ … ]]
+   * is left as written: [[ expands each operand itself, and an unquoted empty
+   * expansion is still an operand there (`if [[ -n ${ZSH_VERSION:-} ]]`),
+   * not a word that disappears.
+   */
+  private async conditionText(condition: string, writeStderr: (s: string) => void): Promise<string> {
+    if (condition.includes('[[')) return condition;
+    return this.expandVars(await this.expandCommandSubstitution(this.expandArithmetic(condition), writeStderr));
+  }
+
   private async evalCondition(
     condition: string, writeStdout: (s: string) => void, writeStderr: (s: string) => void
   ): Promise<number> {
@@ -6608,7 +6670,7 @@ export class Shell {
 
     // Evaluate branches in order
     for (const branch of branches) {
-      const expandedCond = this.expandVars(await this.expandCommandSubstitution(this.expandArithmetic(branch.condition), writeStderr));
+      const expandedCond = await this.conditionText(branch.condition, writeStderr);
       const condResult = await this.evalCondition(expandedCond, writeStdout, writeStderr);
       if (condResult === 0) {
         return branch.body.trim() ? this.execute(branch.body, writeStdout, writeStderr, false, undefined, true) : 0;
@@ -6770,7 +6832,7 @@ export class Shell {
       if (iter % 1000 === 0) await yieldToEventLoop(); // keep the page responsive in long loops
       try {
         // Expand vars in condition each iteration (loop vars like $X change)
-        const expandedCond = this.expandVars(await this.expandCommandSubstitution(this.expandArithmetic(parsed.condition), writeStderr));
+        const expandedCond = await this.conditionText(parsed.condition, writeStderr);
         if (((await this.evalCondition(expandedCond, writeStdout, writeStderr)) === 0) === untilMode) break;
         status = 0;
         if (parsed.body.trim()) status = await this.execute(parsed.body, writeStdout, writeStderr, false, undefined, true);
@@ -7415,6 +7477,13 @@ export class Shell {
     if (firstIsFilter && i === pipeline.length - 1) return null;
     const first = await stageFor(name, args);
     if (!first) return null;
+    // exec -a NAME: the program runs with NAME as argv[0]
+    const a0 = this.execArgv0;
+    if (a0 && a0.name === name && !first.builtin) {
+      this.execArgv0 = undefined;
+      first.path = first.path ?? first.argv[0];
+      first.argv = [a0.argv0, ...first.argv.slice(1)];
+    }
     const hasOutRedirect = (r: Redirect[]) => r.some(x => x.type !== '<');
     const programs = [first];
     let last = i;
@@ -7799,6 +7868,11 @@ export class Shell {
     }
     if (interp.includes('/') && !viaEnv && await this.fs.exists(interp)) {
       return this.executeScript(interp, argv, ctx, writeStdout, writeStderr);
+    }
+    // A builtin's file on PATH (path-shims.ts ALWAYS_SHIMS): run that builtin
+    if (interp === BUILTIN_SHIM_INTERP && argv.length) {
+      const named = this.commands.get(argv[0].slice(argv[0].lastIndexOf('/') + 1));
+      if (named) { ctx.args = argv.slice(1); return this.runCommand(named, ctx); }
     }
     const base = interp.slice(interp.lastIndexOf('/') + 1);
     const cmd = this.commands.get(base);

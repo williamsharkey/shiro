@@ -55,8 +55,8 @@ const CSS = `
 /* The wrapper takes no box of its own: its child sits directly in #shiro-layout,
    so page scripts that size things beside the terminal (strudelish's divider sets
    percentages of the layout width) measure against the same box. */
-#shiro-panes { display: contents; }
-#shiro-panes > * { min-width: 0; min-height: 0; height: calc(100% - clamp(0px, calc(100vh - 20em), 1em)); }
+#tabcomputer-panes { display: contents; }
+#tabcomputer-panes > * { min-width: 0; min-height: 0; height: calc(100% - clamp(0px, calc(100vh - 20em), 1em)); }
 .shiro-split > #terminal { height: auto; }
 .shiro-split { display: flex; min-width: 0; min-height: 0; }
 .shiro-split.row { flex-direction: row; }
@@ -76,7 +76,7 @@ const CSS = `
 body.shiro-pane-drag, body.shiro-pane-drag * { user-select: none !important; }
 body.shiro-pane-drag.row, body.shiro-pane-drag.row * { cursor: col-resize !important; }
 body.shiro-pane-drag.column, body.shiro-pane-drag.column * { cursor: row-resize !important; }
-.become-active #shiro-panes { display: none !important; }
+.become-active #tabcomputer-panes { display: none !important; }
 `;
 
 export function initPanes(mainTerminal: ShiroTerminal, shellFactory: () => Shell): void {

@@ -15,6 +15,8 @@ import { createServerWindow } from './server-window';
 import { DEFAULT_CLAUDE_THEME } from './claude-config';
 import { ensureClaudeAuthState } from './claude-auth';
 import { getShiroOrigin } from './utils/shiro-origin';
+import { BRAND } from './brand';
+import { claudeSignInUI } from './claude-signin-ui';
 
 // Values Claude Code itself uses for "Claude account with subscription" login.
 const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
@@ -40,6 +42,35 @@ export async function hasClaudeCredentials(fs: Pick<FileSystem, 'readFile'>): Pr
   } catch {
     return false;
   }
+}
+
+/** What the desktop shows for the Claude account: never tokens */
+export interface ClaudeAccount {
+  signedIn: boolean;
+  /** "pro", "max", "team", "enterprise"… when Claude Code recorded it */
+  plan?: string;
+  email?: string;
+  organization?: string;
+}
+
+/** The signed-in Claude account, from ~/.claude/.credentials.json and ~/.claude.json */
+export async function claudeAccount(fs: Pick<FileSystem, 'readFile'>): Promise<ClaudeAccount> {
+  let oauth: Record<string, unknown> | undefined;
+  try { oauth = JSON.parse(await fs.readFile(CLAUDE_CREDENTIALS_PATH, 'utf8') as string)?.claudeAiOauth; } catch {}
+  if (!oauth || (!oauth.accessToken && !oauth.refreshToken)) return { signedIn: false };
+  const acct: ClaudeAccount = { signedIn: true };
+  if (typeof oauth.subscriptionType === 'string' && oauth.subscriptionType) acct.plan = oauth.subscriptionType;
+  try {
+    const o = JSON.parse(await fs.readFile('/home/user/.claude.json', 'utf8') as string)?.oauthAccount;
+    if (typeof o?.emailAddress === 'string') acct.email = o.emailAddress;
+    if (typeof o?.organizationName === 'string') acct.organization = o.organizationName;
+  } catch {}
+  return acct;
+}
+
+/** Sign out: remove the credentials file both Claude Code builds read */
+export async function signOutClaude(fs: Pick<FileSystem, 'unlink'>): Promise<void> {
+  try { await fs.unlink(CLAUDE_CREDENTIALS_PATH); } catch {}
 }
 
 function base64url(bytes: Uint8Array): string {
@@ -68,35 +99,40 @@ function buildPanelHTML(authorizeUrl: string, subtitle: string): string {
 <html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
+  /* The desktop's Settings look (src/desktop/desktop.css): light and dark, one accent */
+  :root { color-scheme: light dark; --bg: #fbfbfd; --text: #1c1d26; --text-2: #555a6b; --field: rgba(0,0,0,.045); --sep: rgba(0,0,0,.1);
+    --accent: #6e6aff; --err: #d93025; --ok: #1e8e3e; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1b1d29; --text: #ecedf3; --text-2: #a4a8b8; --field: rgba(255,255,255,.06); --sep: rgba(255,255,255,.1);
+    --err: #ff6b6b; --ok: #4cd07d; } }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: #0d1117; color: #e6edf3; min-height: 100vh;
-    display: flex; align-items: center; justify-content: center; padding: 1.25rem;
+    font: 13px/1.45 system-ui, sans-serif; -webkit-font-smoothing: antialiased;
+    background: var(--bg); color: var(--text); min-height: 100vh;
+    display: flex; align-items: center; justify-content: center; padding: 18px;
   }
-  .card { max-width: 380px; width: 100%; }
-  h1 { font-size: 1.25rem; margin-bottom: 0.35rem; }
-  .subtitle { color: #8b949e; font-size: 0.875rem; margin-bottom: 1.25rem; line-height: 1.4; }
-  .step { display: flex; gap: 0.6rem; align-items: baseline; margin: 1rem 0 0.5rem; color: #8b949e; font-size: 0.85rem; }
-  .num { color: #da7756; font-weight: 700; }
+  .card { max-width: 360px; width: 100%; }
+  h1 { font-size: 17px; font-weight: 650; letter-spacing: -.01em; margin-bottom: 4px; }
+  .subtitle { color: var(--text-2); margin-bottom: 14px; }
+  .step { display: flex; gap: 8px; align-items: baseline; margin: 14px 0 6px; color: var(--text-2); }
+  .num { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 11px; font-weight: 700; flex: none; }
   .btn {
-    display: block; width: 100%; padding: 12px 20px; font-size: 1rem; font-weight: 600;
-    border: none; border-radius: 8px; cursor: pointer; text-align: center; text-decoration: none;
-    background: #da7756; color: #fff; -webkit-tap-highlight-color: transparent;
+    display: inline-flex; align-items: center; justify-content: center; height: 30px; padding: 0 14px; width: 100%;
+    font: inherit; font-weight: 600; border: 0; border-radius: 7px; cursor: default; text-decoration: none;
+    background: var(--accent); color: #fff; -webkit-tap-highlight-color: transparent;
   }
-  .btn:active { opacity: 0.85; }
-  .btn:disabled { opacity: 0.5; cursor: default; }
-  .btn-ghost { background: #21262d; color: #e6edf3; border: 1px solid #30363d; margin-top: 0.6rem; }
+  .btn:active { filter: brightness(.92); }
+  .btn:disabled { opacity: .5; }
+  .btn-ghost { background: var(--field); color: var(--text); border: 1px solid var(--sep); margin-top: 12px; font-weight: 500; }
   input {
-    width: 100%; padding: 10px 12px; font-size: 1rem; font-family: ui-monospace, Menlo, monospace;
-    background: #010409; border: 1px solid #30363d; border-radius: 6px; color: #e6edf3; outline: none;
+    flex: 1; min-width: 0; height: 30px; padding: 0 10px; font: 13px ui-monospace, monospace;
+    background: var(--field); border: 1px solid var(--sep); border-radius: 7px; color: var(--text); outline: none;
   }
-  input:focus { border-color: #da7756; }
-  .row { display: flex; gap: 0.5rem; }
+  input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+  .row { display: flex; gap: 8px; }
   .row .btn { width: auto; white-space: nowrap; }
-  .status { margin-top: 0.9rem; font-size: 0.85rem; color: #8b949e; min-height: 1.2em; }
-  .status.error { color: #f85149; }
-  .status.success { color: #3fb950; }
+  .status { margin-top: 10px; color: var(--text-2); min-height: 1.2em; }
+  .status.error { color: var(--err); }
+  .status.success { color: var(--ok); }
 </style>
 </head><body>
 <div class="card">
@@ -184,11 +220,19 @@ export interface ClaudeSignInOptions {
   subtitle?: string;
 }
 
-/**
- * Show the sign-in panel. Resolves true once credentials are saved, false if
- * the panel is skipped or closed.
- */
-export async function openClaudeSignIn(opts: ClaudeSignInOptions): Promise<boolean> {
+/** The default line under "Sign in to Claude" */
+export function claudeSignInSubtitle(): string {
+  return `Use your Claude account for Claude Code in ${BRAND.name}.`;
+}
+
+/** One sign-in attempt: the page to open, and what to do with the code it shows */
+export interface ClaudeSignInFlow {
+  authorizeUrl: string;
+  /** Exchange the pasted code and save the credentials; throws a readable error */
+  complete(code: string): Promise<void>;
+}
+
+export async function beginClaudeSignIn(fs: SignInFs, cwd?: string): Promise<ClaudeSignInFlow> {
   const verifier = randomToken();
   const state = randomToken();
   const params = new URLSearchParams({
@@ -201,7 +245,32 @@ export async function openClaudeSignIn(opts: ClaudeSignInOptions): Promise<boole
     code_challenge_method: 'S256',
     state,
   });
-  const authorizeUrl = `${AUTHORIZE_URL}?${params}`;
+  return {
+    authorizeUrl: `${AUTHORIZE_URL}?${params}`,
+    async complete(code: string) {
+      const tokens = await exchangeCode(code.trim(), verifier, state);
+      await ensureClaudeAuthState(fs, {
+        homeDir: '/home/user',
+        projectPath: cwd,
+        tokens,
+        theme: DEFAULT_CLAUDE_THEME,
+        ensureBootstrap: true,
+        refreshRemoteState: true,
+      });
+    },
+  };
+}
+
+/**
+ * Show the sign-in UI: the desktop's sheet when there is one (claude-signin-ui.ts),
+ * else a floating panel. Resolves true once credentials are saved, false if
+ * it is skipped or closed.
+ */
+export async function openClaudeSignIn(opts: ClaudeSignInOptions): Promise<boolean> {
+  const ui = claudeSignInUI();
+  if (ui) return ui({ subtitle: opts.subtitle, cwd: opts.cwd });
+  const flow = await beginClaudeSignIn(opts.fs, opts.cwd);
+  const authorizeUrl = flow.authorizeUrl;
 
   return new Promise<boolean>((resolve) => {
     let settled = false;
@@ -230,15 +299,7 @@ export async function openClaudeSignIn(opts: ClaudeSignInOptions): Promise<boole
       }
       if (event.data.type !== 'claude-signin-code') return;
       try {
-        const tokens = await exchangeCode(String(event.data.code || ''), verifier, state);
-        await ensureClaudeAuthState(opts.fs, {
-          homeDir: '/home/user',
-          projectPath: opts.cwd,
-          tokens,
-          theme: DEFAULT_CLAUDE_THEME,
-          ensureBootstrap: true,
-          refreshRemoteState: true,
-        });
+        await flow.complete(String(event.data.code || ''));
         reply({ type: 'claude-signin-done' });
         finish(true);
         setTimeout(() => win.close(), 400);
@@ -248,6 +309,6 @@ export async function openClaudeSignIn(opts: ClaudeSignInOptions): Promise<boole
     }
 
     window.addEventListener('message', onMessage);
-    win.updateIframe(buildPanelHTML(authorizeUrl, opts.subtitle || 'Claude Code in tabcomputer uses your Claude subscription.'));
+    win.updateIframe(buildPanelHTML(authorizeUrl, opts.subtitle || claudeSignInSubtitle()));
   });
 }

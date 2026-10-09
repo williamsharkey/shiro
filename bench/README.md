@@ -3,7 +3,7 @@
 ```bash
 npm run bench                  # full run, both modes: bench/results/<date>-<sha>.json + docs/BENCHMARKS.md
 npm run bench:quick            # key metrics, ~2.5 min (isolated + JSPI kernel), doesn't touch docs/
-node bench/compare.mjs bench/results/A.json bench/results/B.json   # flags >10% regressions, exit 1 if any
+node bench/compare.mjs bench/results/A.json bench/results/B.json   # flags only same-machine, A/B-confirmed regressions (exit 1)
 node bench/ab.mjs origin/unix/integration                          # A/B: that ref vs the working tree, with a significance test
 node bench/report.mjs bench/results/X.json                          # regenerate the docs table from a file
 ```
@@ -14,7 +14,7 @@ Options for `node bench/run.mjs`:
 |---|---|
 | `--quick` | fewer/lighter metrics; isolated mode plus the non-isolated kernel suite |
 | `--runs N` | samples per metric (default 5; boot uses 3 in `--quick`) |
-| `--suites a,b` | any of `boot shell kernel wasm x86 net node hygiene` |
+| `--suites a,b` | default `boot shell kernel wasm x86 net node hygiene workloads`; optional `debian x86first workloads-slow` |
 | `--modes isolated,nonisolated` | cross-origin isolated (SAB, Workers, Blink) and/or the fallbacks |
 | `--only re1,re2` | only metrics whose name matches |
 | `--no-build` | reuse `dist/` (otherwise `vite build` first) |
@@ -35,6 +35,56 @@ pre-installed Chromium.
 `node bench/try.mjs 'cmd' 'js:return 1+1'` boots one page (MODE=nonisolated,
 SETTLE=1 to wait for the background install) and runs shell commands or page
 JS: handy for poking at something a benchmark flagged.
+
+## Real workloads (`workloads`, `workloads-slow`)
+
+- `workloads` (in `--quick` and full runs, isolated only; ~25 s): every
+  sample is a fresh profile. Desktop boot to the `shiro:desktop:revealed`
+  mark (and a warm reload), renderer RSS/heap once it is up, `ffmpeg
+  -version` first run (loads the ~31 MB core) and warm, `claude --npm
+  --version` first run (installs the npm build from the cache) and warm. Each
+  program metric has a `workload.peak_rss.*` twin.
+- `workloads-slow` (opt-in: `--suites workloads-slow`; ~10 min for 3 rounds,
+  1 round with `--quick`): `debian install` to the first Debian bash,
+  `apt-get update`, `apt-get install -y cowsay` and `python3` (packages from
+  server.mjs's mirror disk cache, `.debian-build/mirror-cache`, after the
+  first run), `python3 -c 'print(1)'` cold and warm, `git clone` over the
+  TCP relay (pkg git in Blink, `git://` to a `git daemon` the harness starts
+  on this machine's address with a generated 5-commit repo in
+  `bench/.cache/gitsrv`; needs `git` installed here), and native Claude
+  Code's `--version`.
+- Native Claude Code is never downloaded by the bench. To measure it, put
+  the linux-x64-musl binary at `bench/.cache/fixtures/claude-native` and
+  musl's loader (`usr/lib/x86_64-linux-musl/libc.so` from Debian's
+  `musl_1.2.5-3.1~deb13u1_amd64.deb`) at
+  `bench/.cache/fixtures/ld-musl-x86_64.so.1`; `claude install --native`
+  inside tabcomputer fetches the same two files (src/commands/claude-native.ts).
+  Without them the metric is recorded as skipped with that note.
+
+## Comparing runs (`bench/compare.mjs`)
+
+`node bench/compare.mjs base.json new.json` exits 1 only for regressions
+that are real on this machine:
+
+1. **Same machine.** Each results file records `env.machine` (a hash of CPU
+   model/count, memory, OS and Chromium; `BENCH_MACHINE=<label>` names a
+   machine explicitly). Files from different machines are listed for
+   information and nothing is flagged (`--assume-same-machine` overrides).
+2. **Candidates**: worse than `--threshold` (10%) with ≥ 3 samples on both
+   sides, or measured in base and failing in new.
+3. **A/B-confirmed**: the candidates (only those metrics, their suites and
+   modes) are re-run with `ab.mjs` base commit vs new commit, `--rounds 5`,
+   interleaved on this machine. Only `regressed` verdicts (or a metric that
+   still fails on the new commit) count. `--ab ab.json` reuses an existing
+   A/B; `--no-confirm` lists candidates and exits 0. A dirty-tree run can
+   only be confirmed from that same checkout (it becomes the working tree
+   side); a commit that isn't in the repository can't be confirmed, and is
+   reported, not flagged.
+
+Statuses: `REGRESSED` (confirmed), `noise` (candidate the A/B didn't
+confirm), `flaky` (failed once, works in the A/B), `candidate` (not
+confirmed: different machine, `--no-confirm`, or no commits),
+`improved`, `fixed`, `new`, `gone`.
 
 ## A/B (`bench/ab.mjs`)
 
