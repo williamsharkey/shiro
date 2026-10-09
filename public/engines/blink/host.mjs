@@ -562,9 +562,24 @@ async function run(msg) {
     Atomics.store(ch.i32, CH_STATE, 1);
     post({ type: 'blink-sys', ch: pool.indexOf(ch), as });
   });
+  // The guest is exiting (Blink's ShiroQuiesce): the calls its other threads
+  // have in flight, and any they make now, end with EINTR so the threads get
+  // back to Blink, which ends them before the kernel hears exit_group.
+  let dying = false;
+  const EINTR_REPLY = { r: -4, hi: -1, out: null };
+  const shiroDying = () => {
+    dying = true;
+    for (const ch of pool) {
+      const done = ch.done;
+      ch.done = null;
+      done?.({ r: -4, hi: -1, sig: 0 });
+    }
+  };
   const call = async (nr, args, as, input, outCap) => {
     if (exiting) return new Promise(() => {}); // the kernel ends this worker
+    if (dying) return EINTR_REPLY;
     const ch = await acquire();
+    if (dying) { release(ch); return EINTR_REPLY; }
     try {
       if (input.length > ch.data.length) return { r: -7 /* E2BIG */, hi: -1, out: null };
       ch.data.set(input);
@@ -655,6 +670,7 @@ async function run(msg) {
       // Blink calls shiroExit on this thread as soon as the guest exits;
       // onExit only fires if emscripten's own teardown completes.
       shiroExit: (code) => exitGuest(code),
+      shiroDying: () => shiroDying(),
       // A signal's default action killed the guest: die of it in the kernel
       // too (default disposition, then kill self), so waitpid sees WTERMSIG.
       shiroKill: (sig) => {

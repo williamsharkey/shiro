@@ -404,6 +404,27 @@ medians 1240 and 1215 proc/s, base 1200. One of those passes stalled at
 ≈10 proc/s for its last 11 samples and did not recur in two more; worth
 watching if it shows up on other branches.
 
+### unix/perf-blink 5 — threads end before the worker is terminated
+
+After a guest exited, Chromium took ~2 s to terminate its worker
+(`x86.blink.release_ms`): a Worker with a thread parked in a wait is
+terminated only after a 2 s grace period, against ~15 ms once its threads
+are back in their event loops (unix/perf-kernel's measurements). The thread
+that called `exit_group` was the one parked: Blink's `exit()` proxied
+emscripten's exit to the main runtime thread, which had already unwound in
+`exitGuest` and never answered. Patch 0053 returns that thread to its event
+loop instead, and first ends the guest's other threads (killed, futex
+waiters woken, kernel calls in flight answered EINTR by host.mjs, sleeps in
+10 ms slices), waiting up to 0.5 s for them.
+
+`node bench/ab.mjs 5a4e756 <0053> --suites x86 --only 'release_ms|gh_version'
+--gh` (isolated, medians of 15 runs, alpha 0.01):
+
+| metric (isolated) | base 5a4e756 | new | shift | p | verdict |
+|---|---:|---:|---:|---:|---|
+| x86.blink.release_ms.gh_version | 2080 ms | 104 ms | -95.8% | 0.0000034 | improved (all 3 rounds) |
+| x86.blink.gh_version | 4575 ms | 4576 ms | -0.2% | 1 | same (first visit, Liftoff) |
+
 ### unix/perf-blink 4 — page-straddling instructions, rep movs/stos by page
 
 Profiling Vim's startup (~2.2 s in Shiro against 41 ms native) found the
