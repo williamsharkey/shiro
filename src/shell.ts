@@ -17,6 +17,7 @@ import type { OpenFile } from './kernel/fd';
 import { getCompiledModule } from './wasi-packages';
 import { builtinIndex, findEntry, packageStatus, packageShadows, pkgOwnShadows, loadPackageShadows, packageOfPath, runPackageBinary, PKG_BIN_DIR } from './pkg-manager';
 import { activeProfile } from './profile';
+import { BUILTIN_SHIM_INTERP } from './path-shims';
 
 // Lazy-load the WASI runtime (~960 lines) only when WASM execution is needed
 let _wasiRuntime: typeof import('./wasi-runtime') | null = null;
@@ -7797,6 +7798,11 @@ export class Shell {
     }
     if (interp.includes('/') && !viaEnv && await this.fs.exists(interp)) {
       return this.executeScript(interp, argv, ctx, writeStdout, writeStderr);
+    }
+    // A builtin's file on PATH (path-shims.ts ALWAYS_SHIMS): run that builtin
+    if (interp === BUILTIN_SHIM_INTERP && argv.length) {
+      const named = this.commands.get(argv[0].slice(argv[0].lastIndexOf('/') + 1));
+      if (named) { ctx.args = argv.slice(1); return this.runCommand(named, ctx); }
     }
     const base = interp.slice(interp.lastIndexOf('/') + 1);
     const cmd = this.commands.get(base);

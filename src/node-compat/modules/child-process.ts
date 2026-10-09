@@ -200,28 +200,6 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       normalized = `rg ${rgArgs}`;
     }
 
-    // Suppress OAuth browser popup — it doesn't work in Shiro (wrong redirect domain).
-    // Claude Code will fall back to showing the URL in terminal, which we make clickable.
-    // The URL may be wrapped in single quotes by shellQuoteArgs, so strip them.
-    const oauthOpenMatch = normalized.match(/^(open|xdg-open)\s+['"]*?(https:\/\/claude\.ai\/oauth\/\S+?)['"]*$/);
-    if (oauthOpenMatch) {
-      // The `open` URL has redirect_uri=http://localhost:PORT/callback (local server).
-      // On Shiro this doesn't work — replace with the manual-flow redirect that
-      // shows a code the user can paste back into the terminal.
-      const oauthUrl = oauthOpenMatch[2].replace(
-        /redirect_uri=http%3A%2F%2Flocalhost%3A\d+%2F[^&]*/,
-        'redirect_uri=' + encodeURIComponent('https://platform.claude.com/oauth/code/callback')
-      );
-      // Write clickable sign-in buttons to terminal
-      if (ctx.terminal) {
-        const copyUri = `shiro://copy?text=${encodeURIComponent(oauthUrl)}`;
-        const copyBtn = `\x1b]8;;${copyUri}\x07\x1b[1;33m[ Copy URL ]\x1b[0m\x1b]8;;\x07`;
-        const openBtn = `\x1b]8;;${oauthUrl}\x07\x1b[1;36m[ Open in Browser ]\x1b[0m\x1b]8;;\x07`;
-        ctx.terminal.writeOutput(`\r\n  ${copyBtn}  ${openBtn}\r\n`);
-      }
-      return { stdout: '', stderr: '', exitCode: 1 };
-    }
-
     // Drain pending IDB writes so shell commands can see files written by
     // writeFileSync (which only updates fileCache + queues async IDB write).
     if (pendingPromises.length > 0) {

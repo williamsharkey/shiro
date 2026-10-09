@@ -597,24 +597,16 @@ export const openCmd: Command = {
     }
 
     for (const target of targets) {
-      // URL?
+      // URL: a new browser tab (src/open-url.ts), or a card offering it
+      // when the browser blocks the tab; return at once, as xdg-open does.
+      // Claude Code's sign-in goes to its manual flow (a code to paste).
       if (/^https?:\/\//.test(target)) {
-        // Intercept OAuth URLs — rewrite redirect_uri for manual code flow
-        // and show clickable links instead of opening a window that won't work
-        if (target.includes('claude.ai/oauth/')) {
-          const fixedUrl = target.replace(
-            /redirect_uri=http%3A%2F%2Flocalhost%3A\d+%2F[^&]*/,
-            'redirect_uri=' + encodeURIComponent('https://platform.claude.com/oauth/code/callback')
-          );
-          if (ctx.terminal) {
-            const openBtn = `\x1b]8;;${fixedUrl}\x07\x1b[1;36m[ Open in Browser ]\x1b[0m\x1b]8;;\x07`;
-            ctx.terminal.writeOutput(`\r\n  ${openBtn}\r\n`);
-          } else {
-            if (typeof window !== 'undefined') window.open(fixedUrl, '_blank');
-          }
-          continue;
+        const { openUrl, manualSignInUrl } = await import('../open-url');
+        const url = manualSignInUrl(target);
+        const how = openUrl(url);
+        if (how !== 'opened' && ctx.terminal) {
+          ctx.terminal.writeOutput(`\x1b]8;;${url}\x07\x1b[1;36m[ Open in Browser ]\x1b[0m\x1b]8;;\x07\r\n`);
         }
-        if (typeof window !== 'undefined') window.open(target, '_blank');
         continue;
       }
       // File or directory
@@ -649,5 +641,6 @@ export const shiroCmds: Command[] = [
   // cut: src/commands/cut.ts (GNU-compatible) is the registered one
   // sha256sum: src/commands/checksum.ts (registered from unix.ts)
   shasumCmd,
-  openCmd, { name: 'xdg-open', description: 'Open a URL in the browser', exec: (ctx) => openCmd.exec(ctx) },
+  openCmd, { name: 'xdg-open', description: 'Open a file or URL (URLs in a new browser tab)', exec: (ctx) => openCmd.exec(ctx) },
+  { name: 'sensible-browser', description: 'Open a URL in a new browser tab', exec: (ctx) => openCmd.exec(ctx) },
 ];
