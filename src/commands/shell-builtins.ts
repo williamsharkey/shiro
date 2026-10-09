@@ -291,6 +291,8 @@ export const shCmd: Command = {
     }
 
     const child = ctx.shell.fork();
+    child.startProcess(ctx.shell.execPid, ctx.shell.execPpid);
+    ctx.shell.execPid = ctx.shell.execPpid = undefined;
     child.setPositional(positional, argv0);
     for (const o of options) child.options.add(o);
     for (const [o, on] of shopts) { if (on) child.shoptopts.add(o); else child.shoptopts.delete(o); }

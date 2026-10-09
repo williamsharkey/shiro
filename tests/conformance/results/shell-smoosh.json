@@ -18,7 +18,7 @@
    ]
   },
   "builtin": {
-   "pass": 38,
+   "pass": 45,
    "total": 59,
    "failures": [
     {
@@ -50,18 +50,6 @@
      "reason": "status 1, want 0"
     },
     {
-     "name": "builtin.jobs",
-     "reason": "status 5, want 0"
-    },
-    {
-     "name": "builtin.kill.signame",
-     "reason": "status 1, want 0"
-    },
-    {
-     "name": "builtin.kill0",
-     "reason": "status 1, want 0"
-    },
-    {
      "name": "builtin.readonly.assign.interactive",
      "reason": "stdout differs"
     },
@@ -78,28 +66,12 @@
      "reason": "status 0, want 1"
     },
     {
-     "name": "builtin.trap.chained",
-     "reason": "status 1, want 0"
-    },
-    {
-     "name": "builtin.trap.exit3",
-     "reason": "status 1, want 0"
-    },
-    {
-     "name": "builtin.trap.false",
-     "reason": "status 1, want 0"
-    },
-    {
      "name": "builtin.trap.nested",
      "reason": "stdout differs"
     },
     {
      "name": "builtin.trap.redirect",
      "reason": "stdout differs"
-    },
-    {
-     "name": "builtin.trap.subshell.false",
-     "reason": "status 1, want 0"
     },
     {
      "name": "builtin.trap.supershell",
@@ -118,13 +90,9 @@
    ]
   },
   "semantics": {
-   "pass": 67,
+   "pass": 71,
    "total": 92,
    "failures": [
-    {
-     "name": "semantics.background.pid",
-     "reason": "status 1, want 0"
-    },
     {
      "name": "semantics.background.pipe.pid",
      "reason": "status 1, want 0"
@@ -166,10 +134,6 @@
      "reason": "status 1, want 0"
     },
     {
-     "name": "semantics.kill.traps",
-     "reason": "status 1, want 0"
-    },
-    {
      "name": "semantics.pattern.bracket.quoted",
      "reason": "stdout differs"
     },
@@ -206,31 +170,19 @@
      "reason": "stdout differs"
     },
     {
-     "name": "semantics.traps.async",
-     "reason": "status 1, want 0"
-    },
-    {
      "name": "semantics.var.dashu",
      "reason": "status 1, want 0"
     },
     {
      "name": "semantics.var.star.format",
      "reason": "stdout differs"
-    },
-    {
-     "name": "semantics.wait.alreadydead",
-     "timeout": true
     }
    ]
   },
   "sh": {
-   "pass": 4,
+   "pass": 5,
    "total": 7,
    "failures": [
-    {
-     "name": "sh.env.ppid",
-     "reason": "status 1, want 0"
-    },
     {
      "name": "sh.monitor.bg",
      "reason": "status 3, want 0"

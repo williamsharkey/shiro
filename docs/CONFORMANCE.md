@@ -6,9 +6,9 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1393/1567 (88.9%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1395/1567 (89.0%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1394/1567 (89.0%)** |
-| [Shell: smoosh POSIX tests](#shell-smoosh-posix-tests) | 111/163 (68.1%) | **111/163 (68.1%)** |
+| [Shell: smoosh POSIX tests](#shell-smoosh-posix-tests) | 111/163 (68.1%) | **123/163 (75.5%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **625/635 (98.4%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **148/320 (46.3%)** |
 | [Syscalls: wasi-testsuite (wasm32-wasip1)](#syscalls-wasi-testsuite-wasm32-wasip1) | — | **71/72 (98.6%)** |
@@ -48,7 +48,7 @@ How each suite runs, and what is and isn't scored, is described in
 | builtin-read | 0/64 | 64/64 | 0 |
 | builtin-eval-source | 0/23 | 19/23 | 4 |
 | builtin-getopts | 0/30 | 26/30 | 4 |
-| builtin-trap | 0/33 | 29/33 | 4 |
+| builtin-trap | 0/33 | 31/33 | 2 |
 | builtin-bracket | 0/50 | 46/50 | 4 |
 | builtin-cd | 3/28 | 26/28 | 2 |
 | builtin-special | 1/12 | 7/12 | 5 |
@@ -104,7 +104,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **builtin-printf**: printf %c unicode - prints the first BYTE of a string - it does not respect UTF-8; bash truncates long strftime string at 128; printf positive integer overflow; printf negative integer overflow
 - **builtin-eval-source**: eval usage; eval YSH block with 'break continue return error'; Source with syntax error; Eval with syntax error
 - **builtin-getopts**: getopts with invalid variable name; OPTIND; OPTIND after multiple getopts with same spec; OPTIND after multiple getopts with different spec
-- **builtin-trap**: exit 1 when trap code string is invalid; exit codes for traps are isolated; traps are cleared in subshell (started with &); trap USR1, sleep, SIGINT: non-interactively
+- **builtin-trap**: exit 1 when trap code string is invalid; trap USR1, sleep, SIGINT: non-interactively
 - **builtin-bracket**: -k for sticky bit; test -p named pipe; -ef; test -c
 - **builtin-cd**: pwd in symlinked dir on shell initialization; Survey of getcwd() syscall
 - **builtin-special**: Prefix assignments persist after special builtins, like : (set -o posix); Prefix assignments persist after readonly, but NOT exported (set -o posix); Prefix binding for exec is a special case (versus e.g. readonly); bash 'type' gets confused - says 'function', but runs builtin; command, builtin - both can be redefined, not special (regression)
@@ -259,18 +259,18 @@ POSIX sh cases from [smoosh](https://github.com/mgree/smoosh) (tests/shell), jud
 | Area | Before | Now | Failing |
 |---|---|---|---|
 | benchmark | 0/2 | 0/2 | 2 |
-| builtin | 38/59 | 38/59 | 21 |
+| builtin | 38/59 | 45/59 | 14 |
 | parse | 2/3 | 2/3 | 1 |
-| semantics | 67/92 | 67/92 | 25 |
-| sh | 4/7 | 4/7 | 3 |
+| semantics | 67/92 | 71/92 | 21 |
+| sh | 4/7 | 5/7 | 2 |
 
 <details><summary>Failing cases</summary>
 
 - **benchmark**: benchmark.fact5 — status 2, want 0; benchmark.while — status 2, want 0
-- **builtin**: builtin.command.exec — stdout differs; builtin.exec.modernish.mkfifo.loop — stdout differs; builtin.exec.true — status 1, want 0; builtin.export — stdout differs; builtin.export.override — stdout differs; builtin.export.unset — status 1, want 0; builtin.hash.nonposix — status 1, want 0; builtin.jobs — status 5, want 0; builtin.kill.signame — status 1, want 0; builtin.kill0 — status 1, want 0; builtin.readonly.assign.interactive — stdout differs; builtin.readonly.assign.noninteractive — status 0, want 1; builtin.source.nonexistent.earlyexit — status 0, want 1; builtin.special.redir.error — status 0, want 1; builtin.trap.chained — status 1, want 0; builtin.trap.exit3 — status 1, want 0; builtin.trap.false — status 1, want 0; builtin.trap.nested — stdout differs; builtin.trap.redirect — stdout differs; builtin.trap.subshell.false — status 1, want 0; builtin.trap.supershell — stdout differs
+- **builtin**: builtin.command.exec — stdout differs; builtin.exec.modernish.mkfifo.loop — stdout differs; builtin.exec.true — status 1, want 0; builtin.export — stdout differs; builtin.export.override — stdout differs; builtin.export.unset — status 1, want 0; builtin.hash.nonposix — status 1, want 0; builtin.readonly.assign.interactive — stdout differs; builtin.readonly.assign.noninteractive — status 0, want 1; builtin.source.nonexistent.earlyexit — status 0, want 1; builtin.special.redir.error — status 0, want 1; builtin.trap.nested — stdout differs; builtin.trap.redirect — stdout differs; builtin.trap.supershell — stdout differs
 - **parse**: parse.eval.error — status 1, want 0
-- **semantics**: semantics.background.pid — status 1, want 0; semantics.background.pipe.pid — status 1, want 0; semantics.case.ec — status 2, want 0; semantics.command-subst.newline — stdout differs; semantics.command.argv0 — status 1, want 0; semantics.defun.ec — stdout differs; semantics.dot.glob — stdout differs; semantics.escaping.backslash.modernish — status 1, want 0; semantics.escaping.quote — status 1, want 0; semantics.evalorder.fun — status 1, want 0; semantics.for.readonly — status 1, want 0; semantics.kill.traps — status 1, want 0; semantics.pattern.bracket.quoted — stdout differs; semantics.pattern.hyphen — stdout differs; semantics.pattern.modernish — status 1, want 0; semantics.pattern.rightbracket — stdout differs; semantics.quote.backslash — stdout differs; semantics.redir.close — status 0, want 1; semantics.special.assign.visible.nonposix — stdout differs; semantics.subshell.break — status 127, want 0; semantics.tilde.quoted — stdout differs; semantics.traps.async — status 1, want 0; semantics.var.dashu — status 1, want 0; semantics.var.star.format — stdout differs; semantics.wait.alreadydead (hang/timeout)
-- **sh**: sh.env.ppid — status 1, want 0; sh.monitor.bg — status 3, want 0; sh.set.ifs — stdout differs
+- **semantics**: semantics.background.pipe.pid — status 1, want 0; semantics.case.ec — status 2, want 0; semantics.command-subst.newline — stdout differs; semantics.command.argv0 — status 1, want 0; semantics.defun.ec — stdout differs; semantics.dot.glob — stdout differs; semantics.escaping.backslash.modernish — status 1, want 0; semantics.escaping.quote — status 1, want 0; semantics.evalorder.fun — status 1, want 0; semantics.for.readonly — status 1, want 0; semantics.pattern.bracket.quoted — stdout differs; semantics.pattern.hyphen — stdout differs; semantics.pattern.modernish — status 1, want 0; semantics.pattern.rightbracket — stdout differs; semantics.quote.backslash — stdout differs; semantics.redir.close — status 0, want 1; semantics.special.assign.visible.nonposix — stdout differs; semantics.subshell.break — status 127, want 0; semantics.tilde.quoted — stdout differs; semantics.var.dashu — status 1, want 0; semantics.var.star.format — stdout differs
+- **sh**: sh.monitor.bg — status 3, want 0; sh.set.ifs — stdout differs
 
 </details>
 

@@ -90,6 +90,10 @@ export interface BackgroundJob {
   abortController?: AbortController;
   /** In-page jobs: the made-up pid that $! holds */
   pid?: number;
+  /** In-page jobs: the signal `kill` ended it with (its status is then 128+signal) */
+  signal?: number;
+  /** Started by a non-interactive shell without job control: SIGINT and SIGQUIT are ignored (POSIX 2.11) */
+  ignoresIntQuit?: boolean;
   /** Kernel jobs: the process group (signals, fg/bg, Ctrl-Z) and its members */
   pgid?: number;
   pids?: number[];
@@ -186,6 +190,21 @@ let procSubCounter = 0;
 
 /** Pids for in-page background jobs ($!), above any kernel pid in practice */
 let nextInPagePid = 40000;
+
+/** Shells started as their own process (`sh script`, `sh -c`), by $$: `kill PID` reaches them */
+const shellsByPid = new Map<number, WeakRef<Shell>>();
+/** Running in-page background jobs by their made-up pid ($!), for `kill PID` from any shell */
+const inPageJobs = new Map<number, BackgroundJob>();
+export function inPageJobForPid(pid: number): BackgroundJob | undefined {
+  return inPageJobs.get(pid);
+}
+
+/** The shell whose $$ is `pid`, while it runs */
+export function shellForPid(pid: number): Shell | undefined {
+  const s = shellsByPid.get(pid)?.deref();
+  if (!s) shellsByPid.delete(pid);
+  return s;
+}
 
 // Env var names whose values should be masked in terminal output
 const SECRET_ENV_KEYS = [
@@ -411,6 +430,20 @@ export class Shell {
   options: Set<string> = new Set(['hashall', 'braceexpand', 'interactive-comments']);
   /** $BASHPID: 1 (= $$) in the top shell, a new number in each subshell */
   bashPid = 1;
+  /** $$ (a subshell keeps its parent's) and $PPID */
+  shellPid = 1;
+  parentPid = 0;
+  /** BASHPID of the shell this one was forked from: a new shell's $PPID */
+  private forkParentPid = 0;
+  /**
+   * The pid and parent pid for a shell started as this one's only command,
+   * as if this process exec'd it: `sh script &` ($! is its $$), `$(sh -c …)`
+   * (its $PPID is the shell around the substitution). Taken once.
+   */
+  execPid?: number;
+  execPpid?: number;
+  /** Signals sent to this shell (kill $$), handled before its next command */
+  private pendingSignals: number[] = [];
   /** The logical working directory cd set (symlinks kept), which pwd prints; null: use cwd */
   logicalPwd: string | null = null;
   /** Bash-style indexed arrays */
@@ -585,6 +618,51 @@ export class Shell {
   /** fd 0 is still this shell's stdin (nothing handed it a string in its place) */
   kernelStdinLive = false;
 
+  /**
+   * This fork is a new shell process (`sh script`, `sh -c`), not a subshell:
+   * its own $$, the caller's $$ as $PPID, and `kill $$` reaches it. Undo
+   * with endProcess() when it finishes.
+   */
+  startProcess(pid = this.bashPid, ppid = this.forkParentPid): void {
+    this.parentPid = ppid;
+    this.shellPid = pid;
+    shellsByPid.set(pid, new WeakRef(this));
+  }
+
+  endProcess(): void {
+    if (shellsByPid.get(this.shellPid)?.deref() === this) shellsByPid.delete(this.shellPid);
+  }
+
+  /** `kill -SIG $$`: handled before the shell's next command (processSignals) */
+  queueSignal(sig: number): void {
+    this.pendingSignals.push(sig);
+  }
+
+  /**
+   * Act on signals sent to this shell: run its trap (keeping $?), ignore it
+   * (trap '' SIG, or a signal whose default is to be ignored), or end the
+   * shell with status 128+SIG, as an uncaught signal would.
+   */
+  private async processSignals(writeStdout: (s: string) => void, writeStderr: (s: string) => void): Promise<void> {
+    while (this.pendingSignals.length) {
+      const sig = this.pendingSignals.shift()!;
+      const action = this.traps.get(SIGNALS[sig]);
+      if (action === '') continue;
+      if (action !== undefined) {
+        const saved = this.lastExitCode;
+        await this.execute(action, writeStdout, writeStderr, false, undefined, true);
+        this.lastExitCode = saved;
+        this.env['?'] = String(saved);
+        continue;
+      }
+      const { defaultAction } = await import('./kernel/signals');
+      const d = defaultAction(sig);
+      // An interactive shell survives the usual terminating signals
+      if (!this.scriptShell || d === 'ign' || d === 'stop' || d === 'cont') continue;
+      throw new ExitSignal(128 + sig);
+    }
+  }
+
   fork(): Shell {
     const child = new Shell(this.fs, this.commands);
     child.inheritedAbort = this.abortController ?? this.inheritedAbort;
@@ -599,6 +677,9 @@ export class Shell {
     child.options = new Set(this.options);
     child.logicalPwd = this.logicalPwd;
     child.bashPid = nextInPagePid++;
+    child.forkParentPid = this.bashPid;
+    child.shellPid = this.shellPid;
+    child.parentPid = this.parentPid;
     child.arrays = new Map(Array.from(this.arrays.entries()).map(([k, v]) => [k, copyArray(v)]));
     child.assocArrays = new Map(Array.from(this.assocArrays.entries()).map(([k, v]) => [k, new Map(v)]));
     // A subshell starts with the traps reset, except ignored ones (trap '' SIG)
@@ -652,6 +733,7 @@ export class Shell {
     const child = this.fork();
     child.terminal = this.terminal;
     child.userFds.delete(1); // inside $(...) stdout is the capture
+    if (!/[;&|\n]/.test(cmd)) { child.execPid = child.bashPid; child.execPpid = this.bashPid; }
     const r = await child.exec(cmd);
     this.substStatus = r.exitCode;
     return r;
@@ -680,21 +762,40 @@ export class Shell {
     const stderrWriter = writeStderr || writeStdout;
     // An in-page job has no kernel process; $! and `wait PID` use a made-up pid
     const pid = nextInPagePid++;
+    // `( list ) &`: the job's shell is already the subshell
+    const t = command.trim();
+    if (t.startsWith('(') && !t.startsWith('((') && t.endsWith(')') && this.parseCompound(t).length === 1 && splitTopLevelPipes(t).length === 1) {
+      command = t.slice(1, -1).trim() || ':';
+    }
+    // Runs in a child shell (its variables and cd stay there), output to ours,
+    // with its own abort: `kill $!` ends just this job
+    const child = this.fork();
+    child.bashPid = pid;
+    // A shell run as the job's only command gets the job's pid as its $$, as if exec'd
+    if (!/[;&|]/.test(command)) { child.execPid = pid; child.execPpid = this.bashPid; }
+    const abort = new AbortController();
+    const outer = this.abortController ?? this.inheritedAbort;
+    outer?.signal.addEventListener('abort', () => abort.abort(), { once: true });
+    child.inheritedAbort = abort;
     const job: BackgroundJob = {
       id: jobId,
       command,
       status: 'running',
       exitCode: 0,
       pid,
-      // Runs in a child shell (its variables and cd stay there), output to ours.
+      abortController: abort,
+      ignoresIntQuit: this.scriptShell && !this.options.has('monitor'),
       // No tty for in-page background work: kernel programs inside it must not take the terminal
-      promise: this.fork().execute(command, writeStdout, stderrWriter, false, this.terminal ? withoutTty(this.terminal) : undefined).then(
+      promise: child.execute(command, writeStdout, stderrWriter, false, this.terminal ? withoutTty(this.terminal) : undefined).then(
         (code) => {
+          inPageJobs.delete(pid);
+          if (job.signal) code = 128 + job.signal;
           job.status = code === 0 ? 'done' : 'failed';
           job.exitCode = code;
           return code;
         },
         (err) => {
+          inPageJobs.delete(pid);
           job.status = 'failed';
           job.exitCode = 1;
           return 1;
@@ -702,6 +803,7 @@ export class Shell {
       ),
     };
     this.backgroundJobs.set(jobId, job);
+    if (job.status === 'running') inPageJobs.set(pid, job);
     this.env['!'] = String(pid);
     // An interactive shell reports the job; a script doesn't
     if (!this.scriptShell) writeStdout(`[${jobId}] ${pid}\n`);
@@ -758,7 +860,9 @@ export class Shell {
     // A file write per statement keeps output in order for the commands that read it
     if (this.flushFdWrites) await this.flushFdWrites();
     try {
-      return await this.executeImpl(line, writeStdout, writeStderr, remote, terminalOverride, skipHistory);
+      const code = await this.executeImpl(line, writeStdout, writeStderr, remote, terminalOverride, skipHistory);
+      if (this.pendingSignals.length) await this.processSignals(writeStdout, writeStderr || writeStdout);
+      return code;
     } catch (e) {
       // `exit` unwinds to the outermost execute() of this shell (a script, `sh -c`,
       // a subshell or $(...) each run in their own Shell), which runs the EXIT trap
@@ -1206,6 +1310,7 @@ export class Shell {
 
     for (let ci = 0; ci < compounds.length; ci++) {
       const compound = compounds[ci];
+      if (this.pendingSignals.length) await this.processSignals(writeStdout, stderrWriter);
       if (lastRan >= 0) this.checkErrexit(compounds, lastRan, exitCode);
       if (suppressing) { this.errexitSuppressed--; suppressing = false; }
       // Check conditional
@@ -1518,6 +1623,7 @@ export class Shell {
             // `sh -c CMD [NAME ARGS...]`: only CMD is the command string
             const shellCmd = cmdArgs[cIdx + 1];
             const child = this.fork();
+            child.startProcess();
             const rest = cmdArgs.slice(cIdx + 2);
             child.setPositional(rest.slice(1), rest[0] ?? cmdName);
             child.injectedStdin = nestedStdin;
@@ -3653,7 +3759,7 @@ export class Shell {
 
       // Expand $$ (process ID)
       if (ch === '$' && line[i + 1] === '$') {
-        result += '1';
+        result += String(this.shellPid);
         i += 2;
         continue;
       }
@@ -3833,7 +3939,7 @@ export class Shell {
           if (varName === 'HOSTNAME' && this.env['HOSTNAME'] === undefined) { result += 'shiro'; i += m[0].length; continue; }
           if (varName === 'OSTYPE' && this.env['OSTYPE'] === undefined) { result += 'linux-gnu'; i += m[0].length; continue; }
           // Read-only: an assignment or the environment doesn't change them
-          if (varName === 'PPID') { result += '0'; i += m[0].length; continue; }
+          if (varName === 'PPID') { result += String(this.parentPid); i += m[0].length; continue; }
           if (varName === 'UID' || varName === 'EUID') { result += '1000'; i += m[0].length; continue; }
           if (varName === 'BASHPID') { result += String(this.bashPid); i += m[0].length; continue; }
           if (varName === 'LINENO') { result += (this.env['LINENO'] || '1'); i += m[0].length; continue; }
@@ -7202,6 +7308,7 @@ export class Shell {
     argv0?: string,
   ): Promise<number> {
     const child = this.fork();
+    child.startProcess();
     child.setPositional(args, argv0);
     // Its first command reads the script's stdin, unless that is the shell's fd 0
     if (!ctx.liveStdin) child.setInjectedStdin(ctx.stdin);
@@ -7265,6 +7372,7 @@ export class Shell {
     this.env['?'] = String(exitCode);
     const trapExit = await this.runExitTrap(writeStdout, writeStderr, terminal);
     if (trapExit !== undefined) { exitCode = trapExit; this.env['?'] = String(exitCode); }
+    this.endProcess();
     return exitCode;
   }
 

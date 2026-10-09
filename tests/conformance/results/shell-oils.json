@@ -443,20 +443,12 @@
    ]
   },
   "builtin-trap": {
-   "pass": 29,
+   "pass": 31,
    "total": 33,
    "failures": [
     {
      "i": 16,
      "name": "exit 1 when trap code string is invalid"
-    },
-    {
-     "i": 24,
-     "name": "exit codes for traps are isolated"
-    },
-    {
-     "i": 25,
-     "name": "traps are cleared in subshell (started with &)"
     },
     {
      "i": 26,
