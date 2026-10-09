@@ -1124,6 +1124,31 @@ resolution are apt's own CPU under Blink (perf-blink), and `dpkg-preconfigure`
 (20 s per install, a no-op under `DEBIAN_FRONTEND=noninteractive`) is a
 Debian-config decision proposed to the debian workstream.
 
+### unix/perf-fs-shell 9 — apt: dpkg-preconfigure is a no-op under DEBIAN_FRONTEND=noninteractive
+
+apt-utils' 70debconf hook runs `dpkg-preconfigure --apt` before every dpkg
+run: ~20 s per install under the x86 engine (Perl, debconf,
+apt-extracttemplates re-reading apt's cache), with nothing to ask under
+`DEBIAN_FRONTEND=noninteractive`. As agreed with the debian workstream,
+`/usr/sbin/dpkg-preconfigure` is diverted (overlay policy, stub) to
+`shiro-dpkg-preconfigure` (`src/debian/preconfigure.ts`): with that
+variable set it reads apt's list to EOF and exits 0 (templates and config
+scripts load at configure time through debconf's confmodule, Debian's path
+without apt-utils); any other frontend runs Debian's script, kept as
+`dpkg-preconfigure.debian`, with the same arguments and stdio. Tests:
+`dpkg-preconfigure.test.ts`.
+
+`bench/run.mjs --suites debian --modes isolated`, one sample each, against
+the same baseline as entry 8 (`perf-fs-shell-9-debian.json`, with the native
+store method too):
+
+| metric | baseline | entry 8 | now |
+|---|---:|---:|---:|
+| debian.apt.update | 82.5 s | 45.6 s | 48.8 s |
+| debian.apt.install.hello | 58.7 s | 48.7 s | 26.6 s (2.2×) |
+| debian.apt.install.jq | 60.2 s | 52.9 s | 32.6 s (1.8×) |
+| debian.apt.install.python3-minimal | 161.3 s | 152.8 s | 141.5 s |
+
 ## Results
 
 <!-- bench:table:begin -->
