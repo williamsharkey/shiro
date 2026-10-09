@@ -460,6 +460,30 @@ ncurses-based programs are linked against a static ncurses 6.5 with
 `xterm-256color`, `xterm`, `screen*`, `tmux*`, `linux`, `vt100`, `vt220` and
 `dumb` compiled in, so they work without a terminfo database.
 
+### Developer workflows
+
+`tests/browser/dev-workflows.mjs [URL]`: each workflow from a fresh browser
+profile, typed into the terminal of the built desktop in Chromium, every step
+timed (2026-10-09, local build; GitHub, npm and PyPI reached through the
+container's proxy).
+
+| Workflow | Repository | Status | Time | Steps (time) | Notes |
+| --- | --- | --- | --- | --- | --- |
+| git clone, edit, commit, log | octocat/Hello-World | works | 4 s | clone 1.4 s, config, commit 0.9 s, `git log`, `git status` | over the server's git proxy; on tabcomputer.com every clone failed on 2026-10-09 (the proxy's POST got "fetch failed" on the live host; reported) |
+| `npm install && npm test` | jshttp/mime-types | works | 22 s | clone 1.3 s, `npm install` 14.9 s (mocha, eslint, nyc and their dependencies), `npm test` 4.8 s (mocha) | lukeed/kleur fails: its tests load through the `esm` package, which patches Node's module internals |
+| venv, `pip install pytest requests`, `pytest` | benjaminp/six | works | 16 s | clone 1.3 s, `python3 -m venv` + activate 1.0 s (installs the CPython package first), pip 5.1 s, `pytest` 4.8 s: 181 passed | 2 tests deselected: `test_getoutput` needs subprocess, the `HTTPSHandler` move needs ssl (WASI CPython has neither); dbader/schedule can't run (`time.tzset`) |
+| `make test` | zserge/jsmn | works | 12 s | `pkg install make llvm` 4.4 s, clone 2.8 s, `make test` 4.0 s (four builds with clang and runs) | programs are wasm32-wasi |
+| `ssh -T git@github.com` | — | not verified | — | `pkg install openssh` 1.9 s | needs the server's TCP relay: tabcomputer.com issues a relay token but refused the WebSocket from this container (the token is bound to the client IP, and the container's egress proxy uses another one); the local server can't reach port 22 |
+
+Fixed for these: git found its repository only in the current directory
+(a subdirectory or a failed clone's leftover directory gave a JS TypeError),
+and a failed clone left its directory behind; `require('./package')` didn't
+try `.json`; `python3 -m venv` without the CPython package ran Pyodide, which
+took `venv` for a script; pytest needs `dup()` (output capture,
+faulthandler) and `umask()` (its cache), which WASI lacks, so the CPython
+package sets `PYTEST_ADDOPTS="--capture=sys -p no:faulthandler -p
+no:cacheprovider"`.
+
 ## Claude Code native binary (unix/perf-kernel)
 
 Status (2026-10-09, unix/agent-clis, see "Agent CLIs" below): with Blink's
