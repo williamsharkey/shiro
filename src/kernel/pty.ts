@@ -1143,5 +1143,13 @@ export function attachKernelTty(kernel: Kernel, jc: JobControl = jobControl): vo
     pty.master.flags = flags;
     return pty.master;
   });
+  // /dev/tty: the process's controlling terminal. Besides the one a session
+  // was spawned with (proc.ctty), a session leader acquires a pty by opening
+  // its slave without O_NOCTTY or with TIOCSCTTY (xterm, script, ssh do this).
+  kernel.registerDevice('/dev/tty', (proc) => {
+    if (proc.ctty) return proc.ctty;
+    const pty = controllingTtys.get(proc.sid);
+    return pty ? pty.openSlave(O_RDWR | O_NOCTTY) : -6 /* ENXIO */;
+  });
   for (const p of livePtys) p.registerDevice(kernel);
 }

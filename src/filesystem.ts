@@ -66,7 +66,19 @@ export interface FSNode {
   /** Nanoseconds past atime/mtime (0-999999), when set with nanosecond precision. */
   atimeNs?: number;
   mtimeNs?: number;
+  /**
+   * Content not fetched yet (`content` is null, `size` is the real size):
+   * a file of a streamed root filesystem (src/debian/rootfs.ts). The first
+   * read fetches it through the registered lazy loader and stores it.
+   */
+  lazy?: LazyRef;
 }
+
+/** Where a lazy file's bytes are: `len` bytes at `off` in chunk `chunk` of source `src`. */
+export interface LazyRef { src: string; chunk: string; off: number }
+
+/** Fetches a lazy file's bytes (FileSystem.setLazyLoader). */
+export type LazyLoader = (ref: LazyRef, size: number, path: string) => Promise<Uint8Array>;
 
 export interface StatResult {
   type: 'file' | 'dir' | 'symlink';
@@ -84,7 +96,7 @@ export interface StatResult {
   isSymbolicLink(): boolean;
 }
 
-function makeStat(node: FSNode): StatResult {
+export function makeStat(node: FSNode): StatResult {
   const mtime = new Date(node.mtime);
   const ctime = new Date(node.ctime);
   const atime = node.atime === undefined ? mtime : new Date(node.atime);
@@ -156,6 +168,8 @@ export interface VirtualFSProvider {
   exists(path: string): boolean;
   /** Write (returns true if handled, even if silently discarded) */
   writeFile(path: string, data: Uint8Array | string): boolean;
+  /** Top-level directory name this provider adds to `ls /` (e.g. 'dom') */
+  mountPoint?: string;
 }
 
 /** /dev virtual provider */
@@ -359,23 +373,22 @@ class VarLogProvider implements VirtualFSProvider {
     return '';
   }
 
+  // Only the two files: /var/log itself is a real directory (dpkg and apt
+  // write their logs there), which readdir merges these names into.
   handles(path: string): boolean {
-    return path === '/var/log' || path === '/var/log/syslog' || path === '/var/log/journal';
+    return path === '/var/log/syslog' || path === '/var/log/journal';
   }
   readFile(path: string, encoding?: 'utf8'): string | Uint8Array | null {
-    if (path === '/var/log') return null; // directory
     const content = this.getSyslog();
     return encoding === 'utf8' ? content : new TextEncoder().encode(content);
   }
   stat(path: string): StatResult | null {
-    if (path === '/var/log') return makeStat({ path, type: 'dir', content: null, mode: 0o755, mtime: Date.now(), ctime: 0, size: 0 });
     if (path === '/var/log/syslog' || path === '/var/log/journal') {
       return makeStat({ path, type: 'file', content: new Uint8Array(0), mode: 0o644, mtime: Date.now(), ctime: 0, size: 0 });
     }
     return null;
   }
-  readdir(path: string): string[] | null {
-    if (path === '/var/log') return ['syslog', 'journal'];
+  readdir(): string[] | null {
     return null;
   }
   exists(path: string): boolean { return this.handles(path); }
@@ -452,6 +465,11 @@ export class FileSystem {
   private _changeListeners: Set<FSChangeListener> = new Set();
   private virtualProviders: VirtualFSProvider[] = [new DevProvider(), new ProcProvider(), new VarLogProvider()];
 
+  /** Mount a virtual provider (e.g. /dom, src/dom-fs.ts); consulted after the built-in ones. */
+  addVirtualProvider(vp: VirtualFSProvider): void {
+    if (!this.virtualProviders.includes(vp)) this.virtualProviders.push(vp);
+  }
+
   /** Subscribe to filesystem change events. Returns unsubscribe function. */
   onChange(listener: FSChangeListener): () => void {
     this._changeListeners.add(listener);
@@ -475,7 +493,7 @@ export class FileSystem {
     }
 
     // Ensure basic directories exist
-    for (const dir of ['/home', '/tmp', '/home/user', '/etc']) {
+    for (const dir of ['/home', '/tmp', '/home/user', '/etc', '/var', '/var/log']) {
       const existing = await this._get(dir);
       if (!existing) {
         await this._put(this._makeNode(dir, 'dir'));
@@ -486,6 +504,46 @@ export class FileSystem {
     for (const [path, text] of Object.entries(BASE_ETC_FILES)) {
       if (!(await this._get(path))) await this._put(this._makeNode(path, 'file', new TextEncoder().encode(text)));
     }
+  }
+
+  private _lazyLoader: LazyLoader | null = null;
+  private _materializing = new Map<string, Promise<FSNode>>();
+
+  /** Register the loader for lazy (not yet fetched) files; see FSNode.lazy. */
+  setLazyLoader(loader: LazyLoader | null): void { this._lazyLoader = loader; }
+
+  /**
+   * Fetch a lazy file's content and store it as a regular file (the next read
+   * is local). Concurrent readers share one fetch. A write that replaced the
+   * node meanwhile wins over the fetched bytes.
+   */
+  private _materialize(node: FSNode): Promise<FSNode> {
+    const path = node.path;
+    let p = this._materializing.get(path);
+    if (!p) {
+      const ref = node.lazy!;
+      if (!this._lazyLoader) return Promise.reject(fsError('EIO', `EIO: no loader for lazy file '${path}'`));
+      p = this._lazyLoader(ref, node.size, path).then((content) => {
+        const now = this.cache.get(path);
+        if (!now || now.lazy !== ref) return now ?? node; // rewritten, renamed or deleted meanwhile
+        if (content.length !== now.size) throw fsError('EIO', `EIO: lazy file '${path}' is ${content.length} bytes, expected ${now.size}`);
+        const filled: FSNode = { ...now, content };
+        delete filled.lazy;
+        this._putNow(filled);
+        return filled;
+      }).finally(() => this._materializing.delete(path));
+      this._materializing.set(path, p);
+    }
+    return p;
+  }
+
+  /**
+   * Add many nodes at once (a streamed root filesystem's placeholders): one
+   * cache update and one IndexedDB flush. Existing nodes are replaced.
+   */
+  putNodes(nodes: FSNode[]): void {
+    for (const node of nodes) this._putNow(node);
+    this._canonDirs.clear();
   }
 
   private _makeNode(path: string, type: 'file' | 'dir', content?: Uint8Array): FSNode {
@@ -1092,9 +1150,10 @@ export class FileSystem {
         throw fsError('EISDIR', `EISDIR: illegal operation on a directory, read '${path}'`);
       }
     }
-    const node = await this._get(await this._canon(path, true));
+    let node = await this._get(await this._canon(path, true));
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, open '${path}'`);
     if (node.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, read '${path}'`);
+    if (node.lazy) node = await this._materialize(node);
     const data = node.content || new Uint8Array(0);
     if (encoding === 'utf8') {
       return new TextDecoder().decode(data);
@@ -1205,6 +1264,9 @@ export class FileSystem {
 
     const entries: string[] = [...await this._childNames(path)];
 
+    // The virtual log files live in the real /var/log
+    if (path === '/var/log') for (const n of ['syslog', 'journal']) if (!entries.includes(n)) entries.push(n);
+
     // For root directory, add virtual top-level dirs
     if (path === '/') {
       const vdirs = new Set<string>();
@@ -1212,6 +1274,7 @@ export class FileSystem {
         for (const name of ['dev', 'proc']) {
           if (vp.handles('/' + name)) vdirs.add(name);
         }
+        if (vp.mountPoint) vdirs.add(vp.mountPoint);
       }
       for (const vd of vdirs) {
         if (!entries.includes(vd)) entries.push(vd);
@@ -1367,6 +1430,7 @@ export class FileSystem {
       size: target.length,
       symlinkTarget: target,
     });
+    this._emitChange('write', path);
   }
 
   async readlink(path: string): Promise<string> {

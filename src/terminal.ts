@@ -28,8 +28,12 @@ interface HudState {
 export class ShiroTerminal {
   /** Live terminals, so status can go to an idle one (e.g. the upper pane of a split). */
   static instances = new Set<ShiroTerminal>();
+  /** xterm options applied to every new terminal over the defaults (the desktop's theme and font) */
+  static optionOverrides: Record<string, unknown> = {};
   /** Set on extra panes: typing `exit` (or Ctrl-D on an empty line) at the prompt closes the pane */
   onExit?: () => void;
+  /** Replaces the startup HUD (the desktop draws a compact welcome instead) */
+  banner?: (t: ShiroTerminal) => void;
   private teardown?: () => void;
 
   term: Terminal;
@@ -182,6 +186,7 @@ export class ShiroTerminal {
           window.open(uri, '_blank', 'noopener');
         },
       },
+      ...ShiroTerminal.optionOverrides,
     });
 
     this.fitAddon = new FitAddon();
@@ -739,6 +744,7 @@ export class ShiroTerminal {
 
   // Keep old name as alias for backwards compatibility
   drawBanner() {
+    if (this.banner) { this.banner(this); return; }
     this.drawHud();
   }
 

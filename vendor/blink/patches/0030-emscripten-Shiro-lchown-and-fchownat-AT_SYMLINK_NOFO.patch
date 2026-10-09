@@ -1,0 +1,44 @@
+From db4a086c8b0eb92e8234119658574f73661db9fe Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 05:16:02 +0000
+Subject: [PATCH 30/30] emscripten: Shiro lchown and
+ fchownat(AT_SYMLINK_NOFOLLOW) don't follow symlinks
+
+chown and lchown both went to the kernel's access(), which follows a
+link, so lchown of a dangling symlink failed with ENOENT: dpkg creates
+every symlink as NAME.dpkg-new and lchowns it before the target exists
+(libedit2, libonig5, libjq1, adduser failed to unpack). fchownat
+returned 0 even for a missing path. Ownership still isn't kept; the calls
+check that the file exists with the kernel's newfstatat, without following
+the link for lchown and AT_SYMLINK_NOFOLLOW, and fchownat honors its
+dirfd and AT_EMPTY_PATH.
+---
+ blink/shiro.inc | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 4ae1e04..cea9243 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -1422,9 +1422,16 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+     case 0x05A: r = ShiroPathCall(m, 90, a, b, 0, 0); break;          // chmod
+     case 0x05B: r = KS(m, 91, A12(a, b)); break;                      // fchmod
+     case 0x10C: case 0x1C4: r = ShiroAtCall(m, 268, a, b, c, 0); break;  // fchmodat(2)
+-    case 0x05C: case 0x05E: r = ShiroPathCall(m, 21, a, 0, 0, 0); break;  // chown, lchown
++    // ownership isn't kept; these check that the file exists, and lchown and
++    // AT_SYMLINK_NOFOLLOW look at a symlink itself (dpkg lchowns NAME.dpkg-new
++    // links before their targets exist)
++    case 0x05C: r = ShiroStatAt(m, -100, a, 0, 0, 0); break;           // chown
++    case 0x05E: r = ShiroStatAt(m, -100, a, 0, 0x100, 0); break;       // lchown
+     case 0x05D: r = KS(m, 72, A12(a, 1, 0)) < 0 ? -EBADF_LINUX : 0; break;  // fchown
+-    case 0x104: r = 0; break;                                         // fchownat
++    case 0x104:                                                       // fchownat
++      if (!b) { r = -EFAULT_LINUX; break; }
++      r = ShiroStatAt(m, a, b, 0, e & (0x100 | 0x1000), 0);
++      break;
+     case 0x05F: r = KS(m, 95, A12(a)); break;                         // umask
+     case 0x084: {                                                     // utime
+       u8 t[32];
+-- 
+2.43.0
+

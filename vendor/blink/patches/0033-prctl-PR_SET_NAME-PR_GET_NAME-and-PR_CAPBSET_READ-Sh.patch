@@ -1,0 +1,110 @@
+From 9fd130d3f8fd03bc918250a376a5bb97d10cc69d Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 06:19:04 +0000
+Subject: [PATCH 33/33] prctl PR_SET_NAME/PR_GET_NAME and PR_CAPBSET_READ;
+ Shiro capget/capset
+
+PR_SET_NAME failed with EINVAL, so perl's $0 = ... died ("Can't set $0
+with prctl()", Debian's addgroup in openssh-client's postinst). The name
+is kept per thread (up to 15 bytes; the program's basename by default)
+and PR_GET_NAME returns it. PR_CAPBSET_READ answers 1 for capabilities
+0-40 and EINVAL above. Under Shiro, capget reports every capability when
+the kernel's uid is 0 and none otherwise, with Linux's version handshake
+(an unknown version is answered with 0x20080522: EINVAL, or 0 when no
+data was asked for); capset accepts. libcap's cap_get_proc (ping) failed
+with ENOSYS.
+---
+ blink/machine.h |  1 +
+ blink/shiro.inc | 22 ++++++++++++++++++++++
+ blink/syscall.c | 27 +++++++++++++++++++++++++++
+ 3 files changed, 50 insertions(+)
+
+diff --git a/blink/machine.h b/blink/machine.h
+index c22243d..239e41d 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -349,6 +349,7 @@ struct MachineTlb {
+ 
+ struct Machine {               //
+   u64 ip;                      // instruction pointer
++  char comm[16];               // prctl(PR_SET_NAME), "" = the program's name
+   u8 oplen;                    // length of operation
+   struct XedMachineMode mode;  // [dup] XED_MACHINE_MODE_REAL etc.
+   bool threaded;               // must use synchronization
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index bf48546..8144384 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -1865,6 +1865,28 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       if (r >= 0 && out && CopyToUserWrite(m, out, it, 32) == -1) r = -EFAULT_LINUX;
+       break;
+     }
++    // capabilities: root (by the kernel's uid) has them all, others none
++    case 0x07D: case 0x07E: {                                         // capget, capset
++      u8 hdr[8], data[24] = {0};
++      u32 version;
++      int words;
++      if (CopyFromUser(m, hdr, a, 8) == -1) { r = -EFAULT_LINUX; break; }
++      version = Read32(hdr);
++      words = version == 0x19980330 ? 1 : version == 0x20071026 || version == 0x20080522 ? 2 : 0;
++      if (!words) {  // tell the caller the version we speak
++        Write32(hdr, 0x20080522);
++        // (with no data pointer that's how callers probe: not an error)
++        r = CopyToUserWrite(m, a, hdr, 4) == -1 ? -EFAULT_LINUX : b ? -EINVAL_LINUX : 0;
++        break;
++      }
++      if (nr == 0x07E || !b) { r = 0; break; }  // capset: accepted
++      if (KS(m, 102, A12(0)) == 0) {  // uid 0
++        Write32(data + 0, 0xffffffff), Write32(data + 4, 0xffffffff);  // effective, permitted
++        if (words == 2) Write32(data + 12, 0x1ff), Write32(data + 16, 0x1ff);
++      }
++      r = CopyToUserWrite(m, b, data, words * 12) == -1 ? -EFAULT_LINUX : 0;
++      break;
++    }
+     case 0x073: {                                                     // getgroups
+       // one supplementary group: the process's gid (the kernel's)
+       u8 g[4];
+diff --git a/blink/syscall.c b/blink/syscall.c
+index cc923cc..19c1f16 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -1037,9 +1037,36 @@ static int SysPrctlSetTsc(struct Machine *m, i64 arg2) {
+   }
+ }
+ 
++// the thread's name (comm): what PR_SET_NAME set, else the program's
++static void GetComm(struct Machine *m, char out[16]) {
++  const char *s, *p;
++  memset(out, 0, 16);
++  if (m->comm[0]) {
++    memcpy(out, m->comm, 16);
++  } else if ((s = m->system->elf.prog)) {
++    if ((p = strrchr(s, '/'))) s = p + 1;
++    strncpy(out, s, 15);
++  }
++}
++
+ static int SysPrctl(struct Machine *m, int op, i64 arg2, i64 arg3, i64 arg4,
+                     i64 arg5) {
++  char name[16];
++  int i;
+   switch (op) {
++    case 15:  // PR_SET_NAME: up to 15 bytes (perl's $0 = ...)
++      memset(name, 0, sizeof(name));
++      for (i = 0; i < 15; ++i) {
++        if (CopyFromUser(m, name + i, arg2 + i, 1) == -1) return efault();
++        if (!name[i]) break;
++      }
++      memcpy(m->comm, name, 16);
++      return 0;
++    case 16:  // PR_GET_NAME: 16 bytes
++      GetComm(m, name);
++      return CopyToUserWrite(m, arg2, name, 16);
++    case 23:  // PR_CAPBSET_READ: every capability Linux 6 knows is in the set
++      return arg2 >= 0 && arg2 <= 40 ? 1 : einval();
+     case PR_GET_TSC_LINUX:
+       return SysPrctlGetTsc(m, arg2);
+     case PR_SET_TSC_LINUX:
+-- 
+2.43.0
+

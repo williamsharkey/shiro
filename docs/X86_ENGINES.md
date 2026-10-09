@@ -363,6 +363,47 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
 26. Under Shiro `uname` takes the kernel's host and domain names (Blink's
    kernel version and machine otherwise; emscripten's nodename was
    "emscripten", which tmux showed).
+27. `mremap` grows (in place, or with `MREMAP_MAYMOVE` by mapping, copying
+   and unmapping), shrinks and moves to a fixed place (it always failed
+   with ENOMEM; apt's DynamicMMap needs it). Under Shiro `getgroups`
+   reports the process's gid (it reached emscripten: EINVAL for size 0,
+   which broke coreutils `id`). Tests: `fixtures/x86/mremap.c`,
+   `getgroups.c`.
+28. `brk` fails, like Linux, when the heap would grow over a mapping (Blink
+   replaced the mapping), and `mmap(0)` leaves 1 GB above the break: in
+   the wasm build the automatic-placement range scales down to the
+   program's neighborhood, so apt's 120 MB cache landed at the break and
+   malloc's next `brk` overwrote it. Test: `fixtures/x86/brkmap.c`.
+29. `cmpps`/`cmppd`/`cmpss`/`cmpsd` write all-ones masks (Blink stored the
+   -1 as a float, -1.0), and predicates NLT/NLE are true for NaN. GTK's
+   cubic-bezier easing selects with those masks, so l3afpad's main thread
+   spun forever in the solve. Test: `fixtures/x86/ssecmp.c`.
+30. Under Shiro `lchown` and `fchownat(AT_SYMLINK_NOFOLLOW)` don't follow a
+   symlink (dpkg lchowns NAME.dpkg-new links before their targets exist),
+   and `fchownat` fails for a missing path. Ownership isn't kept; they
+   check existence. Test: `fixtures/x86/lchown.c`.
+31. Same-instance fork, behind `BLINK_SAME_INSTANCE_FORK=1`: the fork child
+   is a new System with its own guest thread in the parent's Blink instance
+   (same wasm memory). Private pages are copied; pages of writable
+   `MAP_SHARED` mappings move onto host pages both processes map
+   (refcounted, PTE bit `PAGE_GROW`), so shared memory and its futexes work
+   across fork while parent and child run concurrently. The child's kernel
+   calls carry its pid; the page routes its signals by pid, turns its
+   kernel termination into a SIGKILL of its System, and keeps the worker
+   until the last process in it ends (a parent may exit first); its exec
+   starts the program in a worker of its own. LTP's fork-sensitive tests
+   (the ones the 0023 fallback broke): 22 of 24 pass with the flag, 1 of
+   24 without. Limits: a multi-threaded child's other threads aren't
+   reaped at its exit. Tests: `x86-engine.test.ts` "same-instance fork".
+32. `alarm` and `setitimer(ITIMER_REAL)` are per process in the kernel (Blink
+   used the host's one timer, shared by every process in an instance), so
+   a child's alarm is its own and SIGALRM interrupts blocking calls like
+   any signal. Test: `fixtures/x86/alarmfork.c`.
+33. `prctl` `PR_SET_NAME`/`PR_GET_NAME` (per thread; perl's `$0 = ...` died
+   with EINVAL) and `PR_CAPBSET_READ`; under Shiro `capget` reports every
+   capability for uid 0 and none otherwise (Linux's version handshake), and
+   `capset` accepts (libcap's `cap_get_proc` failed with ENOSYS). Test:
+   `fixtures/x86/prctlcap.c`.
 
 Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.

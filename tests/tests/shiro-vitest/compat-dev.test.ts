@@ -1032,4 +1032,13 @@ describe('git (upstream, x86-64 in Blink)', () => {
     expect(r.err).toBe('');
     expect(r.out).toBe('4\nn\n');
   }, 300_000);
+
+  it('clone through a real shell script: --upload-pack that is not a simple command', async () => {
+    // `sh -c 'true; git-upload-pack ...'` can't be exec'd directly: the shell
+    // runs it as a kernel process and git-upload-pack gets its pipes
+    // (src/shell-stdio.ts); before, sh read the request to EOF and deadlocked
+    const r = await g(`cd /tmp && git clone -q --upload-pack='true; git-upload-pack' file:///home/user/r r3 && cd r3 && git log --oneline | wc -l && git ls-remote --upload-pack='read_nothing=1; git-upload-pack' origin refs/heads/main | wc -l`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('4\n1\n');
+  }, 300_000);
 });

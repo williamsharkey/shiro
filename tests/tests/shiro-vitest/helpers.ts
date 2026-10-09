@@ -46,6 +46,8 @@ import { systemctlCmd } from '@shiro/commands/systemctl';
 import { crontabCmd, journalctlCmd } from '@shiro/commands/cron';
 import { sshCmd } from '@shiro/commands/ssh';
 import { scpCmd } from '@shiro/commands/scp';
+import { sudoCmd } from '@shiro/commands/sudo';
+import { debianCmd, shiroAlternativesCmd, shiroAptMethodCmd } from '@shiro/commands/debian';
 
 export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell }> {
   const fs = new FileSystem();
@@ -120,6 +122,7 @@ export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell 
   commands.register(journalctlCmd);
   commands.register(sshCmd);
   commands.register(scpCmd);
+  commands.registerAll([sudoCmd, debianCmd, shiroAlternativesCmd, shiroAptMethodCmd]);
 
   const shell = new Shell(fs, commands);
   return { fs, shell };

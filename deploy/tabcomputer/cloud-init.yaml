@@ -1,0 +1,160 @@
+#cloud-config
+# tabcomputer.com (the Unix edition of Shiro) on its own DigitalOcean droplet.
+#
+# The droplet sets itself up from this file on first boot and then deploys
+# itself: every 2 minutes tabcomputer-deploy checks the deploy/tabcomputer
+# branch of github.com/williamsharkey/shiro and, when it moved, builds that
+# commit and switches to it. Shipping is `git push origin <commit>:deploy/tabcomputer`.
+# No SSH is needed for any of it. See deploy/tabcomputer/README.md.
+
+package_update: true
+packages: [nginx, certbot, python3-certbot-nginx, git, curl, rsync]
+
+swap:
+  filename: /swapfile
+  size: 2G
+
+write_files:
+  - path: /etc/systemd/system/tabcomputer.service
+    content: |
+      [Unit]
+      Description=tabcomputer.com (Shiro Unix edition)
+      After=network.target
+      [Service]
+      WorkingDirectory=/opt/tabcomputer
+      Environment=PORT=3000
+      Environment=STATIC_DIR=/opt/tabcomputer/current/public
+      Environment=SEED_DIR=/opt/tabcomputer/seeds
+      ExecStart=/usr/bin/node /opt/tabcomputer/current/server.mjs
+      Restart=always
+      RestartSec=2
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /usr/local/bin/tabcomputer-deploy
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Build and switch to the head of deploy/tabcomputer if it moved.
+      set -euo pipefail
+      exec 9>/run/tabcomputer-deploy.lock; flock -n 9 || exit 0
+      # The last run's output is public at /_deploy/log (no secrets live on this box).
+      mkdir -p /var/www/tabdeploy
+      exec > >(tee /var/www/tabdeploy/log.new) 2>&1
+      trap 'mv -f /var/www/tabdeploy/log.new /var/www/tabdeploy/log' EXIT
+      REPO=https://github.com/williamsharkey/shiro.git
+      BRANCH=deploy/tabcomputer
+      ROOT=/opt/tabcomputer
+      SRC=$ROOT/src
+      want=$(git ls-remote "$REPO" "refs/heads/$BRANCH" | cut -f1)
+      [ -n "$want" ] || { echo "no $BRANCH yet"; exit 0; }
+      have=$(cat "$ROOT/current/DEPLOYED_SHA" 2>/dev/null || true)
+      [ "$want" != "$have" ] || exit 0
+      [ "$want" != "$(cat $ROOT/FAILED_SHA 2>/dev/null || true)" ] || exit 0
+      echo "deploying $want (was ${have:-none})"
+      if [ ! -d "$SRC/.git" ]; then git clone --depth 1 --branch "$BRANCH" "$REPO" "$SRC"; fi
+      cd "$SRC"
+      git fetch --depth 1 origin "$BRANCH"
+      git checkout -q -f FETCH_HEAD
+      if ! { npm ci --no-audit --no-fund && npm run build; }; then
+        echo "$want" > "$ROOT/FAILED_SHA"; echo "build failed for $want"; exit 1
+      fi
+      rel=$ROOT/releases/$want
+      rm -rf "$rel"; mkdir -p "$rel/public"
+      rsync -a dist/ "$rel/public/"
+      cp server.mjs "$rel/server.mjs"
+      echo "$want" > "$rel/DEPLOYED_SHA"
+      echo "$want" > "$rel/public/deployed.txt"
+      ln -sfn "$rel" "$ROOT/current.new" && mv -T "$ROOT/current.new" "$ROOT/current"
+      systemctl restart tabcomputer
+      ls -1dt $ROOT/releases/* | tail -n +4 | xargs -r rm -rf
+      echo "deployed $want"
+
+  - path: /etc/systemd/system/tabcomputer-deploy.service
+    content: |
+      [Unit]
+      Description=Deploy deploy/tabcomputer if it moved
+      [Service]
+      Type=oneshot
+      Environment=HOME=/root
+      ExecStart=/usr/local/bin/tabcomputer-deploy
+      TimeoutStartSec=1800
+
+  - path: /etc/systemd/system/tabcomputer-deploy.timer
+    content: |
+      [Timer]
+      OnBootSec=30
+      OnUnitInactiveSec=2min
+      [Install]
+      WantedBy=timers.target
+
+  - path: /usr/local/bin/tabcomputer-cert
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Get the Let's Encrypt certificate once DNS points here; then stop trying.
+      set -u
+      [ -e /etc/letsencrypt/live/tabcomputer.com/fullchain.pem ] && { systemctl disable --now tabcomputer-cert.timer; exit 0; }
+      me=$(curl -s http://169.254.169.254/metadata/v1/interfaces/public/0/ipv4/address)
+      for h in tabcomputer.com www.tabcomputer.com; do
+        [ "$(getent ahostsv4 $h | awk 'NR==1{print $1}')" = "$me" ] || { echo "$h does not resolve here yet"; exit 0; }
+      done
+      certbot --nginx -n --agree-tos --register-unsafely-without-email --redirect \
+        -d tabcomputer.com -d www.tabcomputer.com && systemctl disable --now tabcomputer-cert.timer
+
+  - path: /etc/systemd/system/tabcomputer-cert.service
+    content: |
+      [Unit]
+      Description=Obtain the tabcomputer.com certificate
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/tabcomputer-cert
+
+  - path: /etc/systemd/system/tabcomputer-cert.timer
+    content: |
+      [Timer]
+      OnBootSec=60
+      OnUnitInactiveSec=3min
+      [Install]
+      WantedBy=timers.target
+
+  - path: /etc/nginx/sites-available/tabcomputer
+    content: |
+      # node (server.mjs) sends COOP/COEP itself; nginx passes them through.
+      server {
+        listen 80;
+        listen [::]:80;
+        server_name tabcomputer.com www.tabcomputer.com;
+        client_max_body_size 100m;
+        location /_deploy/ {
+          alias /var/www/tabdeploy/;
+          default_type text/plain;
+          add_header Cache-Control no-store;
+        }
+        error_page 502 503 504 /_deploy/log;
+        location / {
+          proxy_pass http://127.0.0.1:3000;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection $http_connection;
+          proxy_set_header Host $host;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $scheme;
+          proxy_read_timeout 3600s;
+          proxy_send_timeout 3600s;
+          proxy_buffering off;
+        }
+      }
+
+runcmd:
+  - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+  - apt-get install -y nodejs
+  - mkdir -p /opt/tabcomputer/releases /opt/tabcomputer/seeds
+  - cd /opt/tabcomputer && echo '{"private":true,"type":"module"}' > package.json && npm install --no-audit --no-fund ws undici
+  - rm -f /etc/nginx/sites-enabled/default
+  - ln -sf /etc/nginx/sites-available/tabcomputer /etc/nginx/sites-enabled/tabcomputer
+  - systemctl reload nginx
+  - ufw allow 'Nginx Full' || true
+  - systemctl daemon-reload
+  - systemctl enable tabcomputer.service
+  - systemctl enable --now tabcomputer-deploy.timer tabcomputer-cert.timer

@@ -75,6 +75,8 @@ import { createPathShims } from './path-shims';
 import { getKernel } from './kernel/kernel';
 import { installNet } from './kernel/net';
 import { attachKernelTty } from './kernel/pty';
+import { sudoCmd } from './commands/sudo';
+import { shiroAptMethodCmd } from './commands/debian';
 import { iframeServer } from './iframe-server';
 import { unixCommands } from './commands/unix';
 import { ShiroTerminal } from './terminal';
@@ -86,6 +88,10 @@ import { closeSplitView } from './split-view';
 import { initFileAssociations } from './file-associations';
 import { setActiveTerminal } from './active-terminal';
 import { initPanes } from './panes';
+import { uiMode } from './ui-mode';
+import type { Desktop } from './desktop/index';
+import { installDomFs } from './dom-fs';
+import { desktopCmd } from './commands/desktop';
 import buildNumber from '../build-number.txt?raw';
 import { AGENTS_MD, CLAUDE_MD } from './claude-md-seed';
 import {
@@ -109,6 +115,11 @@ function registerCommand(commands: CommandRegistry, cmd: Command, sourcePath?: s
 async function main() {
   console.log(`[shiro] Starting... (build #${buildNumber.trim()})`);
   logIsolationStatus();
+
+  // The desktop (src/desktop) is its own chunk: shiro.computer's terminal UI
+  // never loads it, and the desktop's download overlaps IndexedDB opening
+  const mode = uiMode();
+  const desktopModule = mode === 'desktop' ? import('./desktop/index') : null;
 
   // Request persistent storage so browser never evicts IndexedDB data (credentials, etc.)
   navigator.storage?.persist?.().then(granted => {
@@ -307,11 +318,16 @@ async function main() {
   registerCommand(commands, unbecomeCmd, 'src/commands/become.ts');
   registerCommand(commands, pageCmd, 'src/commands/page.ts');
   registerCommand(commands, titleCmd, 'src/commands/title.ts');
+  registerCommand(commands, desktopCmd, 'src/commands/desktop.ts');
 
   registerCommand(commands, lazyCommand('gh', 'GitHub CLI',
     () => import('./commands/gh').then(m => m.ghCmd)), 'src/commands/gh.ts');
   registerCommand(commands, lazyCommand('x86', 'Run x86-64 ELF binaries',
     () => import('./commands/x86').then(m => m.x86Cmd)), 'src/commands/x86.ts');
+  registerCommand(commands, lazyCommand('gui', 'Linux GUI apps (xterm, GTK, Qt) from Debian, streamed on first use',
+    () => import('./commands/gui').then(m => m.guiCmd)), 'src/commands/gui.ts');
+  registerCommand(commands, lazyCommand('xserver', 'In-page X11 display server (Xshiro): status, start, stop',
+    () => import('./commands/xserver').then(m => m.xserverCmd)), 'src/commands/xserver.ts');
   registerCommand(commands, mkTempCmd, 'src/commands/mktemp.ts');
   registerCommand(commands, lazyCommand('jq', 'JSON processor',
     () => import('./commands/jq').then(m => m.jqCmd)), 'src/commands/jq.ts');
@@ -379,6 +395,12 @@ async function main() {
     () => import('./commands/pkg').then(m => m.aptCmd)), 'src/commands/pkg.ts');
   registerCommand(commands, lazyCommand('apt-get', 'Package manager (same as pkg)',
     () => import('./commands/pkg').then(m => m.aptGetCmd)), 'src/commands/pkg.ts');
+  registerCommand(commands, lazyCommand('debian', 'Install and manage the streamed Debian system',
+    () => import('./commands/debian').then(m => m.debianCmd)), 'src/commands/debian.ts');
+  registerCommand(commands, lazyCommand('shiro-alternatives', "Choose Shiro's or Debian's implementation of a program",
+    () => import('./commands/debian').then(m => m.shiroAlternativesCmd)), 'src/commands/debian.ts');
+  registerCommand(commands, shiroAptMethodCmd, 'src/commands/debian.ts');
+  registerCommand(commands, sudoCmd, 'src/commands/sudo.ts');
   registerCommand(commands, lazyCommand('xpkg', 'Binary (x86-64) package manager',
     () => import('./commands/xpkg').then(m => m.xpkgCmd)), 'src/commands/xpkg.ts');
 
@@ -440,7 +462,17 @@ async function main() {
   // Create PATH shims for builtins so programs can discover them via `which`, `execFile`, etc.
   // This is how an OS advertises its commands — the PATH mechanism, not the builtin registry.
   // PATH shims for builtins, /bin/sh, /usr/bin/env (src/path-shims.ts)
-  void createPathShims(fs).catch(() => {});
+  // In Debian mode (docs/DEBIAN.md) the streamed rootfs's files load on first
+  // read, Debian's programs on PATH replace builtins of the same name, and
+  // the builtin shims are left out (they'd shadow /usr/bin).
+  void import('./debian/rootfs').then(async (m) => {
+    const st = await m.bootRootfs(fs);
+    if (!st) return createPathShims(fs);
+    const ov = await import('./debian/overlay');
+    await ov.enableDebianShadows(fs, (n) => !!commands.get(n));
+    for (const [k, v] of Object.entries(m.DEBIAN_ENV)) shell.env[k] ??= v;
+    console.log(`[shiro] Debian ${st.version} (${st.suite}) rootfs ${st.id}`);
+  }).catch((e) => { console.warn('[shiro] Debian boot failed:', e); void createPathShims(fs).catch(() => {}); });
 
   // Create shell
   const shell = new Shell(fs, commands);
@@ -452,6 +484,10 @@ async function main() {
   void import('./x86-engine/blink').then(m => m.registerBlinkLoader(kernel));
   // Signals and job control for kernel processes; /dev/ptmx and /dev/pts/N
   attachKernelTty(kernel);
+  // X11 display :0 (src/x11, docs/GUI.md): `Xshiro :0` listens on /tmp/.X11-unix/X0 now;
+  // the server and its fonts load on the first client, windows open on the desktop
+  shell.env['DISPLAY'] ??= ':0';
+  void import('./x11/display').then(m => m.startDisplay(kernel, 0)).catch(e => console.warn('[Xshiro]', e));
 
   // Populate API keys from localStorage so `claude` CLI picks them up
   const storedAnthropicKey = localStorage.getItem('shiro_anthropic_key') || localStorage.getItem('shiro_api_key');
@@ -463,12 +499,43 @@ async function main() {
   const storedGithubToken = localStorage.getItem('shiro_github_token');
   if (storedGithubToken) shell.env['GITHUB_TOKEN'] = storedGithubToken;
 
-  // Create terminal
+  // Extra terminals (panes, desktop windows) get fresh shells with this one's env and cwd
+  const makeShell = () => {
+    const s = new Shell(fs, commands);
+    Object.assign(s.env, shell.env);
+    s.cwd = shell.cwd;
+    return s;
+  };
+
+  // The Unix edition boots a desktop (src/desktop); shiro.computer keeps the
+  // full-page terminal (src/ui-mode.ts). The desktop puts #terminal in its
+  // first window before the terminal is created, so it measures its real size.
   const container = document.getElementById('terminal')!;
+  let desktop: Desktop | null = null;
+  if (desktopModule) {
+    try {
+      const { bootDesktop } = await desktopModule;
+      performance.mark('shiro:desktop:start');
+      desktop = bootDesktop({ fs, shell, kernel, makeShell, terminalEl: container });
+    } catch (e) {
+      // A chunk that fails to load leaves the full-page terminal, which always works
+      console.error('[shiro] desktop failed to load; using the terminal UI', e);
+      document.body.classList.remove('sd-active');
+    }
+  }
+  performance.mark('shiro:desktop:end');
+  // /dom: the live page as files (docs/DESKTOP.md)
+  installDomFs(fs, kernel, () => desktop?.wm ?? null);
+
+  // Create terminal
   const terminal = new ShiroTerminal(container, shell);
 
   // Connect terminal to shell for interactive commands (vi, etc.)
   shell.setTerminal(terminal);
+  desktop?.attachMainTerminal(terminal);
+  // Debian GUI apps (xterm, GTK, Qt) in the dock, installed on first click (src/gui/apps.ts)
+  if (desktop) void import('./gui/desktop-apps').then(m => m.registerGuiApps(desktop.wm, fs, kernel)).catch(e => console.warn('[gui]', e));
+  performance.mark('shiro:terminal:ready');
 
   // Listen for font size changes from parent (seed snippet)
   window.addEventListener('message', (e) => {
@@ -495,6 +562,8 @@ async function main() {
     iframeServer, // Iframe-based virtual HTTP server
     processTable, // Windowed process registry
     kernel, // Process table, fds, pipes and syscalls for worker guests (src/kernel)
+    desktop: desktop?.wm ?? null, // Window manager API (docs/DESKTOP.md), null in the classic UI
+    uiMode: mode,
     unbecome: deactivateBecomeMode, // Exit app mode from browser console
     closeSplit: closeSplitView, // Close split pane from browser console
     lastSeedGif: null as Uint8Array | null, // Last generated seed GIF bytes (for demos/drag)
@@ -562,13 +631,8 @@ async function main() {
     document.body.classList.add('become-active');
   }
 
-  // Tiling panes: drag a corner triangle of any pane to split it
-  initPanes(terminal, () => {
-    const paneShell = new Shell(fs, commands);
-    Object.assign(paneShell.env, shell.env);
-    paneShell.cwd = shell.cwd;
-    return paneShell;
-  });
+  // Tiling panes: drag a corner triangle of any pane to split it (the desktop has windows and tabs instead)
+  if (!desktop) initPanes(terminal, makeShell);
 
   await terminal.start();
 
@@ -710,7 +774,8 @@ async function main() {
   initFaviconUpdater(terminal.term);
 
   // Initialize dynamic title (shows recent commands)
-  initTitle();
+  // The desktop titles the tab with the product name (src/brand.json)
+  if (!desktop) initTitle();
 
   // Auto-reconnect remote session if one was active before page reload
   // Skip only if become mode is actually active (not just config in localStorage)

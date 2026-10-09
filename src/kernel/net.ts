@@ -17,6 +17,7 @@
  * Errors are negative Linux errno values, as everywhere in the kernel ABI.
  */
 
+import { networkCredential, requireNetworkSignIn, setNetworkStatus } from '../net-signin';
 import type { KStat } from './abi';
 import { retain, release, type FdTable, type OpenFile } from './fd';
 import type { Kernel } from './kernel';
@@ -1114,8 +1115,20 @@ export class NetStack {
     if (!tokenUrl) return null;
     if (this.token && this.token.expires - 30_000 > Date.now()) return this.token.token;
     const f = this.config.fetch ?? fetch;
-    const res = await f(tokenUrl, { method: 'POST', credentials: 'same-origin' as RequestCredentials });
+    // A saved sign-in goes along, so a relay that requires one connects silently
+    const post = (cred: string | null) => f(tokenUrl, {
+      method: 'POST', credentials: 'same-origin' as RequestCredentials,
+      ...(cred ? { headers: { Authorization: `Bearer ${cred}` } } : {}),
+    });
+    let res = await post(networkCredential());
+    if (res.status === 401) {
+      // The relay wants a signed-in user: ask once (src/net-signin.ts), then retry
+      const cred = await requireNetworkSignIn({ reason: 'A program wants to connect to the internet' });
+      if (!cred) { setNetworkStatus('needs-sign-in'); throw new Error('token 401: sign-in required'); }
+      res = await post(cred);
+    }
     if (!res.ok) throw new Error(`token ${res.status}`);
+    setNetworkStatus(networkCredential() ? 'signed-in' : 'online');
     this.token = await res.json();
     return this.token!.token;
   }

@@ -157,8 +157,8 @@ describe('kernel path syscalls (Linux semantics)', () => {
     expect(await call(A.SYS_symlinkat, [L('x'), A.AT_FDCWD, L('dangling')], 'x', 'dangling')).toBe(-A.EEXIST);
     expect(await call(A.SYS_linkat, [A.AT_FDCWD, L('file'), A.AT_FDCWD, L('hl/'), 0], 'file', 'hl/')).toBe(-A.ENOENT);
     expect(await call(A.SYS_linkat, [A.AT_FDCWD, L('dir'), A.AT_FDCWD, L('hl'), 0], 'dir', 'hl')).toBe(-A.EPERM);
-    // No hard links: a valid link is EPERM (programs fall back to copying)
-    expect(await call(A.SYS_linkat, [A.AT_FDCWD, L('file'), A.AT_FDCWD, L('hl'), 0], 'file', 'hl')).toBe(-A.EPERM);
+    // No hard links: a valid link makes a copy that reports the source's inode (dpkg needs link() to work)
+    expect(await call(A.SYS_linkat, [A.AT_FDCWD, L('file'), A.AT_FDCWD, L('hl'), 0], 'file', 'hl')).toBe(0);
     expect(await call(A.SYS_linkat, [A.AT_FDCWD, L('file'), A.AT_FDCWD, L('hl'), 0x10000], 'file', 'hl')).toBe(-A.EINVAL);
     // rename: a directory replaces only an empty directory, never a file, and vice versa
     expect(await call(A.SYS_renameat, [A.AT_FDCWD, L('empty'), A.AT_FDCWD, L('dir')], 'empty', 'dir')).toBe(-A.ENOTEMPTY);

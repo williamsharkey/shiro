@@ -41,8 +41,26 @@ const jitBin = join(out, 'jit');
 const haveJit = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', jitBin, 'jit.c']);
 const forkBin = join(out, 'forkcopy');
 const haveFork = tryBuild('gcc', ['-static', '-O1', '-o', forkBin, 'forkcopy.c']);
+const shfutexBin = join(out, 'shfutex');
+const haveShfutex = tryBuild('gcc', ['-static', '-O1', '-o', shfutexBin, 'shfutex.c']);
+const orphanBin = join(out, 'orphan');
+const haveOrphan = tryBuild('gcc', ['-static', '-O1', '-o', orphanBin, 'orphan.c']);
+const alarmforkBin = join(out, 'alarmfork');
+const haveAlarmfork = tryBuild('gcc', ['-static', '-O1', '-o', alarmforkBin, 'alarmfork.c']);
 const forkSharedBin = join(out, 'forkshared');
 const haveForkShared = tryBuild('gcc', ['-static', '-O1', '-o', forkSharedBin, 'forkshared.c']);
+const mremapBin = join(out, 'mremap');
+const haveMremap = tryBuild('gcc', ['-static', '-O1', '-o', mremapBin, 'mremap.c']);
+const prctlcapBin = join(out, 'prctlcap');
+const havePrctlcap = tryBuild('gcc', ['-static', '-O1', '-o', prctlcapBin, 'prctlcap.c']);
+const lchownBin = join(out, 'lchown');
+const haveLchown = tryBuild('gcc', ['-static', '-O1', '-o', lchownBin, 'lchown.c']);
+const ssecmpBin = join(out, 'ssecmp');
+const haveSsecmp = tryBuild('gcc', ['-static', '-O1', '-o', ssecmpBin, 'ssecmp.c', '-lm']);
+const brkmapBin = join(out, 'brkmap');
+const haveBrkmap = tryBuild('gcc', ['-static', '-O1', '-o', brkmapBin, 'brkmap.c']);
+const getgroupsBin = join(out, 'getgroups');
+const haveGetgroups = tryBuild('gcc', ['-static', '-O1', '-o', getgroupsBin, 'getgroups.c']);
 const fionbioBin = join(out, 'fionbio');
 const haveFionbio = tryBuild('gcc', ['-static', '-O1', '-o', fionbioBin, 'fionbio.c']);
 const fuzzBin = join(out, 'jitfuzz');
@@ -176,6 +194,42 @@ describe.skipIf(!haveFork)('Blink engine: fork', () => {
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe('anon shared 42\nfile shared 7\nprivate after unmap 100\n');
     expect(r.exitCode).toBe(0);
+  }, 60_000);
+});
+
+// BLINK_SAME_INSTANCE_FORK=1 (patch 0031): the child is a System in the
+// parent's Blink instance, sharing MAP_SHARED pages and running alongside
+describe.skipIf(!haveFork || !haveForkShared || !haveShfutex || !haveOrphan || !haveAlarmfork)('Blink engine: same-instance fork', () => {
+  const sif = 'BLINK_SAME_INSTANCE_FORK=1 ./prog';
+  it('copies private memory; pipes, exec and nested forks work', async () => {
+    const { shell } = await setup(readFileSync(forkBin));
+    expect((await run(shell, `${sif} copy`)).output).toContain('parent sees 1 p parent status 7');
+    expect((await run(shell, `${sif} pipe`)).output).toContain('pipe got: from-exec');
+    expect((await run(shell, `${sif} nested`)).output).toContain('nested status 44 counter 1');
+  }, 60_000);
+
+  it('shares MAP_SHARED memory and its futexes with a child running alongside', async () => {
+    const { shell } = await setup(readFileSync(forkSharedBin));
+    expect((await run(shell, sif)).output.replace(/\r\n/g, '\n')).toBe('anon shared 42\nfile shared 7\nprivate after unmap 100\n');
+    const f = await setup(readFileSync(shfutexBin));
+    expect((await run(f.shell, sif)).output).toContain('futex across fork: child wrote 2, exit 3');
+  }, 60_000);
+
+  it('kills children, and a child outlives its parent', async () => {
+    const { shell } = await setup(readFileSync(orphanBin));
+    expect((await run(shell, sif)).output.replace(/\r\n/g, '\n')).toBe(
+      'killed spinning child: signaled=1 sig=9\nSIGTERM to pausing child: signaled=1 sig=15\n');
+    await run(shell, 'rm -f /tmp/orphan.out');
+    await run(shell, `${sif} x`);
+    await run(shell, 'sleep 1');
+    expect((await run(shell, 'cat /tmp/orphan.out')).output).toContain('child outlived parent');
+  }, 60_000);
+
+  it('keeps alarms per process (here and with the default fork)', async () => {
+    const { shell } = await setup(readFileSync(alarmforkBin));
+    const want = "first alarm 0, child ok 1, parent's alarm still set 1";
+    expect((await run(shell, sif)).output).toContain(want);
+    expect((await run(shell, './prog')).output).toContain(want);
   }, 60_000);
 });
 
@@ -431,6 +485,64 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const r = await run(shell, './prog');
     expect(r.exitCode).toBe(0);
     expect(r.output.replace(/\r\n/g, '\n')).toBe('pextrw 0xfffe\nmadvise 0 0 0\nfutex_wait_bitset timedout on time\nfutex_wake_bitset 0\ngetrandom 16\n');
+  }, 60_000);
+
+  // apt's DynamicMMap grows its package cache with mremap(MREMAP_MAYMOVE)
+  it.skipIf(!haveMremap)('mremap grows (in place or moving), shrinks and moves to a fixed place', async () => {
+    const { shell } = await setup(readFileSync(mremapBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'no MAYMOVE: Cannot allocate memory\nmoved=1 first=7 mid=7 last=9\nold range free=1\n' +
+      'shrunk same=1 tail free=1 last=7\nfixed at=1 first=7\nreadonly moved=1 byte=42\n');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  // perl's $0 = ... (Debian's addgroup); libcap's cap_get_proc (ping)
+  it.skipIf(!havePrctlcap)('prctl PR_SET_NAME/PR_GET_NAME/PR_CAPBSET_READ, capget/capset', async () => {
+    const { shell } = await setup(readFileSync(prctlcapBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'default name prog\nset 0 name renamed-thread-\ncapbset_read(0)=1 capbset_read(40)=1\n' +
+      'capbset_read(64)=-1 Invalid argument\ncapget(version 0)=0 , version 0x20080522\n' +
+      'capget=0 full=0\ncapset=0\n');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  // dpkg lchowns NAME.dpkg-new symlinks before their targets exist
+  it.skipIf(!haveLchown)('lchown and fchownat(AT_SYMLINK_NOFOLLOW) act on a dangling symlink', async () => {
+    const { shell } = await setup(readFileSync(lchownBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'lchown(dangling)=0 \nfchownat(dangling, NOFOLLOW)=0 \nchown(dangling)=-1 No such file or directory\n' +
+      'fchownat(dangling)=-1 No such file or directory\nlchown(missing)=-1 No such file or directory\n' +
+      'fchownat(missing)=-1 No such file or directory\nfchownat(dirfd, dangling, NOFOLLOW)=0 \n' +
+      'fchownat(fd, "", EMPTY_PATH)=0 \n');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  // GTK's cubic-bezier easing selects with cmpltsd masks (Blink wrote -1.0)
+  it.skipIf(!haveSsecmp)('cmpps/cmppd/cmpss/cmpsd write all-ones masks, NaN included', async () => {
+    const { shell } = await setup(readFileSync(ssecmpBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('ssecmp 288 cases, 0 wrong\n');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  // apt's cache was mmapped at the break and malloc's brk overwrote it
+  it.skipIf(!haveBrkmap)('brk never grows over a mapping; mmap(0) leaves the heap room', async () => {
+    const { shell } = await setup(readFileSync(brkmapBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'mmap(0) clear of the break: 1\nmapping intact: 1\nsbrk over a mapping refused: 1, mapping kept: 1\n');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  // coreutils id: "failed to get groups for the current process"
+  it.skipIf(!haveGetgroups)('getgroups reports the process gid, and its count for size 0', async () => {
+    const { shell } = await setup(readFileSync(getgroupsBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('getgroups(0)=1 getgroups(64)=1 is-gid=1\n');
+    expect(r.exitCode).toBe(0);
   }, 60_000);
 });
 

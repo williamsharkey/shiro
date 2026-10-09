@@ -154,7 +154,7 @@ async function servePoolChannel(kernel: Kernel, proc: Process, sab: SharedArrayB
     }
     i32[CH_RESULT] = result | 0;
     if (Atomics.load(i32, CH_SIGNAL) === 0) {
-      const sig = kernel.takeSignal(proc);
+      const sig = as ? (target ? kernel.takeSignal(target) : 0) : kernel.takeSignal(proc);
       if (sig) Atomics.store(i32, CH_SIGNAL, sig);
     }
     Atomics.store(i32, CH_STATE, STATE_REPLY);
@@ -174,6 +174,15 @@ async function servePoolChannel(kernel: Kernel, proc: Process, sab: SharedArrayB
  */
 function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: SharedArrayBuffer[]): void {
   const busy = new Set<SharedArrayBuffer>();
+  // Same-instance fork children (Blink): kernel processes this worker runs
+  // too. The worker outlives its own process until the last of them ends.
+  const hosted = new Set<number>();
+  const terminate = w.terminate.bind(w);
+  let ownGone = false;
+  w.terminate = () => {
+    ownGone = true;
+    if (!hosted.size) return terminate();
+  };
   const subs = new Map<number, () => void>();
   const pending = new Set<number>();
   const ping = (fd: number) => {
@@ -197,7 +206,18 @@ function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: SharedA
     } else if (m?.type === 'blink-fork') {
       // fork(): the child (made by SYS_shiro_vfork) runs the snapshot in its own worker
       const child = kernel.procs.get(m.pid);
-      if (child && child.ppid === proc.pid) kernel.startEmbryo(child, blinkRunner(child.path, m.snapshot));
+      if (child) kernel.startForkChild(proc, m.pid, blinkRunner(child.path, m.snapshot));
+    } else if (m?.type === 'blink-hosted') {
+      const child = kernel.procs.get(m.pid);
+      if (!child || hosted.has(m.pid)) return;
+      hosted.add(m.pid);
+      const off = child.addSignalListener((sig: number) => { if (sig > 0) w.postMessage({ type: 'blink-signal', sig, pid: m.pid }); });
+      child.onTerminate(() => {
+        off();
+        hosted.delete(m.pid);
+        w.postMessage({ type: 'blink-reap', pid: m.pid });
+        if (ownGone && !hosted.size) terminate();
+      });
     } else if (m?.type === 'blink-watch') watch(m.fd);
     else if (m?.type === 'blink-unwatch') { subs.get(m.fd)?.(); subs.delete(m.fd); }
   });
