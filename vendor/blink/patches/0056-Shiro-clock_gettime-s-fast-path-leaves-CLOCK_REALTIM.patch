@@ -1,0 +1,133 @@
+From d9e605ef0337b20bd36f75d0c9b4fe42acb632d7 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 17:18:30 +0000
+Subject: [PATCH 56/57] Shiro: clock_gettime's fast path leaves
+ CLOCK_REALTIME/BOOTTIME to ShiroSyscall; SHIRO_BLINK_MMLOG
+
+OpSyscall answered clock_gettime (0xE4) before ShiroSyscall, so patch
+0049's sub-ms CLOCK_REALTIME only reached gettimeofday (musl's
+gettimeofday, as in Shiro's static vim, is clock_gettime) and
+CLOCK_BOOTTIME never came from the kernel.
+
+SHIRO_BLINK_MMLOG=1 logs each mmap, mprotect, munmap, mremap and madvise
+with its result to the guest's stderr; =2 keeps the last 256 in memory
+and the crash report (SHIRO_BLINK_CRASH=1) prints them with the fault
+page's PTE (debugging aid).
+---
+ blink/shiro.inc | 41 +++++++++++++++++++++++++++++++++++++++++
+ blink/syscall.c | 12 +++++++++++-
+ 2 files changed, 52 insertions(+), 1 deletion(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 23657f8..c94430e 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -25,6 +25,9 @@
+ // Memory, threads, futexes, signal delivery and timing stay Blink's.
+ 
+ int g_shiro_pid;  // kernel pid; 0 = not running under Shiro
++static int g_shiro_mmlog;  // SHIRO_BLINK_MMLOG=1: log the guest's mappings, 2: ring
++static struct { int tid, nr; u64 a, b, c, r; } g_shiro_mmring[256];
++static _Atomic(unsigned) g_shiro_mmringi;
+ static int g_shiro_chunk = 65536;
+ static u64 g_shiro_ignored;  // signals ignored at startup (inherited)
+ 
+@@ -46,6 +49,7 @@ void ShiroInitSystem(struct System *s, bool first) {
+   const char *e;
+   if (!g_shiro_pid) return;
+   g_shiro_trace = (e = getenv("SHIRO_BLINK_CRASH")) && !strcmp(e, "2");
++  g_shiro_mmlog = (e = getenv("SHIRO_BLINK_MMLOG")) ? atoi(e) : 0;
+   if (g_shiro_trace && (e = getenv("SHIRO_BLINK_PROBE"))) {  // addr,addr,...
+     int k;
+     for (k = 0; k < 8 && *e; ++k) {
+@@ -805,6 +809,32 @@ static i64 ShiroMsg(struct Machine *m, bool send, int fd, i64 msg, int flags) {
+   return r;
+ }
+ 
++// SHIRO_BLINK_MMLOG=1: each mmap, munmap, mprotect, mremap and madvise
++// with its result goes to the guest's stderr (debugging aid)
++static void ShiroMmLog(struct Machine *m, int nr, u64 a, u64 b, u64 c, u64 d) {
++  char buf[160];
++  const char *name;
++  int n;
++  switch (nr) {
++    case 9: name = "mmap"; break;
++    case 10: name = "mprotect"; break;
++    case 11: name = "munmap"; break;
++    case 25: name = "mremap"; break;
++    case 28: name = "madvise"; break;
++    default: return;
++  }
++  if (g_shiro_mmlog == 2) {  // kept for the crash report, without the cost of a write
++    unsigned i = atomic_fetch_add(&g_shiro_mmringi, 1) & 255;
++    g_shiro_mmring[i].tid = m->tid, g_shiro_mmring[i].nr = nr;
++    g_shiro_mmring[i].a = a, g_shiro_mmring[i].b = b, g_shiro_mmring[i].c = c;
++    g_shiro_mmring[i].r = Get64(m->ax);
++    return;
++  }
++  n = snprintf(buf, sizeof(buf), "mm %d %s %#" PRIx64 " %#" PRIx64 " %#" PRIx64 " %#" PRIx64 " = %#" PRIx64 "\n",
++               m->tid, name, a, b, c, d, Get64(m->ax));
++  ShiroCall(m, 1, A12(2, n), buf, n, 0, false, false);
++}
++
+ // SHIRO_BLINK_CRASH=2 with SHIRO_BLINK_PROBE=addr,...: each time the
+ // interpreter reaches one of them, the registers and the words around rsp
+ // and rbp go to the guest's stderr (debugging aid)
+@@ -844,6 +874,17 @@ void ShiroCrashReport(struct Machine *m, int sig, int code) {
+   if (!(b = (char *)malloc(cap))) return;
+   n += snprintf(b + n, cap - n, "blink: pid %d tid %d: %s (si_code %d) at rip %#" PRIx64 ", fault address %#" PRIx64 "\n",
+                 m->system->pid, m->tid, DescribeSignal(sig), code, m->ip, m->faultaddr);
++  if (g_shiro_mmlog == 2) {
++    unsigned k, end = g_shiro_mmringi;
++    n += snprintf(b + n, cap - n, "blink: pte of the fault page %#" PRIx64 "\n",
++                  FindPageTableEntry(m, m->faultaddr & -4096));
++    for (k = end > 256 ? end - 256 : 0; k < end && n < cap - 200; ++k) {
++      unsigned j = k & 255;
++      n += snprintf(b + n, cap - n, "blink: mm %u tid %d nr %d %#" PRIx64 " %#" PRIx64 " %#" PRIx64 " = %#" PRIx64 "\n",
++                    k, g_shiro_mmring[j].tid, g_shiro_mmring[j].nr, g_shiro_mmring[j].a,
++                    g_shiro_mmring[j].b, g_shiro_mmring[j].c, g_shiro_mmring[j].r);
++    }
++  }
+   if ((fm = GetFileMap(m->system, m->ip))) {
+     n += snprintf(b + n, cap - n, "blink: rip is %s+%#" PRIx64 "\n", fm->path,
+                   (fm->offset > 0 ? fm->offset : 0) + (m->ip - fm->virt));
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 3d33ee2..d736670 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -5896,7 +5896,13 @@ void OpSyscall(P) {
+   size_t mark;
+   u64 ax, di, si, dx, r0, r8, r9;
+   unassert(!m->nofault);
+-  if (Get64(m->ax) == 0xE4) {
++  if (Get64(m->ax) == 0xE4
++#ifdef __EMSCRIPTEN__
++      // under Shiro CLOCK_REALTIME (sub-ms) and CLOCK_BOOTTIME (the kernel's)
++      // are ShiroSyscall's
++      && !(g_shiro_pid && (Get64(m->di) == 0 || Get64(m->di) == 7))
++#endif
++  ) {
+     // clock_gettime() is
+     //   1) called frequently,
+     //   2) latency sensitive, and
+@@ -5937,6 +5943,9 @@ void OpSyscall(P) {
+   r0 = Get64(m->r10);
+   r8 = Get64(m->r8);
+   r9 = Get64(m->r9);
++#ifdef __EMSCRIPTEN__
++  int shnr = ax & 0xfff;
++#endif
+   // Restore the lock state we entered with: a syscall nested in a signal
+   // handler (rt_sigreturn) must not leave an outer blocking wait holding it.
+   bool gil = GilHeld();
+@@ -6201,6 +6210,7 @@ void OpSyscall(P) {
+   }
+ #ifdef __EMSCRIPTEN__
+ ShiroDone:
++  if (g_shiro_mmlog) ShiroMmLog(m, shnr, di, si, dx, r0);
+ #endif
+   unassert(--m->sysdepth >= 0);
+   CollectPageLocks(m);
+-- 
+2.43.0
+

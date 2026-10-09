@@ -543,6 +543,27 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    5 ms, with its kernel round trips inside the sleep (off 3 ms before the
    deadline). LTP nanosleep01 and clock_nanosleep02 pass all rows again
    (they slept 0.4-1.3 ms too long).
+55. A same-instance fork child's fatal signal gets the crash report too
+   (`SHIRO_BLINK_CRASH=1`).
+56. `clock_gettime`'s fast path in `OpSyscall` leaves `CLOCK_REALTIME`
+   and `CLOCK_BOOTTIME` to the Shiro code: patch 49's sub-ms realtime
+   only reached `gettimeofday` before (musl's `gettimeofday`, which
+   Shiro's static vim uses, is `clock_gettime`). `SHIRO_BLINK_MMLOG=1`
+   logs the guest's mmap/mprotect/munmap/mremap/madvise calls to its
+   stderr; `=2` keeps the last 256 for the crash report (debugging aid).
+57. Instructions that cross into the next code page go to the interpreter
+   again, as before patch 41 (`BLINK_WJIT_STRADDLE=1` turns 41's decoding
+   back on). With it, a forked child decoding `.xz` with liblzma's
+   threaded decoder crashed in glibc's `_int_free` or reported corrupt
+   data (Debian mode's dpkg-deb), in one binary layout of two. Bisecting
+   by code address and by straddle site needs lzma_decode's three
+   straddling instructions together; each runs right on its own. Not yet
+   understood. No measurable cost on the x86 suite (vim_startup -3.5%,
+   gh_version +0.1%, both "same").
+58. `clock_nanosleep` (and so glibc's `nanosleep`) returns `EINVAL` for a
+   negative or out-of-range timespec before sleeping, as Linux's
+   `timespec64_valid` (LTP nanosleep04, broken by patch 54's path). Test:
+   `fixtures/x86/sleepintr.c`.
 
 The guest's kernel calls go over a pool of channels (`src/x86-engine/blink.ts`
 → `public/engines/blink/host.mjs`). It starts at 6, and host.mjs asks the

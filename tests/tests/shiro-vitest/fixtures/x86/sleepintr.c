@@ -3,7 +3,8 @@
 // signals between them: a handled signal ends the sleep with EINTR and the
 // time left (LTP nanosleep02, clock_nanosleep01). Then exit_group with
 // threads parked in a futex, a sleep and a pipe read: the process ends
-// at once (Blink ends those threads first; patch 0053).
+// at once (Blink ends those threads first; patch 0053). Invalid times
+// are EINVAL (patch 0058).
 #include <errno.h>
 #include <linux/futex.h>
 #include <pthread.h>
@@ -41,6 +42,15 @@ static void *park_sleep(void *a) { sleep(60); return 0; }
 static void *park_read(void *a) { char c; read(p[0], &c, 1); return 0; }
 
 int main(void) {
+  // invalid times are EINVAL before any sleep (LTP nanosleep04)
+  struct timespec inval[3] = {{-5, 9999}, {0, 1000000000}, {1, -100}};
+  int einval = 0;
+  for (int i = 0; i < 3; i++) {
+    einval += nanosleep(&inval[i], 0) == -1 && errno == EINVAL;
+    einval += clock_nanosleep(CLOCK_MONOTONIC, 0, &inval[i], 0) == EINVAL;
+  }
+  printf("invalid timespec EINVAL %d/6\n", einval);
+  fflush(stdout);
   signal(SIGUSR1, on_usr1);
   for (int clk = 0; clk < 2; clk++) {
     int pid = fork();
