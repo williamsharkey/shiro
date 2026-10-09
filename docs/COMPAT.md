@@ -407,9 +407,12 @@ The install column is the whole `apt-get install` (download, unpack,
 maintainer scripts, triggers) in Blink: about a minute even for jq, most
 of it apt's dependency resolution and dpkg-preconfigure (perf-fs-shell's
 profile: 14 s and 20 s for `hello`), which unix/perf-fs-shell is cutting.
-Debian's builds of the TUIs (tmux, nano, htop, ncdu, fzf, emacs -nw) have
-only had these non-interactive checks; Shiro's own `pkg` builds of them,
-in the table above, are the ones verified on the pty in Chromium.
+In Chromium (the built desktop, `debian install`, `sudo apt-get install`,
+2026-10-09) Debian's TUIs work on the pty: htop (meters, `q`), nano (type,
+`^O` save, `^X`), tmux (a command, `C-b %` split, `exit`), ncdu (scan of
+`/etc`, `q`), fzf (filtering a pipe). There `sudo apt-get … | tail -2` used
+to print all of apt's output on the terminal (sudo gave its programs the
+tty for stdout); fixed. emacs -nw from Debian has only had the batch check.
 
 | Tool (package) | Version | Status | Install | Smoke test | Notes |
 | --- | --- | --- | --- | --- | --- |
