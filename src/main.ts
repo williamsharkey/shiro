@@ -426,6 +426,8 @@ async function main() {
     () => import('./commands/pkg').then(m => m.aptGetCmd)), 'src/commands/pkg.ts');
   registerCommand(commands, lazyCommand('debian', 'Install and manage the streamed Debian system',
     () => import('./commands/debian').then(m => m.debianCmd)), 'src/commands/debian.ts');
+  registerCommand(commands, lazyCommand('toolchain', 'Install prebuilt compilers and runtimes (C, Python, Node, Java, LaTeX, ...) in seconds',
+    () => import('./commands/toolchain').then(m => m.toolchainCmd)), 'src/commands/toolchain.ts');
   registerCommand(commands, lazyCommand('tabcomputer-alternatives', "Choose tabcomputer's or Debian's implementation of a program",
     () => import('./commands/debian').then(m => m.shiroAlternativesCmd)), 'src/commands/debian.ts');
   registerCommand(commands, lazyCommand('shiro-alternatives', 'Old name of tabcomputer-alternatives',
@@ -508,6 +510,7 @@ async function main() {
   const debianBoot = import('./debian/rootfs').then(async (m) => {
     const st = await m.bootRootfs(fs);
     if (!st) { void createPathShims(fs).catch(() => {}); return; } // no Debian: nothing for commands to wait for
+    await import('./debian/layers').then((l) => l.bootLayers(fs)); // toolchain layers' lazy files
     void installAlwaysShims(fs).catch(() => {}); // xdg-open, xclip, ... on PATH in Debian mode too
     const ov = await import('./debian/overlay');
     await ov.enableDebianShadows(fs, (n) => !!commands.get(n));

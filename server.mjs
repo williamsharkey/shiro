@@ -440,6 +440,31 @@ async function handleStatic(req, res) {
   }
 }
 
+// --- Toolchain layers (docs/DEBIAN.md "Toolchain layers") ---
+// scripts/debian/build-layers.sh writes them (index.json, <id>/layer.json and
+// index, chunks/<sha256>.gz). They are large, so they live outside the
+// release: TABCOMPUTER_DEBIAN_LAYERS names the directory. Unset, /debian/layers/
+// is whatever STATIC_DIR has there.
+const DEBIAN_LAYERS = process.env.TABCOMPUTER_DEBIAN_LAYERS || '';
+
+async function handleDebianLayers(req, res, rel) {
+  const headers = { 'access-control-allow-origin': '*', 'cross-origin-resource-policy': 'cross-origin' };
+  if (!/^(index\.json|[a-z0-9-]+\/(layer\.json|index-[0-9a-f]+\.json\.gz)|chunks\/[0-9a-f]{64}\.gz)$/.test(rel)) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', ...headers });
+    return res.end('Not found');
+  }
+  try {
+    const data = await readFile(join(DEBIAN_LAYERS, rel));
+    // Chunks and indexes are content-addressed; the catalog and manifests change with a rebuild
+    const cache = rel.endsWith('.gz') ? 'public, max-age=31536000, immutable' : 'no-cache';
+    res.writeHead(200, { 'content-type': rel.endsWith('.json') ? 'application/json' : 'application/gzip', 'cache-control': cache, ...headers });
+    res.end(data);
+  } catch {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', ...headers });
+    res.end('Not found');
+  }
+}
+
 // --- Debian package mirror (docs/DEBIAN.md "Package mirror") ---
 // apt inside the page fetches http://HOST/PATH as /debian/mirror/HOST/PATH
 // (src/debian/apt-method.ts), so it needs no TCP relay. Only the hosts in
@@ -1499,6 +1524,9 @@ const server = createServer(async (req, res) => {
   }
   if (pathname.startsWith('/debian/mirror/')) {
     return handleDebianMirror(req, res, pathname.slice('/debian/mirror/'.length));
+  }
+  if (pathname.startsWith('/debian/layers/') && DEBIAN_LAYERS) {
+    return handleDebianLayers(req, res, pathname.slice('/debian/layers/'.length));
   }
   if (pathname === '/health') {
     res.writeHead(200);
