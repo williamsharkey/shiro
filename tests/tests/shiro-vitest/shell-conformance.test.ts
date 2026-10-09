@@ -563,14 +563,18 @@ describe('shell conformance regressions', () => {
     expect(r.out).toBe('bar\n[1 2]\n[3]\n<x>\n<y z>\n(b b)\nst=1\np_1p_2\n');
   });
 
-  it('bad substitution and invalid indirection end the script; in ( … ) only the subshell', async () => {
+  it('bad substitution / arithmetic errors abandon the line, ${x?} ends the script; in ( … ) only the subshell', async () => {
     const r = await script([
       '(echo ${a[0][0]}); echo s1=$?',
       '(echo ${!undef}); echo s2=$?',
       '(echo ${x?boom}); echo s3=$?',
       'echo ${#a[0]/1/x}; echo notreached',
+      'echo next=$?; echo $((1+)); echo notreached',
+      'echo next2=$?',
+      ': ${x?boom}; echo notreached',
+      'echo notreached',
     ].join('\n'));
-    expect(r.out).toBe('s1=1\ns2=1\ns3=1\n');
+    expect(r.out).toBe('s1=1\ns2=1\ns3=1\nnext=1\nnext2=1\n');
     expect(r.status).toBe(1);
   });
 
@@ -632,5 +636,15 @@ describe('shell conformance regressions', () => {
       'echo 1; set -n; echo 2',
     ].join('\n'));
     expect(r.out).toBe('huBc\n1\nfoo bar\nset +o emacs\nset -o vi\nset +o vi\ntrap=42\nst=2\nnof\nl2=xx\nl1=g\n1\n');
+  });
+
+  it('$((…)) ends at its matching )), and may hold $(…) and `…`; 02#1 is no number', async () => {
+    const r = await script([
+      'a=1; b=2; echo $((a,(b+1))) $((!(1 || 2))) $((~(1|2)))',
+      'echo $((1 + $(echo 1)${u:-3})) $((`echo 1` + 2))',
+      'echo $((02#0110)); echo notreached',
+      'echo st=$?',
+    ].join('\n'));
+    expect(r.out).toBe('3 0 -4\n14 3\nst=1\n');
   });
 });

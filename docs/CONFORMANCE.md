@@ -6,7 +6,7 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1377/1567 (87.9%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1383/1567 (88.3%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1275/1567 (81.4%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **612/635 (96.4%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **172/320 (53.8%)** |
@@ -33,7 +33,7 @@ How each suite runs, and what is and isn't scored, is described in
 | var-op-slice | 0/21 | 18/21 | 3 |
 | var-num | 0/7 | 7/7 | 0 |
 | vars-special | 0/37 | 31/37 | 6 |
-| arith | 2/71 | 65/71 | 6 |
+| arith | 2/71 | 71/71 | 0 |
 | command-sub | 0/28 | 26/28 | 2 |
 | here-doc | 0/32 | 29/32 | 3 |
 | redirect | 3/39 | 35/39 | 4 |
@@ -93,7 +93,6 @@ How each suite runs, and what is and isn't scored, is described in
 - **var-op-patsub**: Confusing unquoted slash matches bash (and ash); Synthesized ${x///} bug (similar to above); Replace backslash; When LC_ALL=C, pattern ? doesn't match multibyte character; Chromium from http://www.oilshell.org/blog/2016/11/07.html
 - **var-op-slice**: ${@:offset} and ${*:offset}; ${@:offset:length} and ${*:offset:length}; ${array[@]:} vs ${array[@]: }  - bash and zsh inconsistent
 - **vars-special**: $PATH is set if unset at startup; Vars set interactively only: $HISTFILE; Some vars are set, even without startup file, or env: PATH, PWD; $LINENO is the current line, not line of function call; $LINENO in other for loops; $_ with assignments, arrays, etc.
-- **arith**: Arith sub with word parts; Backticks within arith sub; Integer constant validation; Comma operator (borrowed from C); Logical Ops; Bitwise ops
 - **command-sub**: Making keyword out of command sub should NOT work; Syntax errors with double quotes within backticks
 - **here-doc**: Here doc with bad comsub delimiter; Here doc with line continuation, then pipe.  Syntax error.; Function def and execution with here doc
 - **redirect**: 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes; xtrace not affected by redirects

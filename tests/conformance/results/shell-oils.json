@@ -247,34 +247,9 @@
    ]
   },
   "arith": {
-   "pass": 65,
+   "pass": 71,
    "total": 71,
-   "failures": [
-    {
-     "i": 6,
-     "name": "Arith sub with word parts"
-    },
-    {
-     "i": 9,
-     "name": "Backticks within arith sub"
-    },
-    {
-     "i": 13,
-     "name": "Integer constant validation"
-    },
-    {
-     "i": 21,
-     "name": "Comma operator (borrowed from C)"
-    },
-    {
-     "i": 24,
-     "name": "Logical Ops"
-    },
-    {
-     "i": 26,
-     "name": "Bitwise ops"
-    }
-   ]
+   "failures": []
   },
   "command-sub": {
    "pass": 26,

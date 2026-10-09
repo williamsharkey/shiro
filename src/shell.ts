@@ -209,6 +209,8 @@ class ContinueSignal { constructor(public levels: number = 1) {} }
 class ReturnSignal { constructor(public code: number = 0) {} }
 /** Sentinel thrown by `exit [N]`; caught by the outermost execute() of the shell */
 export class ExitSignal { constructor(public code: number = 0) {} }
+/** An expansion error that abandons the current command line (bad substitution, arithmetic): a script goes on with the next line, status 1 */
+export class LineAbort extends Error {}
 
 /**
  * Whether the inside of ${…} is a parameter expansion bash can parse:
@@ -3687,15 +3689,15 @@ export class Shell {
         }
         if (depth === 0 && j < line.length) {
           let inner = line.slice(i + 2, j); // content between ${ and }
-          if (!validParamExpansion(inner)) throw new Error(`\${${inner}}: bad substitution`);
+          if (!validParamExpansion(inner)) throw new LineAbort(`\${${inner}}: bad substitution`);
           // ${!ref…}: the variable named by $ref (ref=a, a[0] or a[@]) with the rest applied
           const ind = /^!([A-Za-z_][A-Za-z0-9_]*(?:\[(?![@*]\])[^\]]*\])?|[0-9]+)((?![@*]$)[\s\S]*)$/.exec(inner);
           if (ind && !/^\[[@*]\]$/.test(ind[2]) && !/^![A-Za-z_][A-Za-z0-9_]*[@*]$/.test(inner) && !this.namerefs.has(ind[1])) {
             const sub = /^([A-Za-z_][A-Za-z0-9_]*)\[([^\]]*)\]$/.exec(ind[1]);
             const target = (sub ? this.getVar(sub[1], sub[2]) : this.getVar(ind[1])) ?? '';
             if (/^([A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?|[0-9]+|[@*#?$!-])$/.test(target)) inner = target + ind[2];
-            else if (target === '' && (sub ? this.getVar(sub[1], sub[2]) : this.getVar(ind[1])) === undefined) throw new Error(`${ind[1]}: invalid indirect expansion`);
-            else throw new Error(`${target}: invalid variable name`);
+            else if (target === '' && (sub ? this.getVar(sub[1], sub[2]) : this.getVar(ind[1])) === undefined) throw new LineAbort(`${ind[1]}: invalid indirect expansion`);
+            else throw new LineAbort(`${target}: invalid variable name`);
           }
           // ${x:-${a[@]}} / ${x:+"$@"}…: a word that is just a list expansion stays a list
           const listWord = /^([A-Za-z_][A-Za-z0-9_]*)(?:\[([^\]]*)\])?(:?)([-+])("?)(?:\$\{([A-Za-z_][A-Za-z0-9_]*\[[@*]\]|[@*])\}|\$([@*]))\5$/.exec(inner);
@@ -3883,7 +3885,7 @@ export class Shell {
     else if (this.env[name] !== undefined) { const v = this.env[name]; keys = ['0']; get = (k) => (k === '0' ? v : undefined); }
     else { keys = []; get = () => undefined; }
     const arith = (e: string) => {
-      try { return Number(this.evalArithBig(e)); } catch (err) { if (err instanceof ArithError) throw new Error(err.message); throw err; }
+      try { return Number(this.evalArithBig(e)); } catch (err) { if (err instanceof ArithError) throw new LineAbort(err.message); throw err; }
     };
 
     if (sub === '@' || sub === '*') {
@@ -3915,7 +3917,7 @@ export class Shell {
     }
 
     let v: string | undefined;
-    try { v = this.getVar(name, sub); } catch (e) { if (e instanceof ArithError) throw new Error(e.message); throw e; }
+    try { v = this.getVar(name, sub); } catch (e) { if (e instanceof ArithError) throw new LineAbort(e.message); throw e; }
     if (prefix === '#') return op ? null : { text: String([...(v ?? '')].length), raw: false };
     if (prefix === '!') return null;
     if (!op) return { text: v ?? '', raw: false };
@@ -3935,7 +3937,7 @@ export class Shell {
   /** Elements of an [index, value] list from OFFSET[:LENGTH] (arithmetic; a negative offset counts back from top) */
   private sliceList(pairs: [number, string][], top: number, spec: string): string[] {
     const arith = (e: string) => {
-      try { return Number(this.evalArithBig(e)); } catch (err) { if (err instanceof ArithError) throw new Error(err.message); throw err; }
+      try { return Number(this.evalArithBig(e)); } catch (err) { if (err instanceof ArithError) throw new LineAbort(err.message); throw err; }
     };
     const [offE, lenE] = splitSliceSpec(spec);
     let off = arith(offE);
@@ -4210,7 +4212,7 @@ export class Shell {
       const chars = [...(this.env[subMatch[1]] ?? this.scalarOf(subMatch[1]) ?? '')];
       const [offE, lenE] = splitSliceSpec(subMatch[2]);
       const arith = (e: string) => {
-        try { return Number(this.evalArithBig(e)); } catch (err) { if (err instanceof ArithError) throw new Error(err.message); throw err; }
+        try { return Number(this.evalArithBig(e)); } catch (err) { if (err instanceof ArithError) throw new LineAbort(err.message); throw err; }
       };
       let offset = arith(offE);
       if (offset < 0) offset += chars.length;
@@ -5240,11 +5242,15 @@ export class Shell {
       if (ch === "'" && !inDouble) { inSingle = !inSingle; result += ch; i++; continue; }
       if (ch === '"' && !inSingle) { inDouble = !inDouble; result += ch; i++; continue; }
       if (!inSingle && input[i] === '$' && input[i + 1] === '(' && input[i + 2] === '(') {
-        let depth = 1;
+        // The matching )) by single-paren depth: $((a,(b+1))), $((!(1||2)))
+        let depth = 0;
         let j = i + 3;
-        while (j < input.length - 1 && depth > 0) {
-          if (input[j] === '(' && input[j + 1] === '(') { depth++; j += 2; continue; }
-          if (input[j] === ')' && input[j + 1] === ')') { depth--; if (depth === 0) break; j += 2; continue; }
+        while (j < input.length) {
+          if (input[j] === '(') depth++;
+          else if (input[j] === ')') {
+            if (depth === 0 && input[j + 1] === ')') break;
+            if (depth > 0) depth--;
+          }
           j++;
         }
         let expr = input.slice(i + 3, j);
@@ -5253,7 +5259,7 @@ export class Shell {
           result += String(this.evalArithBig(expr));
         } catch (e) {
           // An arithmetic error aborts the command (and a script, as in bash)
-          if (e instanceof ArithError) throw new Error(e.message);
+          if (e instanceof ArithError) throw new LineAbort(e.message);
           throw e;
         }
         i = j + 2;
@@ -5549,8 +5555,9 @@ export class Shell {
     const procSubs: string[] = [];
     if (/[<>]\(/.test(text)) text = hideProcSubs(text, procSubs);
     let expanded = this.expandBraces(text);
-    expanded = this.expandArithmetic(expanded);
+    // (command substitutions first: $(( $(echo 1) + `echo 2` )))
     expanded = await this.expandCommandSubstitution(expanded, writeStderr);
+    expanded = this.expandArithmetic(expanded);
     expanded = this.expandVars(expanded);
     return procSubs.length ? expanded.replace(/\uE030(\d+)\uE031/g, (_m, n) => procSubs[Number(n)]) : expanded;
   }
@@ -7121,7 +7128,15 @@ export class Shell {
         if (this.options.has('noexec') && !this.interactiveFlag) break;
         this.currentLine = stmt.line;
         this.env['LINENO'] = String(stmt.line);
-        exitCode = await this.execute(stmt.text, writeStdout, writeStderr, false, terminal, true);
+        try {
+          exitCode = await this.execute(stmt.text, writeStdout, writeStderr, false, terminal, true);
+        } catch (e) {
+          if (!(e instanceof LineAbort)) throw e;
+          writeStderr(`shiro: line ${stmt.line}: ${e.message}\r\n`);
+          exitCode = 1;
+          this.lastExitCode = 1;
+          this.env['?'] = '1';
+        }
       }
     } catch (e) {
       if (e instanceof ExitSignal || e instanceof ReturnSignal) exitCode = e.code;
