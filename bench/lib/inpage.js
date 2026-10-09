@@ -50,7 +50,11 @@
     const shell = opts.shell || window.__shiro.shell;
     let out = '', err = '';
     const t0 = performance.now();
-    const code = await shell.execute(cmd, (s) => { out += s; }, (s) => { err += s; });
+    // Kernel programs write a terminal's tty directly unless it asks for their
+    // stdout (as $(...) does); without this `vim --version | wc -l` prints on the screen
+    const t = shell.terminal;
+    const term = t && new Proxy(t, { get: (o, k) => (k === 'captureStdout' ? true : typeof o[k] === 'function' ? o[k].bind(o) : o[k]) });
+    const code = await shell.execute(cmd, (s) => { out += s; }, (s) => { err += s; }, false, term);
     const ms = performance.now() - t0;
     return { code, ms, out: opts.full ? out : out.slice(-4000), err: err.slice(-4000) };
   };

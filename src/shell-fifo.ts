@@ -30,6 +30,21 @@ export async function openFifoEnd(shell: Shell, path: string, mode: 'r' | 'w'): 
   return f;
 }
 
+/**
+ * An end the shell keeps open (exec 3>fifo): counted like an fd, so programs
+ * that inherit it and exit don't close it under the shell. Release with dropHeld.
+ */
+export async function openHeldFifoEnd(shell: Shell, path: string, mode: 'r' | 'w'): Promise<OpenFile> {
+  const f = await openFifoEnd(shell, path, mode);
+  (await import('./kernel/fd')).retain(f);
+  return f;
+}
+
+/** The shell lets go of an end from openHeldFifoEnd (closed when nothing else holds it). */
+export function dropHeld(f: OpenFile): void {
+  void import('./kernel/fd').then((m) => m.release(f));
+}
+
 /** Everything written to the FIFO until its last writer closes. */
 export async function readFifo(shell: Shell, path: string): Promise<string> {
   const f = await openFifoEnd(shell, path, 'r');

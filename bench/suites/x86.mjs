@@ -56,4 +56,41 @@ export async function run(h) {
       });
     }
   }
+
+  // Vim's startup in Blink: sourcing defaults.vim (filetype.vim is most of it),
+  // what the dock's Vim and `vi` pay before the first screen. A package, not a fixture.
+  const vim = 'x86.blink.vim_defaults';
+  if (h.isolated && !h.quick && h.wants(vim)) {
+    await h.try(vim, 'ms', async () => {
+      const inst = await h.eval((c) => window.__bench.shLimit(c, 120_000), 'pkg install vim > /dev/null 2>&1; echo "exit=$?"');
+      if (!/exit=0/.test(inst.out)) throw new Error(`pkg install vim: ${inst.out.trim().slice(-160)}`);
+      const cmd = `vim -es -c 'source $VIMRUNTIME/defaults.vim' -c q x.txt`;
+      const first = await runOnce(h, cmd);
+      if (first.code !== 0) throw new Error(`exit ${first.code}: ${first.out.trim().slice(-160)}`);
+      const res = [];
+      for (let i = 0; i < h.runs; i++) res.push(await runOnce(h, cmd));
+      h.sample(vim, res.map((r) => r.ms), 'ms', { notes: `\`${cmd}\` wall time at the prompt; first run ${Math.round(first.ms)} ms` });
+    });
+  }
+
+  // Vim 9.2 (static, from public/pkg) opening a C file: mostly its startup
+  // scripts (defaults.vim: filetype.vim, syntax) run by Vim's interpreter
+  const vimStart = 'x86.blink.vim_startup';
+  if (h.isolated && h.wants(vimStart) && !h.quick) {
+    await h.try(vimStart, 'ms', async () => {
+      const inst = await h.sh('pkg install vim 2>&1');
+      if (inst.code !== 0) throw new Error(`pkg install vim: ${inst.out.trim().split('\n').pop()}`);
+      await h.sh('echo "int main(void) { return 0; }" > /home/user/x/x.c');
+      const cmd = 'vim --not-a-term -c qa x.c';
+      const first = await runOnce(h, cmd);
+      if (first.code !== 0) throw new Error(`exit ${first.code}: ${first.out.trim().slice(-160)}`);
+      const res = [];
+      for (let i = 0; i < h.runs; i++) {
+        const r = await runOnce(h, cmd);
+        if (r.code !== 0) throw new Error(`exit ${r.code} on run ${i + 2}`);
+        res.push(r);
+      }
+      h.sample(vimStart, res.map((r) => r.ms), 'ms', { notes: `\`${cmd}\` wall time at the prompt (Blink); first run ${Math.round(first.ms)} ms` });
+    });
+  }
 }

@@ -21,6 +21,7 @@ import {
   shareInodeNumber, forgetInodeNumber, linkCount,
 } from './fd';
 import { createPipe, Pipe, PipeEnd, FifoRdWr } from './pipe';
+import type { PtyFile } from './pty';
 import { Process } from './process';
 import { EpollFile, waitReady } from './epoll';
 import { EventFile } from './fd';
@@ -1055,6 +1056,13 @@ export class Kernel {
     const out = (fd: number) => (s: string) => {
       chain = chain.then(async () => { if (!proc.exiting) await this.writeAll(proc, fd, enc.encode(s.replace(/\r\n/g, '\n'))); });
     };
+    // Jobs get process groups of their own and the terminal while they run (Ctrl-Z, fg, bg, jobs)
+    const f0 = proc.fds.get(0);
+    if (f0?.kind === 'pty') {
+      const { ProcessTty } = await import('./pty');
+      shell.kernelTty = { tty: new ProcessTty(proc, (f0 as PtyFile).pty), writeOutput: out(2) };
+      shell.options.add('monitor');
+    }
     const prompt = () => {
       const home = shell.env.HOME || '/home/user';
       const cwd = shell.cwd === home ? '~' : shell.cwd.startsWith(home + '/') ? '~' + shell.cwd.slice(home.length) : shell.cwd;
@@ -1106,7 +1114,11 @@ export class Kernel {
     if (!base) throw new Error('kernel has no shell attached');
     const shell = base.fork();
     shell.cwd = proc.cwd;
-    shell.env = { ...proc.env, PWD: proc.cwd };
+    shell.env = { ...proc.env, PWD: proc.cwd, 0: proc.argv[0] ?? proc.path };
+    shell.localVars = new Set(['0']); // $0 is not exported
+    // $$, $PPID and $BASHPID are the process's
+    shell.shellPid = shell.bashPid = proc.pid;
+    shell.parentPid = proc.ppid;
     shell.uid = proc.uid;
     // Its fds are the process's (KernelStdio, adoptFds), not whatever exec did in the page's shell
     shell.userFds = new Map();

@@ -306,6 +306,13 @@ composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts,
 a few MiB each. The terminal UI's +19 KiB is /dom, the sign-in hook and the
 other integration changes since db9f698, not desktop code.
 
+### unix/shell-stdio 4 — job control in a kernel sh; kernel background jobs
+
+`node bench/ab.mjs HEAD~1 HEAD --suites shell,kernel --quick` (e03bde3 →
+3acd170, 3 rounds × 5 runs, alpha 0.01): no regression. 23 metrics
+unchanged; kernel.spawn_wait.wasm moved +28% but not in every round
+(inconsistent; the change doesn't touch WASM spawning).
+
 ### unix/shell-stdio 3 — fd copies keep their stream; programs inherit fds 3-9
 
 `node bench/ab.mjs origin/unix/integration HEAD --suites shell,kernel --quick`
@@ -940,6 +947,47 @@ only on a cache miss) with a static import. A/B, 3 runs each against the
 commit before: no shell metric is outside noise (`redirect_append_100`
 within 8%; `pipeline_seq_grep_wc` 41 → 32 ms and `ls_la_1000` 4.0 → 4.8 ms
 have overlapping runs).
+
+### unix/perf-fs-shell 7 — 1d9582a → bb39a38 regressions: shell-stdio's per-command pass; ab.mjs decides on rounds
+
+The coordinator's `ab.mjs 1d9582a bb39a38 --suites boot,kernel,shell,wasm
+--rounds 3` flagged `wasm.startup.sqlite3` +31% (p = 0.0002),
+`wasm.startup.coreutils` +14% and `shell.echo` +26%, each consistent over all
+3 rounds. Re-checked here:
+
+- The same pair, shell+wasm, 5 rounds × 5 runs: none of the three moved
+  (sqlite3 9.23 → 9.02 ms, coreutils 13.3 → 12.9, echo 0.083 → 0.078;
+  quickjs and ripgrep startup *improved* 14–20%). The coordinator's exact
+  command (3 rounds) flagged a different set: `shell.echo`,
+  `shell.for_seq_1000`, `wasm.startup.quickjs`. An A/A run (bb39a38 in a
+  worktree vs the same commit built in place) flagged nothing, so the build
+  location isn't biased; the pooled Mann–Whitney p was overstating
+  significance (samples within a run are not independent). `ab.mjs` now
+  decides on a round-level hierarchical bootstrap interval of the median
+  shift; with it the coordinator's configuration reports no regressions,
+  only the boot improvements (transfer −6%, 5 fewer requests, 65 fewer DOM
+  nodes).
+- The one real effect is small: unix/shell-stdio (merge b8834c7, commit
+  de6165f "ordered prefix assignments") runs `expandPrefixAssignments` on
+  every single-segment command: a full `splitAssignWords` tokenizer pass plus
+  an await, for `a=1 b=$a cmd`. Node microbenchmark (`createTestShell`, 7×
+  medians, alternated), dcdab97 → b8834c7: `true` 0.027 → 0.030 ms,
+  `x=$(echo hi)` 0.093 → 0.105 ms, `loop_1000` 72–76 → 79–81 ms. A regex
+  pre-check (the line starts with `NAME=` and has another `NAME=` later; a
+  superset, so a false hit just takes the full pass) skips it otherwise:
+
+| Node microbench, merged integration ecd719e | without fix (2 runs) | with fix (2 runs) |
+|---|---:|---:|
+| `while` loop 1000 | 77.3 / 75.9 ms | 73.9 / 71.0 ms |
+| `for i in $(seq 1000)` | 31.5 / 32.1 ms | 28.8 / 25.8 ms |
+| `true` | 0.033 / 0.033 ms | 0.030 / 0.026 ms |
+| `x=$(echo hi)` | 0.121 / 0.119 ms | 0.114 / 0.095 ms |
+
+Browser A/B (`ab.mjs origin/unix/integration --suites shell`, 5 rounds × 7):
+`shell.echo` 0.066 → 0.054 ms (all 5 rounds faster), `loop_1000` 96.8 →
+94.5 ms, others within noise; none significant at the bootstrap level, as
+expected for a shift this size. Full suite and conformance (shell-spec,
+busybox) green.
 
 ## Results
 
