@@ -456,6 +456,14 @@ describe('awk control flow', () => {
     expect(clean).toBe('1\n3');
   });
 
+  it('exit and next keep what the action printed before them', async () => {
+    await fs.writeFile('/tmp/awkx.txt', 'x:1\nfpr:2\nfpr:3\n');
+    const out = async (cmd: string) => (await run(shell, cmd)).output.replace(/\r/g, '');
+    expect(await out(`awk -F: '/^fpr/{print $2; exit}' /tmp/awkx.txt`)).toBe('2\n');
+    expect(await out(`awk -F: '{print $1; next; print "no"}' /tmp/awkx.txt`)).toBe('x\nfpr\nfpr\n');
+    expect(await out(`awk 'BEGIN{print "b"; exit 3} {print "line"} END{print "e"}' /tmp/awkx.txt; echo rc=$?`)).toBe('b\ne\nrc=3\n');
+  });
+
   it('delete array element', async () => {
     await fs.writeFile('/tmp/awkdel.txt', 'a\nb\na\nc\n');
     const { output } = await run(shell, `awk '{count[$1]++} END{delete count["b"]; for(k in count) print k, count[k]}' /tmp/awkdel.txt`);

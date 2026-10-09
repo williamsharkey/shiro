@@ -762,3 +762,31 @@ describe('openssh (client)', () => {
     expect((await sh('ssh -o ConnectTimeout=3 -p 18023 127.0.0.1 true 2>&1')).out).toMatch(/Connection refused/);
   }, 180_000);
 });
+
+describe('gnupg', () => {
+  it('makes a key, signs, verifies, encrypts and decrypts; asks for the passphrase with pinentry on the tty', async () => {
+    await install('gnupg');
+    expect((await sh('gpg --version')).out).toMatch(/^gpg \(GnuPG\) 2\.5\.24\nlibgcrypt 1\.12\.4\n/);
+    const batch = 'gpg -q --batch --pinentry-mode loopback --passphrase pw';
+    // no "insecure memory" warning: mlock succeeds (Blink patch 0023)
+    expect((await sh(`${batch} --quick-gen-key 'Test User <t@shiro>' default default never 2>&1 | grep -c insecure`)).out).toBe('0\n');
+    expect((await sh("gpg -k --with-colons t@shiro | cut -d: -f1,4,12 | grep -E '^(pub|sub)'")).out).toBe('pub:22:scESC\nsub:18:e\n');
+    await fs.writeFile('/home/user/w/m.txt', 'hello gpg\n');
+    expect((await sh(`${batch} --armor --detach-sign m.txt; gpg --verify m.txt.asc m.txt 2>&1`)).out).toMatch(/Good signature from "Test User <t@shiro>" \[ultimate\]/);
+    expect((await sh('gpg --export t@shiro > pub.gpg; gpgv --keyring ./pub.gpg m.txt.asc m.txt 2>&1; echo rc=$?')).out).toMatch(/Good signature[^]*rc=0\n$/);
+    await fs.writeFile('/home/user/w/m.txt', 'hello gpg, changed\n');
+    expect((await sh('gpg --verify m.txt.asc m.txt 2>&1; echo rc=$?')).out).toMatch(/BAD signature[^]*rc=1\n$/);
+    expect((await sh('gpg -q --batch -r t@shiro --armor -e -o m.gpg m.txt; head -1 m.gpg')).out).toBe('-----BEGIN PGP MESSAGE-----\n');
+    expect((await sh(`${batch} -d m.gpg`)).out).toBe('hello gpg, changed\n');
+    expect((await sh('gpg -q --batch --passphrase s3 -c -o s.gpg m.txt && gpg -q --batch --passphrase s3 -d s.gpg')).out).toBe('hello gpg, changed\n');
+    expect((await sh("gpg-connect-agent 'getinfo version' /bye")).out).toBe('D 2.5.24\nOK\n');
+    // The agent forgets the passphrase; decrypting on the terminal runs pinentry-curses there
+    expect((await sh('gpgconf --reload gpg-agent; echo rc=$?')).out).toBe('rc=0\n');
+    const { term, done } = onTerminal('gpg -q -d m.gpg');
+    await until(() => term.screen.includes('Passphrase:'), 'the pinentry dialog');
+    term.type('pw\r');
+    expect(await done).toBe(0);
+    expect(term.screen).toContain('hello gpg, changed');
+    expect((await sh('gpgconf --kill gpg-agent; echo rc=$?')).out).toBe('rc=0\n');
+  }, 180_000);
+});

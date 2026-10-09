@@ -3,8 +3,9 @@ import type { Command } from './index';
 import { parseArgs, readInput } from './flags';
 
 // Signal classes for control flow
-class AwkNext {}
-class AwkExit { constructor(public code: number) {} }
+/** next and exit unwind the action; `output` keeps what it printed before them. */
+class AwkNext { output: string | null = null; }
+class AwkExit { output: string | null = null; constructor(public code: number) {} }
 
 export const awk: Command = {
   name: "awk",
@@ -73,16 +74,27 @@ export const awk: Command = {
 
       const blocks = parseBlocks(program);
 
-      // Execute BEGIN block
-      if (blocks.begin) {
-        const r = executeBlock(blocks.begin, [], awkCtx);
+      let exitCode = 0;
+      let exited = false;
+      const run = (action: string, fields: string[]) => {
+        const r = executeBlock(action, fields, awkCtx);
         if (r !== null) output.push(r);
+      };
+      const onExit = (e: unknown) => {
+        if (!(e instanceof AwkExit)) throw e;
+        if (e.output !== null) output.push(e.output);
+        exitCode = e.code;
+        exited = true;
+      };
+
+      // Execute BEGIN block (exit there skips the input, not END)
+      if (blocks.begin) {
+        try { run(blocks.begin, []); } catch (e) { onExit(e); }
       }
 
       // Process each line
-      let exitCode = 0;
       try {
-        for (const line of lines) {
+        for (const line of exited ? [] : lines) {
           awkCtx.NR++;
           const fieldSepRegex = typeof awkCtx.FS === "string" && awkCtx.FS !== " "
             ? new RegExp(awkCtx.FS.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
@@ -105,28 +117,23 @@ export const awk: Command = {
                   shouldProcess = evalCondition(rule.pattern, fields, awkCtx);
                 }
               }
-              if (shouldProcess) {
-                const r = executeBlock(rule.action, fields, awkCtx);
-                if (r !== null) output.push(r);
-              }
+              if (shouldProcess) run(rule.action, fields);
             }
           } catch (e) {
-            if (e instanceof AwkNext) continue;
+            if (e instanceof AwkNext) {
+              if (e.output !== null) output.push(e.output);
+              continue;
+            }
             throw e;
           }
         }
       } catch (e) {
-        if (e instanceof AwkExit) {
-          exitCode = e.code;
-        } else {
-          throw e;
-        }
+        onExit(e);
       }
 
-      // Execute END block
+      // Execute END block (an exit there ends it)
       if (blocks.end) {
-        const r = executeBlock(blocks.end, [], awkCtx);
-        if (r !== null) output.push(r);
+        try { run(blocks.end, []); } catch (e) { onExit(e); }
       }
 
       ctx.stdout += output.join("\n") + (output.length > 0 ? "\n" : "");
@@ -343,11 +350,18 @@ function executeBlock(action: string, fields: string[], ctx: AwkContext): string
   const statements = splitStatements(code);
   let printResult: string | null = null;
 
-  for (const rawStmt of statements) {
-    const stmt = rawStmt.trim();
-    if (!stmt) continue;
-    const r = execStatement(stmt, fields, ctx);
-    if (r !== null) printResult = printResult !== null ? printResult + "\n" + r : r;
+  try {
+    for (const rawStmt of statements) {
+      const stmt = rawStmt.trim();
+      if (!stmt) continue;
+      const r = execStatement(stmt, fields, ctx);
+      if (r !== null) printResult = printResult !== null ? printResult + "\n" + r : r;
+    }
+  } catch (e) {
+    if ((e instanceof AwkExit || e instanceof AwkNext) && printResult !== null) {
+      e.output = e.output !== null ? printResult + "\n" + e.output : printResult;
+    }
+    throw e;
   }
 
   return printResult;

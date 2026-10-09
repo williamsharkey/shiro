@@ -3194,6 +3194,140 @@
    "needs": [
     "x86"
    ]
+  },
+  {
+   "name": "gnupg",
+   "version": "2.5.24",
+   "description": "GnuPG: gpg, gpgv, gpg-agent, gpgsm, gpgtar, gpgconf and pinentry (curses, tty); no keyserver access (static x86-64 build)",
+   "license": "GPL-3.0-or-later AND LGPL-2.1-or-later",
+   "source": "https://www.gnupg.org/ftp/gcrypt/gnupg/gnupg-2.5.24.tar.bz2",
+   "homepage": "https://gnupg.org/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/gnupg.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/gpg",
+     "url": "/pkg/gnupg/2.5.24/gpg.gz",
+     "sha256": "18998be7a89c4fa18242ec6153905550c225b76795de471c39c56d4803aaf2b9",
+     "size": 1161012,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/gpg-agent",
+     "url": "/pkg/gnupg/2.5.24/gpg-agent.gz",
+     "sha256": "21d26898ff2d9302defab215a7ed8107d0c956b5b5d9ecf1aa6fb4f5a7366ef9",
+     "size": 835610,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/gpg-card",
+     "url": "/pkg/gnupg/2.5.24/gpg-card.gz",
+     "sha256": "1ed59ffcd6898a2259f8e9d1037b38d39c4a9c3a4f9102695962c08c9f4599f8",
+     "size": 758252,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/gpg-connect-agent",
+     "url": "/pkg/gnupg/2.5.24/gpg-connect-agent.gz",
+     "sha256": "977da17e20ae06d3e9875c9e1a61647b97417824f15c417811b0eb2aa14bb99a",
+     "size": 711828,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/gpgconf",
+     "url": "/pkg/gnupg/2.5.24/gpgconf.gz",
+     "sha256": "9f803be7115c792244d40dd15f599d6ae412e59a12cb6ab07d8e381ac820fc77",
+     "size": 704991,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/gpgsm",
+     "url": "/pkg/gnupg/2.5.24/gpgsm.gz",
+     "sha256": "66fe4c3b3d9a42d8e615afe94441d8937e144e86ad6bafa80e02b71020b4d067",
+     "size": 971911,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/gpgtar",
+     "url": "/pkg/gnupg/2.5.24/gpgtar.gz",
+     "sha256": "18139a907f50c4d5d3ec9257e84e5b7e60df11211fcf394b7bc20fba29877b31",
+     "size": 692808,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/gpgv",
+     "url": "/pkg/gnupg/2.5.24/gpgv.gz",
+     "sha256": "80b0c9d1ded3e1736b8e9c7cad2f695f8180bfe91ad11d8e4fffc3c582714615",
+     "size": 919412,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/pinentry-curses",
+     "url": "/pkg/gnupg/2.5.24/pinentry-curses.gz",
+     "sha256": "e59381be3630517fe8feb8a29d12ad94ddc2a15e0676339c1475d053299d51e0",
+     "size": 366014,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/pinentry-tty",
+     "url": "/pkg/gnupg/2.5.24/pinentry-tty.gz",
+     "sha256": "12ec2a3ecda2b9272dbded907d4e7f38ffef5fcb314acb27092eccfe866ea0ed",
+     "size": 123503,
+     "unpack": "gzip"
+    },
+    {
+     "path": "libexec",
+     "url": "/pkg/gnupg/2.5.24/libexec.tar.gz",
+     "sha256": "e68afc0490606358ae4862caf3a18df42425952a2b5759afee0d5556fca611e1",
+     "size": 2104075,
+     "unpack": "tar.gz"
+    }
+   ],
+   "bin": {
+    "gpg": {
+     "file": "bin/gpg"
+    },
+    "gpgv": {
+     "file": "bin/gpgv"
+    },
+    "gpg-agent": {
+     "file": "bin/gpg-agent"
+    },
+    "gpgconf": {
+     "file": "bin/gpgconf"
+    },
+    "gpg-connect-agent": {
+     "file": "bin/gpg-connect-agent"
+    },
+    "gpgsm": {
+     "file": "bin/gpgsm"
+    },
+    "gpgtar": {
+     "file": "bin/gpgtar"
+    },
+    "gpg-card": {
+     "file": "bin/gpg-card"
+    },
+    "pinentry-curses": {
+     "file": "bin/pinentry-curses"
+    },
+    "pinentry-tty": {
+     "file": "bin/pinentry-tty"
+    },
+    "pinentry": {
+     "file": "bin/pinentry-curses"
+    }
+   },
+   "links": {
+    "/usr/libexec/gpg-protect-tool": "libexec/gpg-protect-tool",
+    "/usr/libexec/gpg-preset-passphrase": "libexec/gpg-preset-passphrase",
+    "/usr/libexec/gpg-check-pattern": "libexec/gpg-check-pattern"
+   },
+   "needs": [
+    "x86"
+   ]
   }
  ]
 }

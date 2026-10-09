@@ -326,8 +326,10 @@ target), ~770 regions compiled ≈0.35 s.
 22. Blink keeps every resource limit itself (the browser host has none):
    `setrlimit(RLIMIT_CORE, 0)` succeeds — ssh-agent quit after forking
    without it — and `RLIMIT_STACK` reads 8 MiB.
+23. `mlock`/`munlock`/`mlockall`/`munlockall` succeed (WebAssembly memory
+   is never paged out; GnuPG warned about insecure memory).
 
-Patches 13 and 15–22 come from unix/compat-tools (15 also from
+Patches 13 and 15–23 come from unix/compat-tools (15 also from
 unix/conformance); unix/integration keeps the series.
 
 Native Blink's own exit path (`KillOtherThreads`) still hangs after
