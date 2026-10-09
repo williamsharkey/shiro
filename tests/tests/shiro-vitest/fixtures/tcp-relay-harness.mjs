@@ -66,6 +66,9 @@ const relayD = await mount({ ports: [echoPort], allowCidrs: ['127.0.0.1/32'], re
   verifySignin: async (t) => (t === 'good-token' ? 'octocat' : null),
 });
 
+// E: tokens not bound to the client IP (TABCOMPUTER_TCP_TOKEN_BIND_IP=0, tabcomputer.com)
+const relayE = await mount({ ports: [echoPort], allowCidrs: ['127.0.0.1/32'], tokenBindIp: false });
+
 // server.mjs as deployed, configured only through the environment
 const mainPort = await new Promise((r) => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
 const child = spawn(process.execPath, [serverPath], {
@@ -93,4 +96,4 @@ process.on('SIGINT', stop);
 process.stdin.on('end', stop); // parent went away
 process.stdin.resume();
 
-console.log(JSON.stringify({ echoPort, firehosePort, relayA, relayB, relayC, relayD, mainPort, origin: ORIGIN }));
+console.log(JSON.stringify({ echoPort, firehosePort, relayA, relayB, relayC, relayD, relayE, mainPort, origin: ORIGIN }));

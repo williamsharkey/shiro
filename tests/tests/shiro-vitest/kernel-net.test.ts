@@ -15,7 +15,7 @@ import {
 } from '@shiro/kernel/net';
 import { MSG_PEEK, MSG_TRUNC } from '@shiro/kernel/abi';
 
-interface Ports { echoPort: number; firehosePort: number; relayA: number; relayB: number; relayC: number; relayD: number; mainPort: number; origin: string }
+interface Ports { echoPort: number; firehosePort: number; relayA: number; relayB: number; relayC: number; relayD: number; relayE: number; mainPort: number; origin: string }
 
 let harness: ChildProcess;
 let P: Ports;
@@ -289,6 +289,25 @@ describe('kernel sockets over the TCP relay', () => {
     });
     expect(otherIp).toBe(false);
     expect(await opened(`${base}?t=${token}`, P.origin)).toBe(true);
+  });
+
+  it('with tokenBindIp off, a token works from another IP (rotating-IP clients); the origin check stays', async () => {
+    const xff = (n: number) => `203.0.113.${n}`;
+    const { token } = await (await fetch(`http://127.0.0.1:${P.relayE}/tcp/token`, { method: 'POST', headers: { origin: P.origin, 'x-forwarded-for': xff(1) } })).json();
+    const open = (ip: string, origin = P.origin) => new Promise<boolean>((resolve) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${P.relayE}/tcp?t=${token}`, { headers: { origin, 'x-forwarded-for': ip } } as any);
+      ws.onopen = () => { ws.close(); resolve(true); };
+      ws.onerror = () => resolve(false);
+    });
+    for (let i = 2; i < 5; i++) expect(await open(xff(i))).toBe(true); // one after another
+    expect(await Promise.all([5, 6, 7].map((i) => open(xff(i))))).toEqual([true, true, true]); // in parallel
+    expect(await open(xff(8), 'https://evil.example')).toBe(false);
+    // The deployed default stays bound; TABCOMPUTER_TCP_TOKEN_BIND_IP=0 turns it off
+    const server = new URL('../../../server.mjs', import.meta.url).href;
+    const out = execFileSync('node', ['--input-type=module', '-e',
+      `const m = await import(${JSON.stringify(server)}); console.log(JSON.stringify([m.tcpRelayConfigFromEnv({}).tokenBindIp, m.tcpRelayConfigFromEnv({ TABCOMPUTER_TCP_TOKEN_BIND_IP: '0' }).tokenBindIp])); process.exit(0);`,
+    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    expect(JSON.parse(out.trim().split('\n').pop()!)).toEqual([true, false]);
   });
 
   it('blocks private ranges without blocking public IPv4 (BlockList matches IPv4 against ::ffff:0:0/96)', async () => {

@@ -91,7 +91,10 @@ gather/scatter around sendto/recvfrom.
 ## Relay protocol (`/tcp`)
 
 1. `POST /tcp/token` from an allowed Origin → `{ "token": "...", "expires": ms }`.
-   The token is an HMAC over the expiry and the client IP.
+   The token is an HMAC over the expiry and the client IP
+   (`TABCOMPUTER_TCP_TOKEN_BIND_IP=0` leaves the IP out, as tabcomputer.com does:
+   proxy pools, iCloud Private Relay and dual-stack clients change IP between
+   the token request and each connection).
 2. WebSocket `GET /tcp?t=<token>` (Origin must be allowed).
 3. First frame, text JSON:
    - `{"op":"connect","host":"example.com","port":443}` →
@@ -131,7 +134,7 @@ The egress policy is the security boundary; everything else limits abuse.
 - **Caller checks.** Origin must match `TABCOMPUTER_TCP_ORIGINS` (default
   `https://shiro.computer,https://*.shiro.computer`), on both the token request
   and the WebSocket handshake, and the token must be valid, unexpired and
-  issued to the same client IP. This keeps other websites' pages out; it does
+  issued to the same client IP (unless binding is off). This keeps other websites' pages out; it does
   not stop a non-browser client that fakes an Origin, which is why the egress
   policy and limits are what actually bound the relay.
 - **Limits** (env, defaults): concurrent connections per IP
