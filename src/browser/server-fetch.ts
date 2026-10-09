@@ -1,6 +1,6 @@
 // The server-side fetch transport: the server makes the request and sees it
 // in plaintext. For local measurement only (docs/BROWSER.md, "Decisions"):
-// the server offers it only with SHIRO_BROWSE_SERVER_FETCH=1, and the app
+// the server offers it only with TABCOMPUTER_BROWSE_SERVER_FETCH=1, and the app
 // uses it only when also asked to (kv "transport" = "server").
 import type { HeaderList } from './http1';
 import type { Fetcher, NetRequest, NetResponse } from './netfetch';

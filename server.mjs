@@ -1312,17 +1312,17 @@ export function createTcpRelay(config, { lookup, log = console.log, verifySignin
 // Those hosts serve only three scripts and a bootstrap page that installs the
 // origin's service worker; all content comes from the app's broker in the
 // user's page. They never serve the app, /api, /tcp or anything else.
-//   SHIRO_BROWSE_ORIGIN       template; default https://{key}.web.<brand domain> on the brand
+//   TABCOMPUTER_BROWSE_ORIGIN       template; default https://{key}.web.<brand domain> on the brand
 //                             domain and its instances (music.<domain>, …), http://{key}.localhost:PORT
 //                             on localhost, else off. Needs wildcard DNS and a *.web.<domain> certificate.
-//   SHIRO_BROWSE_APP_ORIGINS  origins (with *. wildcards) whose Browser may use them; default the
+//   TABCOMPUTER_BROWSE_APP_ORIGINS  origins (with *. wildcards) whose Browser may use them; default the
 //                             brand domain and its subdomains, or http://localhost:PORT
-//   SHIRO_BROWSE=0            off
+//   TABCOMPUTER_BROWSE=0            off
 export function browseConfigFor(hostHeader, env = process.env, brand = profileFor(hostHeader)?.brand) {
-  if (env.SHIRO_BROWSE === '0') return null;
+  if (env.TABCOMPUTER_BROWSE === '0') return null;
   const host = String(hostHeader || '').toLowerCase();
-  let template = env.SHIRO_BROWSE_ORIGIN || '';
-  let apps = envList(env.SHIRO_BROWSE_APP_ORIGINS);
+  let template = env.TABCOMPUTER_BROWSE_ORIGIN || '';
+  let apps = envList(env.TABCOMPUTER_BROWSE_APP_ORIGINS);
   if (!template) {
     const local = /^(?:[a-z0-9-]+\.)*localhost(:\d+)?$/.exec(host);
     const domain = String(brand?.domain || '').toLowerCase();
@@ -1407,9 +1407,9 @@ async function handleBrowseHost(req, res, cfg) {
 // The product path is TLS in the page over /tcp (the server only sees
 // ciphertext). This transport makes the *server* do the request, so it sees
 // plaintext: it exists only to compare the two on the scoreboard, is off unless
-// SHIRO_BROWSE_SERVER_FETCH=1, and must never be set in production (owner
+// TABCOMPUTER_BROWSE_SERVER_FETCH=1, and must never be set in production (owner
 // decision, docs/BROWSER.md). Same address policy as the relay.
-const BROWSE_SERVER_FETCH = process.env.SHIRO_BROWSE_SERVER_FETCH === '1';
+const BROWSE_SERVER_FETCH = process.env.TABCOMPUTER_BROWSE_SERVER_FETCH === '1';
 const browseAgents = { 'https:': new https.Agent({ keepAlive: true, maxSockets: 6 }), 'http:': new http.Agent({ keepAlive: true, maxSockets: 6 }) };
 
 async function handleBrowseFetch(req, res) {
@@ -1427,10 +1427,10 @@ async function handleBrowseFetch(req, res) {
   const host = target.hostname.replace(/^\[|\]$/g, '');
   let addrs;
   try { addrs = net.isIP(host) ? [{ address: host }] : await dns.lookup(host, { all: true, verbatim: true }); } catch { return fail(502, 'ENOTFOUND'); }
-  const usable = addrs.filter((a) => !isBlockedAddress(a.address, { allow: cidrBlockList(envList(process.env.SHIRO_TCP_ALLOW_CIDRS) || []), deny: cidrBlockList([]) }));
+  const usable = addrs.filter((a) => !isBlockedAddress(a.address, { allow: cidrBlockList(envList(process.env.TABCOMPUTER_TCP_ALLOW_CIDRS) || []), deny: cidrBlockList([]) }));
   if (!usable.length) return fail(403, 'address blocked by relay policy');
   const port = Number(target.port) || (target.protocol === 'https:' ? 443 : 80);
-  if (!(envList(process.env.SHIRO_TCP_PORTS) || TCP_DEFAULT_PORTS).map(Number).includes(port)) return fail(403, 'port blocked');
+  if (!(envList(process.env.TABCOMPUTER_TCP_PORTS) || TCP_DEFAULT_PORTS).map(Number).includes(port)) return fail(403, 'port blocked');
   const flat = {};
   for (const [k, v] of headers) { const n = String(k).toLowerCase(); if (n !== 'host' && n !== 'connection' && n !== 'content-length' && n !== 'transfer-encoding') flat[k] = flat[k] ? `${flat[k]}, ${v}` : String(v); }
   const mod = target.protocol === 'https:' ? https : http;

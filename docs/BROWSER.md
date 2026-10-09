@@ -179,7 +179,7 @@ The broker speaks HTTP/1.1 (`http1.ts`) over TLS 1.3 done in the page
 
 The alternative is the server fetching for the page, which would see every
 page and password in plaintext. It exists only as a local comparison
-(`server-fetch.ts`, `SHIRO_BROWSE_SERVER_FETCH=1`, the scoreboard's
+(`server-fetch.ts`, `TABCOMPUTER_BROWSE_SERVER_FETCH=1`, the scoreboard's
 `tab-server` column) and is never on in production.
 
 ### What the broker changes
@@ -344,11 +344,11 @@ the web.
 | Password theft by a page | The vault is on the app origin and encrypted at rest. Fill happens only on a click, only for the exact origin, and only into the top document's origin. | A page that is already malicious on its own origin can read what's typed or filled into it, as in any browser. |
 | A network observer | TLS end to end from the page. The relay WebSocket is itself `wss:`. | — |
 | The server sees traffic | It only relays ciphertext: SNI and IPs are visible, not content. | The relay operator sees which sites are visited (SNI), as an ISP would. |
-| The server sees decrypted traffic (a fetch-through-server design) | Only with `SHIRO_BROWSE_SERVER_FETCH=1`, for local measurement; never in production (owner decision). | — |
+| The server sees decrypted traffic (a fetch-through-server design) | Only with `TABCOMPUTER_BROWSE_SERVER_FETCH=1`, for local measurement; never in production (owner decision). | — |
 | One instance's Browser reads another's site storage (music.tabcomputer.com vs art.tabcomputer.com) | Cookies and passwords live in each instance's own broker. | Browse-origin storage (a site's `localStorage`, IndexedDB, and our service worker) is partitioned by top-level *site*, and every instance is the same site, so instances share it. A fix would put an instance tag in the key (`www-example-com---i…`). |
 | Cookie tossing from browse origins onto `.tabcomputer.com` | The page runtime's `document.cookie` never writes host cookies. | A page can still set a real cookie on `Domain=tabcomputer.com` through a pristine `Document.prototype`. The desktop and server use no cookies today, so that must stay true, or a separate domain must be used. |
 | Untrusted TLS code | subtls verifies chains, names, validity and CA key usage. The tests check that an untrusted chain, a name mismatch and a CA without `keyCertSign` are refused. | subtls is "not intended for production" and unaudited, and the scoreboard already found two bugs in its certificate checks (patched). Replacing it (rustls/WASM) comes before shipping. |
-| Proxy abuse (using tabcomputer as an open proxy) | The same relay policy and limits as `curl`. Optional GitHub sign-in (`SHIRO_TCP_REQUIRE_SIGNIN`). | Browsing raises connect rates; limits need tuning, not removing. |
+| Proxy abuse (using tabcomputer as an open proxy) | The same relay policy and limits as `curl`. Optional GitHub sign-in (`TABCOMPUTER_TCP_REQUIRE_SIGNIN`). | Browsing raises connect rates; limits need tuning, not removing. |
 
 ## Prior art
 
@@ -376,15 +376,15 @@ the web.
 - Browse origins default to `https://{key}.web.<brand domain>` on the brand
   domain and its instances, and to `http://{key}.localhost:PORT` on localhost
   (Chromium resolves `*.localhost` itself). This needs a wildcard DNS record
-  and a certificate for `*.web.tabcomputer.com` (DNS-01). `SHIRO_BROWSE_ORIGIN`
-  overrides the template, `SHIRO_BROWSE_APP_ORIGINS` the allowed parents, and
-  `SHIRO_BROWSE=0` turns it off. Elsewhere (no template) the app says pages
+  and a certificate for `*.web.tabcomputer.com` (DNS-01). `TABCOMPUTER_BROWSE_ORIGIN`
+  overrides the template, `TABCOMPUTER_BROWSE_APP_ORIGINS` the allowed parents, and
+  `TABCOMPUTER_BROWSE=0` turns it off. Elsewhere (no template) the app says pages
   can only open in real tabs.
-- The relay must be on (`SHIRO_TCP_RELAY=1`), with the app's origins in
-  `SHIRO_TCP_ORIGINS`.
+- The relay must be on (`TABCOMPUTER_TCP_RELAY=1`), with the app's origins in
+  `TABCOMPUTER_TCP_ORIGINS`.
 - nginx: proxy `*.web.tabcomputer.com` to node like the main server block. No
   WebSocket is needed on browse hosts.
-- `SHIRO_BROWSE_SERVER_FETCH=1` adds `POST /browse/fetch`, where the server
+- `TABCOMPUTER_BROWSE_SERVER_FETCH=1` adds `POST /browse/fetch`, where the server
   makes the request and sees plaintext. It exists **for local measurement
   only** (the scoreboard's `tab-server` column) and must never be set in a
   production config. Even with it on, the app uses it only when its own
@@ -398,7 +398,7 @@ the web.
    process shared with the desktop, and storage shared between instances
    (threat model).
 2. **Server-side decrypting fetch: local measurement only**, behind
-   `SHIRO_BROWSE_SERVER_FETCH=1`, never in production. TLS in the page over
+   `TABCOMPUTER_BROWSE_SERVER_FETCH=1`, never in production. TLS in the page over
    `/tcp` is the product path.
 3. Open: **relay limits for browsing.** 60 connects/min and 16 concurrent per
    IP are tight for news sites. Options: higher limits for signed-in users, or

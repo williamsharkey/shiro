@@ -66,7 +66,7 @@ class Engine {
     const e = new Engine();
     let cfg: { origin: string | null; app?: string; serverFetch?: boolean } = { origin: null };
     try { cfg = await (await fetch('browse/config.json', { cache: 'no-store' })).json(); } catch { /* old server */ }
-    if (!cfg.origin) { e.error = 'This server has no browse origins (SHIRO_BROWSE_ORIGIN), so pages can only open in real tabs.'; return e; }
+    if (!cfg.origin) { e.error = 'This server has no browse origins (TABCOMPUTER_BROWSE_ORIGIN), so pages can only open in real tabs.'; return e; }
     e.map = new OriginMap(cfg.origin);
     e.app = cfg.app || location.origin;
     e.jar = CookieJar.fromJSON(await kvGet<Record<string, Cookie[]>>('cookies').catch(() => undefined));
@@ -76,7 +76,7 @@ class Engine {
     await e.loadRoots();
     await e.vault.load();
     const stack = netStackOf(kernel) ?? netStack;
-    // Local measurement only: the server offers its decrypting fetch only with SHIRO_BROWSE_SERVER_FETCH=1
+    // Local measurement only: the server offers its decrypting fetch only with TABCOMPUTER_BROWSE_SERVER_FETCH=1
     const serverFetch = cfg.serverFetch && (await kvGet<string>('transport').catch(() => undefined)) === 'server';
     const fetcher = serverFetch ? new (await import('../../browser/server-fetch')).ServerFetcher() : undefined;
     e.transport = serverFetch ? 'server' : 'relay';

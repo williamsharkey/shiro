@@ -35,7 +35,7 @@ beforeAll(async () => {
   for (const f of ['sw.js', 'boot.js', 'client.js']) writeFileSync(path.join(dir, 'browse', f), `// ${f}`);
   writeFileSync(path.join(dir, 'index.html'), '<!doctype html><title>x</title><body>APP SHELL</body>');
   port = await new Promise<number>((r) => { const s = net.createServer(); s.listen(0, () => { const p = s.address().port; s.close(() => r(p)); }); });
-  proc = spawn(process.execPath, [serverPath], { env: { ...process.env, PORT: String(port), STATIC_DIR: dir, SHIRO_BROWSE_ORIGIN: '', SHIRO_TCP_RELAY: '' }, stdio: 'pipe' });
+  proc = spawn(process.execPath, [serverPath], { env: { ...process.env, PORT: String(port), STATIC_DIR: dir, TABCOMPUTER_BROWSE_ORIGIN: '', TABCOMPUTER_TCP_RELAY: '' }, stdio: 'pipe' });
   await new Promise<void>((resolve, reject) => {
     const t = setTimeout(() => reject(new Error('server did not start')), 10000);
     proc.stdout.on('data', (d: Buffer) => { if (String(d).includes('listening')) { clearTimeout(t); resolve(); } });
