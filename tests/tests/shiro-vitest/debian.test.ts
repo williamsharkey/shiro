@@ -46,22 +46,22 @@ describe.skipIf(!haveRootfs)('Debian rootfs', () => {
     expect(a).toBe(b);
   }, 120000);
 
-  it("diverts apt's http method to Shiro's transport and keeps dpkg truthful", async () => {
+  it("diverts apt's http method to tabcomputer's transport and keeps dpkg truthful", async () => {
     const list = (await run(shell, 'dpkg-divert --list')).output;
     expect(list).toContain('local diversion of /usr/lib/apt/methods/http to /usr/lib/apt/methods/http.debian');
     expect(await fs.readFile('/usr/lib/apt/methods/http', 'utf8')).toBe('#!/usr/bin/shiro-apt-method\n');
     expect((await fs.lstat('/usr/lib/apt/methods/http.debian')).size).toBeGreaterThan(100000);
-    expect((await run(shell, 'shiro-alternatives --display /usr/lib/apt/methods/http')).output).toMatch(/tabcomputer \(shiro-apt-method\)\s+\(auto, default tabcomputer\)/);
+    expect((await run(shell, 'tabcomputer-alternatives --display /usr/lib/apt/methods/http')).output).toMatch(/tabcomputer \(shiro-apt-method\)\s+\(auto, default tabcomputer\)/);
   }, 60000);
 
-  it('switches a program between Shiro and Debian with shiro-alternatives', async () => {
+  it('switches a program between tabcomputer and Debian with tabcomputer-alternatives', async () => {
     expect((await run(shell, 'type -a env 2>&1; command -v env')).exitCode).toBe(0);
-    let r = await run(shell, 'shiro-alternatives --set env shiro');
+    let r = await run(shell, 'tabcomputer-alternatives --set env tabcomputer');
     expect(r.output).toContain("/usr/bin/env: now tabcomputer's");
     expect(await fs.exists('/usr/bin/env')).toBe(false);
     expect((await fs.lstat('/usr/bin/env.debian')).isFile()).toBe(true);
     expect((await run(shell, 'dpkg-divert --list /usr/bin/env')).output).toContain('local diversion of /usr/bin/env to /usr/bin/env.debian');
-    r = await run(shell, 'shiro-alternatives --set env debian');
+    r = await run(shell, 'tabcomputer-alternatives --set env debian');
     expect(r.output).toContain("/usr/bin/env: now Debian's");
     expect((await fs.lstat('/usr/bin/env')).isFile()).toBe(true);
     expect((await run(shell, 'dpkg-divert --list /usr/bin/env')).output.trim()).toBe('');

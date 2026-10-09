@@ -389,9 +389,9 @@ describe('Commands', () => {
       expect(output.replace(/\r/g, '').trim()).toBe('user');
     });
 
-    it('hostname returns shiro', async () => {
+    it('hostname returns the profile hostname', async () => {
       const { output } = await run(shell, 'hostname');
-      expect(output.replace(/\r/g, '').trim()).toBe('shiro');
+      expect(output.replace(/\r/g, '').trim()).toBe('tabcomputer');
     });
 
     it('uname returns the product name', async () => {
