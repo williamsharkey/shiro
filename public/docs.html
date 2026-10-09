@@ -273,6 +273,7 @@
         <span class="section-label">Advanced</span>
         <a href="#editors">Editors &amp; Viewers</a>
         <a href="#claude-code">Claude Code</a>
+        <a href="#agent-clis">Other Coding Agents</a>
         <a href="#webapis">Web APIs</a>
         <a href="#servers">Virtual Servers</a>
         <a href="#remote">Remote Control</a>
@@ -552,9 +553,33 @@ claude-window</pre></div>
       <h3>Limitations</h3>
       <ul>
         <li>Tree-sitter WASM doesn't load (syntax highlighting disabled)</li>
-        <li>No native binary execution (ripgrep is shimmed to Shiro's <code>rg</code>)</li>
+        <li>The default <code>claude</code> is the pinned JavaScript build; Claude Code's own native binary runs too, slowly (below)</li>
+        <li>Claude's bundled ripgrep is shimmed to Shiro's <code>rg</code></li>
         <li>API calls route through a CORS proxy on shiro.computer</li>
       </ul>
+
+      <h3>Native build (experimental)</h3>
+      <p>Anthropic's native Claude Code binary runs in Shiro's x86-64 emulator. It is about 2 minutes per request today, so the JavaScript build stays the default.</p>
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Download it (238 MB, checked against the release's sha256) and musl's loader</span>
+claude install --native
+
+<span class="c"># Run it instead of the default build (or set CLAUDE_NATIVE=1)</span>
+claude --native -p "say hi"</pre></div>
+      <p>The download happens inside the VM through the server's network relay (it takes about 3 minutes). On a server without the relay, <code>claude install --native</code> says so and stops.</p>
+
+      <!-- ===== Other coding agents ===== -->
+      <h2 id="agent-clis">Other Coding Agents</h2>
+      <p>Other AI coding CLIs run here too: Linux x86-64 binaries in the emulator, Node.js ones on Shiro's <code>node</code>. Their requests go out through the server's network relay, so they need a server that has one (tabcomputer.com does). Sign in or set the vendor's API key as you would on Linux.</p>
+      <table>
+        <tr><th>Tool</th><th>Install</th><th>Status</th><th>Speed</th></tr>
+        <tr><td>OpenAI Codex</td><td><code>curl -fsSLO</code> the <code>codex-x86_64-unknown-linux-musl.tar.gz</code> release, then <code>tar xzf</code> it</td><td>Works: <code>codex exec "..."</code> reaches the API</td><td>About 1 minute per request</td></tr>
+        <tr><td>Gemini CLI</td><td><code>npm install -g @google/gemini-cli</code></td><td>Works: <code>gemini --skip-trust -p "..."</code></td><td>About 25 s to the first answer</td></tr>
+        <tr><td>Grok Build (xAI)</td><td>Download <code>https://x.ai/cli/grok-&lt;version&gt;-linux-x86_64</code></td><td>Works: <code>grok -p "..."</code> reaches the API</td><td>About 2.5 minutes per request</td></tr>
+        <tr><td>Antigravity CLI (<code>agy</code>)</td><td>From its release manifest (<code>antigravity.google/cli/install.sh</code> shows how)</td><td><code>agy --version</code> works; sign-in not tested</td><td>11 s to start</td></tr>
+        <tr><td>opencode</td><td><code>npm install -g opencode-ai</code></td><td>Not yet: crashes at startup in the emulator</td><td>&mdash;</td></tr>
+        <tr><td>aider</td><td>Debian mode: <code>debian install</code>, <code>sudo apt install -y python3 python3-pip</code>, <code>pip3 install --break-system-packages aider-chat</code></td><td>Being verified: Python 3.13 installs (about 9 minutes for apt)</td><td>&mdash;</td></tr>
+      </table>
+      <p>Times are from headless Chromium on a desktop-class machine. The native programs are CPU-bound in the emulator; first runs are slower while code warms up.</p>
 
       <!-- ===== Editors & Viewers ===== -->
       <h2 id="editors">Editors &amp; Viewers</h2>

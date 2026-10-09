@@ -22,7 +22,7 @@ import type { KStat } from './abi';
 import { retain, release, type FdTable, type OpenFile } from './fd';
 import type { Kernel } from './kernel';
 import {
-  EPERM, EINTR, EIO, EBADF, EAGAIN, EACCES, EFAULT, EINVAL, EPIPE, ETIMEDOUT, EPROTO, ENOTSOCK, EDESTADDRREQ,
+  EPERM, EINTR, EIO, EBADF, EAGAIN, EACCES, EFAULT, EINVAL, ENOTTY, EPIPE, ETIMEDOUT, EPROTO, ENOTSOCK, EDESTADDRREQ,
   EMSGSIZE, ENOPROTOOPT, EPROTONOSUPPORT, EOPNOTSUPP, EAFNOSUPPORT, EADDRINUSE, EADDRNOTAVAIL, ENETDOWN,
   ENETUNREACH, ECONNABORTED, ECONNRESET, ENOBUFS, EISCONN, ENOTCONN, ECONNREFUSED, EHOSTUNREACH, EALREADY,
   EINPROGRESS, O_NONBLOCK, POLLIN, POLLPRI, POLLOUT, POLLERR, POLLHUP, POLLNVAL, POLLRDHUP, S_IFSOCK,
@@ -542,7 +542,7 @@ export class KSocket implements OpenFile {
     // O_NONBLOCK is set on the description by the kernel's ioctl; EINVAL here
     // failed CPython's socket.setblocking(False) (pip, urllib3 with a timeout)
     if (req === FIONBIO) return 0;
-    return -EINVAL;
+    return -ENOTTY;
   }
 
   async stat(): Promise<KStat> { return sockStat(this.ino); }
@@ -841,7 +841,7 @@ export class KDatagramSocket implements OpenFile {
       return 0;
     }
     if (req === FIONBIO) return 0; // the kernel set O_NONBLOCK on the description
-    return -EINVAL;
+    return -ENOTTY;
   }
   async stat(): Promise<KStat> { return sockStat(this.ino); }
   async close(): Promise<void> { this.closed = true; this.rx = []; this.q.notify(); }

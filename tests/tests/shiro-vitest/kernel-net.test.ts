@@ -301,6 +301,16 @@ describe('kernel sockets over the TCP relay', () => {
 });
 
 describe('kernel loopback and listening sockets', () => {
+  it('accepts FIONBIO on stream and datagram sockets (Python settimeout), ENOTTY for unknown ioctls', async () => {
+    const stack = stackFor(P.relayA);
+    const on = new Uint8Array([1, 0, 0, 0]);
+    const t = stream(stack);
+    expect(await t.ioctl(0x5421, on)).toBe(0);
+    expect(await t.ioctl(0x5401 /* TCGETS */, new Uint8Array(60))).toBe(-25);
+    const u = stack.socket(AF_INET, SOCK_DGRAM) as KDatagramSocket;
+    expect(await u.ioctl(0x5421, on)).toBe(0);
+  });
+
   function localStack(portHost: PortHost | null = null) {
     const s = new NetStack();
     s.configure({ relayUrl: null, tokenUrl: null, dohUrl: null, portHost });
