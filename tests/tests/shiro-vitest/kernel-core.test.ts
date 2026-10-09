@@ -366,6 +366,14 @@ describe('kernel processes', () => {
     expect(await sys(A.SYS_getegid, [])).toBe(65534);
     expect(await res(A.SYS_getresuid)).toEqual([65534, 65534, 65534]);
     expect(await sys(A.SYS_getgroups, [0])).toBe(1);
+    // setgroups sorts, as Linux does
+    const dvg = new DataView(data.buffer);
+    const p3 = kernel.spawn({ path: 'h3', cwd: '/tmp', uid: 0, run: () => new Promise<number>(() => {}) });
+    dvg.setUint32(0, 65534, true); dvg.setUint32(4, 100, true);
+    expect(await kernel.syscall(p3, A.SYS_setgroups, [2], data)).toBe(0);
+    expect(await kernel.syscall(p3, A.SYS_getgroups, [8], data)).toBe(2);
+    expect([dvg.getUint32(0, true), dvg.getUint32(4, true)]).toEqual([100, 65534]);
+    await kernel.exit(p3, 0);
     // Dropped for good: no way back to root, no more setgroups
     expect(await sys(A.SYS_setuid, [0])).toBe(-A.EPERM);
     expect(await sys(A.SYS_setresuid, [-1, 0, -1])).toBe(-A.EPERM);
