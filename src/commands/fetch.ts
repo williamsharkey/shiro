@@ -1,6 +1,7 @@
 import { Command, CommandContext } from './index';
 import { iframeServer } from '../iframe-server';
 import { CLAUDE_CODE_PKG } from '../claude-code-version';
+import { activeProfile } from '../profile';
 
 export const fetchCmd: Command = {
   name: 'fetch',
@@ -92,8 +93,9 @@ export const fetchCmd: Command = {
     if (remoteName && !outputFile) outputFile = decodeURIComponent(new URL(url).pathname.split('/').pop() || '') || 'index.html';
 
     // Intercept claude.ai/install.sh to return a script that runs npm install
-    if (url.replace(/^https?:\/\//, '').replace(/\/$/, '') === 'claude.ai/install.sh'
-      || url === 'https://claude.ai/install.sh') {
+    // (the profile's claudeInstallSh shim; off, the real installer runs)
+    if (activeProfile().shims.claudeInstallSh && (url.replace(/^https?:\/\//, '').replace(/\/$/, '') === 'claude.ai/install.sh'
+      || url === 'https://claude.ai/install.sh')) {
       const installScript = [
         '#!/bin/sh',
         'set -e',

@@ -85,6 +85,7 @@ import { initFileAssociations } from './file-associations';
 import { setActiveTerminal } from './active-terminal';
 import { initPanes } from './panes';
 import { uiMode } from './ui-mode';
+import { activeProfile } from './profile';
 import type { Desktop } from './desktop/index';
 import { installDomFs } from './dom-fs';
 import { desktopCmd } from './commands/desktop';
@@ -114,6 +115,7 @@ async function main() {
 
   // The desktop (src/desktop) is its own chunk: shiro.computer's terminal UI
   // never loads it, and the desktop's download overlaps IndexedDB opening
+  const profile = activeProfile();
   const mode = uiMode();
   const desktopModule = mode === 'desktop' ? import('./desktop/index') : null;
 
@@ -358,15 +360,18 @@ async function main() {
   registerCommand(commands, lazyCommand('gcc', 'C compiler (alias for cc)',
     () => import('./commands/cc').then(m => m.gccCmd)), 'src/commands/cc.ts');
 
-  // Lazy-loaded new capabilities (WASM runtimes from CDN)
-  registerCommand(commands, lazyCommand('python', 'Python interpreter (Pyodide)',
-    () => import('./commands/python').then(m => m.pythonCmd)), 'src/commands/python.ts');
-  registerCommand(commands, lazyCommand('python3', 'Python 3 interpreter (Pyodide)',
-    () => import('./commands/python').then(m => m.python3Cmd)), 'src/commands/python.ts');
-  registerCommand(commands, lazyCommand('pip', 'Python package manager',
-    () => import('./commands/python').then(m => m.pipCmd)), 'src/commands/python.ts');
-  registerCommand(commands, lazyCommand('pip3', 'Python package manager',
-    () => import('./commands/python').then(m => ({ ...m.pipCmd, name: 'pip3' }))), 'src/commands/python.ts');
+  // Lazy-loaded new capabilities (WASM runtimes from CDN). Pyodide python is
+  // the profile's python shim; without it python3 comes from pkg/apt only.
+  if (activeProfile().shims.python === 'pyodide') {
+    registerCommand(commands, lazyCommand('python', 'Python interpreter (Pyodide)',
+      () => import('./commands/python').then(m => m.pythonCmd)), 'src/commands/python.ts');
+    registerCommand(commands, lazyCommand('python3', 'Python 3 interpreter (Pyodide)',
+      () => import('./commands/python').then(m => m.python3Cmd)), 'src/commands/python.ts');
+    registerCommand(commands, lazyCommand('pip', 'Python package manager',
+      () => import('./commands/python').then(m => m.pipCmd)), 'src/commands/python.ts');
+    registerCommand(commands, lazyCommand('pip3', 'Python package manager',
+      () => import('./commands/python').then(m => ({ ...m.pipCmd, name: 'pip3' }))), 'src/commands/python.ts');
+  }
   registerCommand(commands, lazyCommand('sqlite3', 'SQLite database engine',
     () => import('./commands/sqlite').then(m => m.sqlite3Cmd)), 'src/commands/sqlite.ts');
   registerCommand(commands, lazyCommand('finder', 'Visual file manager',
@@ -544,6 +549,8 @@ async function main() {
   // Connect terminal to shell for interactive commands (vi, etc.)
   shell.setTerminal(terminal);
   desktop?.attachMainTerminal(terminal);
+  // The profile's banner: the desktop sets its compact welcome; 'hud' keeps the full one
+  if (profile.banner === 'hud') terminal.banner = undefined;
   // Debian GUI apps (xterm, GTK, Qt) in the dock, installed on first click (src/gui/apps.ts)
   // Registered once the page is idle: their dock icons aren't needed for the first prompt
   if (desktop) {
@@ -579,6 +586,7 @@ async function main() {
     kernel, // Process table, fds, pipes and syscalls for worker guests (src/kernel)
     desktop: desktop?.wm ?? null, // Window manager API (docs/DESKTOP.md), null in the classic UI
     uiMode: mode,
+    profile, // The product profile (src/profile.ts, docs/PROFILES.md)
     unbecome: deactivateBecomeMode, // Exit app mode from browser console
     closeSplit: closeSplitView, // Close split pane from browser console
     lastSeedGif: null as Uint8Array | null, // Last generated seed GIF bytes (for demos/drag)
@@ -789,7 +797,7 @@ async function main() {
   initFaviconUpdater(terminal.term);
 
   // Initialize dynamic title (shows recent commands)
-  // The desktop titles the tab with the product name (src/brand.json)
+  // The desktop titles the tab with the product name (the profile's brand)
   if (!desktop) initTitle();
 
   // Auto-reconnect remote session if one was active before page reload
@@ -802,9 +810,9 @@ async function main() {
     }
   }
 
-  // Have Claude Code ready before anyone types `claude`. Waits a few seconds
-  // so the 18 MB tarball download doesn't compete with boot.
-  setTimeout(() => {
+  // Have Claude Code ready before anyone types `claude` (the profile's preinstall
+  // list). Waits a few seconds so the 18 MB tarball download doesn't compete with boot.
+  if (profile.preinstall.includes('claude-code')) setTimeout(() => {
     ensureClaudeCodeInstalled(fs)
       .then(() => console.log('[shiro] Claude Code ready'))
       .catch((e) => console.warn('[shiro] Claude Code background install failed:', e?.message || e));

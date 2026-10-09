@@ -186,7 +186,7 @@ describe('uiMode', () => {
   });
 });
 
-describe('brand (src/brand.json)', () => {
+describe('brand (profiles/tabcomputer/profile.json)', () => {
   it('server.mjs titles the app shell and adds meta tags, except on shiro.computer', async () => {
     const { execFileSync } = await import('node:child_process');
     // Plain Node (vitest's polyfilled modules can't load server.mjs)

@@ -31,10 +31,12 @@ All changes are additive. Nothing below renames or removes an earlier name.
 ## Name
 
 The Unix edition is **tabcomputer** (tabcomputer.com). The name, domain, tagline
-and description live in `src/brand.json` only: the desktop reads it (`src/brand.ts`:
-tab title, wallpaper wordmark, welcome banner, About), and `server.mjs`
-(`brandAppShell`) gives the shared `index.html` that title plus description and
-Open Graph tags for every host except shiro.computer, since link previews don't run JS.
+and description are the tabcomputer profile's `brand`
+(`profiles/tabcomputer/profile.json`, [PROFILES.md](PROFILES.md)): the desktop
+reads it (`src/brand.ts`: tab title, wallpaper wordmark, welcome banner, About),
+and `server.mjs` (`brandAppShell`) gives the shared `index.html` that title plus
+description and Open Graph tags for every host whose profile has a brand (not
+shiro.computer), since link previews don't run JS.
 
 ## Choosing the UI
 

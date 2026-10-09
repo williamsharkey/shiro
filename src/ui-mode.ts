@@ -3,10 +3,12 @@
  * shiro.computer's full-page terminal.
  *
  * `?ui=desktop` / `?ui=terminal` choose and remember (localStorage
- * `shiro-ui`). Without a choice: shiro.computer and its subdomains keep the
- * terminal; embedded pages (seeds), `?demo=1` and app ("become") mode always
- * use it; every other host (tabcomputer.com, localhost) gets the desktop.
+ * `shiro-ui`). Embedded pages (seeds), `?demo=1` and app ("become") mode
+ * always use the terminal. Otherwise the product profile decides
+ * (src/profile.ts): shiro.computer and its subdomains get the terminal, every
+ * other host (tabcomputer.com, localhost) the desktop.
  */
+import { selectProfile } from './profile';
 
 export type UiMode = 'desktop' | 'terminal';
 
@@ -25,6 +27,5 @@ export function uiMode(loc: Pick<Location, 'search' | 'hostname'> = location, em
     const saved = localStorage.getItem(UI_MODE_KEY);
     if (saved === 'desktop' || saved === 'terminal') return saved;
   } catch {}
-  const h = loc.hostname;
-  return h === 'shiro.computer' || h.endsWith('.shiro.computer') ? 'terminal' : 'desktop';
+  return selectProfile(loc).ui;
 }

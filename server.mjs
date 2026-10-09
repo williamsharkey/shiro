@@ -11,7 +11,7 @@ import { join, extname } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { randomBytes, createHmac, createHash, timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
-import { realpathSync, readFileSync } from 'node:fs';
+import { realpathSync, readFileSync, readdirSync } from 'node:fs';
 import net from 'node:net';
 import dns from 'node:dns/promises';
 
@@ -306,24 +306,45 @@ function handleOAuthCallback(req, res) {
   res.end(html);
 }
 
-// --- Branding of the app shell ---
-// The Unix edition (desktop UI: every host but shiro.computer, src/ui-mode.ts)
-// is "tabcomputer": src/brand.json names it. Link previews don't run JS, so the
-// shared index.html gets its title and meta tags here. The file is read from
-// src/ next to this script (a checkout) or from STATIC_DIR (the build copies it
-// into dist/; tabcomputer.com's releases carry only dist/ and server.mjs).
-// Without it nothing changes.
-const BRAND = (() => {
-  for (const at of [new URL('./src/brand.json', import.meta.url), join(STATIC_DIR, 'brand.json')]) {
-    try { return JSON.parse(readFileSync(at, 'utf8')); } catch {}
-  }
-  return null;
+// --- Product profiles (docs/PROFILES.md) ---
+// profiles/<id>/profile.json says which hosts a product serves and its brand;
+// the page reads the same files (src/profile.ts). Read from profiles/ next to
+// this script (a checkout) or STATIC_DIR/profiles.json (the build writes it;
+// releases carry only dist/ and server.mjs). Without either, nothing is branded.
+const PROFILES = (() => {
+  try {
+    const dir = new URL('./profiles/', import.meta.url);
+    const found = readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .flatMap((d) => { try { return [JSON.parse(readFileSync(new URL(`${d.name}/profile.json`, dir), 'utf8'))]; } catch { return []; } });
+    if (found.length) return found;
+  } catch {}
+  try { return JSON.parse(readFileSync(join(STATIC_DIR, 'profiles.json'), 'utf8')); } catch {}
+  return [];
 })();
 
-/** index.html with the brand's title and meta tags, for hosts that get the desktop. */
-export function brandAppShell(html, host, brand = BRAND) {
-  const hostname = String(host || '').split(':')[0].toLowerCase();
-  if (!brand || hostname === 'shiro.computer' || hostname.endsWith('.shiro.computer')) return html;
+// The same choice as profiles/select.mjs (not imported: a release has no
+// profiles/ directory); desktop-wm.test.ts checks the two agree.
+function hostMatches(pattern, hostname) {
+  const h = String(hostname || '').toLowerCase().replace(/\.$/, '');
+  const p = String(pattern).toLowerCase();
+  return p.startsWith('*.') ? h.endsWith(p.slice(1)) : h === p;
+}
+export function profileFor(host, override, profiles = PROFILES) {
+  const hostname = String(host || '').split(':')[0];
+  if (override) { const named = profiles.find((p) => p.id === override); if (named) return named; }
+  return profiles.find((p) => (p.hosts || []).some((pat) => hostMatches(pat, hostname)))
+    ?? profiles.find((p) => p.default) ?? profiles[0] ?? null;
+}
+
+// --- Branding of the app shell ---
+// Link previews don't run JS, so the shared index.html gets the profile's
+// title and meta tags here. A profile without a brand (shiro.computer) keeps
+// the page's own.
+
+/** index.html with the brand's title and meta tags, for the profile serving `host`. */
+export function brandAppShell(html, host, brand = profileFor(host)?.brand) {
+  if (!brand) return html;
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
   const url = `https://${brand.domain}/`;
   const tags = [
@@ -377,7 +398,10 @@ async function handleStatic(req, res) {
     // the app in iframes and need nothing from SharedArrayBuffer.
     const isAppShell = filePath === join(STATIC_DIR, 'index.html');
     const isolation = isAppShell || ext === '.js' || ext === '.mjs' ? isolationHeaders() : {};
-    if (isAppShell) data = Buffer.from(brandAppShell(data.toString('utf8'), req.headers['host']));
+    if (isAppShell) {
+      const override = new URL(req.url, 'http://localhost').searchParams.get('profile');
+      data = Buffer.from(brandAppShell(data.toString('utf8'), req.headers['host'], profileFor(req.headers['host'], override)?.brand));
+    }
     // The streamed Debian rootfs's chunks are content-addressed (named by sha256)
     const immutable = pathname.startsWith('/debian/chunks/') ? { 'cache-control': 'public, max-age=31536000, immutable' } : {};
     res.writeHead(200, { 'content-type': MIME[ext] || 'application/octet-stream', ...staticHeaders, ...isolation, ...immutable });

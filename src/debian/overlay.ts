@@ -24,6 +24,7 @@
 import type { FileSystem } from '../filesystem';
 import { extraShadows } from '../pkg-manager';
 import policyJson from './overlay-policy.json';
+import { activeProfile } from '../profile';
 
 export type Side = 'shiro' | 'debian';
 
@@ -172,8 +173,10 @@ export async function applyDefaults(fs: FileSystem, only?: string[]): Promise<st
     if (path in choices) continue;
     const st = await programState(fs, path, undefined, choices);
     if (!st.debianInstalled && st.current === 'debian') continue; // nothing to overlay (yet)
-    if (st.current !== policy.default) {
-      try { changed.push(await setSide(fs, path, policy.default)); } catch (e: any) { changed.push(`${path}: ${e?.message ?? e}`); }
+    // A profile without the overlay keeps Debian's own programs
+    const want: Side = activeProfile().shims.debianOverlay ? policy.default : 'debian';
+    if (st.current !== want) {
+      try { changed.push(await setSide(fs, path, want)); } catch (e: any) { changed.push(`${path}: ${e?.message ?? e}`); }
     }
   }
   return changed;
