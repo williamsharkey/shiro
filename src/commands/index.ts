@@ -1,4 +1,5 @@
 import type { FileSystem } from '../filesystem';
+import { withHelpFlags } from './help-flags';
 import type { Shell } from '../shell';
 
 export interface TerminalLike {
@@ -55,7 +56,8 @@ export class CommandRegistry {
   private commands = new Map<string, Command>();
 
   register(cmd: Command): void {
-    this.commands.set(cmd.name, cmd);
+    // `CMD --help` / `CMD --version` work for every command (help-flags.ts)
+    this.commands.set(cmd.name, withHelpFlags(cmd));
   }
 
   registerAll(cmds: Command[]): void {
