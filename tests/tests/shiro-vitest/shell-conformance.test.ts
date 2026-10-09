@@ -478,4 +478,173 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe('sub\nst=3\nheredoc body\n1\n2\nh\na;b\nfoo:/home/bar\n/home/bar:/home/bar/a\na:~\n/bin:/home/bar/bin:/home/bar\n');
   });
+
+  it('process substitution: <(cmd) in a subshell, < <(cmd) into a loop, > >(cmd)', async () => {
+    const r = await script([
+      'x=1; cat <(echo 1; x=2; echo $x); echo "x=$x"',
+      'while read l; do echo "got $l"; done < <(printf "a\\nb\\n")',
+      'diff <(echo x) <(echo y) >/dev/null; echo st=$?',
+      'echo hi > >(tr a-z A-Z)',
+    ].join('\n'));
+    expect(r.out).toBe('1\n2\nx=1\ngot a\ngot b\nst=1\nHI\n');
+  });
+
+  it('alias ending in a blank expands the next word; alias/unalias --; printf -v a[i]', async () => {
+    const r = await script([
+      "shopt -s expand_aliases",
+      "alias hi=\"echo hello world \"",
+      "alias punct=\"!!!\"",
+      "hi punct",
+      "alias e=\"echo \"",
+      "alias x=\"X\"",
+      "e x y",
+      "alias -- q=quux; alias q; unalias -- q; alias q 2>/dev/null || echo gone",
+      "alias s=\"echo it's\"; alias s",
+      "a=(x y z); printf -v \"a[1]\" \"%s-\" B; echo \"${a[@]}\"",
+      "printf -v \"bad name\" x; echo st=$?",
+    ].join('\n'));
+    expect(r.out).toBe("hello world !!!\nX y\nalias q='quux'\ngone\nalias s='echo it'\\''s'\nx B- z\nst=2\n");
+  });
+
+  it('set a b c sets the positional parameters; unquoted ${v:-word} splits its word on IFS', async () => {
+    const r = await script([
+      'set a b c; echo "n=$# $2"; set -e x y; echo "n=$# $1"; set +e',
+      'IFS=; echo ["$*"]; IFS=x; v=; echo ${v:-AxBxC} "${v:-AxBxC}"x; unset IFS',
+    ].join('\n'));
+    expect(r.out).toBe('n=3 b\nn=2 x\n[xy]\nA B C AxBxCx\n');
+  });
+
+  it('case … esac inside $( … )', async () => {
+    const r = await script([
+      'x=$(case 5 in [0-9]) echo number;; [a-z]) echo letter ;; esac)',
+      'echo "$x" $(case b in a) echo A;; b) echo B;; esac)',
+    ].join('\n'));
+    expect(r.out).toBe('number B\n');
+  });
+
+  it('return status mod 256, |&, ! ( … ), command NAME skips functions', async () => {
+    const r = await script([
+      "f() { return 257; }; f; echo r=$?",
+      "(exit 258); echo e=$?",
+      "f2() { return -1; }; f2; echo n=$?",
+      "ls /nonexist |& wc -l",
+      "! ( false ); echo neg=$?",
+      "builtin echo bi",
+      "command echo co",
+      "echo() { printf \"fn\\n\"; }; command echo co2; builtin echo bi2; unset -f echo",
+      "for i in 1 2; do command break; done; echo after",
+    ].join('\n'));
+    expect(r.out).toBe('r=1\ne=2\nn=255\n1\nneg=0\nbi\nco\nco2\nbi2\nafter\n');
+  });
+
+  it('break/continue outside a loop, return outside a function, test -a/-o', async () => {
+    const r = await script([
+      'continue; echo one; break; echo two',
+      'for i in a b; do ( if true; then continue; fi; echo "sub $i" ); done',
+      'g() { break; }; f() { for x in 1 2; do g; echo x$x; done; }; f',
+      'while true; do while true; do break 2; done; done; echo after',
+      'return; echo rc=$?',
+      'h() ( return 42; ); h; echo h=$?',
+      'test -a /tmp; echo $?; test -a /nonexist; echo $?',
+      'set -o errexit; test -o errexit; echo $?; set +o errexit; test -o nounset; echo $?',
+    ].join('\n'));
+    expect(r.out).toBe('one\ntwo\nsub a\nsub b\nx1\nx2\nafter\nrc=2\nh=42\n0\n1\n0\n1\n');
+  });
+
+  it('${!a[i]}, list-valued defaults, array words as env prefixes, a[i]=(…) errors', async () => {
+    const r = await script([
+      'foo=bar; a=("1 2" foo); echo "${!a[1]}"',
+      'd=("1 2" 3); for w in "${u[@]:-${d[@]}}"; do echo "[$w]"; done',
+      'set -- x "y z"; for w in "${u:-"$@"}"; do echo "<$w>"; done',
+      'B=(b b) sh -c \'echo "$B"\'',
+      'a[0]=(3 4); echo st=$?',
+      'IFS=; p_1=1; p_2=2; echo ${!p_*}; unset IFS',
+    ].join('\n'));
+    expect(r.out).toBe('bar\n[1 2]\n[3]\n<x>\n<y z>\n(b b)\nst=1\np_1p_2\n');
+  });
+
+  it('bad substitution / arithmetic errors abandon the line, ${x?} ends the script; in ( … ) only the subshell', async () => {
+    const r = await script([
+      '(echo ${a[0][0]}); echo s1=$?',
+      '(echo ${!undef}); echo s2=$?',
+      '(echo ${x?boom}); echo s3=$?',
+      'echo ${#a[0]/1/x}; echo notreached',
+      'echo next=$?; echo $((1+)); echo notreached',
+      'echo next2=$?',
+      ': ${x?boom}; echo notreached',
+      'echo notreached',
+    ].join('\n'));
+    expect(r.out).toBe('s1=1\ns2=1\ns3=1\nnext=1\nnext2=1\n');
+    expect(r.status).toBe(1);
+  });
+
+  it('inside "…" the word of ${x-word} is double-quoted: " groups, \' is literal, \\} escapes', async () => {
+    const r = await script([
+      'v="a b"; for w in "${U:-"x y"}" "${U:-"$v" c}"; do echo "[$w]"; done',
+      'echo "${U:-\'$v\'}" "${U-\\}}" "${U-\'}\'}"',
+      'f="\'a b d\'"; echo ${f%d\\\'} "${f%d\\\'}"',
+      'echo "${U=$v x}" "$U"',
+    ].join('\n'));
+    expect(r.out).toBe("[x y]\n[a b c]\n'a b' } '}'\n'a b 'a b \na b x a b x\n");
+  });
+
+  it('backticks hold ; and |, keep an escaped trailing blank; $(<<EOF cmd) is a here-doc', async () => {
+    const r = await script([
+      'echo `echo -n l; echo -n s` `echo ab | tr a x`',
+      'echo "[`echo \\ `]" [\\ ]',
+      'echo $(<<EOF tac',
+      'one',
+      'two',
+      'EOF',
+      ')',
+      'echo hi > "f g"; echo "$(< "f g")" $(<f\\ g)',
+    ].join('\n'), async (fs) => { await fs.mkdir('/tmp/w', { recursive: true }); });
+    expect(r.out).toBe('ls xb\n[ ] [ ]\ntwo one\nhi hi\n');
+  });
+
+  it('assignments: no globbing, NAME+=value in declaration builtins and env prefixes', async () => {
+    const r = await script([
+      'cd /tmp; mkdir -p gl; cd gl; touch foo=a foo=b',
+      'foo=*; echo "$foo"; export bar=*; echo "$bar"; typeset baz=*; echo "$baz"',
+      'typeset s+=foo; typeset s+=bar; echo $s; export e+=x; readonly r+=y; echo $e $r',
+      'f() { local l+=1; local l+=2; echo $l; }; f',
+      'a=(x y); typeset a+=s; echo "${a[@]}"',
+      'declare d+=(d e); declare d+=(c); echo "${d[@]}"; readonly ro+=(r o); echo "${ro[@]}"',
+      'A=a; A+=b sh -c \'echo $A\'; FOO=foo\\<foo sh -c \'echo $FOO\'',
+    ].join('\n'));
+    expect(r.out).toBe('*\n*\n*\nfoobar\nx y\n12\nxs y\nd e c\nr o\nab\nfoo<foo\n');
+  });
+
+  it('>& word, >&file (stdout and stderr), N>&M- moves a descriptor', async () => {
+    const r = await script([
+      'cd /tmp; exec {fd}> n.txt; echo a >&$fd; echo b >& $fd; cat n.txt',
+      'ls /nonexist >&both.txt; grep -c nonexist both.txt',
+      'exec 5> f5.txt; echo hello5 >&5; exec 6>&5-; echo world5 >&5; echo world6 >&6; exec 6>&-; cat f5.txt',
+    ].join('\n'));
+    expect(r.out).toBe('a\nb\n1\nhello5\nworld6\n');
+  });
+
+  it('sh -c/-i/-O and $-, vi/emacs, set -n; exit in an EXIT trap; trap -1; unset scopes', async () => {
+    const r = await script([
+      "sh -o nounset -c 'echo $-'; sh -i -c 'echo $-' | grep -c i",
+      "sh -O nullglob -c 'echo foo *.none bar'",
+      'set -o vi; shopt -o -p emacs vi; set -o emacs; shopt -o -p vi',
+      "sh -c 'trap \"exit 42\" EXIT'; echo trap=$?",
+      "sh -e -c 'trap -1 EXIT; echo bad'; echo st=$?",
+      'f() { echo f; }; unset f; type f >/dev/null 2>&1 || echo nof',
+      'unlocal() { unset "$@"; }; l2() { local h=yy; unlocal h; echo l2=$h; }; l1() { local h=xx; l2; unlocal h; echo l1=$h; }; h=g; l1',
+      'echo 1; set -n; echo 2',
+    ].join('\n'));
+    expect(r.out).toBe('huBc\n1\nfoo bar\nset +o emacs\nset -o vi\nset +o vi\ntrap=42\nst=2\nnof\nl2=xx\nl1=g\n1\n');
+  });
+
+  it('$((…)) ends at its matching )), and may hold $(…) and `…`; 02#1 is no number', async () => {
+    const r = await script([
+      'a=1; b=2; echo $((a,(b+1))) $((!(1 || 2))) $((~(1|2)))',
+      'echo $((1 + $(echo 1)${u:-3})) $((`echo 1` + 2))',
+      'echo $((02#0110)); echo notreached',
+      'echo st=$?',
+    ].join('\n'));
+    expect(r.out).toBe('3 0 -4\n14 3\nst=1\n');
+  });
 });

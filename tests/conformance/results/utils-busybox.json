@@ -34,19 +34,9 @@
    "failures": []
   },
   "cp": {
-   "pass": 3,
+   "pass": 6,
    "total": 6,
-   "failures": [
-    {
-     "name": "cp -RL"
-    },
-    {
-     "name": "cp -RH"
-    },
-    {
-     "name": "cp -RHL"
-    }
-   ]
+   "failures": []
   },
   "cp (old-style)": {
    "pass": 16,
@@ -148,13 +138,9 @@
    "failures": []
   },
   "grep": {
-   "pass": 47,
+   "pass": 48,
    "total": 48,
-   "failures": [
-    {
-     "name": "grep -r on symlink to dir"
-    }
-   ]
+   "failures": []
   },
   "gunzip (old-style)": {
    "pass": 1,

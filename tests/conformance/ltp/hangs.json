@@ -1,1 +1,1 @@
-["fcntl40", "futex_wake03", "waitpid06"]
+["fcntl40", "futex_wait05", "futex_wake03", "sendfile02_64", "waitpid06"]

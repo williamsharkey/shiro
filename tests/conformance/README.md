@@ -88,3 +88,21 @@ through the page's shell the same way as the vitest harness. `--files a,b`
 narrows a run (written as a `.partial.json`). Results:
 `results/shell-oils-browser.json`. Not part of `npm run conformance` (it takes
 a build and a browser); run it before updating the scoreboard.
+
+## Syscalls: wasi-testsuite (`syscalls-wasi.conf.ts`)
+
+- Not vendored: `scripts/conformance/fetch.sh` fetches
+  [WebAssembly/wasi-testsuite](https://github.com/WebAssembly/wasi-testsuite)
+  (Apache-2.0) at a pinned commit of its prebuilt `prod/testsuite-base`
+  branch into `tests/conformance/.cache/wasi-testsuite`.
+- Every wasm32-wasip1 module (C, Rust, AssemblyScript) runs as a Shiro WASI
+  process (`runWasiProgram` → a kernel process in a Node Worker, the path a
+  cross-origin isolated page takes; without the Worker factory Node would get
+  the legacy runtime) the way the suite's wasmtime adapter runs it: only the
+  test's args and env, a fresh copy of its `root` directory preopened as `/`
+  (a `/` mount, see `openPreopens`) and nothing else (`bare`), judged on the
+  exit code and, when given, stdout. Wasmtime passes all of them on Linux, so
+  all are scored. `WASI_ONLY=name,rust` narrows a run; `WASI_LEGACY=1` runs
+  the old in-page runtime (`src/wasi-runtime.ts`) instead, unscored.
+- Known failure: `path_link` needs real hard links (same inode, shared data,
+  nlink 2); the FileSystem has none, so `link()` copies.

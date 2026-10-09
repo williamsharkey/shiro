@@ -35,21 +35,9 @@
    ]
   },
   "word-split": {
-   "pass": 44,
+   "pass": 48,
    "total": 53,
    "failures": [
-    {
-     "i": 23,
-     "name": "default value with unquoted IFS char"
-    },
-    {
-     "i": 30,
-     "name": "Empty IFS (regression for bug)"
-    },
-    {
-     "i": 31,
-     "name": "Unset IFS (regression for bug)"
-    },
     {
      "i": 34,
      "name": "IFS and joining arrays by assignments"
@@ -69,31 +57,18 @@
     {
      "i": 51,
      "name": "\"\"$A\"\" - empty string on both sides - derived from spec/toysh-posix #15"
-    },
-    {
-     "i": 54,
-     "name": "Regression: \"${v:-AxBxC}\"x should not be split"
     }
    ]
   },
   "word-eval": {
-   "pass": 7,
+   "pass": 8,
    "total": 8,
-   "failures": [
-    {
-     "i": 5,
-     "name": "Default values -- more cases"
-    }
-   ]
+   "failures": []
   },
   "var-sub": {
-   "pass": 2,
+   "pass": 3,
    "total": 6,
    "failures": [
-    {
-     "i": 0,
-     "name": "Bad var sub"
-    },
     {
      "i": 1,
      "name": "Braced block inside ${}"
@@ -109,49 +84,21 @@
    ]
   },
   "var-sub-quote": {
-   "pass": 32,
+   "pass": 39,
    "total": 41,
    "failures": [
-    {
-     "i": 14,
-     "name": "Multiple words: outer double quotes, inner double quotes"
-    },
-    {
-     "i": 17,
-     "name": "Mixed inner quotes with outer quotes"
-    },
     {
      "i": 19,
      "name": "part_value tree on RHS"
     },
     {
-     "i": 24,
-     "name": "Multiple words: outer double quotes, inner double quotes"
-    },
-    {
-     "i": 25,
-     "name": "Multiple words: outer double quotes, inner single quotes"
-    },
-    {
-     "i": 27,
-     "name": "Strip a string with single quotes, unquoted"
-    },
-    {
-     "i": 28,
-     "name": "Strip a string with single quotes, double quoted"
-    },
-    {
      "i": 31,
      "name": "Syntax error for single quote in double quote"
-    },
-    {
-     "i": 38,
-     "name": "Right Brace as argument (similar to #702)"
     }
    ]
   },
   "var-op-test": {
-   "pass": 26,
+   "pass": 28,
    "total": 35,
    "failures": [
     {
@@ -171,20 +118,12 @@
      "name": "Assign default with array"
     },
     {
-     "i": 15,
-     "name": "Nix idiom ${!hooksSlice+\"${!hooksSlice}\"} - was workaround for obsolete bash 4.3 bug"
-    },
-    {
      "i": 17,
      "name": "array and - and +"
     },
     {
      "i": 21,
      "name": "$* (\"\" \"\") and - and + (IFS=)"
-    },
-    {
-     "i": 30,
-     "name": "\"\\z\" as arg"
     },
     {
      "i": 36,
@@ -211,7 +150,7 @@
    ]
   },
   "var-op-len": {
-   "pass": 3,
+   "pass": 4,
    "total": 7,
    "failures": [
     {
@@ -225,10 +164,6 @@
     {
      "i": 4,
      "name": "String length with invalid utf-8 continuation bytes"
-    },
-    {
-     "i": 7,
-     "name": "Length operator can't be followed by test operator"
     }
    ]
   },
@@ -259,13 +194,9 @@
    ]
   },
   "var-op-slice": {
-   "pass": 16,
+   "pass": 18,
    "total": 21,
    "failures": [
-    {
-     "i": 1,
-     "name": "Cannot take length of substring slice"
-    },
     {
      "i": 16,
      "name": "${@:offset} and ${*:offset}"
@@ -273,10 +204,6 @@
     {
      "i": 17,
      "name": "${@:offset:length} and ${*:offset:length}"
-    },
-    {
-     "i": 19,
-     "name": "Permutations of implicit begin and length"
     },
     {
      "i": 20,
@@ -320,82 +247,17 @@
    ]
   },
   "arith": {
-   "pass": 62,
+   "pass": 71,
    "total": 71,
-   "failures": [
-    {
-     "i": 6,
-     "name": "Arith sub with word parts"
-    },
-    {
-     "i": 9,
-     "name": "Backticks within arith sub"
-    },
-    {
-     "i": 13,
-     "name": "Integer constant validation"
-    },
-    {
-     "i": 21,
-     "name": "Comma operator (borrowed from C)"
-    },
-    {
-     "i": 24,
-     "name": "Logical Ops"
-    },
-    {
-     "i": 26,
-     "name": "Bitwise ops"
-    },
-    {
-     "i": 50,
-     "name": "Comment not allowed in the middle of multiline arithmetic"
-    },
-    {
-     "i": 53,
-     "name": "Double subscript"
-    },
-    {
-     "i": 65,
-     "name": "Invalid constant"
-    }
-   ]
+   "failures": []
   },
   "command-sub": {
-   "pass": 19,
+   "pass": 26,
    "total": 28,
    "failures": [
     {
-     "i": 1,
-     "name": "case in subshell"
-    },
-    {
-     "i": 4,
-     "name": "Backtick 2"
-    },
-    {
-     "i": 5,
-     "name": "Nested backticks"
-    },
-    {
      "i": 7,
      "name": "Making keyword out of command sub should NOT work"
-    },
-    {
-     "i": 8,
-     "name": "Command sub with here doc"
-    },
-    {
-     "i": 16,
-     "name": "Escaped quote in [[ ]]"
-    },
-    {
-     "i": 20,
-     "name": "Quoting \\ within ``"
-    },
-    {
-     "i": 21,
-     "name": "Quoting \\ within `` within double quotes"
     },
     {
      "i": 28,
@@ -422,21 +284,9 @@
    ]
   },
   "redirect": {
-   "pass": 32,
+   "pass": 35,
    "total": 39,
    "failures": [
-    {
-     "i": 10,
-     "name": "Named file descriptor"
-    },
-    {
-     "i": 24,
-     "name": ">&word redirects stdout and stderr when word is not a number or -"
-    },
-    {
-     "i": 26,
-     "name": "1>&2- to move file descriptor"
-    },
     {
      "i": 27,
      "name": "1>&2- (Bash bug: fail to restore closed fd)"
@@ -456,17 +306,12 @@
    ]
   },
   "if_": {
-   "pass": 4,
+   "pass": 5,
    "total": 5,
-   "failures": [
-    {
-     "i": 4,
-     "name": "if break corner case"
-    }
-   ]
+   "failures": []
   },
   "loop": {
-   "pass": 21,
+   "pass": 26,
    "total": 28,
    "failures": [
     {
@@ -474,28 +319,8 @@
      "name": "while in pipe with subshell"
     },
     {
-     "i": 13,
-     "name": "continue at top level"
-    },
-    {
-     "i": 14,
-     "name": "continue in subshell"
-    },
-    {
-     "i": 15,
-     "name": "continue in subshell aborts with errexit"
-    },
-    {
      "i": 16,
      "name": "bad arg to break"
-    },
-    {
-     "i": 23,
-     "name": "top-level break/continue/return (without strict_control_flow)"
-    },
-    {
-     "i": 28,
-     "name": "builtin,command break,continue,return,exit"
     }
    ]
   },
@@ -559,20 +384,12 @@
    ]
   },
   "builtin-printf": {
-   "pass": 47,
+   "pass": 49,
    "total": 55,
    "failures": [
     {
      "i": 0,
      "name": "printf with no args"
-    },
-    {
-     "i": 3,
-     "name": "printf -v a[1]"
-    },
-    {
-     "i": 4,
-     "name": "printf -v syntax error"
     },
     {
      "i": 38,
@@ -646,20 +463,12 @@
    ]
   },
   "builtin-trap": {
-   "pass": 26,
+   "pass": 29,
    "total": 33,
    "failures": [
     {
      "i": 16,
      "name": "exit 1 when trap code string is invalid"
-    },
-    {
-     "i": 17,
-     "name": "trap EXIT calling exit"
-    },
-    {
-     "i": 20,
-     "name": "trap EXIT with PARSE error and explicit exit"
     },
     {
      "i": 24,
@@ -672,21 +481,13 @@
     {
      "i": 26,
      "name": "trap USR1, sleep, SIGINT: non-interactively"
-    },
-    {
-     "i": 29,
-     "name": "Remove trap with an unsigned integer"
     }
    ]
   },
   "builtin-bracket": {
-   "pass": 44,
+   "pass": 46,
    "total": 50,
    "failures": [
-    {
-     "i": 3,
-     "name": "-a as unary operator (alias of -e)"
-    },
     {
      "i": 27,
      "name": "-k for sticky bit"
@@ -694,10 +495,6 @@
     {
      "i": 35,
      "name": "test -p named pipe"
-    },
-    {
-     "i": 39,
-     "name": "test -o for options"
     },
     {
      "i": 41,
@@ -768,7 +565,7 @@
    ]
   },
   "builtin-vars": {
-   "pass": 31,
+   "pass": 33,
    "total": 38,
    "failures": [
     {
@@ -786,14 +583,6 @@
     {
      "i": 10,
      "name": "Exporting a parent func variable (dynamic scope)"
-    },
-    {
-     "i": 22,
-     "name": "Unset a function without -f"
-    },
-    {
-     "i": 24,
-     "name": "Unset and scope (bug #653)"
     },
     {
      "i": 38,
@@ -838,16 +627,12 @@
    ]
   },
   "assign": {
-   "pass": 35,
+   "pass": 38,
    "total": 43,
    "failures": [
     {
      "i": 2,
      "name": "Env binding can use preceding bindings, but not subsequent ones"
-    },
-    {
-     "i": 4,
-     "name": "Env value with escaped <"
     },
     {
      "i": 10,
@@ -862,56 +647,15 @@
      "name": "aliased assignment doesn't split"
     },
     {
-     "i": 32,
-     "name": "assign and glob"
-    },
-    {
-     "i": 33,
-     "name": "declare and glob"
-    },
-    {
      "i": 45,
      "name": "\"declare -a arr\" and \"readonly -a a\" creates an empty array (OSH)"
     }
    ]
   },
   "append": {
-   "pass": 12,
+   "pass": 20,
    "total": 20,
-   "failures": [
-    {
-     "i": 7,
-     "name": "error: typeset myarray+=s"
-    },
-    {
-     "i": 8,
-     "name": "error: append used like env prefix"
-    },
-    {
-     "i": 11,
-     "name": "Try to append list to element"
-    },
-    {
-     "i": 13,
-     "name": "typeset s+="
-    },
-    {
-     "i": 14,
-     "name": "typeset s${dyn}+="
-    },
-    {
-     "i": 15,
-     "name": "export readonly +="
-    },
-    {
-     "i": 16,
-     "name": "local +="
-    },
-    {
-     "i": 17,
-     "name": "assign builtin appending array: declare d+=(d e)"
-    }
-   ]
+   "failures": []
   },
   "array-basic": {
    "pass": 5,
@@ -919,7 +663,7 @@
    "failures": []
   },
   "array": {
-   "pass": 68,
+   "pass": 75,
    "total": 78,
    "failures": [
     {
@@ -931,41 +675,13 @@
      "name": "array with invalid token"
     },
     {
-     "i": 18,
-     "name": "${!a[1]} is named ref in bash"
-    },
-    {
-     "i": 27,
-     "name": "Arrays can't be used as env bindings"
-    },
-    {
-     "i": 28,
-     "name": "Associative arrays can't be used as env bindings either"
-    },
-    {
-     "i": 32,
-     "name": "Set array item to array"
-    },
-    {
-     "i": 46,
-     "name": "Multiple subscripts not allowed"
-    },
-    {
-     "i": 47,
-     "name": "Length op, index op, then transform op is not allowed"
-    },
-    {
-     "i": 53,
-     "name": "array default"
-    },
-    {
      "i": 72,
      "name": "a+=() modifies existing instance of BashArray"
     }
    ]
   },
   "array-assoc": {
-   "pass": 34,
+   "pass": 35,
    "total": 38,
    "failures": [
     {
@@ -975,10 +691,6 @@
     {
      "i": 31,
      "name": "nameref and assoc array"
-    },
-    {
-     "i": 33,
-     "name": "printf -v and assoc array"
     },
     {
      "i": 34,
@@ -1061,7 +773,7 @@
    ]
   },
   "pipeline": {
-   "pass": 19,
+   "pass": 20,
    "total": 25,
    "failures": [
     {
@@ -1071,10 +783,6 @@
     {
      "i": 10,
      "name": "|&"
-    },
-    {
-     "i": 16,
-     "name": "! with ( )"
     },
     {
      "i": 17,
@@ -1091,21 +799,9 @@
    ]
   },
   "exit-status": {
-   "pass": 5,
+   "pass": 8,
    "total": 11,
    "failures": [
-    {
-     "i": 1,
-     "name": "Truncating 'return' status"
-    },
-    {
-     "i": 2,
-     "name": "subshell OverflowError https://github.com/oilshell/oil/issues/996"
-    },
-    {
-     "i": 3,
-     "name": "func subshell OverflowError https://github.com/oilshell/oil/issues/996"
-    },
     {
      "i": 8,
      "name": "If subshell false -- exit code is propagated in a weird way (strict_argv prevents)"
@@ -1216,24 +912,12 @@
    ]
   },
   "alias": {
-   "pass": 31,
+   "pass": 35,
    "total": 48,
    "failures": [
     {
-     "i": 0,
-     "name": "Usage of builtins"
-    },
-    {
      "i": 2,
      "name": "define and use alias on a single line"
-    },
-    {
-     "i": 11,
-     "name": "alias with trailing space causes alias expansion on second word"
-    },
-    {
-     "i": 13,
-     "name": "Recursive alias expansion of SECOND word"
     },
     {
      "i": 15,
@@ -1258,10 +942,6 @@
     {
      "i": 25,
      "name": "Alias with a quote in the middle is a syntax error"
-    },
-    {
-     "i": 28,
-     "name": "Two aliases in pipeline"
     },
     {
      "i": 30,
@@ -1320,17 +1000,9 @@
    ]
   },
   "process-sub": {
-   "pass": 0,
+   "pass": 3,
    "total": 8,
    "failures": [
-    {
-     "i": 0,
-     "name": "Process sub input"
-    },
-    {
-     "i": 1,
-     "name": "Process sub from external process to stdin"
-    },
     {
      "i": 2,
      "name": "Process sub from shell to stdin"
@@ -1350,10 +1022,6 @@
     {
      "i": 7,
      "name": "process subs and pipelines together"
-    },
-    {
-     "i": 8,
-     "name": "process sub in background &"
     }
    ]
   },
@@ -1407,33 +1075,9 @@
    ]
   },
   "sh-options": {
-   "pass": 25,
+   "pass": 31,
    "total": 32,
    "failures": [
-    {
-     "i": 0,
-     "name": "$- with -c"
-    },
-    {
-     "i": 3,
-     "name": "$- with interactive shell"
-    },
-    {
-     "i": 6,
-     "name": "pass shopt options like sh -O nullglob"
-    },
-    {
-     "i": 8,
-     "name": "vi and emacs are mutually exclusive"
-    },
-    {
-     "i": 9,
-     "name": "interactive shell starts with emacs mode on"
-    },
-    {
-     "i": 12,
-     "name": "-n for no execution (useful with --ast-output)"
-    },
     {
      "i": 20,
      "name": "noclobber on <>"

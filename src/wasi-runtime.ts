@@ -278,6 +278,8 @@ export class WasiRT {
       fd_datasync: this.fd_datasync.bind(this),
       fd_fdstat_get: this.fd_fdstat_get.bind(this),
       fd_fdstat_set_flags: this.fd_fdstat_set_flags.bind(this),
+      // Rights can't be changed (as in Wasmtime); Rust's std imports this
+      fd_fdstat_set_rights: () => 58, // ENOTSUP
       fd_filestat_get: this.fd_filestat_get.bind(this),
       fd_filestat_set_size: this.fd_filestat_set_size.bind(this),
       fd_filestat_set_times: this.fd_filestat_set_times.bind(this),
