@@ -176,11 +176,11 @@ async function tabDriver(browser, transport = 'relay') {
     db.close();
   }, transport);
   await page.evaluate(() => window.__tabcomputer.desktop.openApp('browser', {}));
-  await page.waitForFunction(() => window.__shiroBrowser?.engine, null, { timeout: 30000 });
-  const got = await page.evaluate(() => window.__shiroBrowser.engine.transport);
+  await page.waitForFunction(() => window.__tabcomputerBrowser?.engine, null, { timeout: 30000 });
+  const got = await page.evaluate(() => window.__tabcomputerBrowser.engine.transport);
   if (got !== transport) throw new Error(`transport ${transport} unavailable (server needs TABCOMPUTER_BROWSE_SERVER_FETCH=1)`);
   await page.evaluate(() => { const w = window.__tabcomputer.desktop.focused(); w?.maximize(); });
-  const active = () => page.evaluate(() => { const t = window.__shiroBrowser.window.active; return t && { url: t.url, bytes: t.bytes, requests: t.requests, fallback: t.fallback, title: t.title }; });
+  const active = () => page.evaluate(() => { const t = window.__tabcomputerBrowser.window.active; return t && { url: t.url, bytes: t.bytes, requests: t.requests, fallback: t.fallback, title: t.title }; });
   const frame = async () => {
     const el = await page.$('.sd-br-view iframe.sd-active');
     return el ? el.contentFrame() : null;
@@ -189,8 +189,8 @@ async function tabDriver(browser, transport = 'relay') {
     name: transport === 'server' ? 'tab-server' : 'tab', page,
     async open(url) {
       const t0 = Date.now();
-      await page.evaluate(() => { const w = window.__shiroBrowser.window; for (const t of w.tabs.slice(0, -1)) w.closeTab(t); });
-      await page.evaluate((url) => { const w = window.__shiroBrowser.window; const old = w.active; w.newTab(url); if (old) w.closeTab(old); }, url);
+      await page.evaluate(() => { const w = window.__tabcomputerBrowser.window; for (const t of w.tabs.slice(0, -1)) w.closeTab(t); });
+      await page.evaluate((url) => { const w = window.__tabcomputerBrowser.window; const old = w.active; w.newTab(url); if (old) w.closeTab(old); }, url);
       // Loaded = a document with the page runtime (not the navigation shell) past readyState loading
       const ok = await until(async () => {
         const fb = (await active())?.fallback;
