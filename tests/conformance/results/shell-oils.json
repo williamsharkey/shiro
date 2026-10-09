@@ -1320,17 +1320,9 @@
    ]
   },
   "process-sub": {
-   "pass": 0,
+   "pass": 3,
    "total": 8,
    "failures": [
-    {
-     "i": 0,
-     "name": "Process sub input"
-    },
-    {
-     "i": 1,
-     "name": "Process sub from external process to stdin"
-    },
     {
      "i": 2,
      "name": "Process sub from shell to stdin"
@@ -1350,10 +1342,6 @@
     {
      "i": 7,
      "name": "process subs and pipelines together"
-    },
-    {
-     "i": 8,
-     "name": "process sub in background &"
     }
    ]
   },

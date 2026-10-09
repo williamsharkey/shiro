@@ -478,4 +478,14 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe('sub\nst=3\nheredoc body\n1\n2\nh\na;b\nfoo:/home/bar\n/home/bar:/home/bar/a\na:~\n/bin:/home/bar/bin:/home/bar\n');
   });
+
+  it('process substitution: <(cmd) in a subshell, < <(cmd) into a loop, > >(cmd)', async () => {
+    const r = await script([
+      'x=1; cat <(echo 1; x=2; echo $x); echo "x=$x"',
+      'while read l; do echo "got $l"; done < <(printf "a\\nb\\n")',
+      'diff <(echo x) <(echo y) >/dev/null; echo st=$?',
+      'echo hi > >(tr a-z A-Z)',
+    ].join('\n'));
+    expect(r.out).toBe('1\n2\nx=1\ngot a\ngot b\nst=1\nHI\n');
+  });
 });

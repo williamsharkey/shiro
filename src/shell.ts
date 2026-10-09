@@ -124,6 +124,36 @@ function trapKey(spec: string): string | null {
   return SIGNALS.includes(name) ? name : null;
 }
 
+/** Replace each unquoted <(…) / >(…) with a placeholder (\uE030 N \uE031) kept in `out` */
+function hideProcSubs(text: string, out: string[]): string {
+  let res = '';
+  let q = '';
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { res += c; if (c === '\\' && q === '"') res += text[++i] ?? ''; else if (c === q) q = ''; continue; }
+    if (c === '\\') { res += c + (text[i + 1] ?? ''); i++; continue; }
+    if (c === "'" || c === '"') { q = c; res += c; continue; }
+    if ((c === '<' || c === '>') && text[i + 1] === '(' && !/[<>$\d]/.test(text[i - 1] ?? ' ') ) {
+      let depth = 0, j = i + 1;
+      for (; j < text.length; j++) {
+        if (text[j] === '(') depth++;
+        else if (text[j] === ')' && --depth === 0) break;
+      }
+      if (j < text.length) {
+        out.push(text.slice(i, j + 1));
+        res += `\uE030${out.length - 1}\uE031`;
+        i = j;
+        continue;
+      }
+    }
+    res += c;
+  }
+  return res;
+}
+
+/** Distinct names for process-substitution files */
+let procSubCounter = 0;
+
 /** Pids for in-page background jobs ($!), above any kernel pid in practice */
 let nextInPagePid = 40000;
 
@@ -801,6 +831,9 @@ export class Shell {
     }
     const h = this.heredocs.lookup(target);
     if (h) return h.expand ? this.expandHeredocBody(h.body) : h.body;
+    // `< <(cmd)`: the output of cmd
+    const ps = /^<\(([\s\S]+)\)$/.exec(target);
+    if (ps) return this.procSubOutput(ps[1], () => {});
     const data = await this.fs.readFile(this.fs.resolvePath(target, this.cwd), 'utf8');
     return typeof data === 'string' ? data : new TextDecoder().decode(data as any);
   }
@@ -3022,6 +3055,7 @@ export class Shell {
       }
 
       await flushCapture();
+      if (this.pendingOutSubs.length) await this.runOutSubs(outerStdout, outerStderr);
 
       for (const [key, value] of prefixEnvSaved) {
         if (value === undefined) delete this.env[key];
@@ -3091,6 +3125,14 @@ export class Shell {
       }
       if (target === '/dev/stdout') return t1;
       if (target === '/dev/stderr') return t2;
+      // > >(cmd): cmd reads what is written, once the command is done
+      const ps = /^>\(([\s\S]+)\)$/.exec(target);
+      if (ps) {
+        const p = `/tmp/.procsub_${Date.now()}_${procSubCounter++}`;
+        this.pendingOutSubs.push({ path: p, cmd: ps[1] });
+        target = p;
+        append = false;
+      }
       const path = this.fs.resolvePath(target, this.cwd);
       if (!append && !(await this.clobberOk(redir, path, stderrWriter))) return null;
       const f = files.get(path);
@@ -4566,6 +4608,20 @@ export class Shell {
         continue;
       }
 
+      // >(cmd): output process substitution, one word
+      if (ch === '>' && input[i + 1] === '(' && !inSingle && !inDouble && !current && !quoted) {
+        let depth = 1;
+        let j = i + 2;
+        while (j < input.length && depth > 0) {
+          if (input[j] === '(') depth++;
+          else if (input[j] === ')') depth--;
+          j++;
+        }
+        tokens.push(input.slice(i, j));
+        i = j;
+        continue;
+      }
+
       // >, >>, >| and N>, N>>, N>&M, N>&-, >&M (an all-digit word right before > is the fd)
       if (ch === '>' && !inSingle && !inDouble) {
         const fdPrefix = !quoted && /^(\d+|\{[A-Za-z_][A-Za-z0-9_]*\})$/.test(current) ? current : '';
@@ -4713,26 +4769,41 @@ export class Shell {
    */
   private async expandProcessSubstitution(args: string[], writeStderr: (s: string) => void): Promise<string[]> {
     const result: string[] = [];
-    let tmpCounter = 0;
     for (const arg of args) {
-      // Match <(command) — must be the entire arg or standalone
-      const match = arg.match(/^<\((.+)\)$/);
-      if (match) {
-        const subcmd = match[1];
-        try {
-          const { stdout } = await this.exec(subcmd);
-          const tmpPath = `/tmp/.procsub_${Date.now()}_${tmpCounter++}`;
-          await this.fs.writeFile(tmpPath, stdout);
-          result.push(tmpPath);
-        } catch (e: any) {
-          writeStderr(`shiro: process substitution failed: ${e.message}\r\n`);
-          result.push(arg);
-        }
+      const m = /^([<>])\(([\s\S]+)\)$/.exec(arg);
+      if (!m) { result.push(arg); continue; }
+      const path = `/tmp/.procsub_${Date.now()}_${procSubCounter++}`;
+      if (m[1] === '<') {
+        // <(cmd): a file holding cmd's output (cmd runs in a subshell)
+        await this.fs.writeFile(path, await this.procSubOutput(m[2], writeStderr));
       } else {
-        result.push(arg);
+        // >(cmd): a file the command writes; cmd reads it once the command is done
+        await this.fs.writeFile(path, '');
+        this.pendingOutSubs.push({ path, cmd: m[2] });
       }
+      result.push(path);
     }
     return result;
+  }
+
+  /** The output of a <(cmd) process substitution */
+  private async procSubOutput(cmd: string, writeStderr: (s: string) => void): Promise<string> {
+    const r = await this.fork().exec(cmd);
+    if (r.stderr) writeStderr(r.stderr);
+    return r.stdout.replace(/\r\n/g, '\n');
+  }
+
+  /** >(cmd) substitutions waiting for their command to finish */
+  private pendingOutSubs: { path: string; cmd: string }[] = [];
+
+  /** Run the >(cmd) readers on what was written to their files */
+  private async runOutSubs(writeStdout: (s: string) => void, writeStderr: (s: string) => void): Promise<void> {
+    while (this.pendingOutSubs.length) {
+      const { path, cmd } = this.pendingOutSubs.shift()!;
+      const data = await this.fs.readFile(path, 'utf8').catch(() => '') as string;
+      await this.inSubshell((sub) => sub.executeWithStdin(cmd, data, writeStdout, writeStderr));
+      await this.fs.unlink(path).catch(() => {});
+    }
   }
 
   /**
@@ -5163,10 +5234,14 @@ export class Shell {
 
   /** Brace, arithmetic, command-substitution, and variable expansion of command text */
   private async expandWords(text: string, writeStderr: (s: string) => void): Promise<string> {
+    // <(…) and >(…) bodies expand in their own subshell, not here
+    const procSubs: string[] = [];
+    if (/[<>]\(/.test(text)) text = hideProcSubs(text, procSubs);
     let expanded = this.expandBraces(text);
     expanded = this.expandArithmetic(expanded);
     expanded = await this.expandCommandSubstitution(expanded, writeStderr);
-    return this.expandVars(expanded);
+    expanded = this.expandVars(expanded);
+    return procSubs.length ? expanded.replace(/\uE030(\d+)\uE031/g, (_m, n) => procSubs[Number(n)]) : expanded;
   }
 
   /**
@@ -6793,7 +6868,8 @@ export function splitCompoundRedirects(cmd: string): { compound: string; redirec
   if (end < 0 || end >= cmd.length) return { compound: cmd, redirects: [] };
   const suffix = cmd.slice(end);
   const redirects: CompoundRedirect[] = [];
-  const re = /\s*(2>&1|&>|2>>|2>|>>|>|<)\s*('[^']*'|"[^"]*"|[^\s<>]+)?/y;
+  // (a target may be a process substitution: `done < <(cmd)`)
+  const re = /\s*(2>&1|&>|2>>|2>|>>|>|<)\s*([<>]\((?:[^()]|\([^()]*\))*\)|'[^']*'|"[^"]*"|[^\s<>]+)?/y;
   let pos = 0;
   while (pos < suffix.length) {
     if (!suffix.slice(pos).trim()) break;
