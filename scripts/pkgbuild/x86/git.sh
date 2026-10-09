@@ -27,3 +27,16 @@ cp -a "$R/libexec/git-core" "$PKG_OUT/git/libexec/"
 find "$PKG_OUT/git/libexec/git-core" -type f -exec sh -c 'head -c4 "$1" | grep -q ELF && "$STRIP" "$1"' _ {} \;
 find "$PKG_OUT/git/libexec/git-core" -type l -lname '*bin/git' -exec ln -sf /usr/bin/git {} \;
 cp -a "$R/share/git-core" "$PKG_OUT/git/share/"
+# /etc/gitconfig (linked from the package): no automatic background maintenance,
+# which costs seconds of CPU per run in Blink. Users can turn it back on.
+mkdir -p "$PKG_OUT/git/etc"
+cat > "$PKG_OUT/git/etc/gitconfig" <<'CFG'
+# Shiro: no automatic maintenance. After commits, fetches and merges git
+# would start `git maintenance run --auto --detach` (gc, commit-graph, ...)
+# in the background, which costs seconds of CPU per run in the browser.
+# To have it back: git config --global maintenance.auto true; gc.auto 6700
+[maintenance]
+	auto = false
+[gc]
+	auto = 0
+CFG
