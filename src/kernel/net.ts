@@ -792,7 +792,12 @@ export class KDatagramSocket implements OpenFile {
     return this.remote ? this.sendto(buf, 0, this.remote) : Promise.resolve(-EDESTADDRREQ);
   }
 
-  connect(addr: SockAddr): number { this.remote = { ...addr }; return 0; }
+  connect(addr: SockAddr): number {
+    this.remote = { ...addr };
+    // Like Linux: an unbound socket gets the route's source address and an ephemeral port
+    this.local ??= { family: this.domain, address: sourceFor(this.domain, addr.address), port: this.stack.ephemeral() };
+    return 0;
+  }
   bind(addr: SockAddr): number {
     if (this.local) return -EINVAL;
     this.local = { ...addr, port: addr.port || this.stack.ephemeral() };
@@ -849,11 +854,10 @@ export class KDatagramSocket implements OpenFile {
   }
   onReady(cb: () => void) { return this.q.onReady(cb); }
   getsockname(): SockAddr {
-    if (this.local) return { ...this.local };
-    // connect() picks the source address the route would (glibc's getaddrinfo
+    // connect() set the source address the route would use (glibc's getaddrinfo
     // sorts its answers by these, RFC 3484, and asserts a v4-mapped source
     // for a v4-mapped destination)
-    if (this.remote) return { family: this.domain, address: sourceFor(this.domain, this.remote.address), port: 0 };
+    if (this.local) return { ...this.local };
     return { family: this.domain, address: this.domain === AF_INET6 ? '::' : '0.0.0.0', port: 0 };
   }
   getpeername(): SockAddr | number { return this.remote ? { ...this.remote } : -ENOTCONN; }
