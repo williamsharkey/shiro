@@ -7,7 +7,7 @@ conformance work started (fc0af54).
 | Suite | Before | Now |
 |---|---|---|
 | [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1411/1567 (90.0%)** |
-| [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1394/1567 (89.0%)** |
+| [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1412/1567 (90.1%)** |
 | [Shell: smoosh POSIX tests](#shell-smoosh-posix-tests) | 111/162 (68.5%) | **157/162 (96.9%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **625/635 (98.4%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **148/320 (46.3%)** |
@@ -165,39 +165,39 @@ The same cases as above, run by scripts/conformance/browser-oils.mjs through the
 | builtin-echo | — | 25/27 | 2 |
 | builtin-printf | — | 51/55 | 4 |
 | builtin-read | — | 64/64 | 0 |
-| builtin-eval-source | — | 19/23 | 4 |
+| builtin-eval-source | — | 20/23 | 3 |
 | builtin-getopts | — | 26/30 | 4 |
-| builtin-trap | — | 29/33 | 4 |
+| builtin-trap | — | 31/33 | 2 |
 | builtin-bracket | — | 46/50 | 4 |
 | builtin-cd | — | 26/28 | 2 |
-| builtin-special | — | 7/12 | 5 |
-| builtin-type | — | 3/6 | 3 |
+| builtin-special | — | 8/12 | 4 |
+| builtin-type | — | 4/6 | 2 |
 | builtin-vars | — | 33/38 | 5 |
-| dbracket | — | 44/49 | 5 |
+| dbracket | — | 45/49 | 4 |
 | dparen | — | 13/14 | 1 |
-| assign | — | 38/43 | 5 |
+| assign | — | 39/43 | 4 |
 | append | — | 20/20 | 0 |
 | array-basic | — | 5/5 | 0 |
-| array | — | 75/78 | 3 |
+| array | — | 76/78 | 2 |
 | array-assoc | — | 35/38 | 3 |
 | brace-expansion | — | 51/55 | 4 |
 | tilde | — | 9/14 | 5 |
-| glob | — | 18/23 | 5 |
+| glob | — | 21/23 | 2 |
 | pipeline | — | 20/25 | 5 |
 | exit-status | — | 8/11 | 3 |
 | errexit | — | 34/35 | 1 |
 | subshell | — | 2/2 | 0 |
-| command_ | — | 8/16 | 8 |
+| command_ | — | 10/16 | 6 |
 | posix | — | 12/15 | 3 |
 | alias | — | 35/48 | 13 |
 | let | — | 1/2 | 1 |
 | empty-bodies | — | 3/3 | 0 |
 | whitespace | — | 0/0 | 0 |
 | shell-grammar | — | 32/33 | 1 |
-| process-sub | — | 3/8 | 5 |
+| process-sub | — | 6/8 | 2 |
 | regex | — | 35/37 | 2 |
 | temp-binding | — | 4/4 | 0 |
-| background | — | 21/27 | 6 |
+| background | — | 23/27 | 4 |
 | sh-options | — | 31/32 | 1 |
 | command-parsing | — | 2/2 | 0 |
 
@@ -221,33 +221,33 @@ The same cases as above, run by scripts/conformance/browser-oils.mjs through the
 - **func-parsing**: = in function name; Function name with $; Function name with command sub
 - **builtin-echo**: echo builtin should disallow typed args - literal; echo builtin should disallow typed args - variable
 - **builtin-printf**: printf %c unicode - prints the first BYTE of a string - it does not respect UTF-8; bash truncates long strftime string at 128; printf positive integer overflow; printf negative integer overflow
-- **builtin-eval-source**: eval usage; eval YSH block with 'break continue return error'; Source with syntax error; Eval with syntax error
+- **builtin-eval-source**: eval usage; Source with syntax error; Eval with syntax error
 - **builtin-getopts**: getopts with invalid variable name; OPTIND; OPTIND after multiple getopts with same spec; OPTIND after multiple getopts with different spec
-- **builtin-trap**: exit 1 when trap code string is invalid; exit codes for traps are isolated; traps are cleared in subshell (started with &); trap USR1, sleep, SIGINT: non-interactively
+- **builtin-trap**: exit 1 when trap code string is invalid; trap USR1, sleep, SIGINT: non-interactively
 - **builtin-bracket**: -k for sticky bit; test -p named pipe; -ef; test -c
 - **builtin-cd**: pwd in symlinked dir on shell initialization; Survey of getcwd() syscall
-- **builtin-special**: Prefix assignments persist after special builtins, like : (set -o posix); Prefix assignments persist after readonly, but NOT exported (set -o posix); Prefix binding for exec is a special case (versus e.g. readonly); bash 'type' gets confused - says 'function', but runs builtin; command, builtin - both can be redefined, not special (regression)
-- **builtin-type**: type -\> alias external; type of relative path; more special builtins
+- **builtin-special**: Prefix assignments persist after readonly, but NOT exported (set -o posix); Prefix binding for exec is a special case (versus e.g. readonly); bash 'type' gets confused - says 'function', but runs builtin; command, builtin - both can be redefined, not special (regression)
+- **builtin-type**: type -\> alias external; type of relative path
 - **builtin-vars**: Export sets a global variable that persists after export -n; Export a local that shadows a global; Unset exported variable, then define it again.  It's NOT still exported.; Exporting a parent func variable (dynamic scope); local after readonly
-- **dbracket**: [[ regex syntax error; [[ at runtime doesn't work; [[ with env prefix doesn't work; tilde expansion with =~ (confusing); [[ ]] with redirect
+- **dbracket**: [[ regex syntax error; [[ at runtime doesn't work; [[ with env prefix doesn't work; [[ ]] with redirect
 - **dparen**: (( )) with redirect
-- **assign**: Env binding can use preceding bindings, but not subsequent ones; Trying to run keyword 'for'; Test above without 'local' (which is not POSIX); aliased assignment doesn't split; "declare -a arr" and "readonly -a a" creates an empty array (OSH)
-- **array**: space before ( in array initialization; array with invalid token; a+=() modifies existing instance of BashArray
+- **assign**: Trying to run keyword 'for'; Test above without 'local' (which is not POSIX); aliased assignment doesn't split; "declare -a arr" and "readonly -a a" creates an empty array (OSH)
+- **array**: space before ( in array initialization; array with invalid token
 - **array-assoc**: unset -v and assoc array; nameref and assoc array; bash bug: (( A["$key"] = 1 )) doesn't work
 - **brace-expansion**: expansion on RHS of assignment; no expansion with RHS assignment; Two kinds of tilde expansion; Mixed case char expansion is invalid
 - **tilde**: ${undef:-~}; ${x//~/~root}; a[x]=foo:~ has tilde expansion; x=${undef-~:~}; temp assignment x=~ env
-- **glob**: Glob of unescaped [[] and []]; Glob of negated unescaped [[] and []]; \ in unquoted substitutions does not match a backslash; \ in unquoted substitutions escapes globchars; shopt -u globskipdots shows . and ..
+- **glob**: \ in unquoted substitutions does not match a backslash; \ in unquoted substitutions escapes globchars
 - **pipeline**: PIPESTATUS is set on simple commands; \|&; ! is not a command; Evaluation of argv[0] in pipeline occurs in child; SIGPIPE causes pipeline to die (regression for issue #295)
 - **exit-status**: If subshell false -- exit code is propagated in a weird way (strict_argv prevents); Exit code when command sub evaluates to empty str, e.g. `false` (#2416); More test cases with empty argv
 - **errexit**: pipeline process respects errexit
-- **command_**: Command block; Permission denied; filling $PATH cache, then insert the same command earlier in cache; filling $PATH cache, then deleting command; Non-executable on $PATH; hash without args prints the cache; hash with args; Executing command with same name as directory in PATH (#2429)
+- **command_**: Command block; Permission denied; filling $PATH cache, then insert the same command earlier in cache; filling $PATH cache, then deleting command; Non-executable on $PATH; hash without args prints the cache
 - **posix**: Empty for loop without in.  Do can be on the same line I guess.; Empty action for case is syntax error; Bare semi-colon not allowed
 - **alias**: define and use alias on a single line; Alias must be an unquoted word, no expansions allowed; first and second word are the same alias, with trailing space; Syntax error after expansion; Loop split across alias in another way; Loop split across both iterative and recursive aliases; Alias with a quote in the middle is a syntax error; Alias can be defined and used on a single line; alias with line continuation in the middle; alias for left brace; alias for left paren; here doc inside alias; Corner case: alias inside LHS array arithmetic expression
 - **let**: let with ()
 - **shell-grammar**: If with then on same line missing semicolon
-- **process-sub**: Process sub from shell to stdin; Non-linear pipeline with \>(); status code is available; shopt -s process_sub_fail; process subs and pipelines together
+- **process-sub**: Process sub from shell to stdin; Non-linear pipeline with \>()
 - **regex**: Unquoted { is a regex parse error; make a lisp example
-- **background**: wait -n with arguments - arguments are respected; wait with invalid arg; Wait for job and PIPESTATUS - cat; YSH wait --all; YSH wait --verbose; Signal message for killed background job
+- **background**: wait -n with arguments - arguments are respected; wait with invalid arg; Wait for job and PIPESTATUS - cat; Signal message for killed background job
 - **sh-options**: noclobber on \<\>
 
 </details>
