@@ -790,3 +790,36 @@ describe('gnupg', () => {
     expect((await sh('gpgconf --kill gpg-agent; echo rc=$?')).out).toBe('rc=0\n');
   }, 180_000);
 });
+
+describe('neovim', () => {
+  it('runs headless Lua and treesitter (parsers linked in)', async () => {
+    await install('neovim');
+    expect((await sh('nvim --version')).out).toMatch(/^NVIM v0\.12\.5\n[^]*Lua 5\.1\n/);
+    await fs.writeFile('/home/user/w/n.txt', 'hello\nworld\n');
+    expect((await sh("nvim --headless -c '%s/world/there/' -c wq n.txt >/dev/null 2>&1; cat n.txt")).out).toBe('hello\nthere\n');
+    const ts = 'lua local p=vim.treesitter.get_string_parser("local x = 1","lua"); io.stdout:write(p:parse()[1]:root():sexpr().."\\n")';
+    expect((await sh(`nvim --headless -c '${ts}' -c q`)).out).toMatch(/^\(chunk local_declaration: \(variable_declaration/);
+    const help = 'lua io.stdout:write(vim.bo.filetype.." "..tostring(vim.treesitter.highlighter.active[vim.api.nvim_get_current_buf()] ~= nil).."\\n")';
+    expect((await sh(`nvim --headless -c help -c '${help}' -c qa 2>&1`)).out).toBe('help true\n');
+  }, 180_000);
+
+  it('edits a file on the tty, and runs a shell in :terminal', async () => {
+    await install('neovim');
+    await fs.writeFile('/home/user/w/a.txt', 'one\ntwo\n');
+    const { term, done } = onTerminal('nvim a.txt');
+    await until(() => term.screen.includes('two'), 'the file on screen');
+    term.type('Gothree\x1b');
+    await until(() => term.screen.includes('three'), 'inserted text');
+    term.clear();
+    term.type(':terminal\r');
+    await until(() => term.screen.includes('$'), 'the shell prompt in :terminal');
+    term.type('iecho term-$((6*7))\r');
+    await until(() => term.screen.includes('term-42'), 'command output in :terminal');
+    term.clear();
+    term.type('exit\r'); // a :terminal shell that exits 0 closes its buffer: back to a.txt
+    await until(() => term.screen.includes('a.txt [+]'), 'the edited buffer again');
+    term.type(':wq\r');
+    expect(await done).toBe(0);
+    expect(await fs.readFile('/home/user/w/a.txt', 'utf8')).toBe('one\ntwo\nthree\n');
+  }, 180_000);
+});

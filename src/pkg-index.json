@@ -1983,6 +1983,45 @@
    ]
   },
   {
+   "name": "neovim",
+   "version": "0.12.5",
+   "description": "Neovim: hyperextensible Vim-based text editor (PUC Lua 5.1, runtime with :help; static x86-64 build)",
+   "license": "Apache-2.0 AND Vim",
+   "source": "https://github.com/neovim/neovim/tree/v0.12.5",
+   "homepage": "https://neovim.io/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/neovim.sh",
+   "section": "editors",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/nvim",
+     "url": "/pkg/neovim/0.12.5/nvim.gz",
+     "sha256": "062a88f3df7d3460d6a3cc9b4cd506ed61862d998abac1dea5b76d74d3343bba",
+     "size": 3340787,
+     "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/neovim/0.12.5/share.tar.gz",
+     "sha256": "93dd4745f6b5a73ad4fe2131b1ed7ef47e0585ffd8e86464d48404d55d105c9d",
+     "size": 5729499,
+     "unpack": "tar.gz"
+    }
+   ],
+   "bin": {
+    "nvim": {
+     "file": "bin/nvim"
+    }
+   },
+   "links": {
+    "/usr/share/nvim": "share/nvim"
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
    "name": "nano",
    "version": "9.2",
    "description": "GNU nano text editor (syntax highlighting; static x86-64 build)",
