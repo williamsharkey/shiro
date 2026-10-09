@@ -448,6 +448,8 @@ export class BufferFile implements OpenFile {
  */
 const FLUSH_DELAY_MS = 25;
 const FLUSH_MAX_DELAY_MS = 1000;
+/** Uncommitted bytes in the FileSystem beyond which a close waits for the commit (Inode.flush). */
+const WRITE_BACKLOG_BYTES = 16 << 20;
 
 class Inode {
   data: Uint8Array;
@@ -528,8 +530,11 @@ class Inode {
     const times = { mtime: this.mtimeMs, mtimeNs: this.mtimeNs, ...(this.atimeMs === null ? {} : { atime: this.atimeMs, atimeNs: this.atimeNs }) };
     // Refused (storage full: ENOSPC): the data stays here for a retry by fsync or close
     const written = this.fs.writeFile(this.path, snapshot, { times }).catch((e) => { this.dirty = true; throw e; });
-    // Paced: writes made meanwhile go into one later snapshot
-    this.flushing = (paced ? written.then(() => this.fs.flushed()) : written).finally(() => { this.flushing = null; });
+    // Paced: writes made meanwhile go into one later snapshot. Past a backlog of
+    // uncommitted data a close waits too, or a fast writer (dpkg unpacking)
+    // holds it all in memory (python3's install peaked 150 MiB higher)
+    const wait = paced || this.fs.pendingBytes > WRITE_BACKLOG_BYTES;
+    this.flushing = (wait ? written.then(() => this.fs.flushed()) : written).finally(() => { this.flushing = null; });
     await this.flushing;
   }
 }
