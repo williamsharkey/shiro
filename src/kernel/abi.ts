@@ -257,6 +257,7 @@ export const O_DSYNC = 0o10000;
 export const O_SYNC = 0o4010000;
 export const O_DIRECTORY = 0o200000;
 export const O_NOFOLLOW = 0o400000;
+export const O_PATH = 0o10000000;
 export const O_CLOEXEC = 0o2000000;
 
 export const AT_FDCWD = -100;
@@ -288,6 +289,10 @@ export const F_SETFD = 2;
 export const F_GETFL = 3;
 export const F_SETFL = 4;
 export const F_DUPFD_CLOEXEC = 1030;
+export const F_SETPIPE_SZ = 1031;
+export const F_GETPIPE_SZ = 1032;
+/** /proc/sys/fs/pipe-max-size: the largest F_SETPIPE_SZ an unprivileged process may ask for */
+export const PIPE_MAX_SIZE = 1048576;
 export const FD_CLOEXEC = 1;
 
 // ── poll ───────────────────────────────────────────────────────────────────

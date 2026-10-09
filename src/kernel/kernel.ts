@@ -17,10 +17,10 @@ import { packageShadows, pkgOwnShadows, packageArgsForPath, PKG_BIN_DIR } from '
 import * as A from './abi';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
-  RegularFile, DirFile, openInode, openInodeSync, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, flushInode, inodeStat, hasOpenInodes,
+  RegularFile, DirFile, openInode, openInodeSync, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
   shareInodeNumber, forgetInodeNumber,
 } from './fd';
-import { createPipe } from './pipe';
+import { createPipe, PipeEnd } from './pipe';
 import { Process } from './process';
 import { EpollFile, waitReady } from './epoll';
 import { EventFile } from './fd';
@@ -111,6 +111,27 @@ function normalize(path: string): string {
 /** A path whose last component is followed by '/': it must name a directory (path_resolution(7)). */
 function trailingSlash(path: string): boolean {
   return path.length > 1 && path.endsWith('/') && !/^\/+$/.test(path);
+}
+
+/** Syscalls an O_PATH fd fails with EBADF, by the argument holding the fd */
+const OPATH_FD_ARG: Record<number, number> = {
+  0: 0, 1: 0, 16: 0, 17: 0, 18: 0, 19: 0, 20: 0, 74: 0, 75: 0, 77: 0, 91: 0, 93: 0, // read write ioctl pread pwrite readv writev fsync fdatasync ftruncate fchmod fchown
+  190: 0, 193: 0, 196: 0, 199: 0, 217: 0, 285: 0, 233: 2, // f*xattr getdents64 fallocate epoll_ctl
+};
+
+/** An O_PATH description over `f`: same file and stat, no I/O */
+function pathOnlyFile(f: OpenFile): OpenFile {
+  const ebadf = () => -A.EBADF;
+  return new Proxy(f, {
+    get(t, k) {
+      if (k === 'flags') return (t.flags & ~3) | A.O_PATH;
+      if (k === 'read' || k === 'write' || k === 'pread' || k === 'pwrite' || k === 'ioctl') return async () => -A.EBADF;
+      if (k === 'tryRead' || k === 'tryWrite') return ebadf;
+      const v = Reflect.get(t, k, t);
+      return typeof v === 'function' ? v.bind(t) : v;
+    },
+    set(t, k, v) { return Reflect.set(t, k, v, t); },
+  });
 }
 
 /** Single-quote a word for the shell. */
@@ -682,6 +703,8 @@ export class Kernel {
   /** Absolute path for `path` relative to `dirfd` (AT_FDCWD = cwd), or -errno. */
   resolvePath(proc: Process, path: string, dirfd = A.AT_FDCWD): string | number {
     if (path === '') return -A.ENOENT;
+    // PATH_MAX 4096 with its NUL, NAME_MAX 255 per component
+    if (path.length >= 4096 || path.split('/').some((c) => c.length > 255)) return -A.ENAMETOOLONG;
     if (path.startsWith('/')) return normalize(path);
     let base = proc.cwd;
     if (dirfd !== A.AT_FDCWD) {
@@ -695,6 +718,11 @@ export class Kernel {
 
   /** open(2) without the fd: returns the new OpenFile or -errno. */
   async open(proc: Process, path: string, flags: number, mode = 0o666, dirfd = A.AT_FDCWD): Promise<OpenFile | number> {
+    // O_PATH: a descriptor that only names the file (fstat, fchdir, *at, dup, close)
+    if (flags & A.O_PATH) {
+      const f = await this.open(proc, path, (flags & (A.O_NOFOLLOW | A.O_DIRECTORY)) | A.O_RDONLY, mode, dirfd);
+      return typeof f === 'number' ? f : pathOnlyFile(f);
+    }
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
     const fdm = /^\/(?:dev\/fd|proc\/self\/fd)\/(\d+)$/.exec(p) ?? (/^\/dev\/(stdin|stdout|stderr)$/.exec(p));
@@ -750,7 +778,7 @@ export class Kernel {
       if ((flags & A.O_TRUNC) && canWrite(flags)) await file.truncate(0);
       return file;
     } catch (e) {
-      return A.errnoFromError(e);
+      return this.pathErrno(p, A.errnoFromError(e));
     }
   }
 
@@ -768,7 +796,7 @@ export class Kernel {
    */
   openSync(proc: Process, path: string, flags: number, dirfd = A.AT_FDCWD): OpenFile | number | undefined {
     const fs = this.fs;
-    if (!fs || flags & (A.O_CREAT | A.O_TRUNC | A.O_NOFOLLOW) || trailingSlash(path)) return undefined;
+    if (!fs || flags & (A.O_CREAT | A.O_TRUNC | A.O_NOFOLLOW | A.O_PATH) || trailingSlash(path)) return undefined;
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
     if (this.devices.has(p) || /^\/(?:dev|proc)\//.test(p)) return undefined;
@@ -804,6 +832,20 @@ export class Kernel {
       atimeNs: n.atime === undefined ? n.mtimeNs : n.atimeNs, mtimeNs: n.mtimeNs,
     }, data);
     return 0;
+  }
+
+  /** -ENOENT for `p` is -ENOTDIR when a leading component is an existing non-directory (path_resolution(7)) */
+  private async pathErrno(p: string, errno: number): Promise<number> {
+    if (errno !== -A.ENOENT || !this.fs) return errno;
+    const parts = p.split('/').filter(Boolean);
+    let cur = '';
+    for (let k = 0; k < parts.length - 1; k++) {
+      cur += '/' + parts[k];
+      const st = await this.fs.stat(cur).catch(() => null);
+      if (!st) return errno;
+      if (!st.isDirectory()) return -A.ENOTDIR;
+    }
+    return errno;
   }
 
   async statPath(proc: Process, path: string, follow = true, dirfd = A.AT_FDCWD): Promise<A.KStat | number> {
@@ -848,7 +890,7 @@ export class Kernel {
         atimeNs: st.atimeNs, mtimeNs: st.mtimeNs,
       };
     } catch (e) {
-      return A.errnoFromError(e);
+      return this.pathErrno(p, A.errnoFromError(e));
     }
   }
 
@@ -1203,6 +1245,10 @@ export class Kernel {
       return this.fs;
     };
 
+    // An O_PATH descriptor can't be read, written or changed through
+    const pathFd = OPATH_FD_ARG[nr];
+    if (pathFd !== undefined && ((file(args[pathFd])?.flags ?? 0) & A.O_PATH)) return -A.EBADF;
+
     try {
       const handlers = this.syscallTable.get(nr);
       if (handlers) {
@@ -1344,7 +1390,7 @@ export class Kernel {
           if (!fds.has(args[0])) return -A.EBADF;
           return await fds.dup2(args[0], args[1]);
         case A.SYS_dup3:
-          if (args[0] === args[1]) return -A.EINVAL;
+          if (args[0] === args[1] || (args[2] & ~A.O_CLOEXEC)) return -A.EINVAL;
           return await fds.dup2(args[0], args[1], !!(args[2] & A.O_CLOEXEC));
         case A.SYS_nanosleep: {
           const ms = args[0] * 1000 + Math.floor(args[1] / 1e6);
@@ -1718,6 +1764,7 @@ export class Kernel {
           const real = await fs().realpath(p);
           await flushInode(fs(), real);
           await fs().chmod(real, mode & 0o7777);
+          setInodeMode(fs(), real, mode);
           return 0;
         }
         case A.SYS_utimensat: {
@@ -1862,6 +1909,15 @@ export class Kernel {
         const mask = A.O_NONBLOCK | A.O_APPEND;
         f.flags = (f.flags & ~mask) | (arg & mask);
         return 0;
+      }
+      case A.F_GETPIPE_SZ:
+      case A.F_SETPIPE_SZ: {
+        if (!(f instanceof PipeEnd)) return -A.EBADF;
+        if (cmd === A.F_GETPIPE_SZ) return f.pipe.capacity;
+        const size = arg | 0;
+        if (size < 0) return -A.EINVAL;
+        if (size > A.PIPE_MAX_SIZE) return -A.EPERM;
+        return f.pipe.resize(size);
       }
       default: return -A.EINVAL;
     }

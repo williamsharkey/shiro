@@ -127,6 +127,8 @@ export class EpollFile implements OpenFile {
     if (file === this) return -EINVAL;
     if (file.kind === 'file' || file.kind === 'dir') return -EPERM;
     if (file instanceof EpollFile && file.watches(this)) return -ELOOP;
+    // At most 5 epolls deep, like Linux (EP_MAX_NESTS)
+    if (op === EPOLL_CTL_ADD && file instanceof EpollFile && file.depth() >= 5) return -EINVAL;
     const byFd = this.interest.get(file);
     const cur = byFd?.get(fd);
     switch (op) {
@@ -168,6 +170,14 @@ export class EpollFile implements OpenFile {
     if (m && m.size === 0) this.interest.delete(e.file);
   }
 
+  /** Epolls in the deepest chain below and including this one */
+  depth(level = 0): number {
+    if (level > 8) return level;
+    let d = 0;
+    for (const f of this.interest.keys()) if (f instanceof EpollFile) d = Math.max(d, f.depth(level + 1));
+    return d + 1;
+  }
+
   /** Does this epoll (transitively) watch `ep`? Guards against loops. */
   watches(ep: EpollFile, depth = 0): boolean {
     if (depth > 5) return true;
@@ -180,6 +190,17 @@ export class EpollFile implements OpenFile {
 
   /** Collect up to `max` ready events, applying ET/ONESHOT bookkeeping when `consume`. */
   collect(max: number, consume = true): EpollEvent[] {
+    const reported: OpenFile[] = [];
+    const out = this.scanReady(max, consume, reported);
+    // Reported entries go to the back, so a full events array doesn't starve the rest (like Linux's ready list)
+    for (const f of reported) {
+      const m = this.interest.get(f);
+      if (m) { this.interest.delete(f); this.interest.set(f, m); }
+    }
+    return out;
+  }
+
+  private scanReady(max: number, consume: boolean, reported: OpenFile[]): EpollEvent[] {
     const out: EpollEvent[] = [];
     for (const [file, m] of [...this.interest]) {
       if (refCount(file) === 0) { for (const e of [...m.values()]) this.drop(e); continue; }
@@ -193,6 +214,7 @@ export class EpollFile implements OpenFile {
         if (consume) {
           if (e.events & EPOLLET) e.armed = false;
           if (e.events & EPOLLONESHOT) e.disabled = true;
+          reported.push(file);
         }
       }
     }

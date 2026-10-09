@@ -28,8 +28,26 @@ export class Pipe {
   private writeWaiters = new Set<() => void>();
   readonly listeners = new ReadyListeners();
 
-  constructor(readonly capacity = PIPE_CAPACITY) {
+  constructor(public capacity = PIPE_CAPACITY) {
     this.buf = new Uint8Array(capacity);
+  }
+
+  /** F_SETPIPE_SZ: the new capacity (`size` rounded up to a power-of-two number of pages), or -EBUSY if the data doesn't fit */
+  resize(size: number): number {
+    let cap = PIPE_BUF;
+    while (cap < size) cap *= 2;
+    if (cap < this.count) return -16; // EBUSY
+    if (cap !== this.capacity) {
+      const next = new Uint8Array(cap);
+      const first = Math.min(this.count, this.capacity - this.head);
+      next.set(this.buf.subarray(this.head, this.head + first));
+      if (this.count > first) next.set(this.buf.subarray(0, this.count - first), first);
+      this.buf = next;
+      this.head = 0;
+      this.capacity = cap;
+      this.wakeWriters();
+    }
+    return cap;
   }
 
   get available(): number { return this.count; }
