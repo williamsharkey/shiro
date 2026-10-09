@@ -51,6 +51,8 @@ const forkSharedBin = join(out, 'forkshared');
 const haveForkShared = tryBuild('gcc', ['-static', '-O1', '-o', forkSharedBin, 'forkshared.c']);
 const mremapBin = join(out, 'mremap');
 const haveMremap = tryBuild('gcc', ['-static', '-O1', '-o', mremapBin, 'mremap.c']);
+const prctlcapBin = join(out, 'prctlcap');
+const havePrctlcap = tryBuild('gcc', ['-static', '-O1', '-o', prctlcapBin, 'prctlcap.c']);
 const lchownBin = join(out, 'lchown');
 const haveLchown = tryBuild('gcc', ['-static', '-O1', '-o', lchownBin, 'lchown.c']);
 const ssecmpBin = join(out, 'ssecmp');
@@ -492,6 +494,17 @@ describe('Blink engine: CPU and syscall fixes', () => {
     expect(r.output.replace(/\r\n/g, '\n')).toBe(
       'no MAYMOVE: Cannot allocate memory\nmoved=1 first=7 mid=7 last=9\nold range free=1\n' +
       'shrunk same=1 tail free=1 last=7\nfixed at=1 first=7\nreadonly moved=1 byte=42\n');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  // perl's $0 = ... (Debian's addgroup); libcap's cap_get_proc (ping)
+  it.skipIf(!havePrctlcap)('prctl PR_SET_NAME/PR_GET_NAME/PR_CAPBSET_READ, capget/capset', async () => {
+    const { shell } = await setup(readFileSync(prctlcapBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'default name prog\nset 0 name renamed-thread-\ncapbset_read(0)=1 capbset_read(40)=1\n' +
+      'capbset_read(64)=-1 Invalid argument\ncapget(version 0)=0 , version 0x20080522\n' +
+      'capget=0 full=0\ncapset=0\n');
     expect(r.exitCode).toBe(0);
   }, 60_000);
 

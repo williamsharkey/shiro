@@ -399,6 +399,11 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    used the host's one timer, shared by every process in an instance), so
    a child's alarm is its own and SIGALRM interrupts blocking calls like
    any signal. Test: `fixtures/x86/alarmfork.c`.
+33. `prctl` `PR_SET_NAME`/`PR_GET_NAME` (per thread; perl's `$0 = ...` died
+   with EINVAL) and `PR_CAPBSET_READ`; under Shiro `capget` reports every
+   capability for uid 0 and none otherwise (Linux's version handshake), and
+   `capset` accepts (libcap's `cap_get_proc` failed with ENOSYS). Test:
+   `fixtures/x86/prctlcap.c`.
 
 Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.
