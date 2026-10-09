@@ -42,10 +42,17 @@ export const sleep: Command = {
         break;
     }
 
-    // In browser environment, we simulate sleep with a promise
-    // Note: This is non-blocking in async context
-    await new Promise(resolve => (globalThis as any).setTimeout(resolve, seconds * 1000));
+    // A timer; the shell's abort (Ctrl-C, `kill` of the job it runs in) ends it early
+    const signal: AbortSignal | undefined = ctx.shell?.abortController?.signal;
+    if (signal?.aborted) return 130;
+    let aborted = false;
+    await new Promise<void>((resolve) => {
+      const done = () => { clearTimeout(t); signal?.removeEventListener('abort', onAbort); resolve(); };
+      const onAbort = () => { aborted = true; done(); };
+      const t = (globalThis as any).setTimeout(done, seconds * 1000);
+      signal?.addEventListener('abort', onAbort);
+    });
 
-    return 0;
+    return aborted ? 130 : 0;
   },
 };

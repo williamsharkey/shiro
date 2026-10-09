@@ -280,6 +280,29 @@ composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts,
 a few MiB each. The terminal UI's +19 KiB is /dom, the sign-in hook and the
 other integration changes since db9f698, not desktop code.
 
+### unix/shell-stdio 2 — POSIX shell fixes (smoosh suite)
+
+Signals to the shell, $$/$PPID/$!, exported vs unexported variables,
+subshell EXIT traps, set -u, bracket expressions and the other fixes found by
+the smoosh POSIX suite (docs/CONFORMANCE.md). Quick shell suite, isolated,
+base unix/integration c14344d vs. 3107d0c, three runs of each alternating
+(medians per run, ms):
+
+| metric | base | new |
+|---|---|---|
+| shell.true | 0.075 / 0.080 / 0.080 | 0.068 / 0.090 / 0.072 |
+| shell.cmd_subst | 0.268 / 0.205 / 0.170 | 0.205 / 0.194 / 0.223 |
+| shell.loop_1000 | 86.7 / 96.3 / 93.7 | 110.2 / 86.7 / 98.2 |
+| shell.for_seq_1000 | 36.5 / 35.8 / 39.1 | 36.3 / 38.6 / 38.2 |
+| shell.pipeline_seq_grep_wc | 31.7 / 33.4 / 38.1 | 54.3 / 41.3 / 38.0 |
+| shell.redirect_append_100 | 6.26 / 6.46 / 7.65 | 6.92 / 7.41 / 7.42 |
+
+compare.mjs flagged loop_1000, pipeline_seq_grep_wc and redirect_append_100
+on the first pair; the runs overlap after that. A CPU profile of
+pipeline_seq_grep_wc on both builds has the same top functions (seq's number
+formatting, wc's count, grep), none of them changed here, so the difference
+is taken as noise. Worth re-measuring on a quieter host.
+
 ### unix/shell-stdio — a shell run as a kernel process uses its fds
 
 `sh -c SCRIPT` spawned by a program (and scripts run through `runViaShell`)

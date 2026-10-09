@@ -21,9 +21,11 @@ normal `npm run test:shiro` keeps them fixed.
 - Cases: `oils/spec/*.test.sh`, a vendored POSIX/bash subset of
   [oils-for-unix](https://github.com/oils-for-unix/oils) `spec/`
   (see `oils/README.md`, Apache-2.0).
-- Each case runs in a fresh `Shell` (shared filesystem) as `sh CASE.sh` in an
-  empty directory, with `$TMP`, `$SH` (= `sh`) and `$REPO_ROOT` set like the
-  oils harness. The oils helpers `argv.py`, `printenv.py` and
+- Each case runs in a fresh `Shell` (shared filesystem) as `bash CASE.sh` in
+  an empty directory, with `$TMP`, `$SH` (= `bash`) and `$REPO_ROOT` set like
+  the oils harness. (Bash, since the judge is bash: as `sh`, Shiro follows
+  POSIX where bash's own mode differs, e.g. a readonly assignment or a failed
+  `.` ends the script.) The oils helpers `argv.py`, `printenv.py` and
   `stdout_stderr.py` are test-only builtins.
 - Judged against **bash**: stdout and exit status must match the case's
   default expectation or its `OK`/`BUG`/`N-I bash` variant. stderr is not
@@ -34,6 +36,22 @@ normal `npm run test:shiro` keeps them fixed.
   never comes back, so the per-case timeout can't fire); they count as
   failures. Find new ones with `SPEC_PROGRESS=/tmp/p.txt`, which logs each
   case before it runs. `SPEC_FILES=a,b` and `SPEC_CASES=3,4` narrow a run.
+
+## Shell: smoosh POSIX tests (`smoosh-posix.conf.ts`)
+
+- Cases: `smoosh/shell/*.test`, vendored from
+  [smoosh](https://github.com/mgree/smoosh) `tests/shell` (MIT, commit
+  cc67dbe), with the expected `NAME.out` and `NAME.ec` (default 0).
+- Each case runs in a fresh `Shell` as `sh /smoosh/shell/NAME.test` in an
+  empty directory with `$TEST_SHELL=sh`, as smoosh's `shell_tests.sh` does.
+  `$TEST_UTIL`'s C helpers (`argv`, `getenv`, `readdir`) are shell scripts;
+  cases that use `fds` (open fds via fcntl) are not scored.
+- Judged on stdout and exit status. stderr isn't compared (the expected
+  messages carry each shell's own prefix).
+- Only cases host dash or `bash --posix` passes are scored
+  (`smoosh/baseline.json`, from `scripts/conformance/smoosh-baseline.mjs`).
+  A few kill/sleep timing cases can flip between baseline runs.
+  `SMOOSH_CASES=a,b` narrows a run (written to `results/detail/`, not scored).
 
 ## Utilities: busybox testsuite (`utils-busybox.conf.ts`)
 
