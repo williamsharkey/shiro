@@ -5,9 +5,12 @@
  * and curl -o of binary files.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { createTestShell, run } from './helpers';
 import { transformESModules } from '@shiro/commands/jseval/module-transform';
 import { isEsbuildChunk, liveEsbuildChunk } from '@shiro/commands/jseval/esm-live';
+import { claudeCmd } from '@shiro/commands/claude';
 
 async function shellWith(files: Record<string, string>) {
   const { fs, shell } = await createTestShell();
@@ -154,4 +157,30 @@ describe('curl -o', () => {
     await run(shell, 'cd /tmp && curl -sO https://example.com/dl/tool.bin');
     expect((await fs.readFile('/tmp/tool.bin') as Uint8Array).length).toBe(bytes.length);
   });
+});
+
+describe('claude --native', () => {
+  it('explains where the binary goes when there is none', async () => {
+    const { shell } = await createTestShell();
+    shell.commands.register(claudeCmd);
+    const r = await run(shell, 'CLAUDE_NATIVE_PATH=/nowhere/claude claude --native --version');
+    expect(r.exitCode).toBe(1);
+    expect(r.output).toContain('no native Claude Code binary at /nowhere/claude');
+    expect(r.output).toContain('linux-x64-musl');
+  });
+
+  it('runs the ELF at CLAUDE_NATIVE_PATH in Blink, with --native or CLAUDE_NATIVE=1', async () => {
+    const { fs, shell } = await createTestShell();
+    shell.commands.register(claudeCmd);
+    await fs.mkdir('/opt/n', { recursive: true });
+    await fs.writeFile('/opt/n/claude', readFileSync(resolve(__dirname, 'fixtures/x86/hello-musl')), { mode: 0o755 });
+    await fs.writeFile('/home/user/input.txt', 'hi from shiro\n');
+    await run(shell, 'cd /home/user');
+    let r = await run(shell, "CLAUDE_NATIVE_PATH=/opt/n/claude claude --native a 'b c' < /dev/null");
+    expect(r.output).toContain('hello from c');
+    expect(r.output).toContain('arg1=a');
+    expect(r.output).toContain('arg2=b c');
+    r = await run(shell, 'CLAUDE_NATIVE=1 CLAUDE_NATIVE_PATH=/opt/n/claude claude fail < /dev/null; echo "status=$?"');
+    expect(r.output).toContain('status=7');
+  }, 60_000);
 });

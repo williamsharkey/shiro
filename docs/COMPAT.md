@@ -331,10 +331,15 @@ ncurses-based programs are linked against a static ncurses 6.5 with
 Status (2026-10-09, unix/agent-clis, see "Agent CLIs" below): with Blink's
 SSE4.1/4.2 (patch 0040) the **musl build runs**: `--version` in 2.1 s and
 `-p` reaches the Anthropic API. The glibc build still crashes in Bun's
-startup. Before patch 0040 both died of SIGILL on `pinsrq`. `claude
---native` is not wired up: the binary and musl's loader are on hosts
-without CORS, so the page would need server-side proxying (an owner
-decision).
+startup. Before patch 0040 both died of SIGILL on `pinsrq`.
+
+`claude --native ARGS` (or `CLAUDE_NATIVE=1 claude ARGS`) runs the native
+binary at `$CLAUDE_NATIVE_PATH`, default `~/.local/bin/claude`, through the
+shell's ELF path (Blink, with the terminal's pty); plain `claude` still runs
+the pinned npm build. Shiro doesn't download it: downloads.claude.ai and
+Alpine's CDN send no CORS headers, so fetching them would need a server
+proxy (an owner decision). Put the linux-x64-musl build there and musl's
+loader at `/lib/ld-musl-x86_64.so.1`; without a binary it says so.
 
 What the official native installer (`claude.ai/install.sh`) installs, as of
 2.1.295 (`downloads.claude.ai/claude-code-releases/<version>/<platform>/claude`,
