@@ -65,12 +65,17 @@ destroyed), and the next Terminal window adopts it again.
   title bar. Drag it to the left or right edge to tile it, or to the top edge
   to maximize. Double-click the title bar to zoom. Drag any edge or corner to
   resize.
-- **The dock** shows Terminal, Files, Settings and Activity, then terminal
+- **The dock** shows Terminal, Files, Browser, Settings and Activity, then terminal
   programs: Vim, htop and Python, plus Neovim, Emacs, nano, tmux, Lua and
   SQLite once they are installed. A program that is not installed has a ↓
   badge; clicking it runs `apt install NAME && NAME` in a new Terminal
   window. A dot under an icon marks a running app. Right-click an icon to
   list its windows, open a new window, or close it.
+- **Browser** (docs/BROWSER.md): tabs, address bar, back/forward/reload,
+  history, bookmarks and saved passwords, showing real sites on per-site
+  browse origins with TLS done in the page. "Open in real tab" (and a banner
+  for passkeys, Google sign-in and TLS 1.2-only sites) hands a page to the
+  host browser. `desktop open browser` / `openApp('browser', { url })`.
 - **Keyboard.** The browser keeps Ctrl/Cmd+N, T and W for itself, so desktop
   shortcuts use Alt+Shift. Terminal programs rarely use that combination.
 

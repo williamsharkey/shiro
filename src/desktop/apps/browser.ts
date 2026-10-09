@@ -10,6 +10,7 @@ import { CookieJar, type Cookie } from '../../browser/cookies';
 import { Broker, type BrokerTab } from '../../browser/broker';
 import { setTrustRoots } from '../../browser/tls';
 import { kvGet, kvSet } from '../../browser/kv';
+import { Vault, renderPasswords } from './browser-passwords';
 import type { ByteStream } from '../../browser/http1';
 import type { Dialer } from '../../browser/netfetch';
 import { AF_INET, SOCK_STREAM, errnoName, netStack, netStackOf, type KSocket } from '../../kernel/net';
@@ -57,6 +58,7 @@ class Engine {
   bookmarks: { url: string; title: string }[] = [];
   tabs = new Set<Tab>();
   error = '';
+  vault = new Vault();
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   static async create(kernel: Kernel): Promise<Engine> {
@@ -71,6 +73,7 @@ class Engine {
     e.history = (await kvGet<HistoryEntry[]>('history').catch(() => undefined)) ?? [];
     e.bookmarks = (await kvGet<{ url: string; title: string }[]>('bookmarks').catch(() => undefined)) ?? [];
     await e.loadRoots();
+    await e.vault.load();
     const stack = netStackOf(kernel) ?? netStack;
     e.broker = new Broker({ map: e.map, app: e.app, dial: kernelDialer(stack), jar: e.jar, tabs: () => [...e.tabs] });
     e.broker.start();
@@ -140,6 +143,8 @@ class Tab implements BrokerTab {
   index = -1;
   traversing: string | null = null;
   fallback: { reason: string; url: string } | null = null;
+  login: { origin: string; fill: (u: string, p: string) => void } | null = null;
+  savePrompt: { origin: string; url: string; username: string; password: string } | null = null;
   iframe: HTMLIFrameElement | null = null;
   button: HTMLButtonElement;
   constructor(private ui: BrowserWindow) {
@@ -172,6 +177,7 @@ class Tab implements BrokerTab {
       this.ui.view.append(f);
     }
     this.url = realUrl;
+    this.login = null;
     this.iframe.src = target;
     this.ui.refresh();
   }
@@ -193,6 +199,16 @@ class Tab implements BrokerTab {
     this.ui.refresh();
   }
   openTab(url: string) { this.ui.newTab(url); }
+  onLoginForm(origin: string, fill: (u: string, p: string) => void) {
+    this.login = { origin, fill };
+    this.ui.refresh();
+  }
+  onLoginSubmitted(origin: string, url: string, username: string, password: string) {
+    const v = this.ui.engine.vault;
+    if (v.unlocked && v.forOrigin(origin).some((e) => e.username === username && e.password === password)) return;
+    this.savePrompt = { origin, url, username, password };
+    this.ui.refresh();
+  }
   go(delta: number) {
     const i = this.index + delta;
     if (i < 0 || i >= this.stack.length) return;
@@ -210,6 +226,8 @@ class BrowserWindow {
   win!: DesktopWindow;
   private addr!: HTMLInputElement;
   private banner!: HTMLElement;
+  private saveBanner!: HTMLElement;
+  private chooser = false;
   private panel!: HTMLElement;
   private status!: HTMLElement;
   private tabStrip!: HTMLElement;
@@ -235,17 +253,20 @@ class BrowserWindow {
         <button class="sd-btn sd-icon-btn" data-act="reload" title="Reload">⟳</button>
         <input class="sd-input sd-br-addr" spellcheck="false" placeholder="Search or enter address" list="sd-br-hist">
         <datalist id="sd-br-hist"></datalist>
+        <button class="sd-btn" data-act="key" title="Fill a saved login" style="display:none">🔑 Fill</button>
         <button class="sd-btn sd-icon-btn" data-act="star" title="Bookmark this page">☆</button>
         <button class="sd-btn" data-act="real" title="Open this page in a real browser tab">Open in real tab</button>
         <button class="sd-btn sd-icon-btn" data-act="menu" title="History, bookmarks, settings">☰</button>
       </div>
       <div class="sd-br-banner"><span></span><button class="sd-btn sd-primary" data-act="real">Open in a real tab</button><button class="sd-btn" data-act="dismiss">Dismiss</button></div>
+      <div class="sd-br-banner sd-br-save"><span></span><button class="sd-btn sd-primary" data-act="save-login">Save</button><button class="sd-btn" data-act="no-save">Not now</button></div>
       <div class="sd-br-view"><div class="sd-br-panel"></div></div>
       <div class="sd-br-status"></div>`;
     this.tabStrip = r.querySelector('.sd-br-tabs')!;
     this.view = r.querySelector('.sd-br-view')!;
     this.addr = r.querySelector('.sd-br-addr')!;
     this.banner = r.querySelector('.sd-br-banner')!;
+    this.saveBanner = r.querySelector('.sd-br-save')!;
     this.panel = r.querySelector('.sd-br-panel')!;
     this.status = r.querySelector('.sd-br-status')!;
     r.addEventListener('click', (e) => {
@@ -260,6 +281,15 @@ class BrowserWindow {
         case 'dismiss': if (t) { t.fallback = null; this.refresh(); } break;
         case 'star': if (this.engine) this.toggleBookmark(); break;
         case 'menu': if (this.engine) this.togglePanel(); break;
+        case 'key': if (this.engine) this.fillLogin(); break;
+        case 'save-login': if (this.engine) void this.saveLogin(); break;
+        case 'no-save': if (t) { t.savePrompt = null; this.chooser = false; this.refresh(); } break;
+        case 'fill-entry': {
+          const id = (e.target as HTMLElement).closest<HTMLElement>('[data-id]')?.dataset.id;
+          const entry = this.engine?.vault.entries.find((x) => x.id === id);
+          if (entry && t?.login) { t.login.fill(entry.username, entry.password); this.chooser = false; this.refresh(); }
+          break;
+        }
       }
     });
     this.addr.addEventListener('keydown', (e) => {
@@ -330,6 +360,21 @@ class BrowserWindow {
     this.banner.classList.toggle('sd-on', !!fb);
     if (fb) this.banner.querySelector('span')!.textContent = FALLBACK_TEXT[fb.reason] ?? `This page needs a real tab (${fb.reason}).`;
     if (!this.engine) return;
+    const key = this.root.querySelector<HTMLElement>('[data-act=key]')!;
+    key.style.display = t?.login ? '' : 'none';
+    const sp = t?.savePrompt;
+    const v = this.engine.vault;
+    if (this.chooser && t?.login) {
+      this.saveBanner.classList.add('sd-on');
+      const list = v.forOrigin(t.login.origin);
+      this.saveBanner.innerHTML = `<span>Fill a login for ${escHtml(new URL(t.login.origin).host)}:</span>` + list.map((x) =>
+        `<button class="sd-btn" data-act="fill-entry" data-id="${escHtml(x.id)}">${escHtml(x.username || '(no username)')}</button>`).join('') + '<button class="sd-btn" data-act="no-save">Close</button>';
+    } else {
+      this.saveBanner.classList.toggle('sd-on', !!sp);
+      this.saveBanner.innerHTML = '<span></span><button class="sd-btn sd-primary" data-act="save-login">Save</button><button class="sd-btn" data-act="no-save">Not now</button>';
+      if (sp) this.saveBanner.querySelector('span')!.textContent = !v.exists ? `Save this password for ${new URL(sp.origin).host}? (Creates a password vault first.)`
+        : !v.unlocked ? `Save this password for ${new URL(sp.origin).host}? (Unlock your passwords first.)` : `Save the password for ${sp.username || 'this login'} on ${new URL(sp.origin).host}?`;
+    }
     const starred = !!t?.url && this.engine.bookmarks.some((b) => b.url === t.url);
     this.root.querySelector('[data-act=star]')!.textContent = starred ? '★' : '☆';
     const dl = this.root.querySelector('#sd-br-hist')!;
@@ -357,6 +402,29 @@ class BrowserWindow {
     this.panel.innerHTML = `<div class="sd-panel"><h2>Browser</h2><p class="sd-muted">${escHtml(text)}</p></div>`;
   }
 
+  fillLogin() {
+    const t = this.active;
+    if (!t?.login) return;
+    const v = this.engine.vault;
+    if (!v.unlocked) { this.panel.classList.add('sd-on'); this.renderPanel(); return; }
+    const list = v.forOrigin(t.login.origin);
+    if (list.length === 1) t.login.fill(list[0].username, list[0].password);
+    else if (list.length > 1) { this.chooser = true; this.refresh(); }
+    else { this.saveBanner.classList.add('sd-on'); this.saveBanner.querySelector('span')!.textContent = `No saved login for ${new URL(t.login.origin).host}.`; }
+  }
+
+  async saveLogin() {
+    const t = this.active;
+    const sp = t?.savePrompt;
+    if (!t || !sp) return;
+    const v = this.engine.vault;
+    if (!v.unlocked) { this.panel.classList.add('sd-on'); this.renderPanel(); return; }
+    v.session!.remember(sp.origin, sp.url, sp.username, sp.password);
+    await v.save();
+    t.savePrompt = null;
+    this.refresh();
+  }
+
   toggleBookmark() {
     const t = this.active;
     if (!t?.url) return;
@@ -377,11 +445,13 @@ class BrowserWindow {
     this.panel.innerHTML = `<div class="sd-panel" style="max-width:820px">
       <h2>Bookmarks</h2><div class="sd-card">${e.bookmarks.map((b) => link(b.url, b.title)).join('') || '<span class="sd-muted">None yet: ☆ adds the page you are on.</span>'}</div>
       <h3>History</h3><div class="sd-card">${hist.map((h) => link(h.url, h.title)).join('') || '<span class="sd-muted">Nothing yet.</span>'}</div>
+      <div data-p="passwords"></div>
       <h3>Privacy</h3><div class="sd-card"><div class="sd-row"><span class="sd-grow">${e.jar.all().length} cookies in ${e.jar.partitions().length} sites</span><button class="sd-btn" data-p="clear-cookies">Clear cookies</button><button class="sd-btn" data-p="clear-history">Clear history</button></div></div>
       <h3>Certificates</h3><div class="sd-card"><p class="sd-small sd-muted">Extra trusted root certificates (PEM), for example a company proxy's. Pages are otherwise checked against Mozilla's roots.</p>
         <textarea class="sd-input" style="width:100%;height:90px;font-size:11px" data-p="roots"></textarea>
         <div class="sd-row"><button class="sd-btn" data-p="save-roots">Save</button></div></div>
     </div>`;
+    renderPasswords(this.panel.querySelector('[data-p=passwords]')!, e.vault, () => { this.renderPanel(); this.refresh(); });
     void kvGet<string>('extraRoots').then((v) => { (this.panel.querySelector('[data-p=roots]') as HTMLTextAreaElement).value = v ?? ''; });
     this.panel.onclick = (ev) => {
       const el = ev.target as HTMLElement;

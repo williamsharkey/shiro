@@ -25,6 +25,7 @@ Do not treat the dashboard or wrappers as the product. The product is the browse
 - `src/claude-config.ts`, `src/node-compat/preload.ts`, `src/node-compat/process.ts`: Claude bootstrap, auth persistence, startup defaults.
 - `src/desktop/*`: the Unix edition's desktop (menu bar, dock, window manager `wm.ts`, Terminal with tabs, lazy Files/Settings/Activity/About). `src/ui-mode.ts` picks it: every host but shiro.computer boots the desktop; `?ui=terminal|desktop` or `desktop classic` switch. API and `/dom`: [docs/DESKTOP.md](docs/DESKTOP.md).
 - `server.mjs`: static hosting, API proxying, OAuth callback, signaling, relay, and the opt-in WebSocket-to-TCP relay (`/tcp`, `SHIRO_TCP_RELAY=1`).
+- `src/browser/*` + `src/desktop/apps/browser.ts`: the desktop's Browser app (docs/BROWSER.md, scoreboard docs/WEB_SCORE.md): iframe tabs on per-origin browse origins (`https://{key}.<domain>`, `SHIRO_BROWSE_ORIGIN`), a service worker per origin forwarding to a broker in the desktop page, which fetches with HTTP/1.1 over TLS in the page (subtls) over the relay.
 - `src/kernel/net.ts`: kernel sockets over that relay (x86 socket syscalls and node `net` use them); see `docs/NETWORKING.md` for the protocol, security model, and nginx config.
 
 ## Working Style
@@ -202,6 +203,7 @@ Production is `https://shiro.computer` on a DigitalOcean droplet. `deploy.sh` ha
 - Desktop shortcuts are Alt+Shift+… and Alt+\` (`isDesktopShortcut`), caught in the capture phase before xterm. Don't take plain Alt keys: readline uses them.
 - The desktop is a separate chunk that `main()` starts importing before IndexedDB opens (the terminal UI never loads it); apps under `src/desktop/apps/` are further chunks `import()`ed on launch. Keep `src/desktop` out of static imports from the entry; measure both UIs (`BENCH_PATH='/?ui=terminal'`). Fonts (`public/fonts`, OFL) are injected by the desktop only.
 - `/dom` (`src/dom-fs.ts`) is a FileSystem virtual provider (`fs.addVirtualProvider`, `mountPoint`) plus kernel devices for `/dom/events/<type>`; `cat` follows those live at a terminal.
+- Browser app: a browse origin must never serve the app or its APIs (`handleBrowseHost` in server.mjs), and a document's broker port is bound to the context the app reads from `event.origin` and the `WindowProxy` chain, never from message contents. `client.ts` (the page runtime) is a compatibility layer, not a security boundary. Score changes with `node tests/browser/web-score.mjs --md docs/WEB_SCORE.md` (needs the relay: `SHIRO_TCP_RELAY=1 SHIRO_TCP_ORIGINS=http://localhost:5299`).
 - Network sign-in: call `requireNetworkSignIn()` (`src/net-signin.ts`) before outbound network that needs a signed-in user; never for same-origin requests. The relay token fetch does; `SHIRO_TCP_REQUIRE_SIGNIN=1` makes server.mjs demand a GitHub token.
 
 ## Linux GUI Apps (X11)

@@ -190,6 +190,10 @@ import type { BrokerToClient, ClientMsg } from './protocol';
       const orig = creds[k]?.bind(creds);
       if (!orig) continue;
       creds[k] = (opts: any) => {
+        if (opts?.publicKey && opts.mediation === 'conditional') {
+          // Passkey autofill offers: passive, so no banner; like a browser with no passkeys, never resolves
+          return new Promise(() => {});
+        }
         if (opts?.publicKey) {
           send({ type: 'fallback', reason: 'webauthn', url: map.toReal(location.href) });
           return Promise.reject(new DOMException('Passkeys need a real tab: tabcomputer offered to open one.', 'NotAllowedError'));
@@ -198,6 +202,40 @@ import type { BrokerToClient, ClientMsg } from './protocol';
       };
     }
   }
+
+  // ── sign-in forms: the app offers saved logins (filled only when the user clicks) and to save new ones ──
+  let reportedForm = false;
+  const visible = (el: Element) => { const b = el.getBoundingClientRect(); return b.width > 0 && b.height > 0; };
+  const passwordField = () => Array.from(document.querySelectorAll<HTMLInputElement>('input[type=password]')).find(visible) ?? null;
+  const usernameFieldFor = (pw: HTMLInputElement | null): HTMLInputElement | null => {
+    const scope: ParentNode = pw?.form ?? document;
+    const cands = Array.from(scope.querySelectorAll<HTMLInputElement>('input[type=email],input[type=text],input[type=tel],input:not([type])'))
+      .filter((i) => visible(i) && (!pw || (i.compareDocumentPosition(pw) & Node.DOCUMENT_POSITION_FOLLOWING)));
+    const named = cands.find((i) => /user|email|login|account|identifier/i.test(i.name + i.id + i.autocomplete));
+    return named ?? cands[cands.length - 1] ?? null;
+  };
+  setInterval(() => {
+    if (reportedForm || document.visibilityState !== 'visible') return;
+    if (passwordField() || document.querySelector('input[autocomplete~=username]')) { reportedForm = true; send({ type: 'login-form' }); }
+  }, 1000);
+  const setValue = (el: HTMLInputElement, v: string) => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(el, v);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  handlers.push((m) => {
+    if (m.type !== 'fill') return;
+    const pw = passwordField();
+    const user = usernameFieldFor(pw) ?? (document.querySelector('input[autocomplete~=username]') as HTMLInputElement | null);
+    if (user && m.username) setValue(user, m.username);
+    if (pw) setValue(pw, m.password);
+  });
+  addEventListener('submit', (e) => {
+    const form = e.target as HTMLFormElement;
+    const pw = Array.from(form.querySelectorAll<HTMLInputElement>('input[type=password]')).find((i) => i.value);
+    if (!pw) return;
+    send({ type: 'login-submitted', username: usernameFieldFor(pw)?.value ?? '', password: pw.value });
+  }, true);
 
   // ── WebSocket through the broker ──
   let wsNext = 1;

@@ -18,6 +18,8 @@ import type { BrokerReply, BrokerToClient, ClientMsg, FetchMsg } from './protoco
 export interface BrokerTab {
   readonly id: number;
   frame(): HTMLIFrameElement | null;
+  /** The real URL the tab shows. */
+  readonly url: string;
   /** The tab's top-level site (cookie partition), set by its last top-level navigation. */
   partition: string | null;
   bytes: number;
@@ -26,6 +28,10 @@ export interface BrokerTab {
   onTitle(title: string): void;
   onFallback(reason: string, url: string): void;
   openTab(url: string): void;
+  /** A document of the tab shows a sign-in form; `fill` types a login into it (only on the user's click). */
+  onLoginForm?(origin: string, fill: (username: string, password: string) => void): void;
+  /** The user submitted a sign-in form (offer to save it). */
+  onLoginSubmitted?(origin: string, url: string, username: string, password: string): void;
 }
 
 interface DocCtx {
@@ -37,6 +43,12 @@ interface DocCtx {
   win: Window;
   /** Real origins of the frames above this one up to the tab (null when unknown). */
   ancestors: (string | null)[];
+  /**
+   * Cookie partition, fixed when the port is bound: a top-level document's own
+   * site, a nested one's tab site at that moment. Never the tab's *current*
+   * site: a port that outlives its document must not ride a later site's jar.
+   */
+  partition: string;
 }
 
 export interface BrokerOptions {
@@ -166,6 +178,7 @@ export class Broker {
     const ctx: DocCtx = {
       tab: where.tab, realOrigin: real, browseOrigin: e.origin, url, nested: where.nested, win: src,
       ancestors: where.chain.map((w) => this.docs.get(w)?.realOrigin ?? null),
+      partition: where.nested ? (where.tab.partition ?? `opaque:${randomToken(8)}`) : siteOf(url),
     };
     if (d.role === 'client') this.docs.set(src, ctx);
     const ch = new MessageChannel();
@@ -194,9 +207,6 @@ export class Broker {
     }
   }
 
-  private partitionFor(ctx: DocCtx): string {
-    return ctx.tab.partition ?? siteOf(ctx.url);
-  }
 
   /** One request from a document (subresource) or for it (its navigation). */
   async fetch(ctx: DocCtx, msg: FetchMsg): Promise<BrokerReply> {
@@ -213,12 +223,19 @@ export class Broker {
     if (msg.navigation) this.stats.navigations++;
     const initiator = msg.navigation ? (msg.referrer && /^https?:/.test(msg.referrer) ? new URL(msg.referrer).origin : null) : ctx.realOrigin;
     const topNav = msg.navigation && !ctx.nested;
-    const partition = topNav ? siteOf(url) : this.partitionFor(ctx);
+    const partition = ctx.partition;
     let method = msg.method.toUpperCase();
     let body: Uint8Array | null = msg.body ? new Uint8Array(msg.body) : null;
     const pageHeaders = msg.headers.filter(([k]) => !DROP_REQUEST.has(k.toLowerCase()) && !k.toLowerCase().startsWith('sec-') && !k.toLowerCase().startsWith('proxy-'));
     const cors = !msg.navigation && msg.mode === 'cors' && url.origin !== ctx.realOrigin;
-    const withCookies = (u: URL) => msg.credentials === 'include' || msg.navigation || (msg.credentials !== 'omit' && u.origin === ctx.realOrigin);
+    // Proxied documents declare COEP credentialless, and the browser can't make our constructed
+    // responses opaque: so cross-origin no-cors requests go without cookies, as under that policy.
+    // Otherwise fetch(url, {mode: 'no-cors', credentials: 'include'}) would read another site with its cookies.
+    const withCookies = (u: URL) => {
+      if (msg.navigation) return true;
+      if (u.origin === ctx.realOrigin) return msg.credentials !== 'omit';
+      return msg.mode === 'cors' && msg.credentials === 'include';
+    };
 
     if (cors && (!SIMPLE_METHODS.has(method) || pageHeaders.some(([k, v]) => !SIMPLE_HEADERS.has(k.toLowerCase())
       || (k.toLowerCase() === 'content-type' && !/^(application\/x-www-form-urlencoded|multipart\/form-data|text\/plain)\b/i.test(v))))) {
@@ -373,6 +390,15 @@ export class Broker {
       case 'fallback': case 'unproxyable':
         ctx.tab.onFallback(m.type === 'fallback' ? String(m.reason) : 'unproxyable', String(m.url));
         break;
+      case 'login-form': case 'login-submitted': {
+        // Logins go only to the tab's own top-level origin: never to a third-party frame inside it
+        let topOrigin = '';
+        try { topOrigin = new URL(ctx.tab.url).origin; } catch { /* no page yet */ }
+        if (ctx.nested && ctx.realOrigin !== topOrigin) break;
+        if (m.type === 'login-form') ctx.tab.onLoginForm?.(ctx.realOrigin, (username, password) => reply({ type: 'fill', username, password }));
+        else ctx.tab.onLoginSubmitted?.(ctx.realOrigin, ctx.url, String(m.username).slice(0, 500), String(m.password).slice(0, 1000));
+        break;
+      }
       case 'ws-open': void this.openWebSocket(ctx, m, reply); break;
       case 'ws-send': void this.sockets.get(`${ctx.tab.id}:${ctx.browseOrigin}:${m.id}`)?.send(m.data); break;
       case 'ws-close': void this.sockets.get(`${ctx.tab.id}:${ctx.browseOrigin}:${m.id}`)?.close(m.code, m.reason); break;
@@ -391,7 +417,7 @@ export class Broker {
       let s = await this.o.dial(url.hostname, port);
       if (secure) s = await tlsConnect(s, url.hostname);
       const httpUrl = new URL(url.href.replace(/^ws/, 'http'));
-      const rctx: RequestContext = { partition: this.partitionFor(ctx), initiatorSite: siteOf(ctx.realOrigin), topLevelNavigation: false, method: 'GET' };
+      const rctx: RequestContext = { partition: ctx.partition, initiatorSite: siteOf(ctx.realOrigin), topLevelNavigation: false, method: 'GET' };
       const headers: HeaderList = [['Origin', ctx.realOrigin], ['User-Agent', navigator.userAgent], ['Pragma', 'no-cache'], ['Cache-Control', 'no-cache']];
       const c = this.o.jar.cookieHeader(httpUrl, rctx);
       if (c) headers.push(['Cookie', c]);
@@ -403,7 +429,8 @@ export class Broker {
       });
       this.sockets.set(key, ws);
       await ws.run(url, headers, m.protocols.map(String));
-    } catch {
+    } catch (e) {
+      console.warn('[browser] WebSocket', url.href, (e as Error)?.message ?? e);
       this.sockets.delete(key);
       reply({ type: 'ws-event', id: m.id, event: 'error' });
       closeWith(1006);
@@ -417,6 +444,6 @@ function sameOriginUrl(ctx: DocCtx, url: string): URL {
   return new URL(ctx.url);
 }
 
-function topPartition(ctx: DocCtx, u: URL): string {
-  return ctx.nested ? (ctx.tab.partition ?? siteOf(u)) : siteOf(u);
+function topPartition(ctx: DocCtx, _u: URL): string {
+  return ctx.partition;
 }

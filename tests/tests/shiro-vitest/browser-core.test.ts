@@ -241,3 +241,15 @@ describe('fetch over TLS 1.3 in JS (subtls) with keep-alive', () => {
     await expect(f.fetch({ url: `https://other.test:${port}/`, method: 'GET', headers: [], body: null })).rejects.toThrow(/TLS/);
   }, 20000);
 });
+
+describe('websocket', () => {
+  it('computes the RFC 6455 accept key and masks client frames', async () => {
+    const { acceptFor, encodeFrame } = await import('@shiro/browser/websocket');
+    expect(await acceptFor('dGhlIHNhbXBsZSBub25jZQ==')).toBe('s3pPLMBiTxaQ9kYGzzhZRbK+xOo=');
+    const f = encodeFrame(1, te.encode('Hello'));
+    expect([f[0], f[1]]).toEqual([0x81, 0x85]);
+    const mask = f.subarray(2, 6);
+    expect(td.decode(f.subarray(6).map((b, i) => b ^ mask[i & 3]))).toBe('Hello');
+    expect(encodeFrame(2, new Uint8Array(70000))[1]).toBe(0x80 | 127);
+  });
+});

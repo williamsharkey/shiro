@@ -19,7 +19,7 @@ function b64(bytes: Uint8Array): string {
 }
 
 export async function acceptFor(key: string): Promise<string> {
-  const d = await crypto.subtle.digest('SHA-1', te.encode(key + '258EAFA5-E914-47DA-95CA-C5AB0DC11B5B'));
+  const d = await crypto.subtle.digest('SHA-1', te.encode(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'));
   return b64(new Uint8Array(d));
 }
 

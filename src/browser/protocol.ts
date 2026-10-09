@@ -57,11 +57,14 @@ export type ClientMsg =
   | { type: 'ws-open'; id: number; url: string; protocols: string[] }
   | { type: 'ws-send'; id: number; data: string | ArrayBuffer }
   | { type: 'ws-close'; id: number; code?: number; reason?: string }
-  | { type: 'unproxyable'; url: string };
+  | { type: 'unproxyable'; url: string }
+  | { type: 'login-form' }
+  | { type: 'login-submitted'; username: string; password: string };
 
 /** Broker → page runtime. */
 export type BrokerToClient =
   | { type: 'cookie'; id: number; value: string }
+  | { type: 'fill'; username: string; password: string }
   | { type: 'ws-event'; id: number; event: 'open'; protocol: string; extensions: string }
   | { type: 'ws-event'; id: number; event: 'message'; data: string | ArrayBuffer }
   | { type: 'ws-event'; id: number; event: 'error' }
