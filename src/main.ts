@@ -100,7 +100,7 @@ import {
 } from './seed-runtime-context';
 import { getShiroOrigin } from './utils/shiro-origin';
 import { logIsolationStatus } from './utils/isolation';
-import { requestPersistentStorage, storageInfo } from './storage';
+import { requestPersistentStorage, setActiveFileSystem, storageInfo } from './storage';
 
 /**
  * Register a command in both the CommandRegistry (for execution) and
@@ -141,6 +141,7 @@ async function main() {
   // Initialize filesystem
   const fs = new FileSystem();
   await fs.init();
+  setActiveFileSystem(fs);
   // Persistent storage (no eviction under storage pressure) once the machine
   // holds a lot: Firefox asks the user, so not for a page that stores little
   fs.onBigWrite(PERSIST_AFTER_BYTES, () => void requestPersistentStorage('large write'));
