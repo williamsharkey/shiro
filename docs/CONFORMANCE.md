@@ -6,7 +6,7 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1347/1567 (86.0%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1363/1567 (87.0%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1275/1567 (81.4%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **612/635 (96.4%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **0/320 (0.0%)** |
@@ -34,7 +34,7 @@ How each suite runs, and what is and isn't scored, is described in
 | var-num | 0/7 | 7/7 | 0 |
 | vars-special | 0/37 | 31/37 | 6 |
 | arith | 2/71 | 65/71 | 6 |
-| command-sub | 0/28 | 20/28 | 8 |
+| command-sub | 0/28 | 26/28 | 2 |
 | here-doc | 0/32 | 29/32 | 3 |
 | redirect | 3/39 | 32/39 | 7 |
 | if_ | 0/5 | 5/5 | 0 |
@@ -55,8 +55,8 @@ How each suite runs, and what is and isn't scored, is described in
 | builtin-vars | 0/38 | 31/38 | 7 |
 | dbracket | 1/49 | 44/49 | 5 |
 | dparen | 0/14 | 13/14 | 1 |
-| assign | 2/43 | 35/43 | 8 |
-| append | 1/20 | 13/20 | 7 |
+| assign | 2/43 | 38/43 | 5 |
+| append | 1/20 | 20/20 | 0 |
 | array-basic | 0/5 | 5/5 | 0 |
 | array | 2/78 | 75/78 | 3 |
 | array-assoc | 0/38 | 35/38 | 3 |
@@ -94,7 +94,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **var-op-slice**: ${@:offset} and ${*:offset}; ${@:offset:length} and ${*:offset:length}; ${array[@]:} vs ${array[@]: }  - bash and zsh inconsistent
 - **vars-special**: $PATH is set if unset at startup; Vars set interactively only: $HISTFILE; Some vars are set, even without startup file, or env: PATH, PWD; $LINENO is the current line, not line of function call; $LINENO in other for loops; $_ with assignments, arrays, etc.
 - **arith**: Arith sub with word parts; Backticks within arith sub; Integer constant validation; Comma operator (borrowed from C); Logical Ops; Bitwise ops
-- **command-sub**: Backtick 2; Nested backticks; Making keyword out of command sub should NOT work; Command sub with here doc; Escaped quote in [[ ]]; Quoting \ within ``; Quoting \ within `` within double quotes; Syntax errors with double quotes within backticks
+- **command-sub**: Making keyword out of command sub should NOT work; Syntax errors with double quotes within backticks
 - **here-doc**: Here doc with bad comsub delimiter; Here doc with line continuation, then pipe.  Syntax error.; Function def and execution with here doc
 - **redirect**: Named file descriptor; \>&word redirects stdout and stderr when word is not a number or -; 1\>&2- to move file descriptor; 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes; xtrace not affected by redirects
 - **loop**: while in pipe with subshell; bad arg to break
@@ -112,8 +112,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **builtin-vars**: Export sets a global variable that persists after export -n; Export a local that shadows a global; Unset exported variable, then define it again.  It's NOT still exported.; Exporting a parent func variable (dynamic scope); Unset a function without -f; Unset and scope (bug #653); local after readonly
 - **dbracket**: [[ regex syntax error; [[ at runtime doesn't work; [[ with env prefix doesn't work; tilde expansion with =~ (confusing); [[ ]] with redirect
 - **dparen**: (( )) with redirect
-- **assign**: Env binding can use preceding bindings, but not subsequent ones; Env value with escaped \<; Trying to run keyword 'for'; Test above without 'local' (which is not POSIX); aliased assignment doesn't split; assign and glob; declare and glob; "declare -a arr" and "readonly -a a" creates an empty array (OSH)
-- **append**: error: typeset myarray+=s; error: append used like env prefix; typeset s+=; typeset s${dyn}+=; export readonly +=; local +=; assign builtin appending array: declare d+=(d e)
+- **assign**: Env binding can use preceding bindings, but not subsequent ones; Trying to run keyword 'for'; Test above without 'local' (which is not POSIX); aliased assignment doesn't split; "declare -a arr" and "readonly -a a" creates an empty array (OSH)
 - **array**: space before ( in array initialization; array with invalid token; a+=() modifies existing instance of BashArray
 - **array-assoc**: unset -v and assoc array; nameref and assoc array; bash bug: (( A["$key"] = 1 )) doesn't work
 - **brace-expansion**: expansion on RHS of assignment; no expansion with RHS assignment; Two kinds of tilde expansion; Mixed case char expansion is invalid

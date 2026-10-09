@@ -51,7 +51,7 @@ export function groupStatements(src: string): Statement[] {
   let pendingHeredocs: { delim: string; stripTabs: boolean }[] = [];
 
   const flush = () => {
-    if (text.trim()) out.push({ text: text.trim(), line: startLine });
+    if (text.trim()) out.push({ text: trimCommand(text), line: startLine });
     text = '';
     lastWord = '';
     lastWasPatternClose = false;
@@ -279,7 +279,7 @@ export function groupStatements(src: string): Statement[] {
     if (!open) flush();
   }
   // Unterminated input: hand over what we have (the executor reports the error)
-  if (text.trim()) out.push({ text: text.trim(), line: startLine });
+  if (text.trim()) out.push({ text: trimCommand(text), line: startLine });
   return out;
 }
 
@@ -315,4 +315,13 @@ function skipParen(src: string, j: number): number {
     j++;
   }
   return j;
+}
+
+/** trim(), keeping a trailing backslash-escaped blank (`echo \ `) */
+export function trimCommand(s: string): string {
+  const t = s.trim();
+  const bs = /\\+$/.exec(t);
+  if (!bs || bs[0].length % 2 === 0) return t;
+  const k = s.indexOf(t) + t.length;
+  return s[k] === " " || s[k] === "\t" ? t + s[k] : t;
 }

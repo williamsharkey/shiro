@@ -277,36 +277,12 @@
    ]
   },
   "command-sub": {
-   "pass": 20,
+   "pass": 26,
    "total": 28,
    "failures": [
     {
-     "i": 4,
-     "name": "Backtick 2"
-    },
-    {
-     "i": 5,
-     "name": "Nested backticks"
-    },
-    {
      "i": 7,
      "name": "Making keyword out of command sub should NOT work"
-    },
-    {
-     "i": 8,
-     "name": "Command sub with here doc"
-    },
-    {
-     "i": 16,
-     "name": "Escaped quote in [[ ]]"
-    },
-    {
-     "i": 20,
-     "name": "Quoting \\ within ``"
-    },
-    {
-     "i": 21,
-     "name": "Quoting \\ within `` within double quotes"
     },
     {
      "i": 28,
@@ -708,16 +684,12 @@
    ]
   },
   "assign": {
-   "pass": 35,
+   "pass": 38,
    "total": 43,
    "failures": [
     {
      "i": 2,
      "name": "Env binding can use preceding bindings, but not subsequent ones"
-    },
-    {
-     "i": 4,
-     "name": "Env value with escaped <"
     },
     {
      "i": 10,
@@ -732,52 +704,15 @@
      "name": "aliased assignment doesn't split"
     },
     {
-     "i": 32,
-     "name": "assign and glob"
-    },
-    {
-     "i": 33,
-     "name": "declare and glob"
-    },
-    {
      "i": 45,
      "name": "\"declare -a arr\" and \"readonly -a a\" creates an empty array (OSH)"
     }
    ]
   },
   "append": {
-   "pass": 13,
+   "pass": 20,
    "total": 20,
-   "failures": [
-    {
-     "i": 7,
-     "name": "error: typeset myarray+=s"
-    },
-    {
-     "i": 8,
-     "name": "error: append used like env prefix"
-    },
-    {
-     "i": 13,
-     "name": "typeset s+="
-    },
-    {
-     "i": 14,
-     "name": "typeset s${dyn}+="
-    },
-    {
-     "i": 15,
-     "name": "export readonly +="
-    },
-    {
-     "i": 16,
-     "name": "local +="
-    },
-    {
-     "i": 17,
-     "name": "assign builtin appending array: declare d+=(d e)"
-    }
-   ]
+   "failures": []
   },
   "array-basic": {
    "pass": 5,

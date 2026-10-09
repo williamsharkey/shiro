@@ -583,4 +583,31 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe("[x y]\n[a b c]\n'a b' } '}'\n'a b 'a b \na b x a b x\n");
   });
+
+  it('backticks hold ; and |, keep an escaped trailing blank; $(<<EOF cmd) is a here-doc', async () => {
+    const r = await script([
+      'echo `echo -n l; echo -n s` `echo ab | tr a x`',
+      'echo "[`echo \\ `]" [\\ ]',
+      'echo $(<<EOF tac',
+      'one',
+      'two',
+      'EOF',
+      ')',
+      'echo hi > "f g"; echo "$(< "f g")" $(<f\\ g)',
+    ].join('\n'), async (fs) => { await fs.mkdir('/tmp/w', { recursive: true }); });
+    expect(r.out).toBe('ls xb\n[ ] [ ]\ntwo one\nhi hi\n');
+  });
+
+  it('assignments: no globbing, NAME+=value in declaration builtins and env prefixes', async () => {
+    const r = await script([
+      'cd /tmp; mkdir -p gl; cd gl; touch foo=a foo=b',
+      'foo=*; echo "$foo"; export bar=*; echo "$bar"; typeset baz=*; echo "$baz"',
+      'typeset s+=foo; typeset s+=bar; echo $s; export e+=x; readonly r+=y; echo $e $r',
+      'f() { local l+=1; local l+=2; echo $l; }; f',
+      'a=(x y); typeset a+=s; echo "${a[@]}"',
+      'declare d+=(d e); declare d+=(c); echo "${d[@]}"; readonly ro+=(r o); echo "${ro[@]}"',
+      'A=a; A+=b sh -c \'echo $A\'; FOO=foo\\<foo sh -c \'echo $FOO\'',
+    ].join('\n'));
+    expect(r.out).toBe('*\n*\n*\nfoobar\nx y\n12\nxs y\nd e c\nr o\nab\nfoo<foo\n');
+  });
 });
