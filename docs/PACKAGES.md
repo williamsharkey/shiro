@@ -1,6 +1,6 @@
 # Packages (`pkg`, `apt`, `apt-get`)
 
-Shiro installs real open-source Unix programs as prebuilt WebAssembly. This is
+tabcomputer installs real open-source Unix programs as prebuilt WebAssembly. This is
 phase 5 ("Open source") of [UNIX_COMPAT.md](UNIX_COMPAT.md).
 
 ```
@@ -37,7 +37,7 @@ guest implements preview1 only), it uses the older in-page runtime
 directories and the files named on the command line before the program
 starts.
 
-A package command takes precedence over a Shiro builtin of the same name
+A package command takes precedence over a tabcomputer builtin of the same name
 (`jq`, `lua`, `sqlite3`) while it is installed; `builtin jq` still reaches the
 builtin. Commands marked `"shadow": false` don't: coreutils applets (so `ls`
 stays the builtin), and every WASIX command (`grep`, `sed`, `bash`, `rg`, ...)
@@ -84,9 +84,9 @@ downloaded once per install and checked against its sha256 (Wasmer's CDN is
 content-addressed: the file name is the sha256). `src/webc.ts` reads WebC v2
 and v3.
 
-URLs starting with `/` are served by the Shiro origin (`public/pkg/` in this
-repo, copied to `dist/` by vite); outside a Shiro page they resolve against
-`https://shiro.computer`, or `$SHIRO_PKG_MIRROR`.
+URLs starting with `/` are served by the tabcomputer origin (`public/pkg/` in this
+repo, copied to `dist/` by vite); outside a tabcomputer page they resolve against
+`https://shiro.computer`, or `$TABCOMPUTER_PKG_MIRROR`.
 
 ## Kernel features and gating
 
@@ -94,7 +94,7 @@ repo, copied to `dist/` by vite); outside a Shiro page they resolve against
 `blocking-stdin`, `tty`, `sync-fs`, `wasix-stack`, `dynamic-linking`,
 `mounts`. A package whose `needs` the kernel lacks is
 listed as `[needs kernel]`, `pkg install` refuses it without `--force`, and
-running it exits 126 unless `SHIRO_PKG_FORCE=1`.
+running it exits 126 unless `TABCOMPUTER_PKG_FORCE=1`.
 
 What the kernel provides follows the WASM process mode (`wasmProcessMode()`
 in `src/wasi/host.ts`): `sab` gives blocking-stdin, tty, processes, threads,
@@ -105,7 +105,7 @@ threads and wasix-stack;
 can add features with:
 
 ```js
-globalThis.__shiroKernel = { features: ['sockets'] };
+globalThis.__tabcomputerKernel = { features: ['sockets'] };
 ```
 
 ## Packages
@@ -120,7 +120,7 @@ works everywhere and the interactive mode needs a page that can block.
 | --- | --- | --- | --- | --- |
 | coreutils (uutils, 78 applets) | 0.12.0 | built here, `coreutils.sh` | preview1 | ok |
 | lua, luac | 5.4.7 | built here, `lua.sh` | preview1 | ok; the REPL reads the tty as a kernel process (checked on the pty) |
-| python3 (CPython) | 3.13.7 | built here, `python3.sh` | preview1 | ok; `pip` (Shiro) installs pure-Python wheels, `python3 -m venv` works; no subprocess/sockets |
+| python3 (CPython) | 3.13.7 | built here, `python3.sh` | preview1 | ok; `pip` (tabcomputer) installs pure-Python wheels, `python3 -m venv` works; no subprocess/sockets |
 | make (GNU) | 4.4.1 | built here, `make.sh` | preview1 + process shim | ok; no jobserver |
 | llvm (clang, wasm-ld, llvm-ar, ...) | 21.1.4 | npm `@yowasp/clang` tarball + driver built here, `llvm.sh` | preview1 + process shim | ok; targets wasm32-wasip1 |
 | go (go, gofmt + tools) | 1.24.7 | built here, `go.sh` + patch | preview1 + WASIX processes | ok; builds wasip1 programs; no module downloads |
@@ -154,7 +154,7 @@ works everywhere and the interactive mode needs a page that can block.
 can use threads (`sab` mode: a cross-origin isolated page). Without that, WASIX
 packages stay gated on `threads`, because every one imports a shared
 `env.memory`. WASIX commands never shadow builtins (`shadow: false`), so
-`grep` stays Shiro's and GNU grep is `/usr/bin/grep`.
+`grep` stays tabcomputer's and GNU grep is `/usr/bin/grep`.
 
 What the WASIX packages needed from the kernel guest (`src/wasi/wasi-guest.ts`):
 `proc_signals_sizes_get`/`proc_signals_get` and `proc_exit2` (WASIX libc

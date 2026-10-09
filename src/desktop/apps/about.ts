@@ -6,7 +6,7 @@ import { ICONS } from '../icons';
 import { BRAND } from '../../brand';
 import buildNumber from '../../../build-number.txt?raw';
 
-const REPO = 'https://github.com/williamsharkey/shiro/blob/main/docs';
+const REPO = 'https://github.com/williamsharkey/tabcomputer/blob/main/docs';
 
 /**
  * Measured numbers, each with the document that records it. Update these
@@ -26,7 +26,7 @@ export function open(ctx: AppContext): DesktopWindow {
   root.innerHTML = `
     <div class="sd-scroll"><div class="sd-panel" style="max-width:none">
       <div style="display:flex;gap:16px;align-items:center">
-        <div style="width:64px;height:64px;flex:none">${ICONS.about}</div>
+        <div class="sd-brand-mark" style="width:64px;flex:none">${ICONS.logo}</div>
         <div><h2>${BRAND.name}</h2><div class="sd-muted sd-small">${BRAND.tagline} · build #${buildNumber.trim()}</div></div>
       </div>
       <h3>Status</h3>

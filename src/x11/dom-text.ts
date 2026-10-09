@@ -43,6 +43,7 @@ let measureCtx: CanvasRenderingContext2D | null = null;
 
 /** CSS for an XLFD (or an alias like "fixed", "6x13"): monospace unless the font is proportional */
 function cssFont(name: string, px: number): string {
+  if (name === 'pango') return `400 ${px}px Inter, sans-serif`;
   const f = name.split('-');
   const xlfd = f.length >= 14;
   const mono = !xlfd || /^[cm]$/i.test(f[11]);
@@ -68,7 +69,9 @@ function wireSelection(): void {
   if (selectWired || typeof document === 'undefined') return;
   selectWired = true;
   const style = document.createElement('style');
-  style.textContent = '.shiro-x11-selecting .shiro-x11-text{pointer-events:auto!important;cursor:text}';
+  style.textContent = '.shiro-x11-selecting .shiro-x11-text{pointer-events:auto!important;cursor:text}' +
+    // transparent (overlay) text still shows what is selected
+    '.shiro-x11-text ::selection{background:rgba(70,120,255,.35)}';
   document.head.appendChild(style);
   const set = (on: boolean) => document.documentElement.classList.toggle('shiro-x11-selecting', on);
   window.addEventListener('keydown', (e) => { if (e.key === 'Alt') set(true); }, true);
@@ -106,12 +109,12 @@ export class TextLayer {
     if (!run.text.trim() && run.bg !== null) return; // ImageText of blanks: only its background, already painted
     const h = run.ascent + run.descent;
     const rect = { x: run.x, y: run.y - run.ascent, w: run.width, h };
-    // A run replaces the text it is drawn over (PolyText has no background, but redraws the same text)
-    this.drop(rect, true);
+    // A run replaces the text it is drawn over in its window (PolyText has no background, but redraws the same text)
+    this.drop(rect, true, run.win === undefined ? undefined : (id) => id === run.win);
     // Terminals draw a line in pieces (each typed character; blank cells skipped): continue the
     // run it extends, so a line is one span and selecting it copies words with their spaces
     const cell = cellWidth(run);
-    const prev = cell ? this.spans.find((sp) => sp.y === rect.y && sp.h === h && sp.run.font === run.font && sp.run.fg === run.fg &&
+    const prev = cell ? this.spans.find((sp) => sp.y === rect.y && sp.h === h && sp.run.font === run.font && sp.run.fg === run.fg && sp.run.win === run.win &&
       cellWidth(sp.run) === cell && sp.x + sp.w <= run.x && (run.x - (sp.x + sp.w)) % cell === 0 && run.x - (sp.x + sp.w) <= 8 * cell) : undefined;
     if (prev) {
       const gap = (run.x - (prev.x + prev.w)) / cell;
@@ -136,7 +139,9 @@ export class TextLayer {
     // a line break at the end (not visible: the box is one line high) so copied text keeps its lines
     el.textContent = run.text + '\n';
     el.style.cssText = `position:absolute;left:${run.x / s}px;top:${(run.y - run.ascent) / s}px;height:${h / s}px;` +
-      `font:${font};line-height:${h / s}px;letter-spacing:${spacing.toFixed(3)}px;color:${this.transparent ? 'transparent' : cssColor(run.fg)}`;
+      `font:${font};line-height:${h / s}px;letter-spacing:${spacing.toFixed(3)}px;color:${cssColor(run.fg)}` +
+      // overlay: invisible glyphs (the pixels show them) but a real colour, so selections are painted
+      (this.transparent || run.overlay ? ';-webkit-text-fill-color:transparent' : '');
     this.el.appendChild(el);
     this.spans.push({ el, x: run.x, y: run.y - run.ascent, w: run.width, h, run });
   }
@@ -146,12 +151,15 @@ export class TextLayer {
     this.spans.splice(this.spans.indexOf(sp), 1);
   }
 
-  /** Pixels in `r` (toplevel coordinates) were drawn: the text there is gone. */
-  damage(r: Rect): void { this.drop(r, false); }
+  /**
+   * Pixels in `r` (toplevel coordinates) were drawn: the text there is gone.
+   * `covers(id)`: whether that drawing covers text drawn on window `id` (default: all text).
+   */
+  damage(r: Rect, covers?: (win: number) => boolean): void { this.drop(r, false, covers); }
 
   /** Remove the text under `r`; a fixed-cell run keeps the cells left and right of it. */
-  private drop(r: Rect, sameLineOnly: boolean): void {
-    for (const sp of this.spans.filter((sp) => overlaps(sp, r) && (!sameLineOnly || sp.y === r.y))) {
+  private drop(r: Rect, sameLineOnly: boolean, covers?: (win: number) => boolean): void {
+    for (const sp of this.spans.filter((sp) => overlaps(sp, r) && (!sameLineOnly || sp.y === r.y) && (!covers || sp.run.win === undefined || covers(sp.run.win)))) {
       this.remove(sp);
       const cell = cellWidth(sp.run);
       if (!cell) continue;
@@ -163,11 +171,11 @@ export class TextLayer {
   }
 
   /** CopyArea from (sx, sy) to (dx, dy): the spans wholly inside the source move with the pixels. */
-  copyBegin(sx: number, sy: number, w: number, h: number, dx: number, dy: number): void {
+  copyBegin(sx: number, sy: number, w: number, h: number, dx: number, dy: number, win?: number): void {
     const src = { x: sx, y: sy, w, h };
     this.moving = [];
     this.spans = this.spans.filter((sp) => {
-      if (!inside(sp, src)) return true;
+      if (!inside(sp, src) || (win !== undefined && sp.run.win !== undefined && sp.run.win !== win)) return true;
       sp.x += dx - sx; sp.y += dy - sy;
       this.moving.push(sp);
       return false;

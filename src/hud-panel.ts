@@ -7,6 +7,7 @@
  */
 
 import type { Shell } from './shell';
+import { activeProfile } from './profile';
 
 export interface HudPanel {
   show(): void;
@@ -53,7 +54,7 @@ export function createHudPanel(shell: Shell): HudPanel {
   logo.style.cssText = 'font-size: 14px; color: #fff; line-height: 1;';
 
   const label = document.createElement('span');
-  label.textContent = 'shiro';
+  label.textContent = activeProfile().name;
   label.style.cssText = 'font-size: 13px; color: rgba(255,255,255,0.7); font-weight: 500;';
 
   const expandBtn = document.createElement('span');
@@ -92,7 +93,7 @@ export function createHudPanel(shell: Shell): HudPanel {
     { label: 'Remote', desc: 'Connect an agent (MCP)', icon: '○', action: 'remote' },
     { label: 'Files', desc: 'File manager', icon: '↕', action: 'files' },
     { label: 'Help', desc: 'Getting started', icon: '?', action: 'help' },
-    { label: 'Source', desc: 'github.com/williamsharkey/shiro', icon: '白', action: 'source' },
+    { label: 'Source', desc: 'github.com/williamsharkey/tabcomputer', icon: '白', action: 'source' },
   ];
 
   items.forEach((item, i) => {
@@ -278,7 +279,7 @@ export function createHudPanel(shell: Shell): HudPanel {
  * the pattern used by shiro:// link handlers in terminal.ts.
  */
 function runInTerminal(shell: Shell, cmd: string) {
-  const term = (window as any).__shiro?.terminal as any;
+  const term = (window as any).__tabcomputer?.terminal as any;
   if (!term?.term) return;
   term.term.writeln('');
   shell.execute(
@@ -311,7 +312,7 @@ function handleAction(action: string, shell: Shell) {
       break;
     }
     case 'source': {
-      window.open('https://github.com/williamsharkey/shiro', '_blank', 'noopener');
+      window.open('https://github.com/williamsharkey/tabcomputer', '_blank', 'noopener');
       break;
     }
     case 'help': {

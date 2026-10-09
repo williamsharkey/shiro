@@ -1,6 +1,6 @@
 # Benchmarks
 
-Speed and memory baseline for Shiro, measured by the harness in [`bench/`](../bench/README.md)
+Speed and memory baseline for tabcomputer, measured by the harness in [`bench/`](../bench/README.md)
 (`npm run bench`; `npm run bench:quick` in ~2.5 min). Every number is a median
 and nearest-rank p90 of the samples in the linked results file; compare two
 runs with `node bench/compare.mjs base.json new.json` (flags >10% regressions).
@@ -9,7 +9,7 @@ How to read it:
 
 - **isolated** is the production configuration (COOP/COEP from `server.mjs`):
   WASM processes run in Workers over the SAB syscall channel, x86 in Blink.
-  **not isolated** (`SHIRO_ISOLATION=0`) measures the fallbacks: WASM on the
+  **not isolated** (`TABCOMPUTER_ISOLATION=0`) measures the fallbacks: WASM on the
   main thread with JSPI, x86 in the `src/x86` interpreter, no WASIX packages.
 - Shell metrics call `shell.execute` directly (no terminal rendering);
   kernel metrics spawn processes with `kernel.spawn` and real kernel pipes
@@ -170,6 +170,12 @@ desktop chunk.
 `node bench/ab.mjs origin/unix/integration --quick --suites boot --rounds 4`
 (0fa56a5 vs this, desktop page, desktop pointer): no timing metric changed;
 boot transfer 1548 → 1554 KiB (+6 KiB, +0.4%), DOM nodes 329 → 330.
+
+Again after the otter logo (integration c4d0e2a vs this; the inline boot
+mark comes from server.mjs, so the bench page doesn't carry it): timings
+unchanged, transfer +1 KiB, DOM nodes 342 → 334 and renderer RSS −5%
+(240 → 229 MiB, lower in all 4 rounds). The base lacks this branch's phone
+commit too; which change moved nodes and RSS was not traced.
 
 ### unix/desktop 3 — the terminal's first layout: system font lookups
 
@@ -439,7 +445,7 @@ waiters woken, kernel calls in flight answered EINTR by host.mjs, sleeps in
 
 ### unix/perf-blink 4 — page-straddling instructions, rep movs/stos by page
 
-Profiling Vim's startup (~2.2 s in Shiro against 41 ms native) found the
+Profiling Vim's startup (~2.2 s in tabcomputer against 41 ms native) found the
 wasm JIT refusing instructions that cross a 4 KB page: the region before
 one ended there and the interpreter ran up to the next taken branch, every
 time (218k times in one hot Vim function). Patch 0041 decodes such an
@@ -1166,7 +1172,7 @@ busybox) green.
 
 Where apt's time goes in Chromium (integration ecd719e, per-process timeline
 from temporary kernel instrumentation; the main thread is >90% idle, so the
-cost is CPU inside the x86 engine, not Shiro's kernel or IndexedDB):
+cost is CPU inside the x86 engine, not tabcomputer's kernel or IndexedDB):
 
 | `apt-get update` (72 s) | s |
 |---|---:|
@@ -1189,7 +1195,7 @@ help. Asking apt for uncompressed indexes doesn't work either
 
 Change: `/usr/lib/apt/methods/store` is diverted (overlay policy, like the
 http method) to `shiro-apt-store` (`src/debian/apt-store.ts`), which speaks
-apt's method protocol and decodes with Shiro's xz/gz/bz2/zstd codecs and
+apt's method protocol and decodes with tabcomputer's xz/gz/bz2/zstd codecs and
 `crypto.subtle` hashes in the page; apt still checks size and hashes against
 the signed Release. Lists are byte-identical. `apt-store.test.ts` covers
 the protocol (gz, xz, plain, GzipIndexes-style copy, missing file).
@@ -1204,7 +1210,7 @@ the protocol (gz, xz, plain, GzipIndexes-style copy, missing file).
 | debian.apt.install.jq | 60.2 s | 52.9 s |
 | debian.apt.install.python3-minimal | 161.3 s | 152.8 s |
 
-The rest is not Shiro-side I/O: the package cache build and dependency
+The rest is not tabcomputer-side I/O: the package cache build and dependency
 resolution are apt's own CPU under Blink (perf-blink), and `dpkg-preconfigure`
 (20 s per install, a no-op under `DEBIAN_FRONTEND=noninteractive`) is a
 Debian-config decision proposed to the debian workstream.
@@ -1453,11 +1459,11 @@ Environment: 4× Intel(R) Xeon(R) Processor @ 2.10GHz, 15.7 GiB, Linux 6.18.44-f
 | `wasm.tree_create` | 4506 | 4506 | ms | 1 | 10000 files × ~160 B in 100 dirs via fs.writeFile (IndexedDB), one sample |
 | `wasm.ripgrep.tree` | 3239 | 3519 | ms | 5 | `rg -l NEEDLE` over 10000 files (1000 match) |
 | `wasm.peak_rss.ripgrep_tree` | 18.74 | 47.89 | MiB | 5 | renderer RSS peak during the search |
-| `wasm.builtin_grep_r.tree` | 171.9 | 176.9 | ms | 5 | reference: Shiro's builtin `grep -rl` over the same 10000 files |
-| `wasm.cpu_loop.shiro` | 372.1 | 390.1 | ms | 5 | kbench cpu 200M as a Shiro process (guest clock) |
+| `wasm.builtin_grep_r.tree` | 171.9 | 176.9 | ms | 5 | reference: tabcomputer's builtin `grep -rl` over the same 10000 files |
+| `wasm.cpu_loop.shiro` | 372.1 | 390.1 | ms | 5 | kbench cpu 200M as a tabcomputer process (guest clock) |
 | `wasm.cpu_loop.node` | 375 | 386.9 | ms | 5 | same .wasm instantiated in Node (V8), same loop |
 | `wasm.cpu_loop.native` | 382.2 | 386.4 | ms | 5 | same C loop, gcc -O2, native |
-| `wasm.cpu_loop.ratio_vs_node` | 0.992 | 0.992 | x | 1 | Shiro / Node median |
+| `wasm.cpu_loop.ratio_vs_node` | 0.992 | 0.992 | x | 1 | tabcomputer / Node median |
 
 | x86 metric | median | p90 | unit | n | notes |
 |---|---:|---:|---|---:|---|
@@ -1473,7 +1479,7 @@ Environment: 4× Intel(R) Xeon(R) Processor @ 2.10GHz, 15.7 GiB, Linux 6.18.44-f
 | `x86.blink.peak_rss.go_nethttp` | 30.89 | 31.23 | MiB | 5 | renderer RSS peak above the pre-run level |
 | `x86.blink.gh_version` | 17826 | 17972 | ms | 5 | `./gh --version` wall time at the prompt; first run 18087 ms |
 | `x86.blink.peak_rss.gh_version` | 157.3 | 160.8 | MiB | 5 | renderer RSS peak above the pre-run level |
-| `x86.x86.hello_musl` | 14.63 | 25.18 | ms | 5 | `SHIRO_X86_ENGINE=x86 ./hello-musl` wall time at the prompt; first run 31 ms |
+| `x86.x86.hello_musl` | 14.63 | 25.18 | ms | 5 | `TABCOMPUTER_X86_ENGINE=x86 ./hello-musl` wall time at the prompt; first run 31 ms |
 | `x86.x86.peak_rss.hello_musl` | 2.379 | 4.602 | MiB | 5 | renderer RSS peak above the pre-run level |
 | `x86.x86.hello_glibc` | — | — | ms | 0 | failed: exit 1: shiro: /home/user/x/hello-glibc: Unknown two-byte opcode: 0F 62 at 0x4031a3 |
 | `x86.x86.go_hello` | — | — | ms | 0 | failed: exit 2: fatal error: float64nan |
@@ -1598,11 +1604,11 @@ Environment: 4× Intel(R) Xeon(R) Processor @ 2.10GHz, 15.7 GiB, Linux 6.18.44-f
 | `wasm.sqlite.insert_10k_file` | 40.4 | 59.2 | ms | 5 | 10k INSERTs in one transaction + LIKE scan, database file in /tmp (kernel file I/O) |
 | `wasm.tree_create` | 4160 | 4160 | ms | 1 | 10000 files × ~160 B in 100 dirs via fs.writeFile (IndexedDB), one sample |
 | `wasm.ripgrep.tree` | — | — | ms | 0 | WASIX: needs threads (SharedArrayBuffer) |
-| `wasm.builtin_grep_r.tree` | 165.8 | 252.6 | ms | 5 | reference: Shiro's builtin `grep -rl` over the same 10000 files |
-| `wasm.cpu_loop.shiro` | 380 | 383.9 | ms | 5 | kbench cpu 200M as a Shiro process (guest clock) |
+| `wasm.builtin_grep_r.tree` | 165.8 | 252.6 | ms | 5 | reference: tabcomputer's builtin `grep -rl` over the same 10000 files |
+| `wasm.cpu_loop.shiro` | 380 | 383.9 | ms | 5 | kbench cpu 200M as a tabcomputer process (guest clock) |
 | `wasm.cpu_loop.node` | 371.6 | 376.5 | ms | 5 | same .wasm instantiated in Node (V8), same loop |
 | `wasm.cpu_loop.native` | 363.3 | 371.8 | ms | 5 | same C loop, gcc -O2, native |
-| `wasm.cpu_loop.ratio_vs_node` | 1.023 | 1.023 | x | 1 | Shiro / Node median |
+| `wasm.cpu_loop.ratio_vs_node` | 1.023 | 1.023 | x | 1 | tabcomputer / Node median |
 
 | x86 metric | median | p90 | unit | n | notes |
 |---|---:|---:|---|---:|---|

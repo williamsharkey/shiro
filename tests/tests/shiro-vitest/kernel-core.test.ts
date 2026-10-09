@@ -528,7 +528,7 @@ describe('kernel processes', () => {
     const data = new Uint8Array(4096).fill(0xff);
     const field = (i: number) => new TextDecoder().decode(data.subarray(i * 65, i * 65 + 65)).replace(/\0.*$/s, '');
     expect(await kernel.syscall(proc, A.SYS_uname, [], data)).toBe(0);
-    expect([field(0), field(1), field(5)]).toEqual(['Linux', 'shiro', '(none)']);
+    expect([field(0), field(1), field(5)]).toEqual(['Linux', 'tabcomputer', '(none)']);
     kernel.hostname = 'box';
     expect(await kernel.syscall(proc, A.SYS_uname, [], data)).toBe(0);
     expect(field(1)).toBe('box');

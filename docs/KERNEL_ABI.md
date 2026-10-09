@@ -109,10 +109,10 @@ All changes so far are additive; nothing below renames or removes an earlier nam
     rename/unlink call them. Code that renames through the FileSystem API
     directly should do the same.
   - `netStackOf(kernel)` (net.ts): the NetStack `installNet` gave a kernel.
-  - Shiro syscalls 1101–1104 (`src/wasi/abi.ts`, registered by `host.ts`):
+  - tabcomputer syscalls 1101–1104 (`src/wasi/abi.ts`, registered by `host.ts`):
     `SYS_wasix_fork`, `SYS_wasix_exec`, `SYS_wasix_signal`,
     `SYS_wasix_resolve`. A stat/access of a missing `/bin`, `/usr/bin`,
-    `/usr/local/bin`... entry named after a Shiro command reports an
+    `/usr/local/bin`... entry named after a tabcomputer command reports an
     executable file (`binCommandStat`).
   - `FileSystem.writeFile` stores a compact copy of a typed-array view
     (IndexedDB cloned the whole underlying buffer).
@@ -164,7 +164,7 @@ All changes so far are additive; nothing below renames or removes an earlier nam
     child, returns the resolved path of an ELF for `inproc` engines, or
     stops the caller's runner and runs the new program in the same process
     (`Process.stopRunner()`, `proc.data.execRunner`). `/bin/NAME` paths of
-    Shiro commands exec even though no file exists.
+    tabcomputer commands exec even though no file exists.
   - Also: `eventfd`/`eventfd2` (`EventFile` in fd.ts), `close_range`,
     `geteuid`/`getegid`, and `WNOWAIT` for `wait4` (report without reaping).
 
@@ -258,7 +258,7 @@ All changes so far are additive; nothing below renames or removes an earlier nam
     `kernel.spawn` gives it to the child: don't call `close()` on it yourself.
   - 64-bit results (lseek): low word in Int32[2], high word in Int32[4]
     (`args[0]`), which the kernel overwrites on every reply.
-  - Shiro syscalls: `SYS_spawn = 1000` (posix_spawn, JSON request),
+  - tabcomputer syscalls: `SYS_spawn = 1000` (posix_spawn, JSON request),
     `SYS_getenv = 1001` (argv/env/cwd/pid as JSON). Argument conventions for
     every syscall are in the table below.
   - Host API: `Runner`, `Loader` (`kernel.addLoader`), `DeviceOpener`
@@ -431,7 +431,7 @@ k.syscall(proc, SYS_read, [fd, n], dataView);   // same dispatcher for every tra
 ```
 
 Programs resolve through loaders (newest first). The last loader is the
-builtin loader: a registered Shiro command (bare name, or under `/bin`,
+builtin loader: a registered tabcomputer command (bare name, or under `/bin`,
 `/usr/bin`, ...) runs through `runBuiltin`; any other executable the shell
 can find (scripts, node programs) runs through a forked shell. Nothing found:
 the child writes `NAME: command not found` and exits 127 (`SYS_spawn`
@@ -447,7 +447,7 @@ Existing builtins stay in-page. Until the shell itself is ported, the
 kernel exposes `kernel.runBuiltin(ctx)` adapters: a builtin's
 `ctx.stdin`/`ctx.stdout` strings are bridged to fds 0/1/2 of a kernel
 process (stdin read only if the command reads it; a shell uses the fds
-directly, see `src/shell-stdio.ts`). That way a guest's `posix_spawn("ls")` runs Shiro's `ls`, and
+directly, see `src/shell-stdio.ts`). That way a guest's `posix_spawn("ls")` runs tabcomputer's `ls`, and
 `cat | wasm-program | grep` streams through real pipes.
 
 ## Tests

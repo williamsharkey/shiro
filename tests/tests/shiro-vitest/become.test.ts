@@ -40,7 +40,7 @@ describe('Become / Unbecome — App Mode', () => {
     shell.commands.register(unbecomeCmd);
 
     // Clean up DOM and localStorage between tests
-    localStorage.removeItem('shiro-become');
+    localStorage.removeItem('tabcomputer-become');
     document.body.classList.remove('become-active');
     const existing = document.getElementById('become-container');
     if (existing) existing.remove();
@@ -54,7 +54,7 @@ describe('Become / Unbecome — App Mode', () => {
 
   afterEach(() => {
     // Clean up any become state
-    localStorage.removeItem('shiro-become');
+    localStorage.removeItem('tabcomputer-become');
     document.body.classList.remove('become-active');
     const container = document.getElementById('become-container');
     if (container) {
@@ -194,8 +194,8 @@ describe('Become / Unbecome — App Mode', () => {
       // Verify
       expect(document.body.classList.contains('become-active')).toBe(true);
       expect(document.getElementById('become-container')).not.toBeNull();
-      expect(localStorage.getItem('shiro-become')).not.toBeNull();
-      const parsed = JSON.parse(localStorage.getItem('shiro-become')!);
+      expect(localStorage.getItem('tabcomputer-become')).not.toBeNull();
+      const parsed = JSON.parse(localStorage.getItem('tabcomputer-become')!);
       expect(parsed.slug).toBe('functest');
       expect(parsed.title).toBe('Func Test');
 
@@ -203,7 +203,7 @@ describe('Become / Unbecome — App Mode', () => {
       deactivateBecomeMode();
       expect(document.body.classList.contains('become-active')).toBe(false);
       expect(document.getElementById('become-container')).toBeNull();
-      expect(localStorage.getItem('shiro-become')).toBeNull();
+      expect(localStorage.getItem('tabcomputer-become')).toBeNull();
 
       await run(shell, 'serve stop 7000');
     });
@@ -231,12 +231,12 @@ describe('Become / Unbecome — App Mode', () => {
 
   describe('getBecomeConfig', () => {
     it('should return null when no config exists', () => {
-      localStorage.removeItem('shiro-become');
+      localStorage.removeItem('tabcomputer-become');
       expect(getBecomeConfig()).toBeNull();
     });
 
     it('should return parsed config when set', () => {
-      localStorage.setItem('shiro-become', JSON.stringify({
+      localStorage.setItem('tabcomputer-become', JSON.stringify({
         directory: '/tmp/test',
         port: 8080,
         slug: 'test',
@@ -249,7 +249,7 @@ describe('Become / Unbecome — App Mode', () => {
     });
 
     it('should return null for invalid JSON', () => {
-      localStorage.setItem('shiro-become', 'not json');
+      localStorage.setItem('tabcomputer-become', 'not json');
       expect(getBecomeConfig()).toBeNull();
     });
   });

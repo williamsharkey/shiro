@@ -10,7 +10,7 @@
  * Blink guests are kernel processes (src/kernel), so they show up in `ps`
  * and get their stdio through kernel fds.
  *
- * `SHIRO_X86_ENGINE=x86` in the environment forces the built-in one.
+ * `TABCOMPUTER_X86_ENGINE=x86` in the environment forces the built-in one.
  * See docs/X86_ENGINES.md.
  */
 
@@ -20,7 +20,7 @@ import type { Runner } from '../kernel/kernel';
 export type X86EngineName = 'blink' | 'x86';
 
 export async function chooseX86Engine(env: Record<string, string> = {}): Promise<X86EngineName> {
-  const forced = env.SHIRO_X86_ENGINE;
+  const forced = env?.TABCOMPUTER_X86_ENGINE;
   if (forced === 'x86') return 'x86';
   const { blinkSupported } = await import('./blink');
   if (blinkSupported()) return 'blink';

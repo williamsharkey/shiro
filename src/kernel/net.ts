@@ -138,17 +138,6 @@ export function ipFamily(addr: string): 0 | 4 | 6 {
   return 0;
 }
 
-/** The local address a socket of `domain` sends to `dest` from: loopback, or eth0's (10.0.2.15, fd00::15; see netlink.ts). */
-export function sourceFor(domain: number, dest: string): string {
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(dest)?.[1];
-  const v4 = mapped ?? (/^\d+\.\d+\.\d+\.\d+$/.test(dest) ? dest : null);
-  if (v4 !== null) {
-    const src = /^127\./.test(v4) ? '127.0.0.1' : '10.0.2.15';
-    return domain === AF_INET6 ? `::ffff:${src}` : src;
-  }
-  return dest === '::1' ? '::1' : 'fd00::15';
-}
-
 export function isLoopback(addr: string): boolean {
   return /^127\./.test(addr) || addr === '::1' || addr === '0.0.0.0' || addr === '::' || /^::ffff:127\./i.test(addr);
 }
@@ -916,11 +905,10 @@ export class KDatagramSocket implements OpenFile {
   }
   onReady(cb: () => void) { return this.q.onReady(cb); }
   getsockname(): SockAddr {
-    if (this.local) return { ...this.local };
-    // connect() picks the source address the route would (glibc's getaddrinfo
+    // connect() set the source address the route would use (glibc's getaddrinfo
     // sorts its answers by these, RFC 3484, and asserts a v4-mapped source
     // for a v4-mapped destination)
-    if (this.remote) return { family: this.domain, address: sourceFor(this.domain, this.remote.address), port: 0 };
+    if (this.local) return { ...this.local };
     return { family: this.domain, address: this.domain === AF_INET6 ? '::' : '0.0.0.0', port: 0 };
   }
   getpeername(): SockAddr | number { return this.remote ? { ...this.remote } : -ENOTCONN; }

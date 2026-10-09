@@ -149,7 +149,7 @@ describe('window manager', () => {
     wm.setTheme('light');
     expect(wm.theme()).toBe('light');
     expect(wm.root.dataset.theme).toBe('light');
-    expect(localStorage.getItem('shiro-desktop-theme')).toBe('light');
+    expect(localStorage.getItem('tabcomputer-desktop-theme')).toBe('light');
     wm.setTheme('dark');
     expect(wm.theme()).toBe('dark');
     expect(n).toBe(2);
@@ -166,7 +166,7 @@ describe('window manager', () => {
 
 describe('uiMode', () => {
   const loc = (search: string, hostname: string) => ({ search, hostname });
-  beforeEach(() => localStorage.removeItem('shiro-ui'));
+  beforeEach(() => localStorage.removeItem('tabcomputer-ui'));
 
   it('shiro.computer keeps the terminal; other hosts get the desktop', () => {
     expect(uiMode(loc('', 'shiro.computer'), false)).toBe('terminal');
@@ -180,7 +180,7 @@ describe('uiMode', () => {
     expect(uiMode(loc('', 'shiro.computer'), false)).toBe('desktop');
     expect(uiMode(loc('?ui=terminal', 'unix.computer'), false)).toBe('terminal');
     expect(uiMode(loc('', 'unix.computer'), false)).toBe('terminal');
-    localStorage.removeItem('shiro-ui');
+    localStorage.removeItem('tabcomputer-ui');
     expect(uiMode(loc('', 'unix.computer'), true)).toBe('terminal');
     expect(uiMode(loc('?demo=1', 'unix.computer'), false)).toBe('terminal');
   });
@@ -202,6 +202,20 @@ describe('brand (profiles/tabcomputer/profile.json)', () => {
     expect(local).toContain('<title>tabcomputer</title>');
     expect(shiro).toBe('<head><title>shiro</title></head>');
     expect(sub).toBe('<head><title>shiro</title></head>');
+  });
+
+  it('server.mjs shows the brand mark (its favicon, inline, in currentColor) while loading', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const server = new URL('../../../server.mjs', import.meta.url).href;
+    const out = execFileSync('node', ['--input-type=module', '-e',
+      `const m = await import(${JSON.stringify(server)}); const h = '<head><title>shiro</title></head><body></body>';
+       console.log(JSON.stringify([m.brandAppShell(h, 'tabcomputer.com'), m.brandAppShell(h, 'shiro.computer')])); process.exit(0);`,
+    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const [tab, shiro] = JSON.parse(out.trim().split('\n').pop()!);
+    const mark = tab.match(/<div id="boot-mark" aria-hidden="true">(<svg[\s\S]*?<\/svg>)<\/div>/)?.[1];
+    expect(mark).toContain('stroke="currentColor"');
+    expect(mark).not.toMatch(/<style|<svg[^>]*\scolor=/);
+    expect(shiro).not.toContain('boot-mark');
   });
 });
 

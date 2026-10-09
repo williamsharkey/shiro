@@ -8,7 +8,7 @@
  * fds 0/1: each `600 URI Acquire` for http://HOST/PATH is fetched from the
  * page's same-origin mirror, MIRROR/HOST/PATH (MIRROR defaults to
  * /debian/mirror/, set with `Acquire::Shiro::Mirror` in apt.conf or
- * $SHIRO_DEBIAN_MIRROR), written to the file apt names and reported with its
+ * $TABCOMPUTER_DEBIAN_MIRROR), written to the file apt names and reported with its
  * hashes. apt still checks every index against the signed InRelease and
  * every .deb against the index, so the mirror is untrusted like any other.
  */
@@ -87,7 +87,7 @@ function pageBase(): string {
 
 /** The mirror's base URL from apt's configuration, the environment, or the default. */
 export function mirrorBase(config: Map<string, string>, env: Record<string, string>): string {
-  const configured = config.get('acquire::shiro::mirror') || env.SHIRO_DEBIAN_MIRROR || (globalThis as any).process?.env?.SHIRO_DEBIAN_MIRROR || '/debian/mirror/';
+  const configured = config.get('acquire::shiro::mirror') || env?.TABCOMPUTER_DEBIAN_MIRROR || (globalThis as any).process?.env?.TABCOMPUTER_DEBIAN_MIRROR || '/debian/mirror/';
   return new URL(configured, pageBase()).href;
 }
 

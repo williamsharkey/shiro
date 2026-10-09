@@ -419,6 +419,8 @@ body.sd-active #shiro-layout { display: none; }
 .sd-spot-foot { display: flex; justify-content: space-between; padding: 7px 16px; border-top: 1px solid var(--sd-sep); }
 
 /* ── First-visit tour ── */
+.sd-brand-mark { color: var(--sd-text); }
+.sd-brand-mark svg { display: block; width: 100%; height: auto; }
 .sd-tour {
   position: absolute; right: 18px; bottom: calc(var(--sd-dock-h) + var(--sd-dock-gap) + 18px); z-index: 100001; width: min(340px, calc(100vw - 24px));
   background: var(--sd-material-strong); color: var(--sd-text); border: 1px solid var(--sd-window-border); border-radius: 16px;

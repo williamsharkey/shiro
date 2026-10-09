@@ -11,7 +11,7 @@ export { bzip2Compress, bzip2Decompress, bzip2DecompressDetailed, Bzip2Error } f
 
 type Mode = 'compress' | 'decompress' | 'test';
 
-const USAGE = (prog: string) => `bzip2, a block-sorting file compressor.  Version 1.0.8 (Shiro).
+const USAGE = (prog: string) => `bzip2, a block-sorting file compressor.  Version 1.0.8 (tabcomputer).
 
    usage: ${prog} [flags and input files in any order]
 
@@ -80,7 +80,7 @@ async function runBzip2(ctx: CommandContext, prog: string, defaultMode: Mode, de
         case '--best': level = 9; break;
         case '--help': ctx.stderr += USAGE(prog); return 0;
         case '--version': case '--license':
-          ctx.stdout += 'bzip2, a block-sorting file compressor.  Version 1.0.8 (Shiro).\n';
+          ctx.stdout += 'bzip2, a block-sorting file compressor.  Version 1.0.8 (tabcomputer).\n';
           return 0;
         default: return badFlag(arg);
       }
@@ -100,7 +100,7 @@ async function runBzip2(ctx: CommandContext, prog: string, defaultMode: Mode, de
         case 's': break;
         case 'h': ctx.stderr += USAGE(prog); return 0;
         case 'L': case 'V':
-          ctx.stdout += 'bzip2, a block-sorting file compressor.  Version 1.0.8 (Shiro).\n';
+          ctx.stdout += 'bzip2, a block-sorting file compressor.  Version 1.0.8 (tabcomputer).\n';
           return 0;
         default: return badFlag(`-${f}`);
       }

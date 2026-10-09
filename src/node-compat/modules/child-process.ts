@@ -1,4 +1,5 @@
 import type { CommandContext } from '../../commands/index';
+import { activeProfile } from '../../profile';
 
 export interface ChildProcessDeps {
   ctx: CommandContext;
@@ -86,9 +87,9 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       const flags = trimmed.slice(5).trim();
       if (flags === '-s' || flags === '') return { stdout: 'Linux\n', stderr: '', status: 0 };
       if (flags === '-m') return { stdout: 'x86_64\n', stderr: '', status: 0 };
-      if (flags === '-n') return { stdout: 'shiro\n', stderr: '', status: 0 };
+      if (flags === '-n') return { stdout: `${activeProfile().hostname}\n`, stderr: '', status: 0 };
       if (flags === '-r') return { stdout: '0.1.0\n', stderr: '', status: 0 };
-      if (flags === '-a') return { stdout: 'Linux shiro 0.1.0 x86_64\n', stderr: '', status: 0 };
+      if (flags === '-a') return { stdout: `Linux ${activeProfile().hostname} 0.1.0 x86_64\n`, stderr: '', status: 0 };
     }
     // which/command -v for known commands
     const whichMatch = trimmed.match(/^(which|command\s+-v)\s+(\S+)$/);
@@ -107,7 +108,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
     if (gitConfigMatch) {
       const key = gitConfigMatch[1];
       if (key === 'user.name') return { stdout: 'user\n', stderr: '', status: 0 };
-      if (key === 'user.email') return { stdout: 'user@shiro.computer\n', stderr: '', status: 0 };
+      if (key === 'user.email') return { stdout: `user@${activeProfile().hostname}.local\n`, stderr: '', status: 0 };
       return { stdout: '', stderr: '', status: 1 }; // unknown config key
     }
 
@@ -193,7 +194,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
     if (rgMatch) {
       const rgArgs = rgMatch[2];
       if (rgArgs.includes('--version')) {
-        return { stdout: 'ripgrep 14.0.0 (shiro shim)\n', stderr: '', exitCode: 0 };
+        return { stdout: 'ripgrep 14.0.0 (tabcomputer shim)\n', stderr: '', exitCode: 0 };
       }
       // Pass through to Shiro's builtin rg command (handles --files, --sort, all flags)
       normalized = `rg ${rgArgs}`;

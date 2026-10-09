@@ -7,6 +7,7 @@
 
 import type { Command, CommandContext } from './index';
 import { serviceManager } from '../service-manager';
+import { activeProfile } from '../profile';
 
 // ── crontab ─────────────────────────────────────────────────────────
 
@@ -157,7 +158,7 @@ function formatLogEntry(entry: import('../service-manager').LogEntry): string {
   const day = String(d.getDate()).padStart(2, '0');
   const time = d.toLocaleTimeString('en', { hour12: false });
   const priority = entry.priority === 'error' ? '[ERROR]' : entry.priority === 'warn' ? '[WARN]' : '';
-  return `${month} ${day} ${time} shiro ${entry.unit}: ${priority}${priority ? ' ' : ''}${entry.message}`;
+  return `${month} ${day} ${time} ${activeProfile().hostname} ${entry.unit}: ${priority}${priority ? ' ' : ''}${entry.message}`;
 }
 
 async function followLogs(

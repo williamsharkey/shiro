@@ -106,7 +106,7 @@ const PACKAGE_MANIFEST: X86Package[] = [
 
 // ── IndexedDB cache ──────────────────────────────────────────────────
 
-const X86_CACHE_DB = 'shiro-x86-cache';
+const X86_CACHE_DB = 'tabcomputer-x86-cache';
 const X86_CACHE_STORE = 'elfs';
 const X86_META_STORE = 'elf-metadata';
 const X86_DB_VERSION = 1;

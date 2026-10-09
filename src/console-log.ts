@@ -51,7 +51,7 @@ export interface ConsoleQueryResult {
 const MAX_ENTRIES = 3000;
 const MAX_ENTRY_CHARS = 2000;
 const MAX_TOTAL_CHARS = 1_500_000;
-const PERSIST_KEY = 'shiro-console-log';
+const PERSIST_KEY = 'tabcomputer-console-log';
 const PERSIST_ENTRIES = 300;
 const PERSIST_MAX_CHARS = 200_000;
 const PERSIST_EVERY_MS = 5000;

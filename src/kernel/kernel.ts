@@ -27,6 +27,7 @@ import { LockTable, F_RDLCK, F_WRLCK, F_UNLCK } from './locks';
 import { Process } from './process';
 import { EpollFile, waitReady } from './epoll';
 import { EventFile, TimerFile } from './fd';
+import { activeProfile } from '../profile';
 
 /** Runs a process to completion; resolves with its exit code (or nothing if it exited through the kernel). */
 export type Runner = (proc: Process, kernel: Kernel) => Promise<number | void>;
@@ -167,7 +168,7 @@ export class Kernel {
   /** The page's shell: builtins run in forks of it. */
   shell?: Shell;
   /** uname(2) nodename (the prompt's \h). */
-  hostname = 'shiro';
+  hostname = activeProfile().hostname;
   readonly procs = new Map<number, Process>();
   readonly init: Process;
   private loaders: Loader[] = [];
@@ -1159,7 +1160,7 @@ export class Kernel {
       const home = shell.env.HOME || '/home/user';
       const cwd = shell.cwd === home ? '~' : shell.cwd.startsWith(home + '/') ? '~' + shell.cwd.slice(home.length) : shell.cwd;
       return (shell.env.PS1 ?? '').replace(/\\([uhHwW$n\\])/g, (_, c: string) => ({
-        u: shell.env.USER || 'user', h: 'shiro', H: 'shiro', w: cwd, W: cwd === '~' ? '~' : cwd.slice(cwd.lastIndexOf('/') + 1) || '/',
+        u: shell.env.USER || 'user', h: this.hostname, H: this.hostname, w: cwd, W: cwd === '~' ? '~' : cwd.slice(cwd.lastIndexOf('/') + 1) || '/',
         $: '$', n: '\n', '\\': '\\',
       } as Record<string, string>)[c]);
     };
@@ -2016,7 +2017,7 @@ export class Kernel {
         }
         case A.SYS_uname: { // → struct utsname (engines that report their own machine take the names from here)
           if (data.length < A.UTSNAME_FIELD * 6) return -A.EFAULT;
-          const fields = ['Linux', this.hostname, '6.1.0-shiro', '#1 Shiro', 'wasm32', '(none)'];
+          const fields = ['Linux', this.hostname, `6.1.0-${this.hostname}`, '#1 SMP', 'wasm32', '(none)'];
           data.fill(0, 0, A.UTSNAME_FIELD * 6);
           fields.forEach((f, i) => data.set(enc.encode(f).subarray(0, A.UTSNAME_FIELD - 1), i * A.UTSNAME_FIELD));
           return 0;
@@ -2448,9 +2449,9 @@ let singleton: Kernel | undefined;
 /** The page's kernel (created on first use; main.ts attaches the filesystem and shell). */
 export function getKernel(): Kernel {
   const w = typeof window !== 'undefined' ? (window as any) : undefined;
-  if (w?.__shiroKernel) return w.__shiroKernel;
+  if (w?.__tabcomputerKernel) return w.__tabcomputerKernel;
   if (!singleton) singleton = new Kernel();
-  if (w) w.__shiroKernel = singleton;
+  if (w) w.__tabcomputerKernel = singleton;
   return singleton;
 }
 

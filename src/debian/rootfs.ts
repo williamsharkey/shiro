@@ -42,14 +42,14 @@ type IndexRow = [string, 'd', number, number] | [string, 'l', number, number, st
 interface RootfsIndex { format: number; chunks: Array<[string, number, number]>; entries: IndexRow[] }
 
 export const ROOTFS_STATE = '/var/lib/shiro/rootfs.json';
-const CACHE_NAME = 'shiro-debian-chunks-v1';
+const CACHE_NAME = 'tabcomputer-debian-chunks-v1';
 
 const nodeProcess = (): any => (globalThis as any).process;
 const isNode = () => typeof nodeProcess()?.getBuiltinModule === 'function';
 
 /** Where the app serves the rootfs (public/debian → /debian/). */
 export function defaultRootfsBase(): string {
-  const env = nodeProcess()?.env?.SHIRO_DEBIAN_ROOTFS;
+  const env = nodeProcess()?.env?.TABCOMPUTER_DEBIAN_ROOTFS;
   if (env) return env.endsWith('/') ? env : env + '/';
   if (isNode()) {
     const p = nodeProcess();

@@ -4,7 +4,7 @@
  * `gh auth login` asks GitHub for a one-time code, shows it (in the terminal
  * and in a panel with Copy and Open buttons), and polls until the user
  * approves at github.com/login/device. The token goes where gh and git
- * already look (localStorage `shiro_github_token`). github.com's OAuth
+ * already look (localStorage `tabcomputer_github_token`). github.com's OAuth
  * endpoints have no CORS, so requests go through the server's narrow
  * `/api/github-login/` proxy route.
  */
@@ -21,7 +21,7 @@ export const GITHUB_OAUTH_CLIENT_ID = 'Ov23liznflO83ISe0lvr';
 /** Scopes gh itself asks for, plus workflow and user:email (for git identity). */
 export const DEFAULT_GITHUB_SCOPES = ['repo', 'read:org', 'gist', 'workflow', 'user:email'];
 
-export const GITHUB_TOKEN_KEY = 'shiro_github_token';
+export const GITHUB_TOKEN_KEY = 'tabcomputer_github_token';
 
 export interface DeviceCode {
   device_code: string;

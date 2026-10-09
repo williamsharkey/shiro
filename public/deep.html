@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Shiro — Deep Dive</title>
-  <meta name="description" content="All 11 interactive demos: pipes, files, git, serve, page interaction, vi, nano, IDE, seed GIF, and more. The full technical walkthrough of Shiro.">
+  <title>tabcomputer — Deep Dive</title>
+  <meta name="description" content="All 11 interactive demos: pipes, files, git, serve, page interaction, vi, nano, IDE, seed GIF, and more. The full technical walkthrough of tabcomputer.">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -325,9 +325,9 @@
 </head>
 <body>
   <article>
-    <a href="/" class="back">&larr; shiro.computer</a>
+    <a href="/" class="back">&larr; tabcomputer.com</a>
 
-    <h1>Shiro</h1>
+    <h1>tabcomputer</h1>
     <p class="subtitle">
       A static HTML file that boots into something resembling a Unix
       shell.<label for="sn-size" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-size" class="margin-toggle"/><span class="sidenote">~420 KB gzipped. All JavaScript and CSS are inlined into a single document&thinsp;&mdash;&thinsp;no external assets, no CDN, no build artifacts to coordinate.</span>
@@ -341,7 +341,7 @@
       page works with no server at all. But certain features need a network
       path: Claude Code calls the Anthropic API, <code>git clone</code> fetches
       remote repos, and <code>npm install</code> downloads packages. Those
-      requests route through a CORS proxy on shiro.computer because browsers
+      requests route through a CORS proxy on tabcomputer.com because browsers
       block direct cross-origin calls.
     </p>
     <p class="subtitle" style="margin-bottom: 6px">
@@ -362,7 +362,7 @@
       environment.
     </p>
     <p class="subtitle" style="margin-bottom: 6px">
-      If you'd rather just try it: <a href="/">shiro.computer</a>.
+      If you'd rather just try it: <a href="/">tabcomputer.com</a>.
     </p>
 
     <div id="engine-status" class="status">loading shiro&hellip;</div>
@@ -396,7 +396,7 @@
       IndexedDB wearing a POSIX
       costume.<label for="sn-posix" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-posix" class="margin-toggle"/><span class="sidenote">stat, readdir, readFile, writeFile, mkdir, symlink, chmod, glob&thinsp;&mdash;&thinsp;enough of the POSIX surface that isomorphic-git and npm can work against it without modification.</span>
       Files survive page reloads, and each subdomain
-      (<code>app.shiro.computer</code>, <code>game.shiro.computer</code>)
+      (<code>app.tabcomputer.com</code>, <code>game.tabcomputer.com</code>)
       gets its own isolated storage courtesy of the browser's same-origin policy.</p>
     </section>
 
@@ -430,7 +430,7 @@
       a pure-JavaScript implementation. Local operations&thinsp;&mdash;&thinsp;init, add, commit,
       diff, log, branch&thinsp;&mdash;&thinsp;need no server at all. Cloning from GitHub requires a CORS proxy,
       since browsers can't make cross-origin git HTTP requests
-      directly.<label for="sn-proxy" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-proxy" class="margin-toggle"/><span class="sidenote">The production server at shiro.computer is about 400 lines of Node.js. It serves the static file and proxies API routes (Anthropic, GitHub, OAuth), handles WebRTC signaling, git CORS, and a WebSocket relay for encrypted group networking.</span></p>
+      directly.<label for="sn-proxy" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-proxy" class="margin-toggle"/><span class="sidenote">The production server at tabcomputer.com is about 400 lines of Node.js. It serves the static file and proxies API routes (Anthropic, GitHub, OAuth), handles WebRTC signaling, git CORS, and a WebSocket relay for encrypted group networking.</span></p>
     </section>
 
     <!-- Demo 5: Serve a page -->
@@ -550,7 +550,7 @@
         </div>
         <div class="demo-overlay" onclick="demos.seed.play()">
           <h2>Seed GIF</h2>
-          <p class="overlay-desc">Snapshot one Shiro instance, drag the GIF to restore in another.</p>
+          <p class="overlay-desc">Snapshot one tabcomputer instance, drag the GIF to restore in another.</p>
           <button class="demo-play-btn">&#9654;</button>
         </div>
       </div>
@@ -576,10 +576,10 @@
     <section class="info-section">
       <h2>Remote control</h2>
       <p>An outer Claude Code instance&thinsp;&mdash;&thinsp;running on your actual
-      machine&thinsp;&mdash;&thinsp;can control Shiro via
+      machine&thinsp;&mdash;&thinsp;can control tabcomputer via
       <a href="https://modelcontextprotocol.io/">MCP</a> tools over
       WebRTC.<label for="sn-rtc" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-rtc" class="margin-toggle"/><span class="sidenote">The server handles the initial WebRTC signaling handshake. After that, all data flows peer-to-peer between the browser and the outer Claude Code process. Connection codes have ~46 bits of entropy and expire in 5 minutes.</span>
-      Run <code>remote start</code> in Shiro to get a connection code,
+      Run <code>remote start</code> in tabcomputer to get a connection code,
       then use the <code>shiro-mcp</code> package to exec commands, read
       and write files, and evaluate JavaScript in the browser.</p>
     </section>
@@ -592,9 +592,9 @@
       It captures a terminal screenshot, encodes it as a real GIF image,
       and embeds the entire filesystem in a custom extension block. The
       result looks like a screenshot but carries the complete state. Drag
-      it back onto Shiro to restore everything.</p>
+      it back onto tabcomputer to restore everything.</p>
       <p><code>seed html</code> downloads a standalone HTML file&thinsp;&mdash;&thinsp;open
-      it in any browser to boot Shiro with your filesystem already loaded.</p>
+      it in any browser to boot tabcomputer with your filesystem already loaded.</p>
     </section>
 
     <!-- Inject -->
@@ -602,30 +602,30 @@
       <h2>Inject into any page</h2>
       <p><code>seed</code> (with no arguments) copies a JavaScript snippet to
       your clipboard. Open DevTools on any website, paste it into the
-      console, and a floating Shiro window appears on top of the
-      page.<label for="sn-inject" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-inject" class="margin-toggle"/><span class="sidenote">The snippet creates a draggable, resizable iframe with macOS-style traffic lights (close, minimize), font size controls, and a title bar. It loads Shiro from shiro.computer and sends your entire filesystem + localStorage via postMessage.</span>
-      Your files come with it. Everything you had in Shiro is available
+      console, and a floating tabcomputer window appears on top of the
+      page.<label for="sn-inject" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-inject" class="margin-toggle"/><span class="sidenote">The snippet creates a draggable, resizable iframe with macOS-style traffic lights (close, minimize), font size controls, and a title bar. It loads tabcomputer from tabcomputer.com and sends your entire filesystem + localStorage via postMessage.</span>
+      Your files come with it. Everything you had in tabcomputer is available
       inside the injected window.</p>
 
       <p>More interesting: the snippet also installs an <code>hc</code>
-      bridge into the host page. From inside the injected Shiro, run
+      bridge into the host page. From inside the injected tabcomputer, run
       <code>hc outer</code> and all <code>hc</code> commands now
       operate on the host page's
-      DOM.<label for="sn-hc-outer" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-hc-outer" class="margin-toggle"/><span class="sidenote">The bridge communicates via postMessage. The Shiro iframe sends <code>shiro-hc</code> messages; the host-page bridge executes <code>q</code>, <code>look</code>, <code>@N</code>, <code>g</code>, and the rest of the HC command set against the real document, then posts the result back. No cross-origin issues because postMessage doesn't require same-origin.</span>
+      DOM.<label for="sn-hc-outer" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-hc-outer" class="margin-toggle"/><span class="sidenote">The bridge communicates via postMessage. The tabcomputer iframe sends <code>shiro-hc</code> messages; the host-page bridge executes <code>q</code>, <code>look</code>, <code>@N</code>, <code>g</code>, and the rest of the HC command set against the real document, then posts the result back. No cross-origin issues because postMessage doesn't require same-origin.</span>
       <code>hc look</code> lists every button, link, and input on
       the page. <code>hc q .product-price</code> queries elements.
       <code>hc @3</code> clicks one. You can read text, grep content,
       inspect attributes&thinsp;&mdash;&thinsp;all from a shell prompt
       floating over the page you're examining.</p>
 
-      <p>Since Claude Code runs inside Shiro, this means an AI coding
+      <p>Since Claude Code runs inside tabcomputer, this means an AI coding
       agent can interact with any website: navigate a page, read its DOM,
       click buttons, extract data. The page doesn't need to cooperate or
       expose an API.</p>
 
       <p><code>seed blob</code> is the self-contained
-      variant.<label for="sn-blob" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-blob" class="margin-toggle"/><span class="sidenote">The blob variant inlines all of Shiro's HTML, JavaScript, and CSS, gzip-compresses everything, and base64-encodes it. At runtime it decompresses and creates a blob URL. No network request to shiro.computer, so it works even on pages with restrictive Content Security Policies.</span>
-      Instead of loading Shiro from shiro.computer, it packs the entire
+      variant.<label for="sn-blob" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-blob" class="margin-toggle"/><span class="sidenote">The blob variant inlines all of tabcomputer's HTML, JavaScript, and CSS, gzip-compresses everything, and base64-encodes it. At runtime it decompresses and creates a blob URL. No network request to tabcomputer.com, so it works even on pages with restrictive Content Security Policies.</span>
+      Instead of loading tabcomputer from tabcomputer.com, it packs the entire
       application into the snippet itself&thinsp;&mdash;&thinsp;gzip-compressed
       and encoded as a blob URL. No external fetch, no CSP issues. It works
       offline, on intranets, behind firewalls.</p>
@@ -643,7 +643,7 @@
 
     <footer>
       <div class="links">
-        <a href="https://github.com/williamsharkey/shiro">source</a>
+        <a href="https://github.com/williamsharkey/tabcomputer">source</a>
         <a href="/about">About</a>
         <a href="/vision">Vision</a>
       </div>
@@ -661,7 +661,7 @@
 
   function getShiro() {
     const f = document.getElementById('shiro-live');
-    return f?.contentWindow?.__shiro;
+    return f?.contentWindow?.__tabcomputer;
   }
 
   async function waitForShiro(timeout = 20000) {
@@ -695,7 +695,7 @@
     const el = document.getElementById('engine-status');
     el.textContent = 'failed to load';
     el.classList.add('error');
-    throw new Error('Shiro boot timeout');
+    throw new Error('tabcomputer boot timeout');
   }
 
   // ===== DemoPlayer =====
@@ -856,7 +856,7 @@
         return;
       }
 
-      // Eval step — run JS in the Shiro iframe's context (for IDE automation)
+      // Eval step — run JS in the tabcomputer iframe's context (for IDE automation)
       if (step.eval != null) {
         if (step.note) {
           term.write(`\x1b[38;5;75m\x1b[3m# ${step.note}\x1b[0m\r\n`);
@@ -912,7 +912,7 @@
       // keys step — send raw keystrokes to terminal
       if (step.keys != null) {
         const iframe = document.getElementById('shiro-live');
-        const shiroTerm = iframe?.contentWindow?.__shiro?.terminal;
+        const shiroTerm = iframe?.contentWindow?.__tabcomputer?.terminal;
         if (shiroTerm) {
           if (step.typeSpeed) {
             // Animated typing (one char at a time)
@@ -1253,10 +1253,10 @@
   ];
 
   const seedSteps = [
-    { target: 'right', note: 'Target shiro.computer instance (empty)', delay: 100 },
+    { target: 'right', note: 'Target tabcomputer.com instance (empty)', delay: 100 },
     { target: 'left', cmd: 'mkdir -p /tmp/app' },
     { target: 'left', cmd: "echo '<h1>My App</h1><p>Snapshot me!</p>' > /tmp/app/index.html" },
-    { target: 'left', cmd: 'ls /tmp/app', note: 'Files in left Shiro' },
+    { target: 'left', cmd: 'ls /tmp/app', note: 'Files in left tabcomputer' },
     { target: 'left', cmd: 'seed gif', note: 'Generate seed GIF', delay: 2000 },
     { drag: { from: 'left', to: 'right' }, delay: 1500 },
     { target: 'right', cmd: 'ls /tmp/app', note: 'Files restored!' },
@@ -1266,9 +1266,9 @@
   const ideSteps = [
     // Phase 1 — scaffold project via shell
     { cmd: 'mkdir -p /tmp/ide-project', note: 'Create project' },
-    { cmd: "echo '<h1>Hello World</h1><p>Built in Shiro IDE</p><link rel=\"stylesheet\" href=\"style.css\"><script src=\"app.js\"><\\/script>' > /tmp/ide-project/index.html" },
+    { cmd: "echo '<h1>Hello World</h1><p>Built in tabcomputer IDE</p><link rel=\"stylesheet\" href=\"style.css\"><script src=\"app.js\"><\\/script>' > /tmp/ide-project/index.html" },
     { cmd: "echo 'h1 { color: #6c63ff; font-family: system-ui; } p { color: #888; }' > /tmp/ide-project/style.css" },
-    { cmd: "echo 'console.log(\"Hello from Shiro IDE\");' > /tmp/ide-project/app.js" },
+    { cmd: "echo 'console.log(\"Hello from tabcomputer IDE\");' > /tmp/ide-project/app.js" },
     { cmd: 'cd /tmp/ide-project && git init && git add . && git commit -m "init"', note: 'Commit' },
     { cmd: 'ide /tmp/ide-project', note: 'Launch IDE', delay: 1500 },
 
@@ -1341,8 +1341,8 @@
         try { getShiro().unbecome(); } catch {}
         try {
           const iframe = document.getElementById('shiro-live');
-          if (iframe && iframe.contentWindow && iframe.contentWindow.__shiro) {
-            iframe.contentWindow.__shiro.unbecome();
+          if (iframe && iframe.contentWindow && iframe.contentWindow.__tabcomputer) {
+            iframe.contentWindow.__tabcomputer.unbecome();
           }
         } catch {}
       })()
@@ -1419,8 +1419,8 @@
       }
       this.playBtn.classList.remove('loading');
 
-      this.leftShiro = leftIframe.contentWindow.__shiro;
-      this.rightShiro = rightIframe.contentWindow.__shiro;
+      this.leftShiro = leftIframe.contentWindow.__tabcomputer;
+      this.rightShiro = rightIframe.contentWindow.__tabcomputer;
 
       // Inject scrollbar styles
       for (const iframe of [leftIframe, rightIframe]) {
@@ -1462,7 +1462,7 @@
       const start = Date.now();
       while (Date.now() - start < timeout) {
         try {
-          const s = iframe.contentWindow?.__shiro;
+          const s = iframe.contentWindow?.__tabcomputer;
           if (s?.shell?.execute && s?.terminal?.term) return;
         } catch {}
         await sleep(200);
@@ -1499,7 +1499,7 @@
           await sleep(200);
         }
         const iframe = this._getIframe(target);
-        const shiroTerm = iframe?.contentWindow?.__shiro?.terminal;
+        const shiroTerm = iframe?.contentWindow?.__tabcomputer?.terminal;
         if (shiroTerm) {
           if (step.typeSpeed) {
             for (let i = 0; i < step.keys.length; i++) {
@@ -1560,7 +1560,7 @@
     async _animateDrag(drag) {
       // Get GIF bytes from left iframe
       const leftIframe = this._getIframe('left');
-      const gifBytes = leftIframe?.contentWindow?.__shiro?.lastSeedGif;
+      const gifBytes = leftIframe?.contentWindow?.__tabcomputer?.lastSeedGif;
       if (!gifBytes) {
         console.warn('seed demo: no lastSeedGif available');
         return;
@@ -1621,9 +1621,9 @@
       // Copy files directly from left fs to right fs (avoids page reload)
       const rightIframe = this._getIframe('right');
       try {
-        const leftFs = leftIframe.contentWindow.__shiro.fs;
-        const rightFs = rightIframe.contentWindow.__shiro.fs;
-        const rightTerm = rightIframe.contentWindow.__shiro.terminal.term;
+        const leftFs = leftIframe.contentWindow.__tabcomputer.fs;
+        const rightFs = rightIframe.contentWindow.__tabcomputer.fs;
+        const rightTerm = rightIframe.contentWindow.__tabcomputer.terminal.term;
 
         rightTerm.write('\r\n\x1b[92mRestoring from seed...\x1b[0m\r\n');
 

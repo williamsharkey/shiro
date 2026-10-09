@@ -1,7 +1,7 @@
 {
-  "name": "shiro",
+  "name": "tabcomputer",
   "version": "0.1.0",
-  "description": "Browser-native Unix shell with Git, pipes, and IndexedDB filesystem - no servers, runs entirely in JavaScript",
+  "description": "tabcomputer: a Unix-like computer that lives in your browser tab - a real shell, processes and ptys, Debian packages, a desktop",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,7 +11,6 @@
     "bench": "node bench/run.mjs",
     "bench:quick": "node bench/run.mjs --quick",
     "bench:compare": "node bench/compare.mjs",
-    "deploy": "bash deploy.sh",
     "conformance": "(sh scripts/conformance/fetch.sh || echo \"conformance: could not fetch external suites; they will be skipped\") && cd tests && npx vitest run --config vitest.conformance.config.ts; node ../scripts/conformance/report.mjs",
     "debian-score": "node scripts/debian/score.mjs",
     "debian-rootfs": "bash scripts/debian/build-rootfs.sh"

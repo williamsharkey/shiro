@@ -28,20 +28,28 @@ export interface ServerHooks {
   topDestroyed?(w: XWindow): void;
   topConfigured?(w: XWindow): void;
   topProperty?(w: XWindow, atom: string): void;
-  /** pixels of a viewable window changed: rect in that toplevel's coordinates */
-  damage?(top: XWindow, x: number, y: number, w: number, h: number): void;
+  /** pixels of a viewable window changed: rect in that toplevel's coordinates; `src` drew them (none: structure changed) */
+  damage?(top: XWindow, x: number, y: number, w: number, h: number, src?: XWindow): void;
   cursor?(top: XWindow, cursor: XCursor | null): void;
   /** DOM-text mode: a run of core text drawn on a viewable window (not rasterized), in toplevel coordinates */
   text?(top: XWindow, run: TextRun): void;
   /** DOM-text mode: CopyArea within one toplevel, before ('begin') and after ('end') its pixels move */
-  copy?(top: XWindow, phase: 'begin' | 'end', sx: number, sy: number, w: number, h: number, dx: number, dy: number): void;
+  copy?(top: XWindow, phase: 'begin' | 'end', sx: number, sy: number, w: number, h: number, dx: number, dy: number, win: XWindow): void;
   bell?(): void;
   /** a client took ownership of a selection (CLIPBOARD/PRIMARY) */
   selectionOwned?(selection: string, owner: XWindow | null): void;
 }
 
 /** Core text (ImageText/PolyText) as DOM-text mode reports it: x, y is the baseline's left end */
-export interface TextRun { x: number; y: number; width: number; ascent: number; descent: number; text: string; font: string; fg: number; bg: number | null }
+export interface TextRun {
+  x: number; y: number; width: number; ascent: number; descent: number; text: string;
+  /** XLFD, or 'pango' for text a client rasterized itself */
+  font: string; fg: number; bg: number | null;
+  /** the glyphs are pixels already: show the span transparent */
+  overlay?: boolean;
+  /** the window it was drawn on */
+  win?: number;
+}
 
 export interface XCursor { id: number; css: string; image?: { width: number; height: number; rgba: Uint8ClampedArray; xhot: number; yhot: number } }
 
@@ -49,7 +57,7 @@ export interface Property { type: number; format: number; data: Uint8Array }
 
 const ROOT_ID = 0x100, COLORMAP_ID = 0x20, VISUAL_24 = 0x21, VISUAL_32 = 0x22, CMAP_32 = 0x23;
 const CLIENT_SHIFT = 21, RESOURCE_MASK = (1 << CLIENT_SHIFT) - 1;
-const VENDOR = 'Shiro in-page X server';
+const VENDOR = 'tabcomputer in-page X server';
 const RELEASE = 12101011;
 export const SERVER_DEFAULTS = { width: 1600, height: 1000 };
 
@@ -506,7 +514,7 @@ export class XServer {
     const top = w.top();
     if (!top || !w.viewable()) return;
     const [ox, oy] = w.topOrigin();
-    this.hooks.damage?.(top, ox + x, oy + y, ww, hh);
+    this.hooks.damage?.(top, ox + x, oy + y, ww, hh, w);
   }
 
   /** Damage a whole window subtree (structure changed). */
@@ -1189,6 +1197,8 @@ export class XServer {
     const bytes = n * (format / 8);
     let data: Uint8Array = r.bytes(bytes).slice();
     if (!c.le && format > 8) data = swapUnits(data, format / 8); // store little-endian
+    // DOM-text mode: what a GTK app drew as text (libshiro-text-hook.so), not a property to keep
+    if (this.atomName(prop) === '_SHIRO_TEXT') { if (format === 8) this.clientText(w, data); return; }
     const old = w.props.get(prop);
     if (mode !== 0 && old) {
       if (old.type !== type || old.format !== format) throw new XError(P.BadMatch, 0);
@@ -1734,7 +1744,7 @@ export class XServer {
     const dom = this.domText && src.pix === dst.pix && dst.win && dst.win.viewable() ? dst.win : null;
     const top = dom?.top();
     let o: [number, number] = [0, 0];
-    if (dom && top && sr) { o = dom.topOrigin(); this.hooks.copy?.(top, 'begin', o[0] + sr.x, o[1] + sr.y, sr.w, sr.h, o[0] + dx + (sr.x - sx), o[1] + dy + (sr.y - sy)); }
+    if (dom && top && sr) { o = dom.topOrigin(); this.hooks.copy?.(top, 'begin', o[0] + sr.x, o[1] + sr.y, sr.w, sr.h, o[0] + dx + (sr.x - sx), o[1] + dy + (sr.y - sy), dom); }
     if (sr) {
       const p = new Painter(dst.pix, gc);
       const ox = dx + (sr.x - sx), oy = dy + (sr.y - sy);
@@ -1744,7 +1754,7 @@ export class XServer {
         p.copyRows(ox, oy, sr.w, sr.h, tmp, sr.w, 0);
       } else p.copyRows(ox, oy, sr.w, sr.h, s.data, s.width, sr.y * s.width + sr.x);
       p.finish();
-      if (dom && top) this.hooks.copy?.(top, 'end', o[0] + sr.x, o[1] + sr.y, sr.w, sr.h, o[0] + ox, o[1] + oy);
+      if (dom && top) this.hooks.copy?.(top, 'end', o[0] + sr.x, o[1] + sr.y, sr.w, sr.h, o[0] + ox, o[1] + oy, dom);
     }
     if (gc.graphicsExposures) this.noExposure(c, dst, 62);
   }
@@ -1850,13 +1860,29 @@ export class XServer {
     for (const [font, codes, x0, width] of runs) this.textRun(d.win!, p.gc, font, codes, x0, y, width, false);
   }
 
+  /** Runs from libshiro-text-hook.so: "x baseline width ascent descent rrggbb\ttext" lines, window coordinates */
+  private clientText(w: XWindow, data: Uint8Array): void {
+    const top = w.top();
+    if (!this.domText || !top || !w.viewable() || !this.hooks.text) return;
+    const [ox, oy] = w.topOrigin();
+    for (const line of new TextDecoder().decode(data).split('\n')) {
+      const tab = line.indexOf('\t');
+      if (tab < 0) continue;
+      const [x, y, width, ascent, descent] = line.slice(0, tab - 7).split(' ').map(Number);
+      const fg = parseInt(line.slice(tab - 6, tab), 16);
+      if (![x, y, width, ascent, descent, fg].every(Number.isFinite) || width <= 0) continue;
+      // the client drew these glyphs itself: the span is only ever a transparent layer over them
+      this.hooks.text(top, { x: ox + x, y: oy + y, width, ascent, descent, text: line.slice(tab + 1), font: 'pango', fg, bg: null, overlay: true, win: w.id });
+    }
+  }
+
   private textRun(w: XWindow, gc: { fg: number; bg: number }, font: XFont, codes: number[], x: number, y: number, width: number, image: boolean): void {
     const top = w.top();
     if (!top || !w.viewable() || !this.hooks.text) return;
     const [ox, oy] = w.topOrigin();
     // 8-bit fonts here are ISO 8859-1 and 16-bit ones ISO 10646: both map code → code point
     const text = String.fromCharCode(...codes);
-    this.hooks.text(top, { x: ox + x, y: oy + y, width, ascent: font.ascent, descent: font.descent, text, font: font.name, fg: gc.fg, bg: image ? gc.bg : null });
+    this.hooks.text(top, { x: ox + x, y: oy + y, width, ascent: font.ascent, descent: font.descent, text, font: font.name, fg: gc.fg, bg: image ? gc.bg : null, win: w.id });
   }
 
   // ── fonts ──

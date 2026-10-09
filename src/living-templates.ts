@@ -681,7 +681,7 @@ document.getElementById('generate-btn').onclick = function() {
     + '    <h2>My Interests</h2>\\n'
     + '    <p>' + interests + '</p>\\n'
     + '  </div>\\n'
-    + '  <p style="color:#94a3b8;font-size:12px;margin-top:30px">Built with Shiro</p>\\n'
+    + '  <p style="color:#94a3b8;font-size:12px;margin-top:30px">Built with tabcomputer</p>\\n'
     + '</body>\\n</html>';
 
   // Write the file and serve it

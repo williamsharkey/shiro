@@ -60,7 +60,7 @@ export const awk: Command = {
   async exec(ctx: CommandContext) {
     const opts = parseOptions(ctx.args);
     if (typeof opts === 'string') {
-      if (opts === '\0version') { ctx.stdout += 'awk (Shiro) 1.0, POSIX awk with gawk extensions\n'; return 0; }
+      if (opts === '\0version') { ctx.stdout += 'awk (tabcomputer) 1.0, POSIX awk with gawk extensions\n'; return 0; }
       if (opts === '\0usage') { ctx.stdout += USAGE; return 0; }
       ctx.stderr += `awk: ${opts}\n${USAGE}`;
       return 2;

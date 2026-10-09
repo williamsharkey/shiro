@@ -146,7 +146,7 @@ function installClipboardMock() {
   });
 }
 
-// ─── __shiro Mock (for seed gif terminal access) ─────────────
+// ─── __tabcomputer Mock (for seed gif terminal access) ─────────────
 
 function installShiroMock() {
   const mockBuffer = {
@@ -159,7 +159,7 @@ function installShiroMock() {
       }),
     }),
   };
-  (window as any).__shiro = {
+  (window as any).__tabcomputer = {
     terminal: {
       term: {
         cols: 40, rows: 10,
@@ -264,13 +264,13 @@ describe('seed gif — GIF export + import roundtrip', () => {
   afterEach(() => {
     teardownDownloadCapture();
     localStorage.clear();
-    delete (window as any).__shiro;
+    delete (window as any).__tabcomputer;
   });
 
   it('should download a GIF with embedded seed data', async () => {
     const { output, exitCode } = await run(shell, 'seed gif');
     expect(exitCode).toBe(0);
-    expect(output).toContain('Shiro GIF Seed');
+    expect(output).toContain('tabcomputer GIF Seed');
     expect(output).toContain('Downloaded:');
     expect(lastDownloadBlob).not.toBeNull();
     expect(lastDownloadFilename).toMatch(/\.gif$/);
@@ -400,7 +400,7 @@ describe('seed html — HTML export + verify seed injection', () => {
   it('should download an HTML file', async () => {
     const { output, exitCode } = await run(shell, 'seed html');
     expect(exitCode).toBe(0);
-    expect(output).toContain('Shiro HTML Seed');
+    expect(output).toContain('tabcomputer HTML Seed');
     expect(output).toContain('Downloaded:');
     expect(lastDownloadBlob).not.toBeNull();
     expect(lastDownloadFilename).toMatch(/\.html$/);
@@ -772,7 +772,7 @@ describe('seed — API key detection', () => {
   });
 
   it('should warn when API keys are detected in localStorage', async () => {
-    localStorage.setItem('shiro_api_key', 'sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+    localStorage.setItem('tabcomputer_api_key', 'sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAA');
     const { output } = await run(shell, 'seed');
     expect(output).toContain('API keys detected');
   });

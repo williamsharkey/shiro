@@ -1399,14 +1399,14 @@ describe('Node.js Module Compatibility', () => {
       expect(ctx.stdout).toContain('uid:1000');
     });
 
-    it('os.hostname returns shiro', async () => {
+    it('os.hostname returns the profile hostname', async () => {
       const ctx = createCtx(shell, fs, ['-e', [
         'const os = require("os");',
         'console.log("hostname:" + os.hostname());',
       ].join('\n')]);
       const exitCode = await nodeCmd.exec(ctx);
       expect(exitCode).toBe(0);
-      expect(ctx.stdout).toContain('hostname:shiro');
+      expect(ctx.stdout).toContain('hostname:tabcomputer');
     });
 
     it('path.normalize resolves dots', async () => {

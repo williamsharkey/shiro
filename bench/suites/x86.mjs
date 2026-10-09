@@ -1,5 +1,5 @@
 // x86-64 ELF: Blink (wasm, Worker kernel process) when isolated, src/x86
-// (TS interpreter) otherwise or with SHIRO_X86_ENGINE=x86. Time and renderer
+// (TS interpreter) otherwise or with TABCOMPUTER_X86_ENGINE=x86. Time and renderer
 // RSS peak per program, run at the prompt via the shell (`./prog > file`).
 import { MB } from '../lib/harness.mjs';
 
@@ -39,7 +39,7 @@ async function releaseMs(h, run) {
 }
 
 export async function run(h) {
-  const engines = h.isolated ? (h.quick ? [['blink', '']] : [['blink', ''], ['x86', 'SHIRO_X86_ENGINE=x86 ']]) : [['x86', '']];
+  const engines = h.isolated ? (h.quick ? [['blink', '']] : [['blink', ''], ['x86', 'TABCOMPUTER_X86_ENGINE=x86 ']]) : [['x86', '']];
   const available = PROGRAMS.filter(([, f]) => h.fixtures[f]);
   await h.eval(async (names) => {
     for (const n of names) await window.__bench.fetchInto('/__bench/' + n, '/home/user/x/' + n);

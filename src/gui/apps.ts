@@ -66,7 +66,7 @@ export interface InstallResult {
 }
 
 const STATUS = '/var/lib/shiro-gui/status.json';
-const CACHE_NAME = 'shiro-debs-v1';
+const CACHE_NAME = 'tabcomputer-debs-v1';
 /** Paths not worth unpacking in a browser. */
 const SKIP_PATH = /^\/usr\/share\/(doc|man|info|lintian|bug|locale|gtk-doc|help)\//;
 const BIN_DIRS = /^\/(usr\/)?s?bin\//;
@@ -385,6 +385,30 @@ async function doInstall(fs: FileSystem, kernel: Kernel, name: string, onProgres
   return res;
 }
 
+const TEXT_HOOK = '/usr/lib/shiro/libshiro-text-hook.so';
+
+/**
+ * DOM-text mode (docs/DOM-RENDERING.md): GTK apps load libshiro-text-hook.so,
+ * which tells Xshiro the text they draw (scripts/gui/text-hook/).
+ */
+async function textHookEnv(kernel: Kernel, app: GuiApp): Promise<Record<string, string>> {
+  if (!app.toolkit.startsWith('gtk') || !kernel.fs) return {};
+  if ((await import('../x11/dom-text')).domTextMode() === 'pixels') return {};
+  const fs = kernel.fs as FileSystem;
+  try {
+    // 12 KB, HTTP-cached; rewritten when it changed
+    const r = await fetch(new URL('gui/lib/libshiro-text-hook.so', baseUrl()).href);
+    if (!r.ok) return (await fs.exists(TEXT_HOOK).catch(() => false)) ? { LD_PRELOAD: TEXT_HOOK } : {};
+    const lib = new Uint8Array(await r.arrayBuffer());
+    const have = await fs.readFile(TEXT_HOOK).catch(() => null) as Uint8Array | null;
+    if (!have || have.length !== lib.length || have.some((b, i) => b !== lib[i])) {
+      await fs.mkdir('/usr/lib/shiro', { recursive: true }).catch(() => {});
+      await fs.writeFile(TEXT_HOOK, lib, { mode: 0o755 });
+    }
+  } catch { return {}; }
+  return { LD_PRELOAD: TEXT_HOOK };
+}
+
 export interface LaunchedApp { pid: number; exited: Promise<number>; output: () => string }
 
 /** Start an installed app as a background kernel process. */
@@ -400,7 +424,7 @@ export async function launchApp(kernel: Kernel, name: string, args: string[] = [
   const out = new BufferFile(null);
   const p = kernel.spawn({
     path: app.bin, argv: [app.bin.split('/').pop()!, ...args], cwd: '/home/user',
-    env: appEnv({ ...toolkitEnv(app), ...env }), fds: { 0: new BufferFile(''), 1: out, 2: out },
+    env: appEnv({ ...toolkitEnv(app), ...(await textHookEnv(kernel, app)), ...env }), fds: { 0: new BufferFile(''), 1: out, 2: out },
   });
   ids.pidAppIds.set(p.pid, name);
   const launched = { pid: p.pid, exited: p.wait().finally(() => ids.pidAppIds.delete(p.pid)), output: () => out.text() };

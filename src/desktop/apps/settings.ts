@@ -6,7 +6,7 @@
 import { keybarMode, setKeybarMode, type KeybarMode } from '../mobile';
 import type { AppContext } from '../index';
 import type { DesktopWindow } from '../wm';
-import { GLYPHS } from '../icons';
+import { GLYPHS, ICONS } from '../icons';
 import { networkCredential, networkStatus, onNetworkStatus, ownRelay, setOwnRelay } from '../../net-signin';
 import { openSignIn, probeRelay, signedInAccount, signOut, statusText, testOwnRelay } from '../network';
 import { BRAND } from '../../brand';
@@ -74,7 +74,7 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
         <div class="sd-seg" role="radiogroup" aria-label="Extra keys">
           <button data-keybar="off" role="radio">Off</button><button data-keybar="auto" role="radio">Auto</button><button data-keybar="pinned" role="radio">Always</button>
         </div></div></div>` : ''}
-      <div class="sd-card"><div class="sd-row"><span class="sd-grow">Classic full-page terminal<div class="sd-small sd-muted">The terminal-first layout of shiro.computer. Come back with <code>?ui=desktop</code>.</div></span>
+      <div class="sd-card"><div class="sd-row"><span class="sd-grow">Classic full-page terminal<div class="sd-small sd-muted">The terminal-first layout, without the desktop. Come back with <code>?ui=desktop</code>.</div></span>
         <button class="sd-btn" data-act="classic">Switch</button></div></div>
       <h3>Motion</h3>
       <div class="sd-card sd-small sd-muted">Animations follow your system's "reduce motion" setting${matchMedia('(prefers-reduced-motion: reduce)').matches ? ' (reduced now)' : ''}.</div>`;
@@ -92,7 +92,7 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
       b.addEventListener('click', () => { setKeybarMode(b.dataset.keybar as KeybarMode); appearance(); });
     }
     panel.querySelector('[data-act=classic]')!.addEventListener('click', () => {
-      try { localStorage.setItem('shiro-ui', 'terminal'); } catch {}
+      try { localStorage.setItem('tabcomputer-ui', 'terminal'); } catch {}
       location.href = location.pathname + '?ui=terminal';
     });
   }
@@ -131,7 +131,7 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
             <input id="sd-relay-token" class="sd-input" type="url" spellcheck="false" placeholder="https://relay.example.com/tcp/token" value="${esc(draft.tokenUrl)}">
             <div class="sd-row" style="gap:8px;border:0;padding:4px 0 0"><span class="sd-grow sd-small ${relayCls === 'err' ? '' : 'sd-muted'}" style="${relayCls === 'err' ? 'color:#ff5a52' : relayCls === 'ok' ? 'color:#2fb457' : ''}">${esc(relayMsg)}</span>
               <button class="sd-btn" data-act="test">Test</button><button class="sd-btn sd-primary" data-act="save">${own ? 'Update' : 'Use this relay'}</button></div>
-            <div class="sd-small sd-muted">Any relay speaking Shiro's protocol works — <code>SHIRO_TCP_RELAY=1 node server.mjs</code> from the repository, with this site in <code>SHIRO_TCP_ORIGINS</code>. Your GitHub sign-in is never sent to it.</div>
+            <div class="sd-small sd-muted">Any relay speaking tabcomputer's protocol works — <code>TABCOMPUTER_TCP_RELAY=1 node server.mjs</code> from the repository, with this site in <code>TABCOMPUTER_TCP_ORIGINS</code>. Your GitHub sign-in is never sent to it.</div>
           </div>` : ''}
         </div>
         <h3>Account</h3>
@@ -207,6 +207,7 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
   function about(): void {
     panel.onclick = null;
     panel.innerHTML = `
+      <div class="sd-brand-mark" style="width:44px;margin-bottom:8px">${ICONS.logo}</div>
       <h2>${esc(BRAND.name)}</h2><p class="sd-muted">A Unix-like computer that runs in a browser tab: a kernel with processes, pipes, ptys and signals; WASI/WASIX and x86-64 Linux programs; a package manager.</p>
       <h3>This computer</h3>
       <div class="sd-card">

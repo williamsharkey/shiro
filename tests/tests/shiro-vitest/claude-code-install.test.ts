@@ -33,7 +33,7 @@ describe('Claude Code Install', () => {
     const env = await createTestShell();
     shell = env.shell;
     fs = env.fs;
-    // FileSystem always opens the same IndexedDB ('shiro-fs'), so tests in this
+    // FileSystem always opens the same IndexedDB ('tabcomputer-fs'), so tests in this
     // file share state. The bin-symlink fixtures below write a stub cli.js; left
     // in place it stands in for the real CLI in the "REAL install" steps, which
     // is how a fully broken `claude` kept this suite green. Wipe between tests.

@@ -2958,7 +2958,7 @@
    "needs": [
     "x86"
    ],
-   "notes": "s_client and other network commands use kernel sockets: TCP leaves the page through the relay (SHIRO_TCP_RELAY)."
+   "notes": "s_client and other network commands use kernel sockets: TCP leaves the page through the relay (TABCOMPUTER_TCP_RELAY)."
   },
   {
    "name": "curl",

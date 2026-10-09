@@ -22,7 +22,7 @@ describe('ssh: OpenSSH usage vs Shiro peers', () => {
     for (const cmd of ['ssh -T git@github.com', 'ssh git@github.com', 'ssh example.com', 'ssh host ls -l']) {
       const r = await run(cmd);
       expect(r.code, cmd).toBe(255);
-      expect(r.err, cmd).toContain("Shiro's tab-to-tab ssh");
+      expect(r.err, cmd).toContain("tabcomputer's tab-to-tab ssh");
       expect(r.err, cmd).toContain('pkg install openssh');
       expect(r.out + r.err, cmd).not.toContain('Connecting to');
     }

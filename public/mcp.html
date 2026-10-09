@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Shiro Remote MCP - Connect Claude Code to Shiro</title>
+  <title>tabcomputer Remote MCP - Connect Claude Code to tabcomputer</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <style>
     :root {
@@ -166,14 +166,14 @@
 <body>
   <div class="container">
     <header>
-      <h1>Shiro Remote MCP</h1>
-      <p class="tagline">Connect Claude Code to your browser-based Shiro instance via WebRTC</p>
+      <h1>tabcomputer Remote MCP</h1>
+      <p class="tagline">Connect Claude Code to your browser-based tabcomputer instance via WebRTC</p>
     </header>
 
     <section>
       <h2>What is this?</h2>
       <p>
-        Shiro Remote lets you control a <a href="/">Shiro</a> browser instance directly from
+        tabcomputer Remote lets you control a <a href="/">tabcomputer</a> browser instance directly from
         <a href="https://github.com/anthropics/claude-code">Claude Code</a> running on your computer.
         No servers needed &mdash; it uses WebRTC for a direct peer-to-peer connection.
       </p>
@@ -202,9 +202,9 @@
           <text class="sublabel" x="95" y="70">Claude Code</text>
           <text class="sublabel" x="95" y="84">+ MCP Tool</text>
           <text class="label" x="340" y="52">Signaling</text>
-          <text class="sublabel" x="340" y="70">shiro.computer</text>
+          <text class="sublabel" x="340" y="70">tabcomputer.com</text>
           <text class="sublabel" x="340" y="84">/signal/*</text>
-          <text class="label" x="585" y="52">Shiro Browser</text>
+          <text class="label" x="585" y="52">tabcomputer Browser</text>
           <text class="sublabel" x="585" y="70">remote start</text>
           <!-- signaling arrows -->
           <line class="arrow" x1="180" y1="60" x2="255" y2="60"/>
@@ -221,14 +221,14 @@
       <h2>Quick Start</h2>
 
       <div class="step">
-        <p><span class="step-number">1</span> <strong>Install</strong> &mdash; Run this once to add Shiro to Claude Code:</p>
+        <p><span class="step-number">1</span> <strong>Install</strong> &mdash; Run this once to add tabcomputer to Claude Code:</p>
         <pre><code>npx shiro-mcp --install</code></pre>
         <p>Then restart Claude Code.</p>
       </div>
 
       <div class="step">
-        <p><span class="step-number">2</span> <strong>Connect</strong> &mdash; In <a href="/">Shiro</a>, run <code>remote start</code> to get a connection code, then tell Claude:</p>
-        <pre><code>"Connect to Shiro with code fluffy-cloud-shimutako"</code></pre>
+        <p><span class="step-number">2</span> <strong>Connect</strong> &mdash; In <a href="/">tabcomputer</a>, run <code>remote start</code> to get a connection code, then tell Claude:</p>
+        <pre><code>"Connect to tabcomputer with code fluffy-cloud-shimutako"</code></pre>
         <p>Done! Claude can now execute commands, read/write files, and run JavaScript in your browser.</p>
       </div>
     </section>
@@ -239,7 +239,7 @@
       <div class="tools-list">
         <div class="tool">
           <div class="tool-name">connect</div>
-          <div class="tool-desc">Connect to a Shiro instance using a connection code from <code>remote start</code></div>
+          <div class="tool-desc">Connect to a tabcomputer instance using a connection code from <code>remote start</code></div>
         </div>
         <div class="tool">
           <div class="tool-name">reconnect</div>
@@ -291,7 +291,7 @@
         <li><strong>Syllables</strong> (64⁴ options) &mdash; shimutako, karinobe...</li>
       </ul>
       <p>
-        Only the first two parts are shown in the Shiro banner for privacy &mdash;
+        Only the first two parts are shown in the tabcomputer banner for privacy &mdash;
         someone watching your screen can't hijack your session.
       </p>
     </section>
@@ -319,8 +319,8 @@
     </section>
 
     <section>
-      <h2>Shiro Commands</h2>
-      <p>Commands available in the Shiro terminal:</p>
+      <h2>tabcomputer Commands</h2>
+      <p>Commands available in the tabcomputer terminal:</p>
       <pre><code>remote start    # Start a remote session, get connection code
 remote stop     # Stop the current remote session
 remote status   # Check connection status
@@ -329,10 +329,10 @@ clear           # Refresh the banner to show/hide connection code</code></pre>
 
     <section>
       <h2>For AI Assistants</h2>
-      <p>This section helps AI assistants (Claude, etc.) use Shiro MCP effectively.</p>
+      <p>This section helps AI assistants (Claude, etc.) use tabcomputer MCP effectively.</p>
 
       <h3>Shell Commands (exec)</h3>
-      <p>Shiro provides 220+ commands. Run <code>help</code> for full list. Key Shiro-specific commands:</p>
+      <p>tabcomputer provides 220+ commands. Run <code>help</code> for full list. Key tabcomputer-specific commands:</p>
       <pre><code>hc              # Hypercompact DOM navigation (see below)
 serve &lt;dir&gt;     # Start virtual HTTP server
 servers         # List active servers
@@ -368,13 +368,13 @@ JSON.stringify({ width: innerWidth })</code></pre>
       <h2>Troubleshooting</h2>
 
       <h3>Connection fails immediately</h3>
-      <p>Make sure the code hasn't expired (5 minute timeout). Run <code>remote start</code> again in Shiro to get a fresh code.</p>
+      <p>Make sure the code hasn't expired (5 minute timeout). Run <code>remote start</code> again in tabcomputer to get a fresh code.</p>
 
       <h3>WebRTC connection times out</h3>
       <p>Some corporate networks block WebRTC. Try from a different network or use a VPN.</p>
 
       <h3>Connection lost after browser reload</h3>
-      <p>When the Shiro browser page reloads, run <code>remote start</code> in Shiro again, then use the <code>reconnect</code> tool (it remembers the last code).</p>
+      <p>When the tabcomputer browser page reloads, run <code>remote start</code> in tabcomputer again, then use the <code>reconnect</code> tool (it remembers the last code).</p>
 
       <h3>node-datachannel build errors</h3>
       <p>The package requires Node.js 18+ and a C++ compiler. On most systems it installs pre-built binaries. If compilation is needed:</p>
@@ -386,8 +386,8 @@ sudo apt install build-essential cmake</code></pre>
     </section>
 
     <footer>
-      <p>Part of the <a href="https://github.com/williamsharkey/shiro">Shiro</a> project</p>
-      <a href="/" class="back-link">← Back to Shiro</a>
+      <p>Part of the <a href="https://github.com/williamsharkey/tabcomputer">tabcomputer</a> project</p>
+      <a href="/" class="back-link">← Back to tabcomputer</a>
       <span style="margin: 0 8px;">·</span>
       <a href="/about">About</a>
       <span style="margin: 0 8px;">·</span>
