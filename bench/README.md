@@ -24,7 +24,8 @@ Options for `node bench/run.mjs`:
 | `--out file` | results path; `--docs` / `--no-docs` force the docs table on/off |
 
 Env: `BENCH_PATH=/?ui=terminal` (page to boot, default `/`: on localhost that is the desktop), `BENCH_VERBOSE=1` (time per metric), `BENCH_CONSOLE=1` (page console),
-`BENCH_SERVER_LOG=1` (server.mjs output), `BENCH_PROFILE=<regex>` (CDP CPU
+`BENCH_SERVER_LOG=1` (server.mjs output), `BENCH_JS_FLAGS="--flag ..."` (extra V8
+flags for Chromium, e.g. wasm tiering experiments), `BENCH_PROFILE=<regex>` (CDP CPU
 profile of matching metrics: top self-time functions are logged and the
 `.cpuprofile` lands in `bench/.cache/profiles/`, open it in DevTools).
 `CHROMIUM=/path` overrides `/opt/pw-browsers/chromium`. Never run
