@@ -21,7 +21,7 @@ import { installNet } from '../kernel/net';
 import { workerRunner, webWorker, type GuestWorker } from '../kernel/worker-host';
 import { BufferFile, DevNull } from '../kernel/fd';
 import { type KStat, S_IFIFO, shellExitCode, SIGKILL, CH_DATA, CH_STATE, CH_SYSNO, CH_ARGS, CH_NARGS, CH_RESULT, CH_SIGNAL, STATE_REQUEST, STATE_REPLY, ESRCH } from '../kernel/abi';
-import { createChannelBuffer } from '../kernel/channel';
+import { createChannelBuffer, KernelChannel, canWatch as canWatchChannels } from '../kernel/channel';
 import type { Process } from '../kernel/process';
 
 export interface BlinkRunOptions {
@@ -204,10 +204,15 @@ async function servePoolChannel(kernel: Kernel, proc: Process, sab: SharedArrayB
  */
 function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: SharedArrayBuffer[]): void {
   const busy = new Set<SharedArrayBuffer>();
+  const direct: KernelChannel[] = [];
   // Same-instance fork children (Blink): kernel processes this worker runs
   // too. The worker outlives its own process until the last of them ends.
   const hosted = new Set<number>();
-  const terminate = w.terminate.bind(w);
+  // Direct channels' views keep Blink's whole wasm memory alive: let go of
+  // them when this worker ends (an exec's new worker brings its own) or the process does
+  const stopDirect = () => { for (const ch of direct) ch.stop(); direct.length = 0; };
+  const end = w.terminate.bind(w);
+  const terminate = () => { stopDirect(); return end(); };
   let ownGone = false;
   w.terminate = () => {
     ownGone = true;
@@ -233,6 +238,21 @@ function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: SharedA
     if (m?.type === 'blink-sys') {
       const sab = pool[m.ch];
       if (sab) void servePoolChannel(kernel, proc, sab, m.as | 0, busy).then((ok) => { if (ok) w.postMessage({ type: 'blink-done', ch: m.ch }); });
+    } else if (m?.type === 'blink-direct') {
+      // Channels in Blink's wasm memory that its threads use themselves
+      // (Blink patch 0065): served here by watching their state words, with
+      // no message through host.mjs either way
+      if (!canWatchChannels()) return;
+      for (let i = 0; i < m.n; i++) {
+        const ch = new KernelChannel(m.buffer, kernel, proc, { offset: m.base + i * m.stride, size: m.size, listen: false });
+        direct.push(ch);
+        void ch.watch();
+      }
+    } else if (m?.type === 'blink-kick') {
+      // A guest thread waits on a direct channel with a signal to take (it
+      // came between the call's start and the kernel's interrupt): end the
+      // process's blocking calls with EINTR, as a signal would
+      if (direct.some(ch => ch.pending)) proc.interruptSyscalls();
     } else if (m?.type === 'blink-grow') {
       // every channel is busy (blocked calls): one more, shared by this
       // process's workers like the rest (indices match host.mjs's order)
@@ -260,7 +280,12 @@ function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: SharedA
     else if (m?.type === 'blink-unwatch') { subs.get(m.fd)?.(); subs.delete(m.fd); }
   });
   const unlisten = proc.addSignalListener((sig: number) => { if (sig > 0) w.postMessage({ type: 'blink-signal', sig }); });
-  proc.onTerminate(() => { unlisten(); for (const off of subs.values()) off(); subs.clear(); });
+  proc.onTerminate(() => {
+    unlisten();
+    for (const off of subs.values()) off();
+    subs.clear();
+    stopDirect();
+  });
 }
 
 /** True when the file at `path` starts with the ELF magic. */
@@ -305,6 +330,10 @@ function kernelFor(fs: FileSystem, shell?: Shell): Kernel {
 class OutputSink extends DevNull {
   constructor(private sink: (data: Uint8Array) => void) { super(1); }
   async write(buf: Uint8Array): Promise<number> {
+    return this.tryWrite(buf);
+  }
+  // The synchronous path (KernelChannel.serveSync) too: DevNull's discards
+  tryWrite(buf: Uint8Array): number {
     this.sink(buf.slice());
     return buf.length;
   }

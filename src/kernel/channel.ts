@@ -730,11 +730,16 @@ export class KernelChannel {
    * that thread, and gettid returns their tid.
    */
   constructor(readonly sab: SharedArrayBuffer, readonly kernel: Kernel, readonly proc: Process,
-    private opts: { tid?: number; onThreadExit?: (code: number) => void } = {}) {
-    this.i32 = new Int32Array(sab, 0, A.CH_DATA / 4);
-    this.data = new Uint8Array(sab, A.CH_DATA);
+    private opts: { tid?: number; onThreadExit?: (code: number) => void; offset?: number; size?: number; listen?: boolean } = {}) {
+    // A channel can also live inside a larger buffer (Blink's direct channels
+    // are in its wasm memory): `offset` bytes in, with a `size`-byte data area
+    const off = opts.offset ?? 0;
+    this.i32 = new Int32Array(sab, off, A.CH_DATA / 4);
+    this.data = opts.size !== undefined ? new Uint8Array(sab, off + A.CH_DATA, opts.size) : new Uint8Array(sab, off + A.CH_DATA);
     this.tid = opts.tid ?? proc.pid;
-    this.unlisten = proc.addSignalListener(() => this.flagSignals());
+    // `listen: false`: signals ride only on replies (Blink's direct channels:
+    // host.mjs delivers the others, and an idle channel must not hold one)
+    this.unlisten = opts.listen === false ? () => {} : proc.addSignalListener(() => this.flagSignals());
   }
 
   get isThread(): boolean { return this.tid !== this.proc.pid; }

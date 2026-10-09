@@ -550,6 +550,32 @@ medians 1240 and 1215 proc/s, base 1200. One of those passes stalled at
 ≈10 proc/s for its last 11 samples and did not recur in two more; worth
 watching if it shows up on other branches.
 
+### unix/perf-blink 7 — direct kernel channels (opt-in)
+
+Blink patch 0065: with `TABCOMPUTER_BLINK_DIRECT=1` a Blink thread's own
+kernel calls go through four channels in its wasm memory that the page
+watches, skipping emscripten's proxy to host.mjs's thread and its two
+messages. getppid's round trip in Node falls from ~110 µs to ~10 µs.
+
+`node bench/ab.mjs HEAD --suites x86 --only 'x86\.blink\.' --rounds 3`,
+direct channels on (64 KiB channels) against off:
+
+| metric (isolated) | off | on | shift | verdict |
+|---|---:|---:|---:|---|
+| x86.blink.go_hello | 246 ms | 221 ms | -12.2% | improved (p=1.1e-4) |
+| x86.blink.go_nethttp | 529 ms | 441 ms | -16.8% | improved (p=1.6e-5) |
+| x86.blink.vim_defaults | 1247 ms | 1101 ms | -13.7% | improved (p=8.6e-7) |
+| x86.blink.vim_startup | 2717 ms | 2409 ms | -10.7% | improved (p=9.6e-5) |
+| x86.blink.peak_rss.go_nethttp | 22.5 MiB | 34.2 MiB | +49.7% | regressed (p=1.2e-5) |
+| x86.blink.peak_rss.vim_startup | 12.5 MiB | 29.9 MiB | +135% | regressed (p=3.4e-5) |
+
+With the channels at 1 MiB each (the pool's size), hello_musl and go_hello
+peak RSS regressed too (+6, +13 MiB). Not the page's hot-channel pump:
+with the channels never hot, the RSS was the same and go_nethttp lost its
+gain. The likely cause (not yet proven): the page holds the worker's
+wasm memory for the channels, so it is released at the page's next GC
+rather than with the worker. Off by default until that's solved.
+
 ### unix/perf-blink 6 — content-hashed engine wasm
 
 `vite-plugin-engines.ts` writes a content-hashed copy of each engine's
