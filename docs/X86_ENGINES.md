@@ -500,6 +500,16 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    the parent's thread while writable `MAP_SHARED` memory is mapped).
    LTP's syscalls with it on: 197/320 against 155/320 (unix/conformance's
    A/B, no new failures or hangs).
+49. `CLOCK_REALTIME` and `gettimeofday` have sub-ms resolution
+   (`performance.now()` anchored to `Date.now()`, per thread). emscripten
+   reads them from `Date.now()`, whole ms, so two reads microseconds apart
+   could differ by 1 ms. vim's typeahead check (`inchar_loop` with
+   `wtime` 0) then computes its wait as `0 - elapsed = -1`, which blocks
+   until the next key with the typed one not yet shown: the vim stall
+   (4/30 runs of shell-stdio's `vim-keys.mjs`, 2/60 after this patch; the
+   rest are real ≥1 ms pauses between the two reads, which only a fix in
+   vim avoids). `SHIRO_BLINK_PROBE` prints all 16 registers. Test:
+   `fixtures/x86/realtime.c`.
 
 Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.

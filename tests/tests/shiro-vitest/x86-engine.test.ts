@@ -75,6 +75,8 @@ const segvBin = join(out, 'segv');
 const haveSegv = tryBuild('gcc', ['-static', '-O1', '-o', segvBin, 'segv.c']);
 const timerfdBin = join(out, 'timerfd');
 const haveTimerfd = tryBuild('gcc', ['-static', '-O1', '-o', timerfdBin, 'timerfd.c']);
+const realtimeBin = join(out, 'realtime');
+const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
 const haveMaps = tryBuild('gcc', ['-static', '-O1', '-o', mapsBin, 'maps.c']);
 const mmsgBin = join(out, 'mmsg');
@@ -653,6 +655,14 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const { shell } = await setup(readFileSync(timerfdBin));
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe('create 1\nunarmed read EAGAIN 1\nsettime 1\ngettime armed 1 interval 1\npoll 1 after>=45ms 1\nread 1 count>=1 1\ninterval count>=3 1\ndisarmed 1\nabs epoll 1 after>=20ms 1 read 1 1\npast expires 1\nbad nsec EINVAL 1\n');
+  }, 60_000);
+
+  // vim's typeahead check blocked for a key when two reads straddled a ms tick
+  it.skipIf(!haveRealtime)('CLOCK_REALTIME and gettimeofday have sub-ms resolution', async () => {
+    const { shell } = await setup(readFileSync(realtimeBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'valid 1 subms clock_gettime 1 gettimeofday 1 backwards 0 near time() 1 1\n');
   }, 60_000);
 
   // glibc's pthread_getattr_np reads the main stack from here (glibc Bun: Claude Code, opencode)
