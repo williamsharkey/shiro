@@ -346,13 +346,9 @@
    ]
   },
   "command-sub": {
-   "pass": 19,
+   "pass": 20,
    "total": 28,
    "failures": [
-    {
-     "i": 1,
-     "name": "case in subshell"
-    },
     {
      "i": 4,
      "name": "Backtick 2"

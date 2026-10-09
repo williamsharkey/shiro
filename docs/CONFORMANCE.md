@@ -6,7 +6,7 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1309/1567 (83.5%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1310/1567 (83.6%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1275/1567 (81.4%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **608/635 (95.7%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **0/320 (0.0%)** |
@@ -34,7 +34,7 @@ How each suite runs, and what is and isn't scored, is described in
 | var-num | 0/7 | 7/7 | 0 |
 | vars-special | 0/37 | 31/37 | 6 |
 | arith | 2/71 | 62/71 | 9 |
-| command-sub | 0/28 | 19/28 | 9 |
+| command-sub | 0/28 | 20/28 | 8 |
 | here-doc | 0/32 | 29/32 | 3 |
 | redirect | 3/39 | 32/39 | 7 |
 | if_ | 0/5 | 4/5 | 1 |
@@ -95,7 +95,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **var-op-slice**: Cannot take length of substring slice; ${@:offset} and ${*:offset}; ${@:offset:length} and ${*:offset:length}; Permutations of implicit begin and length; ${array[@]:} vs ${array[@]: }  - bash and zsh inconsistent
 - **vars-special**: $PATH is set if unset at startup; Vars set interactively only: $HISTFILE; Some vars are set, even without startup file, or env: PATH, PWD; $LINENO is the current line, not line of function call; $LINENO in other for loops; $_ with assignments, arrays, etc.
 - **arith**: Arith sub with word parts; Backticks within arith sub; Integer constant validation; Comma operator (borrowed from C); Logical Ops; Bitwise ops; Comment not allowed in the middle of multiline arithmetic; Double subscript; Invalid constant
-- **command-sub**: case in subshell; Backtick 2; Nested backticks; Making keyword out of command sub should NOT work; Command sub with here doc; Escaped quote in [[ ]]; Quoting \ within ``; Quoting \ within `` within double quotes; Syntax errors with double quotes within backticks
+- **command-sub**: Backtick 2; Nested backticks; Making keyword out of command sub should NOT work; Command sub with here doc; Escaped quote in [[ ]]; Quoting \ within ``; Quoting \ within `` within double quotes; Syntax errors with double quotes within backticks
 - **here-doc**: Here doc with bad comsub delimiter; Here doc with line continuation, then pipe.  Syntax error.; Function def and execution with here doc
 - **redirect**: Named file descriptor; \>&word redirects stdout and stderr when word is not a number or -; 1\>&2- to move file descriptor; 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes; xtrace not affected by redirects
 - **if_**: if break corner case

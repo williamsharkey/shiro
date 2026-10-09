@@ -513,4 +513,12 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe('n=3 b\nn=2 x\n[xy]\nA B C AxBxCx\n');
   });
+
+  it('case … esac inside $( … )', async () => {
+    const r = await script([
+      'x=$(case 5 in [0-9]) echo number;; [a-z]) echo letter ;; esac)',
+      'echo "$x" $(case b in a) echo A;; b) echo B;; esac)',
+    ].join('\n'));
+    expect(r.out).toBe('number B\n');
+  });
 });

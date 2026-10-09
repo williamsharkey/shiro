@@ -4335,6 +4335,7 @@ export class Shell {
         const prevCh = i > 0 ? line[i - 1] : ' ';
         if (ch === '(' && !/\w/.test(prevCh)) {
           parenDepth++;
+          cmdPos = true; // a command (maybe `case`) starts inside ( or $(
           current += ch; i++; continue;
         }
         if (ch === ')' && parenDepth > 0) {
@@ -4757,14 +4758,23 @@ export class Shell {
         let depth = 1;
         let j = i + 2;
         let subSQ = false, subDQ = false;
+        let caseOpen = 0;
         while (j < input.length && depth > 0) {
           const sc = input[j];
           if (sc === '\\' && !subSQ) { j += 2; continue; }
           if (sc === "'" && !subDQ) { subSQ = !subSQ; j++; continue; }
           if (sc === '"' && !subSQ) { subDQ = !subDQ; j++; continue; }
           if (!subSQ && !subDQ) {
+            // case … esac inside: a pattern's ) doesn't close the $( (one level of case)
+            if (/[a-z]/.test(sc) && !/[\w]/.test(input[j - 1] ?? ' ')) {
+              const w = /^[a-z]+/.exec(input.slice(j))![0];
+              if (w === 'case' && /^\s/.test(input[j + 4] ?? '')) caseOpen++;
+              else if (w === 'esac' && caseOpen > 0) caseOpen--;
+              j += w.length;
+              continue;
+            }
             if (sc === '(') depth++;
-            if (sc === ')') depth--;
+            if (sc === ')' && !(depth === 1 && caseOpen > 0)) depth--;
           }
           j++;
         }
