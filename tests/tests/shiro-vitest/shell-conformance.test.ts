@@ -5,6 +5,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { createTestShell } from './helpers';
+import { processTable } from '@shiro/process-table';
 
 async function script(text: string, setup?: (fs: any) => Promise<void>) {
   const { fs, shell } = await createTestShell();
@@ -721,5 +722,49 @@ describe('shell conformance regressions', () => {
       await fs.writeFile('/tmp/a0/prog.wasm', wasm, { mode: 0o755 });
     });
     expect(r.out).toBe('argv0=echo2\nargv0=prog.wasm\n');
+  });
+
+  it('tabcomputer#8: /proc/PID and /proc/self for in-page commands (fd/, environ, cwd, exe, stat, status)', async () => {
+    const r = await script([
+      'ls /proc | grep -qx "$$" && echo listed',
+      'ls /proc/self | tr "\\n" " "; echo',
+      'ls /proc/self/fd | tr "\\n" " "; echo',
+      '[ "$(readlink /proc/self)" = "$$" ] && echo self-is-me',
+      'cd /tmp; readlink /proc/self/cwd; readlink /proc/$$/exe',
+      'X_PROC_TEST=1; export X_PROC_TEST; tr "\\0" "\\n" < /proc/self/environ | grep -c "^X_PROC_TEST=1$"',
+      'cut -d" " -f1,3 /proc/$$/stat | sed "s/^$$/PID/"',
+      'grep -c "^Pid:" /proc/self/status',
+      'ls -ld /proc/self/cwd | cut -c1',
+    ].join('\n'));
+    expect(r.out).toBe('listed\ncmdline comm cwd environ exe fd io limits mounts root stat statm status \n0 1 2 \nself-is-me\n/tmp\n/usr/bin/sh\n1\nPID R\n1\nl\n');
+  });
+
+  it('tabcomputer#8: uname, free, df and ps agree with /proc and each other', async () => {
+    const r = await script([
+      'uname -a',
+      'uname -srm; uname --kernel-release --machine; uname -p; uname -o',
+      '[ "$(uname -r)" = "$(cut -d" " -f3 /proc/version)" ] && echo release-matches',
+      '[ "$(free -k | awk \'/^Mem:/ {print $2}\')" = "$(awk \'/^MemTotal:/ {print $2}\' /proc/meminfo)" ] && echo free-matches',
+      'df -k / | awk \'NR == 2 { print $1, $6, ($3 + $4 == $2) }\'',
+      'uname -x 2>&1; echo $?',
+    ].join('\n'));
+    expect(r.out).toBe('Linux tabcomputer 6.1.0-tabcomputer #1 SMP PREEMPT_DYNAMIC x86_64 GNU/Linux\n' +
+      'Linux 6.1.0-tabcomputer x86_64\n6.1.0-tabcomputer x86_64\nunknown\nGNU/Linux\n' +
+      'release-matches\nfree-matches\nshirofs / 1\n' +
+      "uname: invalid option -- 'x'\nTry 'uname --help' for more information.\n1\n");
+  });
+
+  it('tabcomputer#8: ps hides exited processes and escapes newlines in command lines', async () => {
+    const kept = processTable.allocate('gone');
+    processTable.markExited(kept.pid, 0);
+    const live = processTable.allocate('two\nlines');
+    try {
+      const r = await script('ps');
+      expect(r.out).not.toMatch(/\bgone\b/);
+      expect(r.out).toContain('two\\nlines\n');
+    } finally {
+      processTable.remove(kept.pid);
+      processTable.remove(live.pid);
+    }
   });
 });

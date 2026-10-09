@@ -1,33 +1,34 @@
-
 import type { Command } from './index';
 import { parseArgs } from './flags';
+import { storageInfo } from '../utils/sysinfo';
+
+/** df: the origin's storage estimate (the numbers `doctor` prints), as one filesystem on / */
 export const df: Command = {
   name: "df",
   description: "Report file system disk space usage",
   async exec(ctx) {
-    const args = ctx.args;
-    const { flags } = parseArgs(args);
+    const { flags } = parseArgs(ctx.args);
+    const { size, used, avail } = await storageInfo();
+    const pct = size ? `${Math.ceil((used / size) * 100)}%` : '-';
 
-    const humanReadable = flags.h;
-    const inodes = flags.i;
-
-    // In browser environment, we show mock values for script compatibility
-    const output: string[] = [];
-
-    if (inodes) {
-      output.push("Filesystem      Inodes  IUsed   IFree IUse% Mounted on");
-      output.push("virtual             0      0       0    0% /");
-    } else {
-      if (humanReadable) {
-        output.push("Filesystem      Size  Used Avail Use% Mounted on");
-        output.push("virtual         100G   10G   90G  10% /");
-      } else {
-        output.push("Filesystem     1K-blocks    Used Available Use% Mounted on");
-        output.push("virtual        104857600 10485760  94371840  10% /");
-      }
+    if (flags.i) {
+      ctx.stdout += "Filesystem      Inodes  IUsed   IFree IUse% Mounted on\nshirofs              0      0       0     - /\n";
+      return 0;
     }
-
-    ctx.stdout += output.join("\n") + "\n";
+    if (flags.h) {
+      const human = (n: number) => {
+        const units = ['', 'K', 'M', 'G', 'T'];
+        let i = 0;
+        while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+        return i === 0 ? String(n) : (n < 10 ? (Math.ceil(n * 10) / 10).toFixed(1) : String(Math.ceil(n))) + units[i];
+      };
+      ctx.stdout += 'Filesystem      Size  Used Avail Use% Mounted on\n'
+        + `shirofs ${human(size).padStart(13)} ${human(used).padStart(5)} ${human(avail).padStart(5)} ${pct.padStart(4)} /\n`;
+      return 0;
+    }
+    const kb = (n: number) => String(Math.floor(n / 1024));
+    ctx.stdout += 'Filesystem     1K-blocks      Used  Available Use% Mounted on\n'
+      + `shirofs ${kb(size).padStart(17)} ${kb(used).padStart(9)} ${kb(avail).padStart(10)} ${pct.padStart(4)} /\n`;
     return 0;
   },
 };

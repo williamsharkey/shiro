@@ -647,7 +647,8 @@ describe('procps (ps, top, free, uptime, vmstat, pgrep/pkill, watch)', () => {
     const top = (await sh('top -b -n 2 -d 0.2')).out;
     expect(top.match(/^top - \d\d:\d\d:\d\d up/gm)?.length).toBe(2);
     expect(top).toMatch(/Tasks: +\d+ total/);
-    expect(top).toMatch(/ +PID USER +PR +NI[^\n]*COMMAND\n +1 user/);
+    // (init among the tasks: ties on %CPU have no fixed order, and in-page shells are listed too)
+    expect(top).toMatch(/ +PID USER +PR +NI[^\n]*COMMAND\n(?:[^\n]*\n)*? +1 user [^\n]* init\n/);
     // pgrep/pkill a running program
     const bg = sh('vmstat 1 > /dev/null');
     for (let i = 0; i < 100 && !/vmstat/.test((await sh('pgrep -l vmstat')).out); i++) await new Promise((r) => setTimeout(r, 50));

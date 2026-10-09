@@ -9,7 +9,7 @@ import { TestEval } from './commands/posix-test';
 import { posixRegExp, RegexSyntaxError } from './utils/posix-regex';
 import { arrayValues, arrayTop, copyArray, splitRawWords as splitAssignWords, parseAssignWord, splitListWords, type AssignWord } from './shell-arrays';
 import { HeredocStore, extractHeredocs, hasHeredoc } from './shell-heredoc';
-import { FileSystem } from './filesystem';
+import { FileSystem, addProcInfoSource, setProcSelf } from './filesystem';
 import { CommandRegistry, CommandContext, type Command } from './commands/index';
 import type { ShiroTerminal } from './terminal';
 import type { KernelStdio } from './shell-stdio';
@@ -276,6 +276,29 @@ export function shellForPid(pid: number): Shell | undefined {
   if (!s) shellsByPid.delete(pid);
   return s;
 }
+
+/** The shell that last ran an in-page command: /proc/self for in-page commands */
+let activeShell: WeakRef<Shell> | undefined;
+
+/** In-page shells in /proc: their own pids, the shell running in-page commands as /proc/self */
+addProcInfoSource({
+  get(pid) {
+    const active = activeShell?.deref();
+    const sh = shellForPid(pid) ?? (active?.shellPid === pid ? active : undefined);
+    if (!sh) return undefined;
+    const comm = sh.invokedAsSh ? 'sh' : 'bash';
+    return {
+      pid, ppid: sh.parentPid, pgid: pid, sid: pid, comm, state: sh === active ? 'R' : 'S', cmdline: [comm],
+      cwd: sh.cwd, environ: sh.exportedEnv(), exe: `/usr/bin/${comm}`,
+      startMs: Date.now() - ((typeof performance !== 'undefined' ? performance.now() : Date.now()) - sh.startTime),
+    };
+  },
+  list() {
+    const active = activeShell?.deref();
+    return [...shellsByPid.keys(), ...(active ? [active.shellPid] : [])];
+  },
+});
+setProcSelf(() => activeShell?.deref()?.shellPid);
 
 // Env var names whose values should be masked in terminal output
 const SECRET_ENV_KEYS = [
@@ -1073,6 +1096,8 @@ export class Shell {
   /** Run a builtin; execute() calls it makes without a terminal collect their output */
   private async runCommand(cmd: { exec(ctx: CommandContext): Promise<number> }, ctx: CommandContext): Promise<number> {
     this.inCommand++;
+    // /proc/self for an in-page command is this shell (setProcSelf below)
+    activeShell = new WeakRef(this);
     // Ctrl-C (or a timeout's abort) ends a builtin even if it never looks at the
     // signal (one stuck awaiting something): the shell stops waiting, status 130
     const abort = (this.abortController ?? this.inheritedAbort)?.signal;

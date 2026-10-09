@@ -1,53 +1,33 @@
-
 import type { Command } from './index';
 import { parseArgs } from './flags';
+import { memoryInfo } from '../utils/sysinfo';
+
+/** free: the same memory /proc/meminfo and sysinfo(2) report (src/utils/sysinfo.ts); no swap */
 export const free: Command = {
   name: "free",
   description: "Display amount of free and used memory",
   async exec(ctx) {
-    const args = ctx.args;
-    const { flags } = parseArgs(args);
+    const { flags } = parseArgs(ctx.args);
+    const { total, used, free, available } = memoryInfo();
+    const mem = [total, used, free, 0, 0, available];
+    const swap = [0, 0, 0];
 
-    const humanReadable = flags.h;
-    const bytes = flags.b;
-    const mega = flags.m;
-    const giga = flags.g;
-
-    // In browser environment, show mock values for script compatibility
-    const output: string[] = [];
-
-    // Mock memory values
-    const total = 8388608; // 8GB in KB
-    const used = 4194304; // 4GB in KB
-    const free = 4194304; // 4GB in KB
-    const shared = 524288; // 512MB in KB
-    const buffCache = 1048576; // 1GB in KB
-    const available = 5242880; // 5GB in KB
-
-    if (humanReadable) {
-      output.push("               total        used        free      shared  buff/cache   available");
-      output.push("Mem:            8.0G        4.0G        4.0G       512M        1.0G        5.0G");
-      output.push("Swap:           2.0G          0B        2.0G");
-    } else if (bytes) {
-      output.push("               total        used        free      shared  buff/cache   available");
-      output.push(`Mem:    ${total * 1024} ${used * 1024} ${free * 1024} ${shared * 1024} ${buffCache * 1024} ${available * 1024}`);
-      output.push(`Swap:   ${2097152 * 1024}           0 ${2097152 * 1024}`);
-    } else if (mega) {
-      output.push("               total        used        free      shared  buff/cache   available");
-      output.push(`Mem:           ${Math.floor(total / 1024)}        ${Math.floor(used / 1024)}        ${Math.floor(free / 1024)}         ${Math.floor(shared / 1024)}        ${Math.floor(buffCache / 1024)}        ${Math.floor(available / 1024)}`);
-      output.push(`Swap:          ${2048}           0        ${2048}`);
-    } else if (giga) {
-      output.push("               total        used        free      shared  buff/cache   available");
-      output.push(`Mem:               8           4           4           0           1           5`);
-      output.push(`Swap:              2           0           2`);
+    let fmt: (n: number) => string;
+    if (flags.h) {
+      fmt = (n) => {
+        if (n === 0) return '0B';
+        const units = ['B', 'Ki', 'Mi', 'Gi', 'Ti'];
+        let i = 0;
+        while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+        return (i === 0 ? String(n) : n < 10 ? n.toFixed(1) : String(Math.round(n))) + units[i];
+      };
     } else {
-      // Default: KB
-      output.push("               total        used        free      shared  buff/cache   available");
-      output.push(`Mem:        ${total}     ${used}     ${free}      ${shared}     ${buffCache}     ${available}`);
-      output.push(`Swap:       ${2097152}           0     ${2097152}`);
+      const div = flags.b ? 1 : flags.g ? 1024 ** 3 : flags.m ? 1024 ** 2 : 1024;
+      fmt = (n) => String(Math.floor(n / div));
     }
-
-    ctx.stdout += output.join("\n") + "\n";
+    const row = (label: string, vals: number[]) => label.padEnd(7) + vals.map(v => fmt(v).padStart(12)).join('');
+    ctx.stdout += '               total        used        free      shared  buff/cache   available\n'
+      + row('Mem:', mem) + '\n' + row('Swap:', swap) + '\n';
     return 0;
   },
 };
