@@ -2,11 +2,11 @@
  "apps": {
   "dillo": {
    "bin": "/usr/bin/dillo",
-   "closureSize": 16108416,
+   "closureSize": 17702388,
    "description": "Tiny web browser (FLTK)",
    "dropped": [
+    "openssl",
     "gcc-12-base",
-    "libssl3",
     "wget",
     "libuuid1",
     "libpsl5",
@@ -23,10 +23,12 @@
    ],
    "icon": "gui/icons/dillo.png",
    "packages": [
-    "dillo",
-    "zlib1g",
+    "ca-certificates",
+    "libssl3",
     "libc6",
     "libgcc-s1",
+    "dillo",
+    "zlib1g",
     "libx11-6",
     "libx11-data",
     "libxcb1",
@@ -52,7 +54,7 @@
     "libxcursor1"
    ],
    "pkg": "dillo",
-   "size": 9185384,
+   "size": 11376660,
    "toolkit": "fltk"
   },
   "featherpad": {
@@ -1740,6 +1742,19 @@
    "sha256": "fb3aa2e903d9fe49372465feba79c0a4b5151386829b7bc754307ad81654fd03",
    "size": 124080,
    "when": "adwaita-icon-theme"
+  },
+  {
+   "path": "/etc/ssl/certs/ca-certificates.crt",
+   "sha256": "a3413a37a8e09cc21b2c11c9ffb23d92d2fc9d1933c9e7617f5c4fba4f72d37d",
+   "size": 216591,
+   "when": "ca-certificates"
+  },
+  {
+   "path": "/",
+   "sha256": "8d6afe7fc2bd1c4ee0a58e4ee79abd87d0e54327d3bc88e6e94ca62292c8ebce",
+   "size": 153600,
+   "tar": true,
+   "when": "ca-certificates"
   },
   {
    "path": "/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders.cache",

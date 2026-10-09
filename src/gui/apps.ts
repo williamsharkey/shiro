@@ -14,7 +14,7 @@
  */
 import type { FileSystem } from '../filesystem';
 import type { Kernel } from '../kernel/kernel';
-import type { TarEntry } from '../pkg-tar';
+import { untar, type TarEntry } from '../pkg-tar';
 import { debEntriesOffThread } from './deb';
 export { arMembers, debEntries } from './deb';
 
@@ -30,8 +30,11 @@ export interface GuiApp {
   /** Paths deleted after unpacking: optional plug-ins whose libraries were left out. */
   remove?: string[];
 }
-/** A file a postinst would generate, built by gen-apps.py (public/gui/overlay/SHA256), applied when `when` is installed. */
-export interface Overlay { path: string; sha256: string; size: number; when: string }
+/**
+ * A file a postinst would generate, built by gen-apps.py (public/gui/overlay/SHA256), applied when `when` is
+ * installed; with `tar`, a tar archive unpacked at `path` (e.g. symlinks).
+ */
+export interface Overlay { path: string; sha256: string; size: number; when: string; tar?: boolean }
 export interface AppsManifest {
   suite: string; arch: string; mirror: string; snapshot: string;
   overlays?: Overlay[];
@@ -261,6 +264,8 @@ export function appEnv(extra: Record<string, string> = {}): Record<string, strin
     XDG_RUNTIME_DIR: '/tmp/runtime-user', NO_AT_BRIDGE: '1', GTK_A11Y: 'none',
     // no session bus: fail fast instead of GDBus autolaunch
     DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/no-session-bus',
+    // OpenSSL's default CA paths are the openssl package's symlinks (not shipped): use the bundle (an overlay)
+    SSL_CERT_FILE: '/etc/ssl/certs/ca-certificates.crt',
     ...extra,
   };
 }
@@ -341,7 +346,7 @@ async function doInstall(fs: FileSystem, kernel: Kernel, name: string, onProgres
     }
   };
   startMore();
-  const overlays = (m.overlays ?? []).filter((o) => want.includes(o.when)).map((o) => [o, getBlob(o.sha256, o.size, `gui/overlay/${o.sha256}`, cache, null)] as const);
+  const overlays = (m.overlays ?? []).filter((o) => want.includes(o.when)).map((o) => [o, getBlob(o.sha256, o.size, `gui/overlay/${o.sha256}`, cache, fetchOverride ? () => fetchOverride!({ version: '', filename: `gui/overlay/${o.sha256}`, sha256: o.sha256, size: o.size }) : null)] as const);
   for (const [, blob] of overlays) blob.catch(() => {}); // awaited after the packages
   for (const n of want) {
     const tw = Date.now();
@@ -362,6 +367,7 @@ async function doInstall(fs: FileSystem, kernel: Kernel, name: string, onProgres
   for (const path of app.remove ?? []) await fs.rm(path, { recursive: true }).catch(() => {});
   for (const [o, blob] of overlays) {
     const { data } = await blob;
+    if (o.tar) { await unpack(fs, untar(data), ownBins); continue; }
     await fs.mkdir(o.path.slice(0, o.path.lastIndexOf('/')), { recursive: true }).catch(() => {});
     await fs.writeFile(o.path, data);
   }

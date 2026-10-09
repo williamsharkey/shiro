@@ -171,6 +171,34 @@ describe.skipIf(!debs)('GUI apps from .deb packages', () => {
     expect(await pendingDownload(fs, 'xdemo')).toEqual({ packages: 0, bytes: 0 });
   });
 
+  it('applies overlays: files, and tar archives of symlinks', async () => {
+    const { configureGuiApps, installApp } = await import('@shiro/gui/apps');
+    const root = join(work, 'ov');
+    mkdirSync(join(root, 'etc/ssl/certs'), { recursive: true });
+    symlinkSync('demo.pem', join(root, 'etc/ssl/certs/abcd1234.0'));
+    execFileSync('tar', ['-C', root, '--owner=0', '--group=0', '-cf', join(work, 'ov.tar'), 'etc/ssl/certs/abcd1234.0']);
+    const tar = new Uint8Array(readFileSync(join(work, 'ov.tar')));
+    const file = new TextEncoder().encode('bundle\n');
+    const blobs: Record<string, Uint8Array> = { [sha(tar)]: tar, [sha(file)]: file };
+    const m = JSON.parse(JSON.stringify(manifest));
+    m.overlays = [
+      { path: '/etc/ssl/certs/ca-certificates.crt', sha256: sha(file), size: file.length, when: 'libdemo1' },
+      { path: '/', tar: true, sha256: sha(tar), size: tar.length, when: 'libdemo1' },
+    ];
+    configureGuiApps({ manifest: m, fetchDeb: async (p) => blobs[p.sha256] ?? debs![p.filename.split('/')[3]] });
+    try {
+      const { fs } = await createTestShell();
+      const { Kernel } = await import('@shiro/kernel/kernel');
+      const kernel = new Kernel({ fs, registerWithProcessTable: false });
+      await fs.rm('/var/lib/shiro-gui/status.json').catch(() => {}); // test shells share one filesystem
+      await installApp(fs, kernel, 'xdemo');
+      expect(await fs.readFile('/etc/ssl/certs/ca-certificates.crt', 'utf8')).toBe('bundle\n');
+      expect(await fs.readlink('/etc/ssl/certs/abcd1234.0')).toBe('demo.pem');
+    } finally {
+      configureGuiApps({ manifest, fetchDeb: async (p) => debs![p.filename.split('/')[3]] });
+    }
+  });
+
   it('rejects a package whose sha256 does not match', async () => {
     const { configureGuiApps, installApp } = await import('@shiro/gui/apps');
     const bad = JSON.parse(JSON.stringify(manifest));
