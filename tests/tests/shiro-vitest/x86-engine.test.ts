@@ -15,6 +15,8 @@ import { join, resolve } from 'node:path';
 import { createTestShell, run } from './helpers';
 import * as Abi from '@shiro/kernel/abi';
 
+// fixtures/x86/strops.c on an x86-64 host
+const NATIVE_STROPS = 'size 1 4255477d8be3a17c\nsize 2 5ec6f1695a3da52b\nsize 4 98b24faa8cdc2e47\nsize 8 0ecf036ebe70d8d0\n';
 // fixtures/x86/sse4.c on an x86-64 host (Intel)
 const NATIVE_SSE4 = 'blendv     e4abc65e766ee19d\nptest      7ba00a6efd7a4874\npmovx      b625e06221fbec95\nint        9681ac88d1b48510\nround      15342966be7d2f10\nblend      1772b0668d5f0605\ninsext     1ed641595d55738e\ninsertps   07a824bc4eee852a\ndp         b92c2b618267d645\nmpsadbw    732e9d86324c3735\ncrc32      ed946d3299e3b67d\npcmpestr   f9d8e2fd9893018c\npcmpistr   97a98d5fb234df8d\npcmpstr64  1141d2a07ff9295d\npinsrq 1\npcmpestri 5\ncrc32 0x1900b8ca\n';
 // fixtures/x86/bitscan.c on an x86-64 host
@@ -67,6 +69,8 @@ const forkSharedBin = join(out, 'forkshared');
 const haveForkShared = tryBuild('gcc', ['-static', '-O1', '-o', forkSharedBin, 'forkshared.c']);
 const mremapBin = join(out, 'mremap');
 const haveMremap = tryBuild('gcc', ['-static', '-O1', '-o', mremapBin, 'mremap.c']);
+const stropsBin = join(out, 'strops');
+const haveStrops = tryBuild('gcc', ['-static', '-O1', '-o', stropsBin, 'strops.c']);
 const sse4Bin = join(out, 'sse4');
 const haveSse4 = tryBuild('gcc', ['-static', '-O1', '-msse4.2', '-o', sse4Bin, 'sse4.c']);
 const bitscanBin = join(out, 'bitscan');
@@ -547,6 +551,13 @@ describe('Blink engine: CPU and syscall fixes', () => {
       'monotonic bitset wait=-1 timedout=1 early=0\nrealtime bitset wait=-1 timedout=1 early=0\n');
     expect(r.exitCode).toBe(0);
   }, 60_000);
+
+  // musl's memcpy/memset (rep movsq/stosq) go a page at a time (patch 0041)
+  it.skipIf(!haveStrops)('rep movs/stos of every size match native: overlaps, page straddles, DF=1', async () => {
+    const { shell } = await setup(readFileSync(stropsBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(NATIVE_STROPS);
+  }, 120_000);
 
   // x86-64-v2: Bun (Claude Code's native build, opencode), GOAMD64=v2 Go
   it.skipIf(!haveSse4)('SSE4.1 and SSE4.2 match native', async () => {
