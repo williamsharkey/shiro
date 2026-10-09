@@ -8,7 +8,7 @@
 //           the server must run with SHIRO_BROWSE_SERVER_FETCH=1; never in production)
 //
 //   npm run build
-//   SHIRO_TCP_RELAY=1 SHIRO_TCP_ORIGINS=http://localhost:5299 PORT=5299 STATIC_DIR=$PWD/dist node server.mjs &
+//   TABCOMPUTER_TCP_RELAY=1 TABCOMPUTER_TCP_ORIGINS=http://localhost:5299 PORT=5299 STATIC_DIR=$PWD/dist node server.mjs &
 //   node tests/browser/web-score.mjs [--app http://localhost:5299] [--modes direct,tab]
 //        [--only id,id] [--skip-sites] [--speedometer] [--wpt] [--json out.json] [--md docs/WEB_SCORE.md]
 //        [--extra-roots /root/.ccr/ca-bundle.crt]

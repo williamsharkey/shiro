@@ -1,8 +1,9 @@
 # Desktop, window manager API, and /dom
 
-The Unix edition boots to a desktop: a menu bar, a dock, and windows. The
+tabcomputer boots to a desktop: a menu bar, a dock, and windows. The
 Terminal (the real tabcomputer terminal on a pty) opens front and center. The
-classic full-page terminal of shiro.computer is still there behind a flag.
+full-page terminal (the `shiro` profile's UI) is still there with
+`?ui=terminal`.
 
 - Code: `src/desktop/` (window manager `wm.ts`, shell `index.ts`, Terminal
   `terminal-app.ts`, network sheet `network.ts`, lazy apps in `apps/`),
@@ -115,7 +116,7 @@ destroyed), and the next Terminal window adopts it again.
   (localStorage `tabcomputer-desktop-tour`); Help → Welcome Tour shows them again.
 - **About This Computer** lists measured status with the document that
   records each number (`STATUS` in `apps/about.ts`: keep it in step with
-  DEBIAN_SCORE.md and X86_ENGINES.md), and what is real, emulated and absent.
+  DEBIAN_SCORE.md and CONFORMANCE.md), and what is real, emulated and absent.
 
 - **Themes**: light, dark, or match the system (View menu, the sun/moon icon
   in the menu bar, or Settings → Appearance). Saved in localStorage
@@ -418,7 +419,7 @@ Examples:
 
 ```sh
 ls /dom                                   # ctl events windows html head body, plus element ids
-cat /dom/windows/terminal/title           # user@shiro: ~
+cat /dom/windows/terminal/title           # user@tabcomputer: ~
 echo 'move 40 40' > /dom/windows/terminal/ctl
 echo 'snap left'  > /dom/windows/terminal/ctl
 echo '0 0 900 500' > /dom/windows/terminal/geometry

@@ -196,7 +196,7 @@ stacking (a menu's spans over a covered window still answer selection).
 | **AT-SPI accessibility tree** | roles, names, states, text contents with per-character extents, actions | GTK 2/3/4 and Qt 5 (with `QT_ACCESSIBILITY=1`), when the bridge is loaded | needs a D-Bus session bus (`dbus-daemon` in Blink) plus at-spi2-registryd and the atk-bridge (we set `NO_AT_BRIDGE=1` today). It gives **semantics** (an invisible ARIA tree over the pixels for screen readers, and text for find and select), not pixels. Laggy for live text; extents are approximate |
 | **Qt** | QPainter text via QFontEngine; QAccessible | Qt 5 apps | hooking C++ symbols in `libQt5Gui` is fragile; the AT-SPI route is cleaner |
 | **Tk** | Tk widgets are Tcl objects; text drawn with Xft (Debian's `libtk8.6` depends on libxft2) | Tk apps, Python's tkinter | client-side pixels like the others. A DOM-native Tk would be a Tk port, not interception |
-| **dialog / whiptail** | full-screen ncurses forms | shell scripts | they run in Shiro's terminal, which is already DOM text. Turning their boxes into native HTML dialogs means reimplementing `dialog`'s command line as a Shiro builtin (cheap: a few hundred lines), not interception |
+| **dialog / whiptail** | full-screen ncurses forms | shell scripts | they run in tabcomputer's terminal, which is already DOM text. Turning their boxes into native HTML dialogs means reimplementing `dialog`'s command line as a tabcomputer builtin (cheap: a few hundred lines), not interception |
 
 ## Recommendation
 

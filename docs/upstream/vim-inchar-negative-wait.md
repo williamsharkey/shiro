@@ -1,7 +1,7 @@
 # Upstream draft: vim's inchar_loop() can block with a key pending
 
 A draft for the project owner to file at https://github.com/vim/vim (issue,
-then the patch as a PR). Shiro carries the fix in
+then the patch as a PR). tabcomputer carries the fix in
 `scripts/pkgbuild/x86/vim/inchar-negative-wait.patch` (vim package
 `9.2.0000-1`).
 
@@ -90,7 +90,7 @@ against 2 in 60 without it on the same emulator build (see below).
 ### Environment
 
 Vim 9.2.0000 (huge, no GUI), static x86-64 musl build, run under the Blink
-x86-64 emulator compiled to WebAssembly (Shiro, https://tabcomputer.com).
-Checked with Shiro's `tests/browser/vim-keys.mjs --runs 60`, which opens vim,
+x86-64 emulator compiled to WebAssembly (tabcomputer, https://tabcomputer.com).
+Checked with tabcomputer's `tests/browser/vim-keys.mjs --runs 60`, which opens vim,
 types `ihello` and counts the sessions where the text isn't on screen within
 8 s.

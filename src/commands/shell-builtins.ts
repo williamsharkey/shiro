@@ -123,8 +123,18 @@ export const exportCmd: Command = {
 const GETTING_STARTED = `tabcomputer: a computer that lives in your browser tab. Files persist in this
 site's storage, in this browser.
 
+Install software
+  apt install NAME       tabcomputer's prebuilt programs: vim, htop, git, python3, ...
+                         (also pkg; pkg available lists them all)
+  debian install         stream in Debian 13; then sudo apt install is Debian's apt
+  gui                    Linux desktop apps (X11) that open in windows
+
 Claude Code
-  claude                 run Claude Code here (installs itself; sign-in panel if needed)
+  claude                 run Claude Code (the profile picks the native or npm build;
+                         a missing native build says how to install it)
+  claude install --native
+                         download the native build (about 240 MB; slow in the emulator)
+  claude --npm           the pinned JavaScript build: installed at boot, starts fast
   claude --continue      resume the last conversation in this directory
   claude-window          run it in a new window
   claude login           sign in again / switch accounts
@@ -141,15 +151,15 @@ Connect an outside agent
 
 Everyday
   ls, cat, grep, sed, rg, find, jq, vi, nano    the usual tools
-  node, npm, npx         Node.js (shimmed) and real npm packages
+  node, npm, npx         Node.js (tabcomputer's runtime) and real npm packages
   serve DIR              serve a folder in a preview window
+  page :PORT text        read or drive that page (click, input, eval)
   finder                 file manager
 
 Something wrong?
   doctor                 check this tab (deploy, browser, network, sign-ins, storage):
                          paste its output into a bug report (also: tabinfo)
-
-Try: claude "make a small page that plays a drum loop, then serve it"
+  Issues: https://github.com/williamsharkey/tabcomputer/issues
 
 help --all lists every command; help NAME describes one.
 Source and docs: https://github.com/williamsharkey/tabcomputer

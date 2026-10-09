@@ -1,57 +1,74 @@
 /**
- * AGENTS.md / CLAUDE.md content seeded into the Shiro home directory
- * so inner Claude Code gets one canonical instruction file plus a compatibility shim.
+ * AGENTS.md / CLAUDE.md content seeded into /home/user so a coding agent
+ * running inside tabcomputer gets one instruction file plus a compatibility shim.
+ * Keep it true to what works today (README.md, docs/).
  */
-export const AGENTS_MD = `# AGENTS.md — You are running inside tabcomputer Browser OS
+export const AGENTS_MD = `# AGENTS.md: you are running inside tabcomputer
 
-Read \`/home/user/NEO.md\` first. It contains runtime context for this boot, including whether this instance came from \`seed\` or \`seed blob\`, what page spawned it, and whether \`hc outer\` should be your first move.
+tabcomputer is a computer that lives in a browser tab. You are a coding agent
+inside it. \`/home/user/NEO.md\` describes this boot (standalone, or
+injected into another page); read it first.
 
-## Environment
+## The machine
 
-- tabcomputer is a browser-native Unix-like system.
-- Filesystem: IndexedDB-backed, persistent across reloads.
-- Shell: pipes, redirects, env vars, globbing, scripts, many bash-like features.
-- Home directory: \`/home/user\`
-- There is no real Linux kernel, process tree, or package manager outside what tabcomputer implements.
+- A Unix kernel written in TypeScript runs in the page: processes, fork/exec,
+  pipes, ptys, signals, job control, sockets, \`/proc\`. \`ps\` lists kernel
+  processes.
+- The shell is tabcomputer's own bash-compatible shell, with many builtins
+  (coreutils, grep/sed/awk, rg, jq, git, gh, node, npm, vi, nano, tmux).
+- Files live in the browser's IndexedDB and survive reloads. Home is
+  \`/home/user\`. You run as uid 1000; \`sudo\` gives root.
+- x86-64 Linux programs run in the Blink emulator (compiled to WebAssembly).
+  WASM programs run directly. Big x86 programs start slowly: seconds, not
+  milliseconds.
+- TCP to the internet goes through a relay on ports 22, 80, 443 and 9418
+  only. UDP is DNS only.
 
-## First Moves
+## Installing software
 
-- If \`/home/user/NEO.md\` says host-page access is available, usually start with \`hc outer\`.
-- Use \`rg\` for code search.
-- Assume serial, low-concurrency work is safer than background-task-heavy orchestration.
+- \`apt install NAME\` (also \`pkg\`) installs from tabcomputer's own index of
+  prebuilt programs: vim, htop, git, python3, curl, make, llvm, go and more.
+  \`pkg available\` lists them.
+- \`debian install\` streams in Debian 13; after that, \`sudo apt install NAME\`
+  is Debian's apt. Most of Debian's popular packages work, slowly.
+- \`npm install\` and \`pip install\` work (pure-Python wheels for pip).
+- \`gui\` lists X11 desktop apps; \`gui NAME\` opens one in a window.
 
-## Useful Commands
+## Useful here
 
-- \`git\`, \`node\`, \`npm\`, \`npx\`, \`rg\`, \`curl\`, \`fetch\`, coreutils, \`vi\`
-- tabcomputer source can be edited directly if the repo is present.
-- Many Node.js builtins are shimmed under \`src/node-compat/\`.
+- \`doctor\`: one OK/WARN/FAIL line per subsystem (build, isolation, x86
+  engine, relay, sign-ins, Debian, storage, kernel). Run it first when
+  something fails. It never prints secrets.
+- \`serve DIR\` serves a folder in a preview window; a program that
+  \`listen()\`s on a port is served the same way.
+- \`page :PORT text|click|input|eval ...\` drives that page, so you can test
+  a UI without a browser automation tool.
+- \`gh auth login\` signs in to GitHub; git and gh then use the token.
 
-## Claude In tabcomputer
+## What doesn't work (yet)
 
-- OAuth credentials live in \`/home/user/.claude/.credentials.json\`.
-- Trust/onboarding/bypass settings are preseeded.
-- Runtime context also exists at \`/home/user/.shiro-context.json\`.
-- Background tasks and multi-agent fan-out may be constrained for stability inside the browser runtime.
+- File watching: \`fs.watch\` never fires and inotify is ENOSYS, so watch
+  modes and hot reload don't react to edits. Re-run commands instead.
+- \`time\` reports no user/sys CPU time.
+- No D-Bus session bus; no hardware, kernel modules or host access.
+- Background-task-heavy or highly concurrent agent work can stall the page.
+  Prefer working serially.
+- Under \`pkg\`'s WASI python, tracebacks can show paths relative to \`/\`
+  instead of the working directory.
 
-## Key tabcomputer Files
+## tabcomputer's source
 
-- \`src/main.ts\`
-- \`src/filesystem.ts\`
-- \`src/shell.ts\`
-- \`src/terminal.ts\`
-- \`src/commands/*\`
-- \`src/node-compat/*\`
-- \`src/commands/seed.ts\`
-- \`src/commands/hc.ts\`
-- \`src/seed-runtime-context.ts\`
-- \`server.mjs\`
+The source is not on this machine. It is at
+https://github.com/williamsharkey/tabcomputer (\`git clone --depth 1\` it
+if you need it). Its docs/ folder has the details and scoreboards.
 
-## Limits
+## Reporting a bug
 
-- \`child_process\` is shimmed.
-- Networking is fetch/WebSocket/WebRTC, not raw sockets.
-- Native binaries only work through tabcomputer's WASI/x86 layers.
-- Do not print tokens or secrets already present in the environment.
+Run \`doctor\`, then open an issue at
+https://github.com/williamsharkey/tabcomputer/issues (\`gh issue create\`
+works here) with the command, what happened, what you expected, and the
+\`doctor\` output. Never paste tokens or credentials: the ones in this
+environment (\`~/.claude/.credentials.json\`, the GitHub token) stay private.
 `;
 
 export const CLAUDE_MD = `# CLAUDE.md

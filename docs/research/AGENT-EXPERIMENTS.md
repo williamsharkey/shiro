@@ -17,6 +17,10 @@ agent CLIs themselves are already scored in [COMPAT.md, "Agent
 CLIs"](../COMPAT.md#agent-clis-unixagent-clis): Codex, Grok Build, Gemini CLI,
 native Claude Code and aider all reach their APIs from tabcomputer.
 
+**Fixed since this was written:** git's background maintenance is off by
+default (`pkg` git 2.56.0-1 ships `maintenance.auto=false`, `gc.auto=0`), and
+the builtin `wget -O -` writes to stdout.
+
 Legend: **verified** = I ran it in tabcomputer and quote the result;
 **read** = from docs or the web, not run.
 
@@ -101,7 +105,7 @@ quickly. An agent would not notice it is in a browser.
 This is [examples/fullstack-notes](../../examples/fullstack-notes/): a
 dependency-free Node HTTP server with a JSON API, a static client using
 `fetch()`, the same API in Python (`server.py`), and an API test (`test.js`).
-Details and screenshots are in [SANDBOXES.md](SANDBOXES.md#prototype-fullstack-notes).
+Details and screenshots are in SANDBOXES.md (a research draft not merged into this repository).
 In short:
 
 - **Verified working:** `node server.js 3000 &`; `serve fetch 3000 /api/health`;
@@ -116,7 +120,7 @@ In short:
 - **Gaps hit:** `assert.match` is missing from tabcomputer's `assert` (the
   test was changed to `assert.ok(re.test())`); the builtin `wget -qO-` saved
   to a file named after the path instead of writing to stdout; `fs.watch`
-  as above. WebSocket and EventSource from the preview: see SANDBOXES.md.
+  as above. WebSocket and EventSource from the preview: see SANDBOXES.md (not merged).
 
 ## Experiment 3: compilers an agent might be asked to use
 
@@ -130,7 +134,7 @@ headless Chromium, with 4–5 other tabcomputer pages running on the same
 | COBOL (`gnucobol4`) | 103 s | 26.7 s | `HELLO FROM COBOL` |
 | Pascal (`fp-compiler`) | 150 s | 12.3 s (fpc reports 10.5 s) | `hello from pascal` |
 
-Other languages in the batch: see [OPPORTUNITIES.md](OPPORTUNITIES.md), "Verified in tabcomputer".
+Other languages in the batch: see OPPORTUNITIES.md, "Verified in tabcomputer" (a research draft not merged into this repository).
 
 ## Would an agent use "GitHub repos mounted as a desktop smart folder"?
 
@@ -208,7 +212,7 @@ Keep git's model and make it visible, rather than hiding it behind a folder:
    branches view for humans, rather than a sync engine. Options, from cheapest:
    - `tig` (apt, TUI);
    - `lazygit` and `gitui` (static binaries, TUI; see
-     [DEV-TOOLS.md](DEV-TOOLS.md));
+     DEV-TOOLS.md, a research draft not merged here);
    - `git gui`/`gitk` (Tk, over X11);
    - a native desktop panel built on the same `git` the shell uses.
 

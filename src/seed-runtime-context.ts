@@ -66,9 +66,10 @@ export function buildNeoMd(context: ShiroRuntimeContext): string {
   if (!context.injected) {
     return `# NEO.md
 
-This file describes the runtime context for this tabcomputer boot.
+This file describes the runtime context for this tabcomputer boot. What the
+machine can do, and how to report a bug: \`/home/user/AGENTS.md\`.
 
-- Mode: standalone
+- Mode: standalone (tabcomputer is its own page, not injected into another)
 - Host page DOM bridge: unavailable
 - \`hc live\` inspects tabcomputer's own DOM
 - \`hc outer\` is not expected to work in this boot
@@ -83,7 +84,8 @@ This file describes the runtime context for this tabcomputer boot.
 
   return `# NEO.md
 
-This tabcomputer instance was spawned from a host page.
+This tabcomputer instance was spawned from a host page. What the machine can
+do, and how to report a bug: \`/home/user/AGENTS.md\`.
 
 - Mode: ${modeLabel}
 - Host page: ${hostUrl}

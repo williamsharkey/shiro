@@ -324,7 +324,7 @@ the web.
 | One instance's Browser reads another's site storage (music.tabcomputer.com vs art.tabcomputer.com) | Cookies and passwords live in each instance's own broker. | Browse-origin storage (a site's `localStorage`, IndexedDB, and our service worker) is partitioned by top-level *site*, and every instance is the same site, so instances share it. A fix would put an instance tag in the key (`www-example-com---i…`). |
 | Cookie tossing from browse origins onto `.tabcomputer.com` | The page runtime's `document.cookie` never writes host cookies. | A page can still set a real cookie on `Domain=tabcomputer.com` through a pristine `Document.prototype`. The desktop and server use no cookies today, so that must stay true, or a separate domain must be used. |
 | Untrusted TLS code | subtls verifies chains, names and validity, and the tests check that a bad chain and a name mismatch are refused. | subtls is "not intended for production" and unaudited. Replacing it (rustls/WASM) comes before shipping. |
-| Proxy abuse (using tabcomputer as an open proxy) | The same relay policy and limits as `curl`. Optional GitHub sign-in (`SHIRO_TCP_REQUIRE_SIGNIN`). | Browsing raises connect rates; limits need tuning, not removing. |
+| Proxy abuse (using tabcomputer as an open proxy) | The same relay policy and limits as `curl`. Optional GitHub sign-in (`TABCOMPUTER_TCP_REQUIRE_SIGNIN`). | Browsing raises connect rates; limits need tuning, not removing. |
 
 ## Prior art
 
@@ -356,8 +356,8 @@ the web.
   overrides the template, `SHIRO_BROWSE_APP_ORIGINS` the allowed parents, and
   `SHIRO_BROWSE=0` turns it off. Elsewhere (no template) the app says pages
   can only open in real tabs.
-- The relay must be on (`SHIRO_TCP_RELAY=1`), with the app's origins in
-  `SHIRO_TCP_ORIGINS`.
+- The relay must be on (`TABCOMPUTER_TCP_RELAY=1`), with the app's origins in
+  `TABCOMPUTER_TCP_ORIGINS`.
 - nginx: proxy `*.web.tabcomputer.com` to node like the main server block. No
   WebSocket is needed on browse hosts.
 - `SHIRO_BROWSE_SERVER_FETCH=1` adds `POST /browse/fetch`, where the server

@@ -472,7 +472,7 @@ export class ShiroTerminal {
     // Detect subdomain
     const hostname = typeof window !== 'undefined' ? window.location.hostname : 'shiro.computer';
     const subdomainMatch = hostname.match(/^([^.]+)\.shiro\.computer$/);
-    const displayHost = subdomainMatch ? `${subdomainMatch[1]}.shiro.computer` : 'shiro.computer';
+    const displayHost = subdomainMatch ? `${subdomainMatch[1]}.shiro.computer` : (activeProfile().brand?.domain ?? 'shiro.computer');
     const hostDisplay = displayHost.length <= 20 ? displayHost : displayHost.slice(0, 17) + '...';
 
     // Record HUD start position (absolute row in buffer)
@@ -636,7 +636,7 @@ export class ShiroTerminal {
 
     const hostname = typeof window !== 'undefined' ? window.location.hostname : 'shiro.computer';
     const subdomainMatch = hostname.match(/^([^.]+)\.shiro\.computer$/);
-    const displayHost = subdomainMatch ? `${subdomainMatch[1]}.shiro.computer` : 'shiro.computer';
+    const displayHost = subdomainMatch ? `${subdomainMatch[1]}.shiro.computer` : (activeProfile().brand?.domain ?? 'shiro.computer');
     const hostDisplay = displayHost.length <= 20 ? displayHost : displayHost.slice(0, 17) + '...';
     const build = buildNumber.trim().padStart(4, '0');
 
@@ -686,7 +686,7 @@ export class ShiroTerminal {
 
     const hostname = typeof window !== 'undefined' ? window.location.hostname : 'shiro.computer';
     const subdomainMatch = hostname.match(/^([^.]+)\.shiro\.computer$/);
-    const displayHost = subdomainMatch ? `${subdomainMatch[1]}.shiro.computer` : 'shiro.computer';
+    const displayHost = subdomainMatch ? `${subdomainMatch[1]}.shiro.computer` : (activeProfile().brand?.domain ?? 'shiro.computer');
     const hostDisplay = displayHost.length <= 20 ? displayHost : displayHost.slice(0, 17) + '...';
 
     const W = 43;
