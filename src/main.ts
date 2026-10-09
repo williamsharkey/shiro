@@ -790,8 +790,8 @@ async function main() {
   // Initialize drag-and-drop seed GIF import
   initDropHandler(terminal, fs);
 
-  // Initialize mobile virtual keys and voice input
-  initMobileInput(terminal);
+  // Initialize mobile virtual keys and voice input (the desktop has its own: src/desktop/mobile.ts)
+  if (!desktop) initMobileInput(terminal);
 
   // Initialize dynamic favicon (32x32 minimap of terminal content)
   initFaviconUpdater(terminal.term);

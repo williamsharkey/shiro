@@ -38,7 +38,8 @@ export function initNetwork(wm: WindowManager, fs: FileSystem, button: HTMLEleme
   window.addEventListener('online', () => setNetworkStatus(networkCredential() ? 'signed-in' : 'online'));
   window.addEventListener('offline', () => setNetworkStatus('offline'));
   const paint = (s: NetworkStatus) => {
-    button.innerHTML = s === 'offline' ? GLYPHS.netOff : s === 'needs-sign-in' ? GLYPHS.netKey : GLYPHS.net;
+    // Globe + status dot: green signed in, blue online, amber needs sign-in, gray offline
+    button.innerHTML = `${GLYPHS.net}<span class="sd-net-dot"></span>`;
     button.title = statusText(s);
     button.setAttribute('aria-label', `Network: ${statusText(s)}`);
     button.dataset.status = s;
