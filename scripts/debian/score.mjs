@@ -24,9 +24,13 @@ const WORKERS = Number(opt('--workers', '2'));
 const ONLY = opt('--only', '') ? opt('--only', '').split(',') : null;
 const PORT = Number(opt('--port', '5397'));
 const INSTALL_TIMEOUT_S = Number(opt('--timeout', '1200'));
-const OUT_DIR = join(ROOT, '.debian-build/score');
+// --tag NAME: a variant run (its own results and report), e.g. with --env
+// BLINK_SAME_INSTANCE_FORK=1 (extra environment for every command, comma-separated)
+const TAG = opt('--tag', '');
+const EXTRA_ENV = Object.fromEntries(opt('--env', '').split(',').filter(Boolean).map((kv) => [kv.slice(0, kv.indexOf('=')), kv.slice(kv.indexOf('=') + 1)]));
+const OUT_DIR = join(ROOT, '.debian-build/score' + (TAG ? '-' + TAG : ''));
 const RESULTS = join(OUT_DIR, 'results.json');
-const REPORT = join(ROOT, 'docs/DEBIAN_SCORE.md');
+const REPORT = TAG ? join(OUT_DIR, 'DEBIAN_SCORE.md') : join(ROOT, 'docs/DEBIAN_SCORE.md');
 mkdirSync(OUT_DIR, { recursive: true });
 
 const results = existsSync(RESULTS) ? JSON.parse(readFileSync(RESULTS, 'utf8')) : {};
@@ -102,7 +106,7 @@ async function newMachine(browser, base, log) {
   page.on('pageerror', (e) => log(`[pageerror] ${e.message}`));
   await page.goto(base + '/');
   await page.waitForFunction(() => window.__shiro && window.__shiro.shell, null, { timeout: 120000 });
-  const run = async (cmd, timeoutS = 600) => page.evaluate(async ({ cmd, timeoutS }) => {
+  const run = async (cmd, timeoutS = 600) => page.evaluate(async ({ cmd, timeoutS, extraEnv }) => {
     let out = '';
     const t0 = performance.now();
     // A root shell (as `sudo -s` gives): kernel programs' output streams into
@@ -110,7 +114,7 @@ async function newMachine(browser, base, log) {
     // builtin, hands its output over only when it returns)
     const sh = window.__scoreShell ??= (() => {
       const f = Object.assign(window.__shiro.shell.fork(), { terminal: null, uid: 0 });
-      Object.assign(f.env, { USER: 'root', LOGNAME: 'root', HOME: '/root', DEBIAN_FRONTEND: 'noninteractive' });
+      Object.assign(f.env, { USER: 'root', LOGNAME: 'root', HOME: '/root', DEBIAN_FRONTEND: 'noninteractive' }, extraEnv);
       return f;
     })();
     let timer;
@@ -119,7 +123,7 @@ async function newMachine(browser, base, log) {
     clearTimeout(timer);
     if (code === 'timeout') { sh.abortController?.abort(); out += '\nSCORE-TIMEOUT\n'; }
     return { code: code === 'timeout' ? 124 : code, out: out.replace(/\r\n/g, '\n'), ms: Math.round(performance.now() - t0) };
-  }, { cmd, timeoutS });
+  }, { cmd, timeoutS, extraEnv: EXTRA_ENV });
   const t0 = Date.now();
   const inst = await run('debian install');
   if (inst.code) throw new Error('debian install failed: ' + inst.out);
@@ -137,6 +141,7 @@ async function smoke(m, pkg) {
   // The program named like the package first, then the rest
   bins.sort((a, b) => (b.endsWith('/' + pkg) ? 1 : 0) - (a.endsWith('/' + pkg) ? 1 : 0));
   const tried = [];
+  let ran; // a run that loaded and exited normally without printing a version or usage
   // Shells have no --version (dash): run a command instead
   const shell = bins.find((b) => /\/(?:da|ba|z|k|mk|c|tc|fi)?sh$/.test(b));
   if (shell) {
@@ -153,8 +158,11 @@ async function smoke(m, pkg) {
       const broken = /error while loading shared libraries|Exec format error|cannot execute|not found|Can't locate|No such file/i.test(r.out);
       if (r.code > 0 && r.code < 126 && !broken && /usage|version|options|--help/i.test(r.out)) return { ok: true, how: `${bin} ${flagArg} (usage, exit ${r.code})`, ms: r.ms, sample: r.out.trim().split('\n')[0].slice(0, 100) };
       if (crashed) return { ok: false, how: `${bin} ${flagArg}`, category: r.code === 124 ? 'timeout' : 'engine-crash', error: firstError(r.out) || `exit ${r.code}` };
+      // helpztags exits 0 printing nothing; select-editor wants a terminal
+      if (!ran && !broken && (r.code === 0 || (r.code < 3 && r.out.trim()))) ran = { bin, flagArg, r };
     }
   }
+  if (ran) return { ok: true, how: `${ran.bin} ${ran.flagArg} (ran, exit ${ran.r.code}${ran.r.out.trim() ? '' : ', no output'})`, ms: ran.r.ms, sample: ran.r.out.trim().split('\n')[0].slice(0, 100) };
   if (bins.length) return { ok: false, how: tried.join('; '), category: 'smoke-failed', error: tried[0] };
   const libs = list.filter((f) => /^\/usr\/lib\/x86_64-linux-gnu\/(?:[\w.+-]+\/)?[^/]+\.so(\.\d+)*$/.test(f));
   if (libs.length) {
@@ -207,14 +215,14 @@ async function scoreBatch(m, batch, onResult) {
   const logs = new Map();
   const timing = new Map();
   if (todo.length) {
-    const r = await m.run(`apt-get install -y ${todo.map((b) => b.p.name).join(' ')} 2>&1`, INSTALL_TIMEOUT_S);
+    const r = await m.run(`apt-get install -y ${todo.map((b) => b.p.name).join(' ')}`, INSTALL_TIMEOUT_S);
     writeFileSync(join(OUT_DIR, `batch-${todo[0].p.name}.log`), `exit ${r.code} after ${r.ms} ms\n` + r.out);
     for (const b of todo) { logs.set(b.p.name, r.out); timing.set(b.p.name, Math.round(r.ms / todo.length)); }
     if (r.code !== 0 && todo.length > 1) {
       await recover(m);
       for (const b of todo) {
         if ((await installedStatus(m, [b.p.name])).has(b.p.name)) continue;
-        const one = await m.run(`apt-get install -y ${b.p.name} 2>&1`, INSTALL_TIMEOUT_S);
+        const one = await m.run(`apt-get install -y ${b.p.name}`, INSTALL_TIMEOUT_S);
         logs.set(b.p.name, one.out); timing.set(b.p.name, one.ms);
         if (one.code !== 0) await recover(m);
       }
