@@ -22,7 +22,7 @@ import type { KStat } from './abi';
 import { retain, release, type FdTable, type OpenFile } from './fd';
 import type { Kernel } from './kernel';
 import {
-  EPERM, EINTR, EIO, EBADF, EAGAIN, EACCES, EFAULT, EINVAL, EPIPE, ETIMEDOUT, EPROTO, ENOTSOCK, EDESTADDRREQ,
+  EPERM, EINTR, EIO, EBADF, EAGAIN, EACCES, EFAULT, EINVAL, ENOTTY, EPIPE, ETIMEDOUT, EPROTO, ENOTSOCK, EDESTADDRREQ,
   EMSGSIZE, ENOPROTOOPT, EPROTONOSUPPORT, EOPNOTSUPP, EAFNOSUPPORT, EADDRINUSE, EADDRNOTAVAIL, ENETDOWN,
   ENETUNREACH, ECONNABORTED, ECONNRESET, ENOBUFS, EISCONN, ENOTCONN, ECONNREFUSED, EHOSTUNREACH, EALREADY,
   EINPROGRESS, O_NONBLOCK, POLLIN, POLLPRI, POLLOUT, POLLERR, POLLHUP, POLLNVAL, POLLRDHUP, S_IFSOCK,
@@ -539,7 +539,9 @@ export class KSocket implements OpenFile {
       new DataView(arg.buffer, arg.byteOffset, 4).setInt32(0, this.rxLen, true);
       return 0;
     }
-    return -EINVAL;
+    // The kernel already set O_NONBLOCK on the open file (Python's settimeout does this)
+    if (req === FIONBIO) return 0;
+    return -ENOTTY;
   }
 
   async stat(): Promise<KStat> { return sockStat(this.ino); }
@@ -837,7 +839,8 @@ export class KDatagramSocket implements OpenFile {
       new DataView(arg.buffer, arg.byteOffset, 4).setInt32(0, this.rx[0]?.data.length ?? 0, true);
       return 0;
     }
-    return -EINVAL;
+    if (req === FIONBIO) return 0;
+    return -ENOTTY;
   }
   async stat(): Promise<KStat> { return sockStat(this.ino); }
   async close(): Promise<void> { this.closed = true; this.rx = []; this.q.notify(); }
