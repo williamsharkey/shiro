@@ -19,7 +19,7 @@ const BENCH = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(BENCH, '..');
 const ALL_SUITES = ['boot', 'shell', 'kernel', 'wasm', 'x86', 'net', 'node', 'hygiene'];
 // Only when asked for (--suites debian): apt runs take minutes
-const OPTIONAL_SUITES = ['debian'];
+const OPTIONAL_SUITES = ['debian', 'x86first'];
 const NONISOLATED_SUITES = ['boot', 'shell', 'kernel', 'wasm', 'x86', 'hygiene'];
 // --quick: everything isolated, plus the kernel fallback paths (JSPI) not isolated
 const QUICK_NONISOLATED_SUITES = ['kernel'];
@@ -84,7 +84,7 @@ async function main() {
   const publish = join(dist, '__bench');
   const fixtures = prepareFixtures({ cacheDir, publishDir: publish, log });
   const suites = (args.suites || ALL_SUITES).filter((s) => ALL_SUITES.includes(s) || OPTIONAL_SUITES.includes(s));
-  if (args.gh && suites.includes('x86')) {
+  if (args.gh && (suites.includes('x86') || suites.includes('x86first'))) {
     const gh = await prepareGh({ cacheDir, publishDir: publish, log });
     if (gh) fixtures.gh = gh;
   }
