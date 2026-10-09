@@ -85,6 +85,8 @@ const sockaddrsBin = join(out, 'sockaddrs');
 const haveSockaddrs = tryBuild('gcc', ['-static', '-O1', '-o', sockaddrsBin, 'sockaddrs.c']);
 const sleepintrBin = join(out, 'sleepintr');
 const haveSleepintr = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', sleepintrBin, 'sleepintr.c']);
+const unameBin = join(out, 'uname');
+const haveUname = tryBuild('gcc', ['-static', '-O1', '-o', unameBin, 'uname.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -702,6 +704,13 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe('invalid timespec EINVAL 6/6\nnanosleep eintr 1 early 1 rem>3s 1\nclock_nanosleep eintr 1 early 1 rem>3s 1\n' +
       'threads parked: exit 7 within 3s 1\n');
+  }, 60_000);
+
+  // Node's os.release() in native Claude Code; glibc's minimum-kernel check
+  it.skipIf(!haveUname)("uname has the kernel's release and version, Blink's sysname and machine", async () => {
+    const { shell } = await setup(readFileSync(unameBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('sysname Linux machine x86_64 release-6.1 1 version-SMP 1 nodename-in-release 1\n');
   }, 60_000);
 
   // vim's typeahead check blocked for a key when two reads straddled a ms tick
