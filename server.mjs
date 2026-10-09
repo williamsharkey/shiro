@@ -1266,7 +1266,7 @@ export function createTcpRelay(config, { lookup, log = console.log, verifySignin
 //   SHIRO_BROWSE_APP_ORIGINS  origins (with *. wildcards) whose Browser may use them; default the
 //                             brand domain and its subdomains, or http://localhost:PORT
 //   SHIRO_BROWSE=0            off
-export function browseConfigFor(hostHeader, env = process.env, brand = BRAND) {
+export function browseConfigFor(hostHeader, env = process.env, brand = profileFor(hostHeader)?.brand) {
   if (env.SHIRO_BROWSE === '0') return null;
   const host = String(hostHeader || '').toLowerCase();
   let template = env.SHIRO_BROWSE_ORIGIN || '';
