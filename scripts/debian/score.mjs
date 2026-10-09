@@ -141,6 +141,7 @@ async function smoke(m, pkg) {
   // The program named like the package first, then the rest
   bins.sort((a, b) => (b.endsWith('/' + pkg) ? 1 : 0) - (a.endsWith('/' + pkg) ? 1 : 0));
   const tried = [];
+  let ran; // a run that loaded and exited normally without printing a version or usage
   // Shells have no --version (dash): run a command instead
   const shell = bins.find((b) => /\/(?:da|ba|z|k|mk|c|tc|fi)?sh$/.test(b));
   if (shell) {
@@ -157,8 +158,11 @@ async function smoke(m, pkg) {
       const broken = /error while loading shared libraries|Exec format error|cannot execute|not found|Can't locate|No such file/i.test(r.out);
       if (r.code > 0 && r.code < 126 && !broken && /usage|version|options|--help/i.test(r.out)) return { ok: true, how: `${bin} ${flagArg} (usage, exit ${r.code})`, ms: r.ms, sample: r.out.trim().split('\n')[0].slice(0, 100) };
       if (crashed) return { ok: false, how: `${bin} ${flagArg}`, category: r.code === 124 ? 'timeout' : 'engine-crash', error: firstError(r.out) || `exit ${r.code}` };
+      // helpztags exits 0 printing nothing; select-editor wants a terminal
+      if (!ran && !broken && (r.code === 0 || (r.code < 3 && r.out.trim()))) ran = { bin, flagArg, r };
     }
   }
+  if (ran) return { ok: true, how: `${ran.bin} ${ran.flagArg} (ran, exit ${ran.r.code}${ran.r.out.trim() ? '' : ', no output'})`, ms: ran.r.ms, sample: ran.r.out.trim().split('\n')[0].slice(0, 100) };
   if (bins.length) return { ok: false, how: tried.join('; '), category: 'smoke-failed', error: tried[0] };
   const libs = list.filter((f) => /^\/usr\/lib\/x86_64-linux-gnu\/(?:[\w.+-]+\/)?[^/]+\.so(\.\d+)*$/.test(f));
   if (libs.length) {
