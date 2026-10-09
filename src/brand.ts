@@ -1,8 +1,12 @@
 /**
- * The Unix edition's name, in one place (src/brand.json, which server.mjs
- * also reads to title the app shell and set its meta tags). shiro.computer
- * keeps its own name; this brand goes with the desktop UI (src/ui-mode.ts).
+ * The product name the desktop shows: the active profile's brand
+ * (profiles/<id>/profile.json, src/profile.ts; server.mjs reads the same file
+ * to title the app shell and set its meta tags). A profile without one
+ * (shiro.computer keeps its own name on the terminal UI) still gets the Unix
+ * edition's when it opens the desktop (?ui=desktop).
  */
-import brand from './brand.json';
+import { activeProfile, PROFILES, type Brand } from './profile';
 
-export const BRAND: Readonly<{ name: string; domain: string; tagline: string; description: string }> = brand;
+const fallback = PROFILES.find((p) => p.brand)!.brand!;
+
+export const BRAND: Readonly<Brand> = activeProfile().brand ?? fallback;

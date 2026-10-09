@@ -25,7 +25,7 @@ write_files:
       Environment=PORT=3000
       Environment=STATIC_DIR=/opt/tabcomputer/current/public
       Environment=SEED_DIR=/opt/tabcomputer/seeds
-      # Server settings ship with each release (deploy/tabcomputer/server.env)
+      # Server settings ship with each release (profiles/tabcomputer/server.env)
       EnvironmentFile=-/opt/tabcomputer/current/server.env
       ExecStart=/usr/bin/node /opt/tabcomputer/current/server.mjs
       Restart=always
