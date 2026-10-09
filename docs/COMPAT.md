@@ -160,7 +160,8 @@ Shell and platform fixes these needed (all with tests in the same file):
   `ax` and `O_EXCL` on an existing file are EEXIST (it was truncated); a
   missing file without `O_CREAT` is ENOENT. `writeFile`, `appendFile` and
   `fs.promises` take `flag`, `mode` (umask applied) and `encoding` (they were
-  ignored). `lstat` reports symlinks (`isSymbolicLink()` was always false),
+  ignored); `mkdir`'s `mode` applies to each directory it creates (it made
+  755). `lstat` reports symlinks (`isSymbolicLink()` was always false),
   `stat` and `realpath` follow them, `symlink` onto an existing path is
   EEXIST, and `ino`/`dev` are stable per file and shared through a link.
 - Node, for yarn: `fs.open` of a missing file to read is ENOENT (yarn took

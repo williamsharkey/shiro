@@ -424,6 +424,17 @@ export function createFsModule(deps: FsDeps): any {
     });
   };
 
+  /** mkdir's `mode` for each directory the call creates (the filesystem's mkdir takes none) */
+  const mkdirModes = (resolved: string, opts: any): (() => void) => {
+    const m = typeof opts === 'object' ? opts?.mode : opts; // mkdir(p, mode) or mkdir(p, { mode })
+    const mode = m === undefined || m === null ? undefined : typeof m === 'string' ? parseInt(m, 8) : Number(m);
+    if (mode === undefined) return () => {};
+    const made: string[] = [];
+    if (opts?.recursive) {
+      for (let cur = resolved; cur && cur !== '/' && !existsNow(cur); cur = cur.slice(0, cur.lastIndexOf('/'))) made.push(cur);
+    } else if (!existsNow(resolved)) made.push(resolved);
+    return () => { for (const d of made) applyMode(d, mode); };
+  };
   /**
    * Before an async open or write of `p` with `flags`: what only storage knows
    * about it, settled (EEXIST for an exclusive create, ENOENT for a missing
@@ -454,6 +465,12 @@ export function createFsModule(deps: FsDeps): any {
   const openAsync = async (p: any, flags: any, mode?: any): Promise<number> => {
     await settleExisting(p, flags ?? 'r');
     return fsShim.openSync(p, flags ?? 'r', mode);
+  };
+  const mkdirAsync = async (p: any, opts: any) => {
+    const resolved = ctx.fs.resolvePath(String(p), ctx.cwd);
+    const setModes = mkdirModes(resolved, opts);
+    await ctx.fs.mkdir(resolved, typeof opts === 'object' ? opts : undefined);
+    setModes();
   };
   const symlinkAsync = async (target: any, path: any) => {
     const r = realParent(path);
@@ -634,6 +651,7 @@ export function createFsModule(deps: FsDeps): any {
     },
     mkdirSync: (p: string, opts?: any) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const setModes = mkdirModes(resolved, opts);
       // Mark directory in fileCache so existsSync/statSync can find it
       // Use a sentinel value to distinguish from files
       if (opts?.recursive) {
@@ -650,6 +668,7 @@ export function createFsModule(deps: FsDeps): any {
       // The directory exists for the filesystem now when its parent is in memory
       // (a write right after it found no parent and was dropped)
       inflight.push((ctx.fs.mkdirNow ? ctx.fs.mkdirNow(resolved, opts) : ctx.fs.mkdir(resolved, opts)).catch(() => {}));
+      setModes();
     },
     unlinkSync: (p: string) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
@@ -1100,9 +1119,7 @@ export function createFsModule(deps: FsDeps): any {
     },
     mkdir: (p: string, optsOrCb?: any, cb?: any) => {
       const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
-      ctx.fs.mkdir(ctx.fs.resolvePath(p, ctx.cwd), typeof optsOrCb === 'object' ? optsOrCb : undefined)
-        .then(() => callback?.(null))
-        .catch((e: any) => callback?.(e));
+      mkdirAsync(p, typeof optsOrCb === 'function' ? undefined : optsOrCb).then(() => callback?.(null), (e: any) => callback?.(e));
     },
     unlink: (p: string, cb?: any) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
@@ -1365,7 +1382,6 @@ export function createFsModule(deps: FsDeps): any {
         }
         return entries;
       },
-      mkdir: async (p: string, opts?: any) => ctx.fs.mkdir(ctx.fs.resolvePath(p, ctx.cwd), opts),
       unlink: async (p: string) => { const r = ctx.fs.resolvePath(p, ctx.cwd); fileCache.delete(r); fileMtimes.delete(r); return ctx.fs.unlink(r); },
       rm: async (p: string, opts?: any) => {
         const resolved = ctx.fs.resolvePath(p, ctx.cwd);
@@ -1379,7 +1395,7 @@ export function createFsModule(deps: FsDeps): any {
       },
     },
   };
-  Object.defineProperty(fsShim, ASYNC, { value: { writeFile: writeFileAsync, stat: statAsync, open: openAsync, symlink: symlinkAsync } });
+  Object.defineProperty(fsShim, ASYNC, { value: { writeFile: writeFileAsync, stat: statAsync, open: openAsync, symlink: symlinkAsync, mkdir: mkdirAsync } });
   // realpath and realpath.native need special handling (function with properties)
   const realpathFn: any = (p: string, optsOrCb?: any, cb?: any) => {
     const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
@@ -1515,10 +1531,7 @@ export function createFsPromisesModule(deps: FsDeps): any {
       return entries;
     },
     stat: (p: any) => shared().stat(p, false),
-    mkdir: async (p: string, opts?: any) => {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-      await ctx.fs.mkdir(resolved, opts);
-    },
+    mkdir: (p: any, opts?: any) => shared().mkdir(p, opts),
     unlink: async (p: string) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       fileCache.delete(resolved);

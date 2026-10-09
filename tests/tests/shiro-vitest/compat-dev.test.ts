@@ -1002,6 +1002,18 @@ fs.writeFile(j('w'), 'Z', { flag: 'a' }, (e) => { r.push('cbFlagA=' + (e ? e.cod
     expect((await sh(shell, 'stat -c %a /home/user/m/fsf/m /home/user/m/fsf/am')).out).toBe('600\n640\n');
   }, 60_000);
 
+  it('fs mkdir mode applies to each directory it creates (sync, callback and promise)', async () => {
+    expect(await node(`${fsCase}
+fs.mkdirSync(j('a/b/c'), { recursive: true, mode: 0o700 }); r.push('rec=' + perm('a') + ',' + perm('a/b') + ',' + perm('a/b/c'));
+fs.mkdirSync(j('a/b/d'), { recursive: true, mode: 0o750 }); r.push('existingKept=' + perm('a/b') + ' new=' + perm('a/b/d'));
+fs.mkdirSync(j('plain'), 0o711); r.push('num=' + perm('plain'));
+fs.mkdirSync(j('dflt')); r.push('default=' + perm('dflt'));
+fs.mkdir(j('cb'), { mode: 0o700 }, () => { r.push('cb=' + perm('cb'));
+  fs.promises.mkdir(j('p/q'), { recursive: true, mode: 0o700 }).then(() => { r.push('p=' + perm('p') + ',' + perm('p/q')); console.log(r.join(' ')); });
+});`)).toBe('rec=700,700,700 existingKept=700 new=750 num=711 default=755 cb=700 p=700,700\n');
+    expect((await sh(shell, 'stat -c %a /home/user/m/fsf/a/b/c /home/user/m/fsf/p/q')).out).toBe('700\n700\n');
+  }, 60_000);
+
   it('fs lstat and realpath see symlinks; ino and dev are stable', async () => {
     expect(await node(`${fsCase}
 fs.writeFileSync(j('f'), 'data'); fs.mkdirSync(j('dir')); fs.writeFileSync(j('dir/in'), 'x');
