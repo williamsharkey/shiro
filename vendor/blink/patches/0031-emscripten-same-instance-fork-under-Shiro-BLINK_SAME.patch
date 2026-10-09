@@ -1,0 +1,637 @@
+From 728653cbc2a8280a40e233d7893d3249f93863aa Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 06:02:02 +0000
+Subject: [PATCH 31/32] emscripten: same-instance fork under Shiro
+ (BLINK_SAME_INSTANCE_FORK=1)
+
+With the flag, fork() and clone() without CLONE_VM make the child a new
+System with its own guest thread in this Blink instance, in the same wasm
+memory, instead of a snapshot restored in another worker (0014) or the
+child running on the parent's thread (0023). Private pages are copied
+(the 0014 snapshot, restored in place); the pages of writable MAP_SHARED
+mappings, anonymous or kernel files, move onto host pages of their own
+that both map (PTE bit PAGE_GROW, unused before; memorymalloc.c
+refcounts them and the last unmapper frees one), so the memory and the
+futexes in it are shared, and parent and child run concurrently under
+the GIL.
+
+The child's kernel calls go out as its pid. Its exit_group ends its
+kernel process and its System; a fatal signal's default action kills it
+through the kernel; an exec starts the new program in a worker of its own
+(the kernel's embryo exec) and the System goes. shiro_hosted() tells the
+page, which routes the child's signals to it by pid
+(blink_shiro_signal_pid), turns its kernel termination (kill -9) into a
+SIGKILL for its System, and keeps the worker until the last process in it
+ends: a parent that exits with children running reports its exit and
+ends only its own thread.
+
+Known limits: a multi-threaded child's other threads aren't reaped on its
+exit; pages of host blocks moved onto shared pages stay with their block.
+---
+ blink/blink.c        |  19 ++-
+ blink/machine.h      |   1 +
+ blink/memorymalloc.c |  52 +++++++
+ blink/shiro.inc      | 316 +++++++++++++++++++++++++++++++++++++++++--
+ blink/syscall.c      |   7 +
+ 5 files changed, 377 insertions(+), 18 deletions(-)
+
+diff --git a/blink/blink.c b/blink/blink.c
+index af4b879..b8ab011 100644
+--- a/blink/blink.c
++++ b/blink/blink.c
+@@ -158,6 +158,11 @@ void TerminateSignal(struct Machine *m, int sig, int code) {
+ #ifdef __EMSCRIPTEN__
+   // Under Shiro a stop signal's default action stops the process in the kernel
+   if (ShiroStopSelf(m, sig)) return;
++  {
++    bool ShiroIsInstanceChild(struct Machine *);
++    _Noreturn void ShiroInstanceChildKilled(struct Machine *, int);
++    if (ShiroIsInstanceChild(m)) ShiroInstanceChildKilled(m, sig);
++  }
+   // Reaping threads hangs here (see SysExitGroup); let the embedder end
+   // the process with the signal (Module.shiroKill), else exit 128+sig.
+   if (IsSignalSerious(sig)) {
+@@ -233,11 +238,10 @@ void ShiroRestore(struct Machine *);
+ // Called by the embedder (Shiro's worker host) when the kernel signals this
+ // process: queue `sig` (Linux numbering) on a guest thread that doesn't
+ // block it. Blocking syscalls notice within kPollingMs.
+-EMSCRIPTEN_KEEPALIVE void blink_shiro_signal(int sig) {
++void ShiroSignalSystem(struct System *s, int sig) {
+   struct Dll *e;
+-  struct System *s;
+   struct Machine *m, *pick = 0, *busy = 0, *any = 0;
+-  if (!(s = g_shiro_system) || sig < 1 || sig > 64) return;
++  if (!s || sig < 1 || sig > 64) return;
+   LOCK(&s->machines_lock);
+   // Prefer a thread running guest code that doesn't block the signal, then
+   // one in a syscall (blocking waits poll for signals), then anyone.
+@@ -255,6 +259,15 @@ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal(int sig) {
+   if (pick) EnqueueSignal(pick, sig);
+   UNLOCK(&s->machines_lock);
+ }
++
++EMSCRIPTEN_KEEPALIVE void blink_shiro_signal(int sig) {
++  ShiroSignalSystem(g_shiro_system, sig);
++}
++
++// the parent's System is going away while same-instance children run on
++void ShiroDropSystem(void) {
++  g_shiro_system = 0;
++}
+ #endif
+ 
+ static int Exec(char *execfn, char *prog, char **argv, char **envp) {
+diff --git a/blink/machine.h b/blink/machine.h
+index ecb1c90..c22243d 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -559,6 +559,7 @@ int SyncVirtual(struct System *, i64, i64, int);
+ int ProtectVirtual(struct System *, i64, i64, int, bool);
+ bool IsFullyMapped(struct System *, i64, i64);
+ bool IsFullyUnmapped(struct System *, i64, i64);
++void ShareHostPage(u8 *);
+ int GetProtection(u64);
+ u64 SetProtection(int);
+ int ClassifyOp(u64) pureconst;
+diff --git a/blink/memorymalloc.c b/blink/memorymalloc.c
+index 444ae3b..24e193e 100644
+--- a/blink/memorymalloc.c
++++ b/blink/memorymalloc.c
+@@ -112,6 +112,53 @@ static bool ReleaseMugPage(u8 *page) {
+ }
+ #endif
+ 
++// Host pages that several processes in this instance map (MAP_SHARED
++// memory across a same-instance fork, shiro.inc): their PTEs carry
++// PAGE_GROW (unused otherwise) and the page is freed by its last unmapper.
++static pthread_mutex_t_ g_shared_lock = PTHREAD_MUTEX_INITIALIZER_;
++static struct {
++  u8 **page;
++  long *refs;
++  long n, c;
++} g_shared;
++
++void ShareHostPage(u8 *page) {
++  long i;
++  LOCK(&g_shared_lock);
++  for (i = 0; i < g_shared.n; ++i) {
++    if (g_shared.page[i] == page) {
++      ++g_shared.refs[i];
++      UNLOCK(&g_shared_lock);
++      return;
++    }
++  }
++  if (g_shared.n == g_shared.c) {
++    g_shared.c = g_shared.c ? g_shared.c * 2 : 64;
++    unassert((g_shared.page = (u8 **)realloc(g_shared.page, g_shared.c * sizeof(*g_shared.page))));
++    unassert((g_shared.refs = (long *)realloc(g_shared.refs, g_shared.c * sizeof(*g_shared.refs))));
++  }
++  g_shared.page[g_shared.n] = page;
++  g_shared.refs[g_shared.n++] = 1;
++  UNLOCK(&g_shared_lock);
++}
++
++// drops a reference; returns how many remain
++static long UnshareHostPage(u8 *page) {
++  long i, r = 0;
++  LOCK(&g_shared_lock);
++  for (i = 0; i < g_shared.n; ++i) {
++    if (g_shared.page[i] == page) {
++      if (!(r = --g_shared.refs[i])) {
++        g_shared.page[i] = g_shared.page[--g_shared.n];
++        g_shared.refs[i] = g_shared.refs[g_shared.n];
++      }
++      break;
++    }
++  }
++  UNLOCK(&g_shared_lock);
++  return r;
++}
++
+ static void FillPage(void *p, int c) {
+   memset(p, c, 4096);
+ }
+@@ -712,6 +759,11 @@ static bool FreePage(struct System *s, i64 virt, u64 entry, u64 size,
+     }
+ #endif
+   }
++  if ((entry & PAGE_GROW) && UnshareHostPage(FindHostPage(entry)) > 0) {
++    s->memstat.committed -= 1;  // another process still maps it
++    --*rss_delta;
++    return false;
++  }
+   if ((entry & (PAGE_HOST | PAGE_MAP | PAGE_MUG)) == PAGE_HOST) {
+     unassert(~entry & PAGE_RSRV);
+     s->memstat.committed -= 1;
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index cea9243..63179df 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -76,6 +76,8 @@ struct ShiroVfork {
+   struct sigaction_linux hands[64];
+ };
+ static _Thread_local struct ShiroVfork *t_vfork;
++bool ShiroIsInstanceChild(struct Machine *);
++_Noreturn static void ShiroInstanceChildVanish(struct Machine *);
+ 
+ static i64 ShiroErr(void) {
+   return -(XlatErrno(errno) & 0xfff);
+@@ -93,7 +95,8 @@ static i64 ShiroCall(struct Machine *m, int nr, const int a[12], void *data,
+   int args[12], r, as;
+   bool held;
+   i64 res;
+-  as = t_vfork ? t_vfork->pid : 0;
++  as = t_vfork ? t_vfork->pid
++               : m && m->system->pid && m->system->pid != g_shiro_pid ? m->system->pid : 0;
+   for (;;) {
+     memcpy(args, a, sizeof(args));
+     held = GilHeld();
+@@ -786,7 +789,7 @@ static i64 ShiroVforkSigaction(struct Machine *m, int sig, i64 act, i64 old,
+ bool ShiroStopSelf(struct Machine *m, int sig) {
+   if (!g_shiro_pid || (sig != 19 && sig != 20 && sig != 21 && sig != 22)) return false;
+   ShiroMirrorSigaction(m, sig, SIG_DFL_LINUX);
+-  KS(m, 62, A12(g_shiro_pid, sig));
++  KS(m, 62, A12(m->system->pid, sig));
+   KS(m, 24, A12(0));  // sched_yield: answered once we're continued
+   return true;
+ }
+@@ -890,7 +893,8 @@ static i64 ShiroExecve(struct Machine *m, i64 pa, i64 aa, i64 ea) {
+   for (i = 0; envp[i]; ++i) need += strlen(envp[i]) * 6 + 4;
+   if (need > (size_t)g_shiro_chunk) return -E2BIG_LINUX;
+   json = p = (char *)ShiroAlloc(m, MAX(need, 4096));
+-  p += sprintf(p, "{\"inproc\":%s,\"path\":", t_vfork ? "false" : "true");
++  p += sprintf(p, "{\"inproc\":%s,\"path\":",
++               t_vfork || ShiroIsInstanceChild(m) ? "false" : "true");
+   p = ShiroJsonStr(p, prog);
+   p += sprintf(p, ",\"argv\":[");
+   for (i = 0; argv[i]; ++i) {
+@@ -907,6 +911,8 @@ static i64 ShiroExecve(struct Machine *m, i64 pa, i64 aa, i64 ea) {
+                 false, false);
+   if (r < 0) return r;
+   if (t_vfork) return ShiroVforkReturn(m);  // the child is running
++  // an in-instance child's program now runs in a worker of its own
++  if (ShiroIsInstanceChild(m)) ShiroInstanceChildVanish(m);
+   // r == length of the resolved path of an ELF to load here
+   json[r] = 0;
+   LOCK(&m->system->exec_lock);
+@@ -982,6 +988,21 @@ static void ShiroCloseRun(struct ShiroWalk *w) {
+   w->run = 0;
+ }
+ 
++static void ShiroAddRun(struct ShiroWalk *w, i64 virt, u64 key, const void *data,
++                        int kind, size_t n) {
++  if (!w->ok) return;
++  if (!w->run || w->cur.key != key || w->cur.hasdata != (u64)kind ||
++      w->cur.virt + (i64)w->cur.pages * 4096 != virt) {
++    ShiroCloseRun(w);
++    w->run = w->b->n;
++    w->cur.virt = virt, w->cur.pages = 0, w->cur.key = key, w->cur.hasdata = kind;
++    w->ok &= ShiroPut(w->b, &w->cur, sizeof(w->cur));
++    ++w->nruns;
++  }
++  ++w->cur.pages;
++  if (n) w->ok &= ShiroPut(w->b, data, n);
++}
++
+ static void ShiroAddPage(struct ShiroWalk *w, i64 virt, u64 key, const u8 *data) {
+   bool hasdata = !!data;
+   if (!w->ok) return;
+@@ -1012,6 +1033,12 @@ static void ShiroWalkTable(struct ShiroWalk *w, u64 entry, int level, i64 base)
+       continue;
+     }
+     u64 key = e & (PAGE_U | PAGE_RW | PAGE_XD);
++    if (e & PAGE_GROW) {
++      // shared with a same-instance child: it maps this very host page
++      ShareHostPage(FindHostPage(e));
++      ShiroAddRun(w, virt, key, &e, 2, 8);
++      continue;
++    }
+     if (!(e & PAGE_U)) {
+       ShiroAddPage(w, virt, key, 0);  // PROT_NONE: no contents to keep
+     } else if (e & PAGE_RSRV) {
+@@ -1052,14 +1079,13 @@ static bool ShiroHasSharedMemory(struct System *s) {
+   return res;
+ }
+ 
+-static i64 ShiroForkReal(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
++// A snapshot of this process for its fork() child (in *out).
++static int ShiroSnapshot(struct Machine *m, u64 flags, i64 stack, i64 ctid,
++                         struct ShiroBuf *out) {
+   struct ShiroBuf b = {0};
+   struct ShiroForkHeader h;
+   struct ShiroWalk w;
+   struct System *s = m->system;
+-  i64 pid;
+-  int rc;
+-  if ((pid = KS(m, K_SYS_vfork, A12(0))) < 0) return pid;
+   memset(&h, 0, sizeof(h));
+   h.magic = SHIRO_FORK_MAGIC;
+   h.size = sizeof(h);
+@@ -1096,7 +1122,6 @@ static i64 ShiroForkReal(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
+       !ShiroPut(&b, s->elf.execfn, h.execfnlen) ||
+       !ShiroPut(&b, s->elf.interpreter, h.interplen)) {
+     free(b.p);
+-    KS(m, 62, A12(pid, 9));
+     return -ENOMEM_LINUX;
+   }
+   memset(&w, 0, sizeof(w));
+@@ -1109,10 +1134,23 @@ static i64 ShiroForkReal(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
+   ShiroCloseRun(&w);
+   if (!w.ok) {
+     free(b.p);
+-    KS(m, 62, A12(pid, 9));
+     return -ENOMEM_LINUX;
+   }
+   ((struct ShiroForkHeader *)b.p)->nruns = w.nruns;
++  *out = b;
++  return 0;
++}
++
++// fork(): the child is the snapshot restored in a new worker
++static i64 ShiroForkReal(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
++  struct ShiroBuf b;
++  i64 pid;
++  int rc;
++  if ((pid = KS(m, K_SYS_vfork, A12(0))) < 0) return pid;
++  if ((rc = ShiroSnapshot(m, flags, stack, ctid, &b)) < 0) {
++    KS(m, 62, A12(pid, 9));
++    return rc;
++  }
+   rc = shiro_fork_start(pid, b.p, b.n);
+   free(b.p);
+   if (rc < 0) {
+@@ -1122,6 +1160,7 @@ static i64 ShiroForkReal(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
+   return pid;
+ }
+ 
++
+ // The child side: set by host.mjs before main() when this worker is a fork
+ static u8 *g_shiro_restore;
+ static size_t g_shiro_restore_len;
+@@ -1142,12 +1181,24 @@ static char *ShiroDupN(const u8 *p, size_t n) {
+   return s;
+ }
+ 
+-// Rebuild the forked process in `m` (a fresh machine from Exec).
+-void ShiroRestore(struct Machine *m) {
++static u8 *ShiroPteSlot(struct System *s, i64 virt) {
++  u64 pt;
++  u8 *slot;
++  int i;
++  for (pt = s->cr3, i = 39;; i -= 9) {
++    slot = GetPageAddress(s, pt, i == 39) + ((virt >> i) & 511) * 8;
++    if (i == 12) return slot;
++    pt = LoadPte(slot);
++    if (!(pt & PAGE_V)) return 0;
++  }
++}
++
++// Rebuild a forked process in `m` (a fresh machine) from snapshot `p`.
++static void ShiroRestoreFrom(struct Machine *m, const u8 *p, size_t len) {
+   struct System *s = m->system;
+   struct ShiroForkHeader h;
+-  const u8 *p = g_shiro_restore, *end = p + g_shiro_restore_len;
+-  u64 i;
++  const u8 *end = p + len;
++  u64 i, k;
+   memcpy(&h, p, sizeof(h));
+   unassert(h.magic == SHIRO_FORK_MAGIC && h.size == sizeof(h));
+   p += sizeof(h);
+@@ -1165,6 +1216,20 @@ void ShiroRestore(struct Machine *m) {
+     struct ShiroForkRun r;
+     memcpy(&r, p, sizeof(r));
+     p += sizeof(r);
++    if (r.hasdata == 2) {  // the parent's host pages (same instance)
++      unassert(ReserveVirtual(s, r.virt, r.pages * 4096, r.key, -1, 0, false, true) == r.virt);
++      for (k = 0; k < r.pages; ++k, p += 8) {
++        u64 e;
++        u8 *slot;
++        memcpy(&e, p, 8);
++        unassert((slot = ShiroPteSlot(s, r.virt + k * 4096)));
++        StorePte(slot, e);
++        s->memstat.reserved -= 1;
++        s->memstat.committed += 1;
++        s->rss += 1;
++      }
++      continue;
++    }
+     // writable while we fill it, then the run's own protection
+     unassert(ReserveVirtual(s, r.virt, r.pages * 4096, r.key | (r.hasdata ? PAGE_RW | PAGE_U : 0),
+                             -1, 0, false, true) == r.virt);
+@@ -1195,11 +1260,16 @@ void ShiroRestore(struct Machine *m) {
+   memcpy(&m->sigaltstack, &h.altstack, sizeof(h.altstack));
+   if ((h.cloneflags & CLONE_CHILD_SETTID_LINUX) && h.ctid) {
+     u8 tid[4];
+-    Write32(tid, g_shiro_pid);
++    Write32(tid, s->pid);
+     CopyToUser(m, h.ctid, tid, 4);
+   }
+   if (h.cloneflags & CLONE_CHILD_CLEARTID_LINUX) m->ctid = h.ctid;
+   s->loaded = true;
++}
++
++// Rebuild the forked process in `m` (a fresh machine from Exec).
++void ShiroRestore(struct Machine *m) {
++  ShiroRestoreFrom(m, g_shiro_restore, g_shiro_restore_len);
+   free(g_shiro_restore);
+   g_shiro_restore = 0;
+ }
+@@ -1213,6 +1283,218 @@ struct ShiroSharedMap {
+ };
+ static pthread_mutex_t_ g_shiro_maps_lock = PTHREAD_MUTEX_INITIALIZER_;
+ 
++// ── same-instance fork (BLINK_SAME_INSTANCE_FORK) ────────────────────────
++//
++// The child is a new System with its own guest thread in this Blink
++// instance (the same wasm memory): private pages are copied, and the pages
++// of writable MAP_SHARED mappings are mapped by both (PAGE_GROW, refcounted
++// in memorymalloc.c), so the memory and its futexes really are shared and
++// parent and child run concurrently. Its kernel calls go out as its pid.
++
++static bool ShiroSameInstanceFork(void) {
++  static int on = -1;
++  const char *e;
++  if (on < 0) on = (e = getenv("BLINK_SAME_INSTANCE_FORK")) && *e && strcmp(e, "0");
++  return on;
++}
++
++bool ShiroIsInstanceChild(struct Machine *m) {
++  return g_shiro_pid && m->system->pid && m->system->pid != g_shiro_pid;
++}
++
++// The children this instance hosts, for signals the embedder routes by pid.
++static pthread_mutex_t_ g_shiro_kids_lock = PTHREAD_MUTEX_INITIALIZER_;
++static struct System *g_shiro_kids[256];
++static int g_shiro_nkids;
++static _Atomic(int) g_shiro_kids_starting;  // forked, thread not running yet
++void ShiroSignalSystem(struct System *, int);
++void ShiroDropSystem(void);
++extern void shiro_hosted(int pid);  // host.mjs: the page tracks it with us
++
++static void ShiroAddKid(struct System *s) {
++  LOCK(&g_shiro_kids_lock);
++  if (g_shiro_nkids < (int)ARRAYLEN(g_shiro_kids)) g_shiro_kids[g_shiro_nkids++] = s;
++  UNLOCK(&g_shiro_kids_lock);
++}
++
++static void ShiroDropKid(struct System *s) {
++  int i;
++  LOCK(&g_shiro_kids_lock);
++  for (i = 0; i < g_shiro_nkids; ++i) {
++    if (g_shiro_kids[i] == s) {
++      g_shiro_kids[i] = g_shiro_kids[--g_shiro_nkids];
++      break;
++    }
++  }
++  UNLOCK(&g_shiro_kids_lock);
++}
++
++// the kernel signalled hosted child `pid` (host.mjs routes by pid)
++EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid(int pid, int sig) {
++  int i;
++  LOCK(&g_shiro_kids_lock);
++  for (i = 0; i < g_shiro_nkids; ++i) {
++    if (g_shiro_kids[i]->pid == pid) {
++      ShiroSignalSystem(g_shiro_kids[i], sig);
++      break;
++    }
++  }
++  UNLOCK(&g_shiro_kids_lock);
++}
++
++// exit_group of the instance's own process while hosted children run: the
++// kernel ends the process, this thread goes, and the worker stays until
++// the last child is done (the page keeps it)
++bool ShiroParentExitWithKids(struct Machine *m, int rc) {
++  int n;
++  LOCK(&g_shiro_kids_lock);
++  n = g_shiro_nkids + g_shiro_kids_starting;
++  UNLOCK(&g_shiro_kids_lock);
++  if (!n || ShiroIsInstanceChild(m)) return false;
++  KS(m, 231, A12(rc & 255));
++  ShiroDropSystem();
++  ClearChildTid(m);
++  FreeMachine(m);
++  GilRelease();
++  pthread_exit(0);
++}
++
++// Moves the pages of [virt, virt+size) onto host pages of their own, marked
++// shared, so a child can map the same ones.
++static void ShiroShareRange(struct System *s, i64 virt, i64 size) {
++  i64 v;
++  u64 e, n;
++  u8 *slot, *np;
++  for (v = virt & -4096; v < virt + size; v += 4096) {
++    if (!(slot = ShiroPteSlot(s, v))) continue;
++    e = LoadPte(slot);
++    if (!(e & PAGE_V) || (e & PAGE_GROW) || !(e & PAGE_U)) continue;
++    if ((n = AllocateAnonymousPage(s)) == (u64)-1) continue;
++    np = FindHostPage(n);
++    if (e & PAGE_RSRV) {
++      memset(np, 0, 4096);
++      s->memstat.reserved -= 1;
++      s->memstat.committed += 1;
++    } else {
++      memcpy(np, GetPageAddress(s, e, false), 4096);
++      if ((e & (PAGE_HOST | PAGE_MAP | PAGE_MUG)) == PAGE_HOST) {
++        u8 *old = FindHostPage(e);
++        memset(old, 0, 4096);
++        FreeAnonymousPage(s, old);
++        s->rss -= 1;
++      }  // (pages of a host block or mug stay with their block)
++    }
++    StorePte(slot, (n & (PAGE_TA | PAGE_HOST)) | (e & (PAGE_U | PAGE_RW | PAGE_XD)) |
++                       PAGE_V | PAGE_GROW);
++    ShareHostPage(np);
++  }
++}
++
++struct ShiroChildStart {
++  struct ShiroBuf snap;
++  int pid;
++  int (*exec)(char *, char *, char **, char **);
++};
++
++static void *ShiroChildMain(void *arg) {
++  struct ShiroChildStart c = *(struct ShiroChildStart *)arg;
++  struct Machine *m;
++  int i;
++  free(arg);
++  unassert((g_machine = m = NewMachine(NewSystem(XED_MACHINE_MODE_LONG), 0)));
++  m->system->exec = c.exec;
++  m->system->pid = c.pid;
++  m->thread = pthread_self();
++  GilAcquire();  // (the parent holds it until fork returns)
++  ShiroAddKid(m->system);
++  --g_shiro_kids_starting;
++  ShiroRestoreFrom(m, c.snap.p, c.snap.n);
++  free(c.snap.p);
++  for (i = 0; i < 10; ++i) AddStdFd(&m->system->fds, i);
++  GilRelease();
++  Blink(m);
++  return 0;
++}
++
++static i64 ShiroForkSame(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
++  struct System *s = m->system;
++  struct ShiroChildStart *c;
++  struct ShiroSharedMap *sm;
++  pthread_attr_t attr;
++  pthread_t th;
++  i64 pid;
++  int i, rc;
++  if (!(c = (struct ShiroChildStart *)calloc(1, sizeof(*c)))) return -ENOMEM_LINUX;
++  if ((pid = KS(m, K_SYS_vfork, A12(0))) < 0) {
++    free(c);
++    return pid;
++  }
++  LOCK(&s->mmap_lock);
++  for (i = 0; i < s->nshared; ++i) ShiroShareRange(s, s->shared[i][0], s->shared[i][1]);
++  UNLOCK(&s->mmap_lock);
++  for (sm = g_shiro_maps; sm; sm = sm->next) {
++    LOCK(&s->mmap_lock);
++    ShiroShareRange(s, sm->addr, sm->size);
++    UNLOCK(&s->mmap_lock);
++  }
++  InvalidateSystem(s, true, false);
++  ResetTlb(m);
++  WjResetTlb(m);
++  if ((rc = ShiroSnapshot(m, flags, stack, ctid, &c->snap)) < 0) {
++    free(c);
++    KS(m, 62, A12(pid, 9));
++    return rc;
++  }
++  c->pid = pid;
++  c->exec = s->exec;
++  ++g_shiro_kids_starting;
++  shiro_hosted(pid);
++  pthread_attr_init(&attr);
++  pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
++  pthread_attr_setstacksize(&attr, 1 << 20);
++  rc = pthread_create(&th, &attr, ShiroChildMain, c);
++  pthread_attr_destroy(&attr);
++  if (rc) {
++    --g_shiro_kids_starting;
++    free(c->snap.p);
++    free(c);
++    KS(m, 62, A12(pid, 9));
++    return -EAGAIN_LINUX;
++  }
++  return pid;
++}
++
++_Noreturn static void ShiroInstanceChildVanish(struct Machine *m) {
++  ShiroDropKid(m->system);
++  FreeMachine(m);
++  GilRelease();
++  pthread_exit(0);
++}
++
++// exit_group of an in-instance child: the kernel ends its process; its
++// memory (shared pages by reference) goes, and the instance runs on.
++_Noreturn void ShiroInstanceChildExit(struct Machine *m, int rc) {
++  KS(m, 231, A12(rc & 255));
++  ShiroDropKid(m->system);
++  ClearChildTid(m);
++  FreeMachine(m);
++  GilRelease();
++  pthread_exit(0);
++}
++
++// the default action of a fatal signal in an in-instance child
++_Noreturn void ShiroInstanceChildKilled(struct Machine *m, int sig) {
++  u8 act[32] = {0};  // SIG_DFL
++  ShiroCall(m, 13, A12(sig, 0), act, sizeof(act), 0, false, false);
++  KS(m, 62, A12(m->system->pid, sig));
++  ShiroDropKid(m->system);
++  ClearChildTid(m);
++  FreeMachine(m);
++  GilRelease();
++  pthread_exit(0);
++}
++
++
+ static void ShiroWriteBack(struct Machine *m, struct ShiroSharedMap *s, i64 addr,
+                            i64 size) {
+   u8 *buf = (u8 *)malloc(g_shiro_chunk);
+@@ -1589,13 +1871,17 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       r = 0;
+       break;
+     case 0x039:                                                       // fork
+-      r = ShiroHasSharedMemory(m->system) ? ShiroVfork(m, 0, true) : ShiroForkReal(m, 0, 0, 0);
++      r = ShiroSameInstanceFork()          ? ShiroForkSame(m, 0, 0, 0)
++          : ShiroHasSharedMemory(m->system) ? ShiroVfork(m, 0, true)
++                                            : ShiroForkReal(m, 0, 0, 0);
+       break;
+     case 0x03A: r = ShiroVfork(m, 0, false); break;                   // vfork
+     case 0x038:                                                       // clone
+       if (!IsForkOrVfork(a)) return false;                           // threads stay Blink's
+       if (a & CLONE_VFORK_LINUX) {
+         r = ShiroVfork(m, b, false);
++      } else if (ShiroSameInstanceFork()) {
++        r = ShiroForkSame(m, a, b, d);
+       } else if (ShiroHasSharedMemory(m->system)) {
+         r = ShiroVfork(m, b, true);
+       } else {
+diff --git a/blink/syscall.c b/blink/syscall.c
+index d50f450..cc923cc 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -381,6 +381,13 @@ _Noreturn void SysExitGroup(struct Machine *m, int rc) {
+   } else {
+     THR_LOGF("calling exit(%d)", rc);
+ #ifdef __EMSCRIPTEN__
++    {
++      bool ShiroIsInstanceChild(struct Machine *);
++      _Noreturn void ShiroInstanceChildExit(struct Machine *, int);
++      bool ShiroParentExitWithKids(struct Machine *, int);
++      if (ShiroIsInstanceChild(m)) ShiroInstanceChildExit(m, rc);
++      ShiroParentExitWithKids(m, rc);
++    }
+     // The embedder tears down the whole runtime (all pthread workers) on
+     // exit, and pthread_kill() can't interrupt a worker blocked in a proxied
+     // syscall, so waiting for the other threads only hangs or trips asserts.
+-- 
+2.43.0
+
