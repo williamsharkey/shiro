@@ -3,14 +3,10 @@
  * App icons are 64x64 tiles; status icons are 16x16 and use currentColor.
  */
 
-const tile = (id: string, from: string, to: string, inner: string) =>
-  `<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>` +
-  `<linearGradient id="g-${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${from}"/><stop offset="1" stop-color="${to}"/></linearGradient>` +
-  `<linearGradient id="s-${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".28"/><stop offset=".5" stop-color="#fff" stop-opacity="0"/></linearGradient></defs>` +
-  `<rect x="3" y="3" width="58" height="58" rx="14" fill="url(#g-${id})"/>` +
-  `<rect x="3" y="3" width="58" height="58" rx="14" fill="url(#s-${id})"/>` +
-  `<rect x="3.5" y="3.5" width="57" height="57" rx="13.5" fill="none" stroke="#fff" stroke-opacity=".14"/>` +
-  inner + `</svg>`;
+// The tile (gradient, shine, hairline border) is CSS on .sd-tile; the SVG holds
+// only the glyph, so a dock icon is a handful of DOM nodes instead of a dozen
+const tile = (_id: string, from: string, to: string, inner: string) =>
+  `<span class="sd-tile" style="--t1:${from};--t2:${to}"><svg viewBox="3 3 58 58" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${inner}</svg></span>`;
 
 const mono = (text: string, size: number, color: string, y = 40) =>
   `<text x="32" y="${y}" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,monospace" font-weight="700" font-size="${size}" fill="${color}">${text}</text>`;
