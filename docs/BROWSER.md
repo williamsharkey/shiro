@@ -410,10 +410,13 @@ the web.
 
 Ordered by what the scoreboard says matters:
 
-1. JS rewriting of `location`/`origin`, or a smaller targeted version.
-2. HTTP/2.
-3. TLS 1.2 and wider algorithms (rustls/WASM).
-4. Multiplexed relay.
-5. Persisting the HTTP cache (none yet; every visit refetches).
-6. Popups with `opener` (OAuth).
-7. Downloads.
+1. **A browser-shaped TLS client** (rustls/WASM: X25519, ALPN, GREASE, more
+   suites), plus **HTTP/2**. Fingerprinting bot defenses (Reddit, Cloudflare
+   challenges) block today's ClientHello, and HTTP/1.1 caps each origin at
+   6 parallel requests.
+2. **`location`/`origin` rewriting** (a targeted JS rewrite, or a proxy over
+   `location` for scripts that read it). Sign-in pages that check their own
+   hostname (Microsoft's) break without it.
+3. **A multiplexed relay** (Wisp-like), or browse-specific relay limits.
+4. **An HTTP cache.** There is none yet, so every visit refetches.
+5. Popups with `opener` (OAuth), downloads, and the per-instance storage tag.
