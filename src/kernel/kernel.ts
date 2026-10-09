@@ -17,7 +17,7 @@ import { packageShadows, pkgOwnShadows, packageArgsForPath, PKG_BIN_DIR } from '
 import * as A from './abi';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
-  RegularFile, DirFile, openInode, openInodeSync, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, flushInode, inodeStat, hasOpenInodes,
+  RegularFile, DirFile, openInode, openInodeSync, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
   shareInodeNumber, forgetInodeNumber,
 } from './fd';
 import { createPipe } from './pipe';
@@ -1716,11 +1716,29 @@ export class Kernel {
             p = f.path;
             mode = args[1];
           } else if (nr === A.SYS_chmod) { p = at(A.AT_FDCWD, 0, args[0]); mode = args[1]; }
-          else { p = at(args[0], 0, args[1]); mode = args[2]; }
+          else if (args[1] === 0 && args[0] >= 0) {
+            // fchmodat2(fd, "", mode, AT_EMPTY_PATH) (Blink passes it without
+            // the flags): systemd's fchmod_opath on an O_PATH descriptor
+            const f = file(args[0]);
+            if (!f) return -A.EBADF;
+            if (!f.path) return -A.EINVAL;
+            p = f.path;
+            mode = args[2];
+          } else { p = at(args[0], 0, args[1]); mode = args[2]; }
           if (typeof p === 'number') return p;
-          const real = await fs().realpath(p);
+          // chmod("/proc/self/fd/N"): the file the descriptor has open (glibc's
+          // and systemd's fallback for O_PATH descriptors)
+          let path: string = p;
+          for (let hops = 0; hops < 8 && (path.startsWith('/proc/') || path.startsWith('/dev/fd/')); hops++) {
+            const fdm = /^\/dev\/fd\/(\d+)$/.exec(path);
+            const link: string | undefined = fdm ? proc.fds.get(Number(fdm[1]))?.path : this.procfs.linkTarget(proc, path);
+            if (!link || link === path) break;
+            path = link;
+          }
+          const real = await fs().realpath(path);
           await flushInode(fs(), real);
           await fs().chmod(real, mode & 0o7777);
+          setInodeMode(fs(), real, mode);
           return 0;
         }
         case A.SYS_utimensat: {

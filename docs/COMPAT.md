@@ -303,6 +303,23 @@ sha256-checked against `manifest.json`):
   `sched_getaffinity`, `posix_spawn*` (with `addchdir`), `mmap`/
   `mprotect`/`madvise` (JSC's JIT and its large virtual reservations).
 
+Where Shiro intercepts it today (so `claude` at the prompt never reaches a
+native binary):
+
+- `src/commands/claude.ts`: the `claude` builtin runs the pinned npm build
+  (`CLAUDE_CODE_VERSION`, pure JS) through Shiro's `node`, and answers
+  `claude install|update|upgrade` with a "pinned" message. Builtins win over
+  PATH lookup, so a binary at `~/.local/bin/claude` is not reached by name.
+- `src/commands/fetch.ts`: `curl`/`fetch` of `claude.ai/install.sh` returns
+  a stand-in script that runs `npm install -g` of that package instead of
+  the real installer.
+- To run the native ELF deliberately today, invoke it by absolute or
+  relative path (`/home/user/.local/bin/claude`, `./claude`): a path that
+  is not under `/bin`, `/usr/bin` or `/usr/local/bin` goes to the ELF loader
+  (Blink), not to the builtin. Proposed opt-in: `claude --native` or
+  `CLAUDE_NATIVE=1` making the builtin exec the native binary when one is
+  installed, and `CLAUDE_NATIVE=1` letting `install.sh` through.
+
 To try it (once allowed): put the binary and the five glibc libraries plus
 the loader in the VFS (Blink loads the ELF interpreter from SHIROFS), then
 run `claude --version` and `claude -p "say hi"` with a dummy key, with and

@@ -6,6 +6,111 @@
       "command": "shiro-apt-method",
       "stub": true,
       "why": "Browsers can't open TCP connections: Shiro's transport fetches from the page's same-origin mirror. apt still verifies the signed InRelease and every hash."
+    },
+    "/usr/bin/base64": {
+      "default": "shiro",
+      "command": "base64",
+      "why": "Shiro's base64 matches Debian's on the overlay cases (2/2, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+    },
+    "/usr/bin/basename": {
+      "default": "shiro",
+      "command": "basename",
+      "why": "Shiro's basename matches Debian's on the overlay cases (3/3, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+    },
+    "/usr/bin/cut": {
+      "default": "shiro",
+      "command": "cut",
+      "why": "Shiro's cut matches Debian's on the overlay cases (3/3, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+    },
+    "/usr/bin/diff": {
+      "default": "shiro",
+      "command": "diff",
+      "why": "Shiro's diff matches Debian's on the overlay cases (2/2, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+    },
+    "/usr/bin/dirname": {
+      "default": "shiro",
+      "command": "dirname",
+      "why": "Shiro's dirname matches Debian's on the overlay cases (3/3, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+    },
+    "/usr/bin/expr": {
+      "default": "shiro",
+      "command": "expr",
+      "why": "Shiro's expr matches Debian's on the overlay cases (4/4, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+    },
+    "/usr/bin/find": {
+      "default": "shiro",
+      "command": "find",
+      "why": "Shiro's find matches Debian's on the overlay cases (4/4, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+    },
+    "/usr/bin/grep": {
+      "default": "shiro",
+      "command": "grep",
+      "why": "Shiro's grep matches Debian's on the overlay cases (11/11, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+    },
+    "/usr/bin/head": {
+      "default": "shiro",
+      "command": "head",
+      "why": "Shiro's head matches Debian's on the overlay cases (4/4, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+    },
+    "/usr/bin/ls": {
+      "default": "shiro",
+      "command": "ls",
+      "why": "Shiro's ls matches Debian's on the overlay cases (3/3, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+    },
+    "/usr/bin/md5sum": {
+      "default": "shiro",
+      "command": "md5sum",
+      "why": "Shiro's md5sum matches Debian's on the overlay cases (2/2, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+    },
+    "/usr/bin/od": {
+      "default": "shiro",
+      "command": "od",
+      "why": "Shiro's od matches Debian's on the overlay cases (2/2, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+    },
+    "/usr/bin/paste": {
+      "default": "shiro",
+      "command": "paste",
+      "why": "Shiro's paste matches Debian's on the overlay cases (2/2, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+    },
+    "/usr/bin/sed": {
+      "default": "shiro",
+      "command": "sed",
+      "why": "Shiro's sed matches Debian's on the overlay cases (9/9, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+    },
+    "/usr/bin/seq": {
+      "default": "shiro",
+      "command": "seq",
+      "why": "Shiro's seq matches Debian's on the overlay cases (5/5, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+    },
+    "/usr/bin/sha256sum": {
+      "default": "shiro",
+      "command": "sha256sum",
+      "why": "Shiro's sha256sum matches Debian's on the overlay cases (2/2, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+    },
+    "/usr/bin/sort": {
+      "default": "shiro",
+      "command": "sort",
+      "why": "Shiro's sort matches Debian's on the overlay cases (6/6, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+    },
+    "/usr/bin/tail": {
+      "default": "shiro",
+      "command": "tail",
+      "why": "Shiro's tail matches Debian's on the overlay cases (4/4, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+    },
+    "/usr/bin/tee": {
+      "default": "shiro",
+      "command": "tee",
+      "why": "Shiro's tee matches Debian's on the overlay cases (2/2, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+    },
+    "/usr/bin/uniq": {
+      "default": "shiro",
+      "command": "uniq",
+      "why": "Shiro's uniq matches Debian's on the overlay cases (4/4, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
+    },
+    "/usr/bin/xargs": {
+      "default": "shiro",
+      "command": "xargs",
+      "why": "Shiro's xargs matches Debian's on the overlay cases (2/2, debian-overlay.test.ts) and runs natively instead of under the x86 engine."
     }
   }
 }

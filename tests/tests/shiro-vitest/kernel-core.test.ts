@@ -326,6 +326,30 @@ describe('kernel processes', () => {
     await kernel.exit(proc, 0);
   });
 
+  it('chmod of a file that is still open: fchmod, /proc/self/fd/N, fchmodat2 AT_EMPTY_PATH (systemd-sysusers)', async () => {
+    const proc = kernel.spawn({ path: 'holder', cwd: '/tmp', run: () => new Promise<number>(() => {}) });
+    const enc = new TextEncoder();
+    const call = (nr: number, a: number[], path = '') => {
+      const data = new Uint8Array(4096);
+      data.set(enc.encode(path));
+      return kernel.syscall(proc, nr, a, data);
+    };
+    const mode = async () => ((await kernel.statPath(proc, '/tmp/.#group', true)) as { mode: number }).mode & 0o7777;
+    const f = (await kernel.open(proc, '.#group', A.O_CREAT | A.O_RDWR | A.O_EXCL, 0o600)) as OpenFile;
+    const fd = proc.fds.alloc(f);
+    expect(await call(A.SYS_fchmod, [fd, 0o644])).toBe(0);
+    await f.write(enc.encode('root:x:0:\n')); // a write-back pending: stat answers from the open inode
+    expect(await mode()).toBe(0o644);
+    const procFd = `/proc/self/fd/${fd}`;
+    expect(await call(A.SYS_chmod, [procFd.length, 0o640], procFd)).toBe(0);
+    expect(await mode()).toBe(0o640);
+    expect(await call(A.SYS_fchmodat, [fd, 0, 0o604])).toBe(0);
+    expect(await mode()).toBe(0o604);
+    await f.close();
+    expect((await fs.stat('/tmp/.#group')).mode & 0o7777).toBe(0o604);
+    await kernel.exit(proc, 0);
+  });
+
   it('open: files, O_CREAT|O_EXCL, O_APPEND, O_TRUNC, directories, /dev', async () => {
     const proc = kernel.spawn({ path: 'holder', cwd: '/tmp', run: () => new Promise<number>(() => {}) });
     const f = await kernel.open(proc, 'kopen.txt', A.O_CREAT | A.O_RDWR | A.O_TRUNC);
