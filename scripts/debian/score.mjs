@@ -159,23 +159,56 @@ async function smoke(m, pkg) {
   return { ok: true, how: 'installed (data/config only)', ms: 0 };
 }
 
-async function scoreOne(m, p, info) {
-  const t0 = Date.now();
-  const inst = await m.run(`sudo apt-get install -y ${p.name} 2>&1`, INSTALL_TIMEOUT_S);
-  const status = (await m.run(`dpkg-query -W -f='\${Status}' ${p.name} 2>/dev/null`)).out.trim();
-  const installed = status === 'install ok installed';
-  const r = { name: p.name, rank: p.rank, version: info?.version, installMs: inst.ms, at: new Date().toISOString() };
-  r.already = /is already the newest version/.test(inst.out);
-  if (!installed) {
-    Object.assign(r, { result: 'fail', stage: 'install', category: categorize(inst.out), error: firstError(inst.out) });
-    writeFileSync(join(OUT_DIR, `${p.name}.log`), inst.out);
-    return r;
+const installedStatus = async (m, names) => {
+  const out = (await m.run(`dpkg-query -W -f='\${Package} \${Status}\\n' ${names.join(' ')} 2>/dev/null`)).out;
+  const ok = new Set();
+  for (const l of out.split('\n')) { const [n, ...st] = l.trim().split(' '); if (st.join(' ') === 'install ok installed') ok.add(n.replace(/:.*$/, '')); }
+  return ok;
+};
+
+/**
+ * Install a batch with one apt run (most of the cost is apt loading its cache
+ * and dpkg reading its database); a failed batch is retried one package at a
+ * time so each failure lands on the right package. Then smoke each.
+ */
+async function scoreBatch(m, batch, onResult) {
+  const names = batch.map((b) => b.p.name);
+  const before = await installedStatus(m, names);
+  const todo = batch.filter((b) => !before.has(b.p.name));
+  const logs = new Map();
+  const timing = new Map();
+  if (todo.length) {
+    const r = await m.run(`sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ${todo.map((b) => b.p.name).join(' ')} 2>&1`, INSTALL_TIMEOUT_S);
+    for (const b of todo) { logs.set(b.p.name, r.out); timing.set(b.p.name, Math.round(r.ms / todo.length)); }
+    if (r.code !== 0 && todo.length > 1) {
+      await m.run('sudo dpkg --configure -a 2>&1; sudo DEBIAN_FRONTEND=noninteractive apt-get -f install -y 2>&1', 1200);
+      for (const b of todo) {
+        if ((await installedStatus(m, [b.p.name])).has(b.p.name)) continue;
+        const one = await m.run(`sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ${b.p.name} 2>&1`, INSTALL_TIMEOUT_S);
+        logs.set(b.p.name, one.out); timing.set(b.p.name, one.ms);
+        if (one.code !== 0) await m.run('sudo dpkg --configure -a 2>&1; sudo DEBIAN_FRONTEND=noninteractive apt-get -f install -y 2>&1', 1200);
+      }
+    }
   }
-  const s = await smoke(m, p.name);
-  Object.assign(r, { result: s.ok ? 'pass' : 'fail', stage: s.ok ? 'smoke' : 'smoke', smoke: s.how, smokeMs: s.ms, sample: s.sample });
-  if (!s.ok) Object.assign(r, { category: s.category, error: s.error });
-  r.totalMs = Date.now() - t0;
-  return r;
+  const after = await installedStatus(m, names);
+  let broken = false;
+  for (const { p, info } of batch) {
+    const t0 = Date.now();
+    const r = { name: p.name, rank: p.rank, version: info?.version, installMs: timing.get(p.name) ?? 0, already: before.has(p.name), at: new Date().toISOString() };
+    if (!after.has(p.name)) {
+      const log = logs.get(p.name) ?? '';
+      Object.assign(r, { result: 'fail', stage: 'install', category: categorize(log), error: firstError(log) });
+      writeFileSync(join(OUT_DIR, `${p.name}.log`), log);
+      broken = true;
+    } else {
+      const sm = await smoke(m, p.name);
+      Object.assign(r, { result: sm.ok ? 'pass' : 'fail', stage: 'smoke', smoke: sm.how, smokeMs: sm.ms, sample: sm.sample });
+      if (!sm.ok) Object.assign(r, { category: sm.category, error: sm.error });
+    }
+    r.totalMs = Date.now() - t0 + r.installMs;
+    onResult(r);
+  }
+  return broken;
 }
 
 async function main() {
@@ -197,27 +230,33 @@ async function main() {
     save();
     console.log(`${queue.length} packages to score with ${WORKERS} workers`);
     const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || '/opt/pw-browsers/chromium', args: ['--no-sandbox', '--js-flags=--max-old-space-size=8192'] });
+    const BATCH = Number(opt('--batch', '8'));
     let next = 0;
     await Promise.all(Array.from({ length: Math.min(WORKERS, queue.length) }, async (_, w) => {
       const log = (s) => console.log(`[w${w}] ${s}`);
       let m = null;
       while (next < queue.length) {
-        const { p, info } = queue[next++];
+        const batch = queue.slice(next, next + BATCH);
+        next += batch.length;
         try {
           m ??= await newMachine(browser, base, log);
-          const r = await scoreOne(m, p, info);
-          results[p.name] = r;
-          save();
-          log(`#${p.rank} ${p.name}: ${r.result}${r.category ? ` [${r.category}] ${r.error ?? ''}` : ` (${r.smoke})`} ${Math.round((r.totalMs ?? r.installMs) / 1000)}s`);
-          // A broken dpkg state would fail everything after it: start over
-          if (r.result === 'fail' && r.stage === 'install') {
-            const fix = await m.run('sudo dpkg --configure -a 2>&1; sudo apt-get -f install -y 2>&1', 1200);
-            if (fix.code) { await m.context.close().catch(() => {}); m = null; }
+          const broken = await scoreBatch(m, batch, (r) => {
+            results[r.name] = r;
+            save();
+            log(`#${r.rank} ${r.name}: ${r.result}${r.category ? ` [${r.category}] ${r.error ?? ''}` : ` (${r.smoke})`} ${Math.round(r.totalMs / 1000)}s`);
+          });
+          // A dpkg that can't recover would fail everything after it: start over
+          if (broken) {
+            const fix = await m.run('sudo dpkg --configure -a 2>&1; sudo DEBIAN_FRONTEND=noninteractive apt-get -f install -y 2>&1', 1200);
+            if (fix.code) { log('dpkg state broken; new machine'); await m.context.close().catch(() => {}); m = null; }
           }
         } catch (e) {
-          results[p.name] = { name: p.name, rank: p.rank, version: info.version, result: 'error', category: 'harness', error: String(e?.message ?? e).slice(0, 300) };
+          for (const { p, info } of batch) {
+            if (results[p.name]?.at && results[p.name].version === info.version && results[p.name].result !== 'error') continue;
+            results[p.name] = { name: p.name, rank: p.rank, version: info.version, result: 'error', category: 'harness', error: String(e?.message ?? e).slice(0, 300) };
+          }
           save();
-          log(`#${p.rank} ${p.name}: harness error ${e?.message ?? e}`);
+          log(`batch ${batch[0].p.name}..: harness error ${e?.message ?? e}`);
           if (m) await m.context.close().catch(() => {});
           m = null;
         }

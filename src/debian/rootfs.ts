@@ -308,6 +308,9 @@ export async function writeEngineWorkarounds(fs: FileSystem): Promise<void> {
     "// Blink can't mremap() a growing anonymous map yet, so apt's cache never",
     '// grows: start it big enough for trixie + updates + security (~45 MB used).',
     'APT::Cache-Start "150000000";',
+    "// apt's pty for dpkg's output: its child's ioctl(TIOCSCTTY) is refused in",
+    '// some runs (not reproduced outside apt yet); dpkg output goes straight through.',
+    'Dpkg::Use-Pty "false";',
     '',
   ].join('\n'));
 }

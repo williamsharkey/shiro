@@ -130,13 +130,18 @@ Debian's.
 ## Known gaps
 
 - Blink (wasm build) places `mmap`s directly above the program break and
-  lets `brk` grow over them; glibc's heap then overwrote apt's package cache.
-  Until the Blink fix lands, Debian mode exports
-  `GLIBC_TUNABLES=glibc.malloc.top_pad=268435456` (the heap reserves ahead),
-  and `debian install` writes `/etc/apt/apt.conf.d/91shiro-engine` with
-  `APT::Cache-Start "150000000"` because Blink's `mremap(MREMAP_MAYMOVE)` of
-  a growing anonymous map fails. Both are reported to the Blink owners with
-  repros.
-- `getgroups(0, NULL)` returns EINVAL under Blink (`id` warns).
+  lets `brk` grow over them; glibc's heap then overwrote apt's package cache
+  ("Ran out of allocation pools", or SIGSEGV in
+  `pkgDebianIndexFile::FindInCache`). Until the Blink fix lands (reported to
+  unix/perf-blink with a repro), Debian mode exports
+  `GLIBC_TUNABLES=glibc.malloc.top_pad=268435456` (the heap reserves ahead)
+  and `debian install` writes `/etc/apt/apt.conf.d/91shiro-engine`.
+- `91shiro-engine` also sets `APT::Cache-Start "150000000"` (written when
+  Blink's `mremap` was a stub; patch 0027 implements it, so this can go once
+  measured) and `Dpkg::Use-Pty "false"`: in apt runs, the child's
+  `ioctl(TIOCSCTTY)` on its pty is sometimes refused with EPERM. The same
+  sequence (fork, close master, setsid, open slave, TIOCSCTTY) works
+  standalone, with and without a shared mapping.
 - One guest thread runs at a time (Blink's GIL); apt and dpkg are
-  interpreted/JIT-compiled x86 and are 5–20x slower than native.
+  interpreted/JIT-compiled x86. `apt-get update` takes about 2 minutes
+  (parsing trixie's 56 MB index), installing a small package about a minute.
