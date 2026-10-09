@@ -581,6 +581,41 @@ A/B, 3 runs each (isolated): `spawn_wait.wasm` 1.45 → 1.57 ms (noise),
 returning Worker is faster than starting one. RSS over 500 spawns stays
 231–234 MiB with 2 Workers.
 
+### unix/perf-kernel, round 6: after compat-tools' kernel additions
+
+Merged unix/integration c5603db (compat-tools: procfs, AF_UNIX sockets,
+syscall time accounting, symlinks followed in every path component). Its
+quick run vs bd9fd87 showed `wasm.ripgrep.tree` 124 → 166 ms and slower
+kernel paths. Profile of rg after the merge: `_getCached` + `lookupCached`
++ the kernel's `normalize` ≈ 20 ms per run. Every lookup now walked each
+path component, building and hashing a string per step. Also,
+`kernel.syscall` gained an `async` wrapper (one more await per call).
+
+- `FileSystem.lookupCached` memoizes each directory's canonical path, so a
+  lookup costs one map hit plus the last component. The memo is cleared when
+  a symlink is written or anything is deleted or renamed (the only changes
+  that can move a canonical path), and a test covers retargeting a symlinked
+  directory.
+- The kernel's `normalize` returns already-normal paths as they are.
+- `kernel.syscall` keeps the accounting (`inSyscall`, `kernelMs`) but
+  returns the inner promise, so the bookkeeping adds no hop.
+- The pool fix from round 5 (not in c5603db) brings `workers_left` back to 2.
+
+Interleaved A/B against c5603db built here, 3 runs each (medians of all
+samples): `wasm.ripgrep.tree` 263 → 231 ms, `syscall_inpage` 1.20 → 0.96 µs
+(isolated) and 1.02 → 0.92 µs (non-isolated), `epoll_wakeup` 56 → 50 µs,
+`file_read` 1678 → 2102 MB/s, `pipe_throughput` 753 → 1137 MB/s,
+`spawn_throughput.wasm` 345 → 745 proc/s (round 5). rg in one page, 12 runs,
+median of the last 8: base 206 and 163 ms, this branch 159 and 154 ms.
+Mixed within noise: `pipe_throughput_512b` 109 → 81 MB/s (base runs
+84–125, new 72–107), non-isolated `file_write` 148 → 121 MB/s (base 145–160,
+new 107–160).
+
+`perf-kernel-r6-quick.json` was recorded while the container was slow
+(untouched metrics: `shell.loop_1000` +92%, x86 +50%, boot +40% against
+c5603db's file), so its absolute numbers are not comparable with the
+committed integration runs. Use the A/B above.
+
 ## Results
 
 <!-- bench:table:begin -->

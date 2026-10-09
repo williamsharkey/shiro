@@ -511,6 +511,22 @@ describe('kernel processes', () => {
     kernel.kill(proc.pid, A.SIGKILL);
   });
 
+  it('lookupCached follows symlinked directories and notices when the link changes', async () => {
+    await fs.mkdir('/tmp/kcd/a', { recursive: true });
+    await fs.mkdir('/tmp/kcd/b', { recursive: true });
+    await fs.writeFile('/tmp/kcd/a/f', 'A');
+    await fs.writeFile('/tmp/kcd/b/f', 'BB');
+    await fs.symlink('/tmp/kcd/a', '/tmp/kcd/l');
+    await fs.readdir('/tmp/kcd'); // loads the key index
+    expect(fs.lookupCached('/tmp/kcd/l/f')?.path).toBe('/tmp/kcd/a/f');
+    expect(fs.lookupCached('/tmp/kcd/l/f')?.node.size).toBe(1);
+    await fs.unlink('/tmp/kcd/l');
+    expect(fs.lookupCached('/tmp/kcd/l/f')).toBeNull();
+    await fs.symlink('/tmp/kcd/b', '/tmp/kcd/l');
+    expect(fs.lookupCached('/tmp/kcd/l/f')?.path).toBe('/tmp/kcd/b/f');
+    expect((await fs.stat('/tmp/kcd/l/f')).size).toBe(2);
+  });
+
   it('readdir keeps its directory index current across create, unlink and rename', async () => {
     await fs.mkdir('/tmp/kidx/sub', { recursive: true });
     await fs.writeFile('/tmp/kidx/one', '1');
