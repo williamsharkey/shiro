@@ -474,12 +474,51 @@ export class FileSystem {
   private _flushScheduled = false;
   /** First error from a failed background flush, reported by the next sync(). */
   private _flushError: unknown = null;
+  /**
+   * The browser refused a commit for lack of space (QuotaExceededError). The
+   * failed batch stays queued (nothing of it reached IndexedDB: one
+   * transaction), and writes that need more space fail with ENOSPC until a
+   * commit goes through: the user deletes something and the next flush
+   * carries the deletes and the queued writes together.
+   */
+  private _full = false;
+  private _fullListeners: Set<(full: boolean) => void> = new Set();
+  /** Bytes written this page load, for onBigWrite. */
+  private _bytesWritten = 0;
+  private _bigWrite: { bytes: number; fn: () => void } | null = null;
   private _changeListeners: Set<FSChangeListener> = new Set();
   private virtualProviders: VirtualFSProvider[] = [new DevProvider(), new ProcProvider(), new VarLogProvider()];
 
   /** Mount a virtual provider (e.g. /dom, src/dom-fs.ts); consulted after the built-in ones. */
   addVirtualProvider(vp: VirtualFSProvider): void {
     if (!this.virtualProviders.includes(vp)) this.virtualProviders.push(vp);
+  }
+
+  /** Browser storage is full (see _full). */
+  get storageFull(): boolean { return this._full; }
+
+  /** Called with true when a commit fails for lack of space, false once one succeeds again. */
+  onStorageFull(fn: (full: boolean) => void): () => void {
+    this._fullListeners.add(fn);
+    return () => { this._fullListeners.delete(fn); };
+  }
+
+  /** Call `fn` once, when this page load has written `bytes` (asking for persistent storage). */
+  onBigWrite(bytes: number, fn: () => void): void { this._bigWrite = { bytes, fn }; }
+
+  private _setFull(full: boolean): void {
+    if (this._full === full) return;
+    this._full = full;
+    for (const fn of this._fullListeners) { try { fn(full); } catch {} }
+  }
+
+  private static _isQuotaError(e: unknown): boolean {
+    const name = (e as any)?.name;
+    return name === 'QuotaExceededError' || (e as any)?.code === 22 || /quota/i.test(String((e as any)?.message));
+  }
+
+  private _enospc(path?: string): Error {
+    return fsError('ENOSPC', `ENOSPC: no space left on device (browser storage is full)${path ? `, write '${path}'` : ''}`);
   }
 
   /** Subscribe to filesystem change events. Returns unsubscribe function. */
@@ -541,7 +580,8 @@ export class FileSystem {
         if (content.length !== now.size) throw fsError('EIO', `EIO: lazy file '${path}' is ${content.length} bytes, expected ${now.size}`);
         const filled: FSNode = { ...now, content };
         delete filled.lazy;
-        this._putNow(filled);
+        // Storage full: read it all the same, fetching again next time
+        if (!this._full) this._putNow(filled);
         return filled;
       }).finally(() => this._materializing.delete(path));
       this._materializing.set(path, p);
@@ -655,6 +695,15 @@ export class FileSystem {
   /** Queue a put (node) or delete (null) for the next flush. */
   private _queue(path: string, node: FSNode | null): void {
     this._dirty.set(path, node);
+    if (this._full) {
+      // Retry the failed batch once a burst of deletes has freed something,
+      // not after every write (each retry clones the whole batch)
+      if (!this._flushScheduled && !this._flushing) {
+        this._flushScheduled = true;
+        setTimeout(() => { this._flushScheduled = false; void this._flush(); }, 250);
+      }
+      return;
+    }
     if (!this._flushScheduled && !this._flushing) {
       this._flushScheduled = true;
       scheduleMacrotask(() => { this._flushScheduled = false; void this._flush(); });
@@ -672,7 +721,17 @@ export class FileSystem {
         this._inflight = batch;
         try {
           await this._commit(batch, durability);
+          this._setFull(false);
         } catch (e) {
+          if (FileSystem._isQuotaError(e)) {
+            // Requeue it under the writes made meanwhile (newer wins) and
+            // stop: the next flush is a retry, after the user frees space
+            for (const [p, n] of this._dirty) batch.set(p, n);
+            this._dirty = batch;
+            if (!this._full) console.error('[fs] browser storage is full; writes fail with ENOSPC until space is freed:', e);
+            this._setFull(true);
+            break;
+          }
           // Keep the cache (the session goes on with what the user wrote) but
           // report it; the next sync() rejects with it.
           console.error('[fs] IndexedDB write failed:', e);
@@ -720,17 +779,19 @@ export class FileSystem {
   /** Start committing queued writes now; resolves when the queue is empty
    *  (relaxed durability). For writers that pace themselves by the commits. */
   flushed(): Promise<void> {
-    return this._flush();
+    return this._flush().then(() => { if (this._full) throw this._enospc(); });
   }
 
   /**
    * Wait until every write made so far is committed to IndexedDB (strict
-   * durability). Rejects with the error of a failed background flush, once.
+   * durability). Rejects with the error of a failed background flush, once,
+   * and with ENOSPC while storage is full.
    */
   async sync(): Promise<void> {
     while (this._flushing || this._dirty.size > 0) {
       if (this._flushing) await this._flushing;
       else await this._flush('strict');
+      if (this._full && !this._flushing) throw this._enospc();
     }
     if (this._flushError) {
       const e = this._flushError;
@@ -920,8 +981,8 @@ export class FileSystem {
     return this._canon(path, true);
   }
 
-  private async _put(node: FSNode): Promise<void> {
-    this._putNow(node);
+  private async _put(node: FSNode, move = false): Promise<void> {
+    this._putNow(node, move);
   }
 
   private async _delete(path: string): Promise<void> {
@@ -929,7 +990,16 @@ export class FileSystem {
   }
 
   /** Synchronous part of a put: cache + key index now, IndexedDB on the next flush. */
-  private _putNow(node: FSNode): void {
+  private _putNow(node: FSNode, move = false): void {
+    const prev = this.cache.get(node.path);
+    const grow = (node.content?.byteLength ?? 0) - (prev?.content?.byteLength ?? 0);
+    // A new node or more bytes needs space; a rename (move) moves what is stored
+    if (this._full && !move && (prev === undefined || grow > 0)) throw this._enospc(node.path);
+    if (grow > 0 && this._bigWrite && (this._bytesWritten += grow) >= this._bigWrite.bytes) {
+      const { fn } = this._bigWrite;
+      this._bigWrite = null;
+      try { fn(); } catch {}
+    }
     if (node.type === 'symlink' || this.cache.get(node.path)?.type === 'symlink') this._canonDirs.clear();
     this.cache.set(node.path, node);
     this._noteKey(node.path, true);
@@ -1284,7 +1354,7 @@ export class FileSystem {
    * and the file was lost). Falls back to mkdir() otherwise.
    */
   mkdirNow(path: string, options?: { recursive?: boolean }): Promise<void> {
-    if (this.virtualProviders.some((vp) => vp.handles(path))) return this.mkdir(path, options);
+    if (this._full || this.virtualProviders.some((vp) => vp.handles(path))) return this.mkdir(path, options);
     const parts = path.split('/').filter(Boolean);
     const made: string[] = [];
     let current = '';
@@ -1358,6 +1428,7 @@ export class FileSystem {
    * callers (node's fs.writeFileSync of binary data) that read the file right back.
    */
   writeNow(path: string, content: Uint8Array): Promise<void> {
+    if (this._full) return this.writeFile(path, content);
     const prev = this.cache.get(path);
     const now = Date.now();
     this.cache.set(path, {
@@ -1444,7 +1515,7 @@ export class FileSystem {
           const child = await this._get(key);
           if (child) {
             const newChildPath = newPath + key.slice(oldPath.length);
-            await this._put({ ...child, path: newChildPath });
+            await this._put({ ...child, path: newChildPath }, true);
             await this._delete(key);
           }
         }
@@ -1453,7 +1524,7 @@ export class FileSystem {
       // Prevent renaming a file over a directory
       const existing = await this._get(newPath);
       if (existing?.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, rename '${newPath}'`);
-      await this._put({ ...node, path: newPath, ctime: Date.now() }); // rename keeps mtime (rsync -a, make)
+      await this._put({ ...node, path: newPath, ctime: Date.now() }, true); // rename keeps mtime (rsync -a, make)
       await this._delete(oldPath);
     }
     this._emitChange('rename', oldPath, newPath);

@@ -83,6 +83,6 @@ export async function aptStoreProgram(proc: Process, kernel: Kernel): Promise<nu
       await fail(`${src}: ${e?.message ?? e}`);
     }
   }
-  await fs.flushed();
+  await fs.flushed().catch(() => {}); // storage full: the writes above already reported ENOSPC
   return 0;
 }
