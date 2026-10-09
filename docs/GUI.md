@@ -226,9 +226,11 @@ Where the time went, and what changed:
 `xserver text dom|overlay` shows core X text (ImageText/PolyText) as
 positioned `<span>`s over the window instead of (or over) glyph pixels:
 sharp, selectable with Alt + drag, and visible to assistive tech. It works
-for Xlib/Xaw apps (xterm, xcalc, xedit); GTK, Qt and FLTK send text as
-pixels. Design note, measurements and next steps:
-[DOM-RENDERING.md](DOM-RENDERING.md).
+for Xlib/Xaw apps (xterm, xcalc, xedit). GTK, Qt and FLTK send text as
+pixels; GTK 2/3 apps report theirs through `libshiro-text-hook.so`
+(preloaded in these modes) as a transparent overlay, so L3afpad's and
+Mousepad's text is selectable and accessible with no visual change. Design
+note, measurements and next steps: [DOM-RENDERING.md](DOM-RENDERING.md).
 
 ### Window hosts (`src/gui/`)
 
