@@ -236,7 +236,9 @@ export const ls: Command = {
     if (!derefSet && !dirsOnly && !long && classify !== 'all') deref = 'cmdline';
     const locale = ctx.env.LC_ALL || ctx.env.LC_COLLATE || ctx.env.LANG || '';
     const cLocale = locale === 'C' || locale === 'POSIX' || locale.startsWith('C.');
-    const nameCmp = (x: string, y: string) => (cLocale ? (x < y ? -1 : x > y ? 1 : 0) : x.localeCompare(y));
+    // A Collator with default locale and options orders exactly like localeCompare(y), without per-call setup
+    const collate = cLocale ? null : new Intl.Collator().compare;
+    const nameCmp = (x: string, y: string) => (collate ? collate(x, y) : x < y ? -1 : x > y ? 1 : 0);
     const fs = ctx.fs;
     const now = Date.now();
     let status = 0;

@@ -105,6 +105,9 @@ async function findWasm(kernel: Kernel, proc: Process, path: string): Promise<{ 
     }
   }
   for (const p of candidates) {
+    // A path known to be missing: skip it without stat()'s ENOENT (an Error
+    // per PATH entry made every builtin spawn pay for six exceptions)
+    if (fs.lookupCached?.(p) === null) continue;
     let image: Uint8Array;
     try {
       const st = await fs.stat(p);

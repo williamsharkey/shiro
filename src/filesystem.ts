@@ -681,6 +681,11 @@ export class FileSystem {
    * the walk; the rest is appended unchanged (ENOENT comes later).
    */
   private async _canon(path: string, followLast: boolean, hops = { n: 0 }): Promise<string> {
+    // Usually every component is in memory: walk it without an await per component
+    if (hops.n === 0) {
+      const fast = this._canonCached(path, followLast, { n: 0 });
+      if (fast !== undefined) return fast;
+    }
     const parts = path.split('/').filter(Boolean);
     let cur = '';
     for (let i = 0; i < parts.length; i++) {
@@ -701,9 +706,35 @@ export class FileSystem {
     return cur || '/';
   }
 
+  /** _canon from memory alone; undefined when a component needs IndexedDB (or on a loop, which _canon reports). */
+  private _canonCached(path: string, followLast: boolean, hops: { n: number }): string | undefined {
+    const parts = path.split('/').filter(Boolean);
+    let cur = '';
+    for (let i = 0; i < parts.length; i++) {
+      const next = `${cur}/${parts[i]}`;
+      if (parts[i] === '.' || parts[i] === '..') {
+        cur = this.resolvePath(next, '/');
+        continue;
+      }
+      if (i === parts.length - 1 && !followLast) return next;
+      const node = this._getCached(next);
+      if (node === undefined) return undefined;
+      if (!node) return next + (i < parts.length - 1 ? '/' + parts.slice(i + 1).join('/') : '');
+      if (node.type !== 'symlink') { cur = next; continue; }
+      if (++hops.n > 40) return undefined;
+      const target = node.symlinkTarget || new TextDecoder().decode(node.content!);
+      const c = this._canonCached(target.startsWith('/') ? target : this.resolvePath(target, cur || '/'), true, hops);
+      if (c === undefined) return undefined;
+      cur = c === '/' ? '' : c;
+    }
+    return cur || '/';
+  }
+
   /** _get from memory: the node, null when it surely doesn't exist, undefined when only IndexedDB knows. */
   private _getCached(path: string): FSNode | null | undefined {
-    if (this.cache.has(path)) return this.cache.get(path) ?? null;
+    const hit = this.cache.get(path); // one lookup: misses (cached as undefined) are the rare case
+    if (hit) return hit;
+    if (this.cache.has(path)) return null;
     if (this._allKeys && !this._allKeys.has(path)) return null;
     return undefined;
   }
@@ -1014,7 +1045,9 @@ export class FileSystem {
     for (const vp of this.virtualProviders) {
       if (vp.handles(path)) { const s = vp.stat(path); if (s) return s; }
     }
-    const node = await this._get(await this._canon(path, true));
+    const c = this._canonCached(path, true, { n: 0 });
+    const known = c === undefined ? undefined : this._getCached(c);
+    const node = known !== undefined ? known : await this._get(await this._canon(path, true));
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, stat '${path}'`);
     return makeStat(node);
   }
@@ -1023,7 +1056,9 @@ export class FileSystem {
     for (const vp of this.virtualProviders) {
       if (vp.handles(path)) { const s = vp.stat(path); if (s) return s; }
     }
-    const node = await this._get(await this._canon(path, false));
+    const c = this._canonCached(path, false, { n: 0 });
+    const known = c === undefined ? undefined : this._getCached(c);
+    const node = known !== undefined ? known : await this._get(await this._canon(path, false));
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, lstat '${path}'`);
     return makeStat(node);
   }
