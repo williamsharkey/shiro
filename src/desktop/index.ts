@@ -532,6 +532,7 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     'separator',
     { label: 'Classic Terminal', action: () => { try { localStorage.setItem('tabcomputer-ui', 'terminal'); } catch {} location.reload(); } },
     { label: 'Restart', action: () => location.reload() },
+    { label: 'Hard Restart', action: () => void hardRestart() },
   ] });
   const termView = (): TerminalView | null => {
     const c = (wm.focused() as { content?: unknown } | null)?.content;
@@ -808,4 +809,18 @@ function drawWelcome(t: ShiroTerminal): void {
   const narrow = t.term.cols < 72;
   t.term.write(`\x1b[1m${BRAND.domain}\x1b[0m ${dim(narrow ? '— Unix in a browser tab.' : `— ${BRAND.tagline}. Real shell, real packages.`)}\r\n`);
   t.term.write(`${dim('try:')} ${link('apt install cowsay', `apt install cowsay && cowsay hello from ${BRAND.domain}`)} ${dim('·')} ${link('htop', 'apt install htop && htop')} ${dim('·')} ${link('python3', 'apt install python3 && python3')} ${dim('·')} ${link('ls /dom')} ${dim('·')} ${link('help')}\r\n\r\n`);
+}
+
+/**
+ * Restart past the browser's HTTP cache (DevTools' "Hard Reload"): fetch the
+ * page fresh, then load it with a one-off query so nothing in between serves
+ * an old copy. Only cached downloads of the page itself are skipped: files,
+ * settings, installed packages (IndexedDB) and the Debian/app download caches
+ * (Cache Storage) are untouched.
+ */
+export async function hardRestart(): Promise<void> {
+  try { await fetch(location.href, { cache: 'reload' }); } catch { /* offline: reload anyway */ }
+  const url = new URL(location.href);
+  url.searchParams.set('reload', Date.now().toString(36));
+  location.replace(url.toString());
 }
