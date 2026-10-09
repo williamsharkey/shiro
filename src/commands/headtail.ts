@@ -1,4 +1,5 @@
 import type { CommandContext } from './index';
+import { decodeBytes, encodeText } from '../utils/byte-text';
 
 /**
  * Shared head/tail (GNU coreutils): -n/-c counts with K/M/G suffixes,
@@ -82,14 +83,12 @@ export async function headTail(ctx: CommandContext, which: 'head' | 'tail'): Pro
 /** Endless devices: read only as much as head needs */
 const INFINITE_DEV = /^\/dev\/(zero|u?random)$/;
 
-/** N bytes of a device, as one char per byte */
+/** N bytes of a device, as byte-exact text */
 function deviceBytes(path: string, len: number): string {
   if (path === '/dev/zero') return '\0'.repeat(len);
   const buf = new Uint8Array(len);
   for (let i = 0; i < len; i += 65536) crypto.getRandomValues(buf.subarray(i, Math.min(len, i + 65536)));
-  let s = '';
-  for (let i = 0; i < len; i += 8192) s += String.fromCharCode(...buf.subarray(i, i + 8192));
-  return s;
+  return decodeBytes(buf);
 }
 
 /** What `head -c N` / `head -n N` reads from an endless device (lines stop at 1 MiB: /dev/zero has none) */
@@ -107,8 +106,12 @@ function readInfiniteDevice(path: string, bytes: boolean, n: number): string {
 
 function select(text: string, which: 'head' | 'tail', bytes: boolean, sign: string, n: number): string {
   if (bytes) {
-    if (which === 'head') return sign === '-' ? text.slice(0, Math.max(0, text.length - n)) : text.slice(0, n);
-    return sign === '+' ? text.slice(Math.max(0, n - 1)) : n === 0 ? '' : text.slice(-n);
+    // Counted in bytes of the data, not UTF-16 units (src/utils/byte-text.ts)
+    const b = encodeText(text);
+    const part = which === 'head'
+      ? (sign === '-' ? b.subarray(0, Math.max(0, b.length - n)) : b.subarray(0, n))
+      : (sign === '+' ? b.subarray(Math.max(0, n - 1)) : n === 0 ? b.subarray(0, 0) : b.subarray(Math.max(0, b.length - n)));
+    return decodeBytes(part);
   }
   // Line boundaries: each line keeps its newline; a last line may have none
   const starts: number[] = [0];

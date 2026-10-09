@@ -28,8 +28,10 @@ Status, numbers and the package scoreboard: [DEBIAN_SCORE.md](DEBIAN_SCORE.md),
    trixie-security (the real archive URLs), apt defaults
    (`/etc/apt/apt.conf.d/90shiro`: no translations, no recommends, downloads
    as root), Docker-slim style `path-exclude`s for docs, translated man
-   pages and locales (English man pages are kept), `force-unsafe-io`, the `user` account (uid 1000, as the kernel
-   runs everything) and the hostname.
+   pages and locales (English man pages are kept), `force-unsafe-io`, the
+   `user` account (uid 1000, as the kernel runs everything), the hostname,
+   and `/usr/sbin/policy-rc.d` exiting 101 so maintainer scripts don't start
+   services, as in Debian's containers (`service NAME start` still does).
 3. Reproducibility: file times clamped to `SOURCE_DATE_EPOCH`, logs, caches,
    machine-id and apt lists removed.
 4. `scripts/debian/pack-rootfs.mjs` packs it into `public/debian/`:

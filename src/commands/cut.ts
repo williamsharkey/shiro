@@ -1,4 +1,5 @@
 import type { Command } from './index';
+import { decodeBytes, encodeText } from '../utils/byte-text';
 import { readOperands } from './flags';
 
 type Range = { lo: number; hi: number };
@@ -159,6 +160,15 @@ export const cut: Command = {
           for (let k = r.lo; k <= r.hi && k <= fields.length; k++) picked.push(fields[k - 1]);
         }
         out += picked.join(od) + eol;
+      } else if (mode === 'b') {
+        // Bytes of the data (src/utils/byte-text.ts), not characters
+        const bytes = encodeText(line);
+        const parts: Uint8Array[] = [];
+        for (const r of sel) {
+          if (r.lo > bytes.length) break;
+          parts.push(bytes.subarray(r.lo - 1, r.hi === Infinity ? undefined : r.hi));
+        }
+        out += parts.map(decodeBytes).join(outDelim ?? '') + eol;
       } else {
         const chars = [...line];
         let s = '';

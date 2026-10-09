@@ -64,7 +64,8 @@ describe('netlink sockets', () => {
     const nameLen = await sys(A.SYS_getsockname, [fd]);
     expect(nameLen).toBe(12);
     const me = decodeSockaddr(data.slice(0, 12));
-    expect(typeof me !== 'number' && me.family === AF_NETLINK && me.port > 0).toBe(true);
+    // Port id 0 (getaddrinfo compares it with the replies' nlmsg_pid)
+    expect(typeof me !== 'number' && me.family === AF_NETLINK && me.port === 0).toBe(true);
     const pid = (me as { port: number }).port;
 
     // Read datagrams until NLMSG_DONE
@@ -115,6 +116,23 @@ describe('netlink sockets', () => {
     expect(new DataView(m.body.buffer, m.body.byteOffset).getInt32(0, true)).toBe(-A.EPERM);
     // Nothing more queued: nonblocking read is EAGAIN
     expect(await sys(A.SYS_recvfrom, [fd, 4096, A.MSG_DONTWAIT])).toBe(-A.EAGAIN);
+  });
+
+  it("a connected UDP socket reports the route's source address (glibc getaddrinfo's RFC 3484 sort)", async () => {
+    const { data, sys } = setup();
+    const fd = await sys(A.SYS_socket, [A.AF_INET6, A.SOCK_DGRAM, 0]);
+    const name = async (dest: string) => {
+      data.set(encodeSockaddr({ family: A.AF_INET6, address: dest, port: 53 }));
+      expect(await sys(A.SYS_connect, [fd, 28])).toBe(0);
+      const n = await sys(A.SYS_getsockname, [fd]);
+      const sa = decodeSockaddr(data.slice(0, n));
+      return typeof sa === 'number' ? sa : sa.address;
+    };
+    // getaddrinfo asserts a v4-mapped source for a v4-mapped destination
+    expect(await name('::ffff:93.184.216.34')).toBe('::ffff:10.0.2.15');
+    expect(await name('::ffff:127.0.0.1')).toBe('::ffff:127.0.0.1');
+    expect(await name('2606:2800:220:1::')).toBe('fd00::15');
+    expect(await name('::1')).toBe('::1');
   });
 
   it('other socket families stay unsupported', async () => {

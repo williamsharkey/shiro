@@ -1,13 +1,15 @@
 /**
- * Binary data in Shiro's string pipes: commands pass binary output as byte
- * strings (one char per byte, U+0000-U+00FF) and text as ordinary strings.
+ * Binary data in Shiro's string pipes. Output is byte-exact text
+ * (src/utils/byte-text.ts: invalid UTF-8 bytes as U+DC80-U+DCFF), which
+ * redirections and pipes write back as the same bytes. Input may also be an
+ * older-style byte string (one char per byte, U+0000-U+00FF) from commands
+ * that still produce those (printf '\xff', xxd -r).
  */
+import { decodeBytes, encodeText } from '../../utils/byte-text';
 
-/** Bytes to a byte string */
+/** Bytes to text for stdout: byte-exact */
 export function latin1(b: Uint8Array): string {
-  let s = '';
-  for (let i = 0; i < b.length; i += 8192) s += String.fromCharCode.apply(null, b.subarray(i, i + 8192) as unknown as number[]);
-  return s;
+  return decodeBytes(b);
 }
 
 export function isByteString(s: string): boolean {
@@ -41,21 +43,12 @@ export function stdinBytes(s: string, compressed: boolean): Uint8Array {
     const b = byteStringToBytes(s);
     if (compressed || looksBinary(b)) return b;
   }
-  return new TextEncoder().encode(s);
+  return encodeText(s);
 }
 
-/**
- * Decompressed output for stdout: text when it is UTF-8 text, else a byte
- * string. NUL bytes or a known binary format (a tar archive is often valid
- * UTF-8) mean binary, so `bunzip2 -c x.tar.bz2 | tar xf -` gets exact bytes.
- */
+/** Decompressed output for stdout: byte-exact, so `bunzip2 -c x.tar.bz2 | tar xf -` gets exact bytes. */
 export function outputString(b: Uint8Array): string {
-  if (looksBinary(b) || b.indexOf(0) >= 0) return latin1(b);
-  try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(b);
-  } catch {
-    return latin1(b);
-  }
+  return decodeBytes(b);
 }
 
 /**

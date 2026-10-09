@@ -7,6 +7,7 @@
  * `top` see kernel processes.
  */
 
+import { decodeBytes, encodeText } from '../utils/byte-text';
 import { addProcInfoSource, type FileSystem } from '../filesystem';
 import type { Shell } from '../shell';
 import type { Command, CommandContext } from '../commands/index';
@@ -1058,7 +1059,8 @@ export class Kernel {
     }
     if (stdio) await stdio.flush();
     if (proc.exiting) return code;
-    if (ctx.stdout) await this.writeAll(proc, 1, enc.encode(ctx.stdout));
+    // Byte-exact (src/utils/byte-text.ts): binary output of a builtin keeps its bytes
+    if (ctx.stdout) await this.writeAll(proc, 1, encodeText(ctx.stdout));
     if (ctx.stderr && !proc.exiting) await this.writeAll(proc, 2, enc.encode(ctx.stderr));
     if (shell.cwd !== proc.cwd) proc.cwd = shell.cwd;
     return code;
@@ -1144,7 +1146,7 @@ export class Kernel {
     shell.env.PS1 ??= '\\u@\\h:\\w\\$ ';
     let chain = Promise.resolve();
     const out = (fd: number) => (s: string) => {
-      chain = chain.then(async () => { if (!proc.exiting) await this.writeAll(proc, fd, enc.encode(s.replace(/\r\n/g, '\n'))); });
+      chain = chain.then(async () => { if (!proc.exiting) await this.writeAll(proc, fd, encodeText(s.replace(/\r\n/g, '\n'))); });
     };
     // Jobs get process groups of their own and the terminal while they run (Ctrl-Z, fg, bg, jobs)
     const f0 = proc.fds.get(0);
@@ -1222,7 +1224,7 @@ export class Kernel {
     if (!f) return '';
     if (f.kind === 'pipe' || f.kind === 'file' || f.kind === 'socket' || f instanceof BufferFile) {
       const r = await this.readAll(proc, 0);
-      return typeof r === 'number' ? '' : A.decodeText(r);
+      return typeof r === 'number' ? '' : decodeBytes(r);
     }
     return '';
   }

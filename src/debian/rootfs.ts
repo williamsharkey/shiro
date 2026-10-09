@@ -312,6 +312,20 @@ export async function writeEngineWorkarounds(fs: FileSystem): Promise<void> {
     }
   } catch { /* no resolv.conf */ }
   await keepManPages(fs);
+  await noServicesFromPackages(fs);
+}
+
+/**
+ * /usr/sbin/policy-rc.d exiting 101, as Debian's chroots and containers
+ * have it: invoke-rc.d and deb-systemd-invoke don't start or restart
+ * services from maintainer scripts (openssh-server's postinst started
+ * sshd in the middle of apt, which then never finished). `service NAME
+ * start` and Shiro's systemctl still start them.
+ */
+export async function noServicesFromPackages(fs: FileSystem): Promise<void> {
+  const p = '/usr/sbin/policy-rc.d';
+  if (await fs.exists(p)) return;
+  await fs.writeFile(p, '#!/bin/sh\n# Written by Shiro (src/debian/rootfs.ts): packages do not start services; see docs/DEBIAN.md\nexit 101\n', { mode: 0o755 });
 }
 
 /**

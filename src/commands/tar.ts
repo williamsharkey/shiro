@@ -1,4 +1,5 @@
 import type { Command, CommandContext } from './index';
+import { decodeBytes, encodeText } from '../utils/byte-text';
 
 /**
  * tar — GNU tar-compatible (GNU format archives: ustar headers with
@@ -164,14 +165,11 @@ function stdinBytes(s: string): Uint8Array {
     for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i);
     if (sniff(b) || (b.length >= BLOCK && checksumOk(b.subarray(0, BLOCK)))) return b;
   }
-  return enc.encode(s);
+  return encodeText(s);
 }
 
-function latin1(b: Uint8Array): string {
-  let s = '';
-  for (let i = 0; i < b.length; i += 8192) s += String.fromCharCode(...b.subarray(i, i + 8192));
-  return s;
-}
+/** Archive bytes for stdout: byte-exact (src/utils/byte-text.ts) */
+const latin1 = decodeBytes;
 
 /** fnmatch-style glob (with GNU tar's defaults: '*' matches '/') */
 function globRe(p: string): RegExp {
@@ -476,7 +474,7 @@ async function runTar(ctx: CommandContext): Promise<number> {
     for (const b of blocks) { data.set(b, o); o += b.length; }
     data = await compress(data, compression);
     if (archive === '-') {
-      ctx.stdout += compression ? latin1(data) : dec.decode(data);
+      ctx.stdout += decodeBytes(data);
     } else {
       try { await fs.writeFile(fs.resolvePath(archive, ctx.cwd), data); }
       catch (e: any) { throw new TarFatal(`${archive}: Cannot open: ${/ENOENT/.test(e?.message) ? 'No such file or directory' : e?.message}`); }
