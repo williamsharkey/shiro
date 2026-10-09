@@ -59,7 +59,7 @@ describe('profile selection', () => {
     const { execFileSync } = await import('node:child_process');
     const server = new URL('../../../server.mjs', import.meta.url).href;
     const out = execFileSync('node', ['--input-type=module', '-e',
-      `const m = await import(${JSON.stringify(server)}); const h = '<head><title>shiro</title></head>';
+      `const m = await import(${JSON.stringify(server)}); const h = '<head><title>shiro</title><link rel="icon" type="image/svg+xml" href="/favicon.svg" /></head>';
        console.log(JSON.stringify({ ids: ${JSON.stringify(HOSTS)}.map((x) => m.profileFor(x)?.id),
          override: m.profileFor('tabcomputer.com', 'shiro').id,
          shiroOnTab: m.brandAppShell(h, 'tabcomputer.com', m.profileFor('tabcomputer.com', 'shiro').brand),
@@ -68,8 +68,9 @@ describe('profile selection', () => {
     const r = JSON.parse(out.trim().split('\n').pop()!);
     expect(r.ids).toEqual(HOSTS.map((h) => pickProfile([...PROFILES], h).id));
     expect(r.override).toBe('shiro');
-    expect(r.shiroOnTab).toBe('<head><title>shiro</title></head>');
+    expect(r.shiroOnTab).toBe('<head><title>shiro</title><link rel="icon" type="image/svg+xml" href="/favicon.svg" /></head>');
     expect(r.tab).toContain('<title>tabcomputer</title>');
+    expect(r.tab).toContain('href="/tabcomputer-favicon.svg"'); // the otter
   });
 
   it('every profile declares every field', () => {

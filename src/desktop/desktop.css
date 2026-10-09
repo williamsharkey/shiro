@@ -91,7 +91,7 @@ body.sd-active #shiro-layout { display: none; }
 }
 .sd-mb-item:hover, .sd-mb-item.sd-open { background: var(--sd-active); }
 .sd-mb-item:focus-visible { outline: 2px solid var(--sd-accent); outline-offset: -2px; }
-.sd-mb-logo svg { width: 17px; height: 17px; }
+.sd-mb-logo svg { width: 21px; height: 17px; }
 .sd-mb-app { font-weight: 650; }
 .sd-mb-menus { display: contents; }
 .sd-mb-spacer { flex: 1; }

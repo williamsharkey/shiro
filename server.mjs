@@ -358,7 +358,9 @@ export function brandAppShell(html, host, brand = profileFor(host)?.brand) {
     `<meta name="application-name" content="${esc(brand.name)}" />`,
     `<meta name="apple-mobile-web-app-title" content="${esc(brand.name)}" />`,
   ].join('\n  ');
-  return html.replace(/<title>[^<]*<\/title>/, `<title>${esc(brand.name)}</title>\n  ${tags}`);
+  let out = html.replace(/<title>[^<]*<\/title>/, `<title>${esc(brand.name)}</title>\n  ${tags}`);
+  if (brand.favicon) out = out.replace(/href="\/favicon\.svg"/, `href="${esc(brand.favicon)}"`);
+  return out;
 }
 
 // --- Static file server ---
