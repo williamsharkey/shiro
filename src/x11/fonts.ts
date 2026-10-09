@@ -92,7 +92,9 @@ export function listFonts(pattern: string, max: number): string[] {
 }
 
 function resolveName(name: string): { face: Face; charset: string; name: string } | null {
-  const lower = name.toLowerCase();
+  let lower = name.toLowerCase();
+  // The cursor font (XCreateFontCursor): glyph cursors become CSS cursors, so any face will do
+  if (lower === 'cursor' || lower === 'decw$cursor') lower = 'fixed';
   const alias = ALIASES.find(([a]) => a.toLowerCase() === lower);
   const target = alias ? alias[1].toLowerCase() : lower;
   const re = globToRegExp(target);

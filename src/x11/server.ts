@@ -214,6 +214,9 @@ export class XServer {
   fontPath: string[] = ['built-ins'];
   /** clients waiting while another holds GrabServer (not enforced: single page) */
   log: ((s: string) => void) | null = null;
+  /** Debugging: called for every request (opcode, data byte = minor for extensions). */
+  debugErrors = false;
+  trace: ((c: Client, opcode: number, data: number, len: number) => void) | null = null;
 
   constructor(opts: { width?: number; height?: number } = {}) {
     this.width = opts.width ?? SERVER_DEFAULTS.width;
@@ -330,10 +333,15 @@ export class XServer {
       c.consumed(len);
       c.seq = (c.seq + 1) & 0xffff;
       const r = new Reader(req, hdr, c.le);
+      this.trace?.(c, opcode, data, len);
       try {
         this.dispatch(c, opcode, data, r, len);
       } catch (e) {
-        if (e instanceof XError) this.error(c, e.code, e.value, opcode, opcode >= 128 ? data : 0);
+        if (e instanceof XError) {
+          this.trace?.(c, -1, e.code, opcode * 256 + (opcode >= 128 ? data : 0));
+          if (this.debugErrors) this.log?.(`error ${e.code} value 0x${e.value.toString(16)} on ${opcode}.${data} req ${Array.from(req.subarray(0, Math.min(32, req.length))).join(',')}`);
+          this.error(c, e.code, e.value, opcode, opcode >= 128 ? data : 0);
+        }
         else {
           this.log?.(`X request ${opcode} failed: ${(e as Error)?.stack ?? e}`);
           this.error(c, P.BadImplementation, 0, opcode, 0);

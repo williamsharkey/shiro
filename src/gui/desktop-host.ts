@@ -5,7 +5,7 @@
  * at scale 1 (one X pixel per CSS px) without auto-resize: the X client
  * redraws at the new size and rootless.ts sets the buffer.
  */
-import type { DesktopAPI, DesktopWindow, Surface } from '../desktop/wm';
+import type { DesktopAPI, DesktopWindow, Surface, WindowOptions } from '../desktop/wm';
 import type { CanvasWindow, CanvasWindowEvents, CanvasWindowOptions, GuiInputEvent, WindowHost } from './window-host';
 
 /** Height of the desktop's title bar (docs/DESKTOP.md: "the title bar adds 38 px"). */
@@ -30,7 +30,7 @@ class DesktopCanvasWindow implements CanvasWindow {
   constructor(d: DesktopAPI, opts: CanvasWindowOptions) {
     this.decorated = opts.decorated;
     const parent = opts.transientFor instanceof DesktopCanvasWindow ? opts.transientFor.win.id : undefined;
-    this.win = d.createWindow({
+    const options: WindowOptions = {
       title: opts.title,
       appId: opts.appId ? `x11-${opts.appId}` : 'x11',
       width: opts.width,
@@ -50,7 +50,8 @@ class DesktopCanvasWindow implements CanvasWindow {
         this.emit('close');
         return false;
       },
-    } as never);
+    };
+    this.win = d.createWindow(options);
     this.surface = this.win.surface!;
     this.surface.onConfigure((w, h) => this.emit('resize', w, h));
     this.win.on('move', () => { const p = this.position(); this.emit('move', p.x, p.y); });
