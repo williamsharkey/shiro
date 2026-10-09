@@ -201,6 +201,7 @@ async function scoreBatch(m, batch, onResult) {
   const timing = new Map();
   if (todo.length) {
     const r = await m.run(`sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ${todo.map((b) => b.p.name).join(' ')} 2>&1`, INSTALL_TIMEOUT_S);
+    writeFileSync(join(OUT_DIR, `batch-${todo[0].p.name}.log`), `exit ${r.code} after ${r.ms} ms\n` + r.out);
     for (const b of todo) { logs.set(b.p.name, r.out); timing.set(b.p.name, Math.round(r.ms / todo.length)); }
     if (r.code !== 0 && todo.length > 1) {
       await recover(m);
@@ -213,6 +214,8 @@ async function scoreBatch(m, batch, onResult) {
     }
   }
   const after = await installedStatus(m, names);
+  // A shell that answers nothing (a hung command killed by the timeout) can't score anything
+  if (!(await installedStatus(m, ['dpkg'])).has('dpkg')) throw new Error('the machine stopped answering (dpkg-query sees no dpkg)');
   let broken = false;
   for (const { p, info } of batch) {
     const t0 = Date.now();
