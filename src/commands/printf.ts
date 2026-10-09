@@ -9,7 +9,7 @@ export const printf: Command = {
     if (args[0] === '--') args = args.slice(1);
     if (args.length === 0) {
       ctx.stderr += 'printf: usage: printf format [arguments]\n';
-      return 1;
+      return 2;
     }
     const r = printfFormat(args[0], args.slice(1));
     ctx.stdout += r.out;

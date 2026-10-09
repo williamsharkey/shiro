@@ -242,13 +242,9 @@
    "failures": []
   },
   "readlink": {
-   "pass": 5,
+   "pass": 6,
    "total": 6,
-   "failures": [
-    {
-     "name": "readlink -f on an invalid link"
-    }
-   ]
+   "failures": []
   },
   "realpath": {
    "pass": 10,
@@ -266,13 +262,9 @@
    "failures": []
   },
   "rmdir (old-style)": {
-   "pass": 0,
+   "pass": 1,
    "total": 1,
-   "failures": [
-    {
-     "name": "rmdir-removes-parent-directories"
-    }
-   ]
+   "failures": []
   },
   "sed": {
    "pass": 92,
@@ -289,13 +281,9 @@
    "failures": []
   },
   "sha1sum": {
-   "pass": 0,
+   "pass": 1,
    "total": 1,
-   "failures": [
-    {
-     "name": "sha1sum: one-space separated input for -c"
-    }
-   ]
+   "failures": []
   },
   "sha256sum": {
    "pass": 0,
@@ -377,40 +365,9 @@
    "failures": []
   },
   "tsort": {
-   "pass": 10,
+   "pass": 20,
    "total": 20,
-   "failures": [
-    {
-     "name": "tsort empty2"
-    },
-    {
-     "name": "tsort singleton"
-    },
-    {
-     "name": "tsort simple"
-    },
-    {
-     "name": "tsort 2singleton"
-    },
-    {
-     "name": "tsort medium"
-    },
-    {
-     "name": "tsort std.example"
-    },
-    {
-     "name": "tsort prefixes"
-    },
-    {
-     "name": "tsort odd"
-    },
-    {
-     "name": "tsort odd2"
-    },
-    {
-     "name": "tsort cycle"
-    }
-   ]
+   "failures": []
   },
   "unexpand": {
    "pass": 17,
