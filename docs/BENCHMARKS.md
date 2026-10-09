@@ -306,6 +306,13 @@ composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts,
 a few MiB each. The terminal UI's +19 KiB is /dom, the sign-in hook and the
 other integration changes since db9f698, not desktop code.
 
+### unix/shell-stdio 4 — job control in a kernel sh; kernel background jobs
+
+`node bench/ab.mjs HEAD~1 HEAD --suites shell,kernel --quick` (e03bde3 →
+3acd170, 3 rounds × 5 runs, alpha 0.01): no regression. 23 metrics
+unchanged; kernel.spawn_wait.wasm moved +28% but not in every round
+(inconsistent; the change doesn't touch WASM spawning).
+
 ### unix/shell-stdio 3 — fd copies keep their stream; programs inherit fds 3-9
 
 `node bench/ab.mjs origin/unix/integration HEAD --suites shell,kernel --quick`
