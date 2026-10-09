@@ -159,6 +159,18 @@ untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
 
+### unix/desktop 4 — phones: key bar, visual viewport, dock stacks
+
+The touch layer (`src/desktop/mobile.ts`: extra-keys bar, `visualViewport`
+layout, keyboard crossfade) is its own 3.6 KiB chunk, imported only under
+`pointer: coarse`; the classic `mobile-input.ts` toolbar no longer starts in
+desktop mode. Dock stacks, the globe icon and the phone CSS stay in the
+desktop chunk.
+
+`node bench/ab.mjs origin/unix/integration --quick --suites boot --rounds 4`
+(0fa56a5 vs this, desktop page, desktop pointer): no timing metric changed;
+boot transfer 1548 → 1554 KiB (+6 KiB, +0.4%), DOM nodes 329 → 330.
+
 ### unix/desktop 3 — the terminal's first layout: system font lookups
 
 perf-fs-shell's cold-boot profile showed `new ShiroTerminal` dominated by

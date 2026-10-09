@@ -1,6 +1,0 @@
-{
-  "name": "tabcomputer",
-  "domain": "tabcomputer.com",
-  "tagline": "a Unix-like computer in your browser tab",
-  "description": "A Unix-like computer that runs in a browser tab: a real shell, processes, pipes and ptys, and packages you can install — vim, htop, python, git."
-}

@@ -10,6 +10,7 @@
  */
 
 import type { Command, CommandContext, TerminalLike } from './index';
+import { activeProfile } from '../profile';
 
 // Signaling server URL (same as remote.ts)
 const SIGNAL_SERVER = 'https://shiro.computer/signal';
@@ -33,13 +34,15 @@ export const sshCmd: Command = {
 
     // OpenSSH usage (options, user@host, a host name with dots) goes to
     // OpenSSH when it is installed; Shiro's tab-to-tab ssh takes peer codes
-    if (!isPeerCode(args)) {
+    // (all of it when the profile turns tab-to-tab ssh off)
+    const tabSsh = activeProfile().shims.tabSsh;
+    if (!tabSsh || !isPeerCode(args)) {
       const openssh = await findOpenSsh(ctx);
       if (openssh) {
         return ctx.shell.execute([openssh, ...args].map(shellQuote).join(' '),
           (s) => { ctx.stdout += s.replace(/\r\n/g, '\n'); }, (s) => { ctx.stderr += s.replace(/\r\n/g, '\n'); }, false, ctx.terminal, true);
       }
-      if (looksLikeOpenSsh(args)) {
+      if (!tabSsh || looksLikeOpenSsh(args)) {
         ctx.stderr += OPENSSH_HINT;
         return 255;
       }

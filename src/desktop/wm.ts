@@ -194,6 +194,22 @@ export interface AppDescriptor {
   launch: (args?: Record<string, unknown>) => DesktopWindow | null | Promise<DesktopWindow | null>;
   /** Menu bar menus while the app is focused, after the defaults. */
   menus?: () => MenuSpec[];
+  /** Dock group (a stack that opens on tap) this app belongs to, see registerGroup. */
+  group?: string;
+}
+
+/**
+ * A dock stack: apps with `group: id` share one dock tile that opens into a
+ * grid. 'always' keeps them stacked; 'auto' (default) stacks them when the
+ * dock is crowded (phones) or the group has more than `maxLoose` apps.
+ */
+export interface DockGroup {
+  id: string;
+  name: string;
+  order?: number;
+  collapse?: 'always' | 'auto';
+  /** With 'auto': stack once the group has more apps than this (default 4) */
+  maxLoose?: number;
 }
 
 export interface MenuItem {
@@ -222,6 +238,9 @@ export interface DesktopAPI {
   registerContentKind(kind: string, factory: ContentFactory): void;
   registerApp(app: AppDescriptor): void;
   apps(): AppDescriptor[];
+  /** Define (or redefine) a dock group. Additive (API v1.2). */
+  registerGroup?(group: DockGroup): void;
+  groups?(): DockGroup[];
   openApp(id: string, args?: Record<string, unknown>): Promise<DesktopWindow | null>;
   theme(): 'light' | 'dark';
   setTheme(pref: 'light' | 'dark' | 'system'): void;
@@ -345,6 +364,17 @@ export class WindowManager implements DesktopAPI {
   registerApp(app: AppDescriptor): void {
     this.appMap.set(app.id, app);
     this.emit('apps-changed');
+  }
+
+  private groupMap = new Map<string, DockGroup>();
+
+  registerGroup(group: DockGroup): void {
+    this.groupMap.set(group.id, group);
+    this.emit('apps-changed');
+  }
+
+  groups(): DockGroup[] {
+    return [...this.groupMap.values()].sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
   }
 
   apps(): AppDescriptor[] {

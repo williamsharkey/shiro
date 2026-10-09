@@ -19,6 +19,11 @@ classic full-page terminal of shiro.computer is still there behind a flag.
 
 All changes are additive. Nothing below renames or removes an earlier name.
 
+- **2026-10-09 (unix/desktop), v1.2.** Dock stacks: `AppDescriptor.group`,
+  `DockGroup` (`{ id, name, order?, collapse?: 'always' | 'auto', maxLoose? }`),
+  and optional `registerGroup(group)` / `groups()` on `DesktopAPI` (check
+  for them before calling, as with any addition). Apps with `order` ≥ 60 and
+  no `group` go in the `debian` stack.
 - **2026-10-09 (unix/desktop), v1.1.** Quarters: `WindowState` gains
   `'snapped-top-left' | 'snapped-top-right' | 'snapped-bottom-left' |
   'snapped-bottom-right'` (every snapped state still starts with `snapped-`),
@@ -31,10 +36,12 @@ All changes are additive. Nothing below renames or removes an earlier name.
 ## Name
 
 The Unix edition is **tabcomputer** (tabcomputer.com). The name, domain, tagline
-and description live in `src/brand.json` only: the desktop reads it (`src/brand.ts`:
-tab title, wallpaper wordmark, welcome banner, About), and `server.mjs`
-(`brandAppShell`) gives the shared `index.html` that title plus description and
-Open Graph tags for every host except shiro.computer, since link previews don't run JS.
+and description are the tabcomputer profile's `brand`
+(`profiles/tabcomputer/profile.json`, [PROFILES.md](PROFILES.md)): the desktop
+reads it (`src/brand.ts`: tab title, wallpaper wordmark, welcome banner, About),
+and `server.mjs` (`brandAppShell`) gives the shared `index.html` that title plus
+description and Open Graph tags for every host whose profile has a brand (not
+shiro.computer), since link previews don't run JS.
 
 ## Choosing the UI
 
@@ -111,8 +118,24 @@ destroyed), and the next Terminal window adopts it again.
 - **Motion**: every animation and transition turns off under
   `prefers-reduced-motion: reduce`.
 - **Phone width** (≤ 640 px): every window fills the work area. Menus collapse
-  to the app name, and the dock scrolls sideways. On touch devices the
-  virtual-key toolbar stays at the bottom, and the dock sits above it.
+  to the app name, the menu bar is solid (its color is the page's
+  `theme-color`, set with the theme) and drops the clock. The network icon is
+  a globe with a status dot: blue online, green signed in, amber sign-in
+  needed, gray offline.
+- **Touch devices** (`pointer: coarse`, `mobile.ts`, its own chunk): the
+  desktop follows `visualViewport`, so when the on-screen keyboard opens the
+  dock hides and windows shrink to the space above it, with the cursor line
+  kept in view; the change crossfades over 0.3 s (instant with reduced
+  motion). An extra-keys bar sits at the bottom: Esc, Tab, Ctrl, Alt, `|`,
+  `~`, `` ` ``, arrows, paste, `/ - $ & ;`. Ctrl and Alt are one-shot and also
+  apply to the next letter typed on the phone's keyboard. The keyboard button
+  in the menu bar turns the bar on or off; Settings → Appearance → Extra keys
+  picks Off, Auto (hidden while the phone's keyboard is open) or Always
+  (localStorage `shiro-keybar`). The classic UI keeps `src/mobile-input.ts`.
+- **Dock stacks**: when the dock would not fit (phones), Settings and
+  Activity share a System stack and Vim, Python and installed programs a
+  Programs stack; Terminal, Files and htop stay loose. Debian GUI apps stack
+  once there are more than four, at any width. Tap a stack to open it.
 - **Fonts** are self-hosted: Inter and JetBrains Mono (latin, variable,
   `public/fonts/`, SIL OFL, license files next to them). Only the desktop
   loads them.
@@ -259,6 +282,14 @@ desktop registers `terminal`; the WM itself provides `dom`, `iframe` and
 app in the dock (if `dock` is not `false`), in `desktop open ID` and in
 `/dom/windows/ctl` (`open ID`). `menus()` adds menu-bar menus while the app
 has focus. Apps with `order` ≥ 20 sit after the dock's separator.
+
+`registerGroup({ id, name, order, collapse, maxLoose })` (v1.2, optional on
+`DesktopAPI`) declares a dock stack; apps join it with `group: id`. A
+stack with `collapse: 'always'` is always one tile; `'auto'` (default)
+stacks when the dock is crowded or the group has more than `maxLoose`
+(default 4) apps. The desktop registers `system`, `programs` and `debian`
+(`maxLoose: 4`; apps with `order` ≥ 60 and no `group` go there). `groups()`
+lists them by `order`.
 
 ## Network sign-in
 

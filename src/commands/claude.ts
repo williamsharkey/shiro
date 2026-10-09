@@ -22,6 +22,7 @@ import {
   isClaudeCodeInstalled,
 } from '../claude-code-version';
 import { hasClaudeCredentials, openClaudeSignIn } from '../claude-signin';
+import { activeProfile } from '../profile';
 
 // Flags that make Claude print something and exit instead of starting a session
 const INFO_FLAGS = new Set(['-v', '--version', '-h', '--help']);
@@ -78,7 +79,11 @@ export const claudeCmd: Command = {
   description: 'Run Claude Code (installed and signed in automatically)',
   async exec(ctx) {
     const args = [...ctx.args];
-    if (args[0] === '--native' || ctx.env.CLAUDE_NATIVE === '1') {
+    // --native, CLAUDE_NATIVE=1, or a profile whose `claude` is the native build
+    // (CLAUDE_NATIVE=0 or --npm then picks the npm build)
+    const npm = args[0] === '--npm' || ctx.env.CLAUDE_NATIVE === '0';
+    if (args[0] === '--npm') args.shift();
+    if (!npm && (args[0] === '--native' || ctx.env.CLAUDE_NATIVE === '1' || activeProfile().shims.claude === 'native')) {
       if (args[0] === '--native') args.shift();
       return runNative(ctx, args);
     }

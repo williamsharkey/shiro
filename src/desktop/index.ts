@@ -14,7 +14,7 @@ import type { FileSystem } from '../filesystem';
 import type { Shell } from '../shell';
 import { ShiroTerminal } from '../terminal';
 import type { Kernel } from '../kernel/kernel';
-import { WindowManager, isDesktopShortcut, type AppDescriptor, type DesktopWindow, type MenuSpec, type MenuItem, type Geometry } from './wm';
+import { WindowManager, isDesktopShortcut, type DockGroup, type AppDescriptor, type DesktopWindow, type MenuSpec, type MenuItem, type Geometry } from './wm';
 import { ICONS, GLYPHS, appIcon } from './icons';
 import { TerminalView, takeParkedMain, hasParkedMain, applyTerminalTheme, useMonoFont, allTerminalViews, terminalTheme, TERMINAL_FONT } from './terminal-app';
 import { initNetwork } from './network';
@@ -38,6 +38,19 @@ export interface AppContext {
   shell: Shell;
   kernel: Kernel;
   openTerminal: (opts?: { command?: string; cwd?: string; title?: string; appId?: string }) => DesktopWindow | null;
+}
+
+/** Phone layout inputs (src/desktop/mobile.ts sets them from the visual viewport) */
+export interface DesktopLayout {
+  /** Height of the extra-keys bar at the bottom (0 when hidden) */
+  keybarH: number;
+  /** The dock hides while the on-screen keyboard is open */
+  dockHidden: boolean;
+  /** env(safe-area-inset-top): the menu bar grows by it (home-screen web app) */
+  topInset: number;
+  /** Visible height (visualViewport), or null for window.innerHeight */
+  viewportH: number | null;
+  relayout(): void;
 }
 
 export interface Desktop {
@@ -89,7 +102,11 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
   document.head.appendChild(style);
   injectFonts();
   document.body.classList.add('sd-active');
+  // One theme-color meta, set from the desktop's theme (an explicit Light/Dark
+  // choice overrides the system's, which media-attributed metas could not follow)
+  document.querySelectorAll('meta[name="theme-color"][media]').forEach(m => m.remove());
   const meta = document.querySelector('meta[name="theme-color"]');
+  const statusBarMeta = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
 
   const root = el('div', 'sd-desktop');
   root.id = 'shiro-desktop';
@@ -110,6 +127,7 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
   searchBtn.setAttribute('aria-label', 'Search');
   const themeBtn = el('button', 'sd-mb-item sd-mb-status');
   const netBtn = el('button', 'sd-mb-item sd-mb-status');
+  netBtn.classList.add('sd-mb-net');
   const clock = el('div', 'sd-mb-item sd-mb-clock');
   menubar.append(logoBtn, appBtn, menusEl, spacer, searchBtn, themeBtn, netBtn, clock);
 
@@ -127,15 +145,17 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
   // From the CSS sizes (--sd-menubar-h, --sd-dock-h, --sd-dock-gap), not layout reads:
   // measuring here would force a full style and layout pass before the terminal exists
   const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+  const layout: DesktopLayout = { keybarH: 0, dockHidden: false, topInset: 0, viewportH: null, relayout: () => {} };
   const workArea = (): Geometry => {
     const compact = window.innerWidth <= 640;
-    const top = compact ? 34 : 30;
-    // The touch toolbar (mobile-input.ts) sits at the very bottom; the dock goes above it
-    const vkeys = coarse ? document.getElementById('shiro-vkeys') : null;
-    const vk = vkeys ? vkeys.offsetHeight : 0;
-    dockWrap.style.bottom = vk ? `${vk + 6}px` : '';
-    const dockSpace = (compact ? 58 + 6 : 68 + 8) + (vk ? vk + 6 - (compact ? 6 : 8) : 0) + 8;
-    const bottom = Math.max(top + 120, window.innerHeight - dockSpace);
+    const top = (compact ? 34 : 30) + layout.topInset;
+    const gap = compact ? 6 : 8;
+    // The key bar (mobile.ts) sits at the very bottom; the dock goes above it
+    const kb = layout.keybarH;
+    dockWrap.style.bottom = kb ? `${kb + gap}px` : '';
+    const dockSpace = layout.dockHidden ? 4 : (compact ? 58 : 68) + gap + 8;
+    const h = layout.viewportH ?? window.innerHeight;
+    const bottom = Math.max(top + 120, h - kb - dockSpace);
     return { x: 0, y: top, width: window.innerWidth, height: bottom - top };
   };
   const wm = new WindowManager(root, { workArea });
@@ -203,8 +223,8 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
   const apps: AppDescriptor[] = [
     { id: 'terminal', name: 'Terminal', icon: ICONS.terminal, order: 0, launch: (args) => openTerminal(args as { command?: string; cwd?: string }) },
     { id: 'files', name: 'Files', icon: ICONS.files, order: 1, launch: lazy(() => import('./apps/files')) },
-    { id: 'settings', name: 'Settings', icon: ICONS.settings, order: 2, launch: focusOrLaunch('settings', lazy(() => import('./apps/settings'))) },
-    { id: 'activity', name: 'Activity', icon: ICONS.activity, order: 3, launch: focusOrLaunch('activity', lazy(() => import('./apps/activity'))) },
+    { id: 'settings', name: 'Settings', icon: ICONS.settings, order: 2, group: 'system', launch: focusOrLaunch('settings', lazy(() => import('./apps/settings'))) },
+    { id: 'activity', name: 'Activity', icon: ICONS.activity, order: 3, group: 'system', launch: focusOrLaunch('activity', lazy(() => import('./apps/activity'))) },
     { id: 'about', name: 'About This Computer', icon: ICONS.about, order: 90, dock: false, launch: focusOrLaunch('about', lazy(() => import('./apps/about'))) },
   ];
   for (const a of apps) wm.registerApp(a);
@@ -215,6 +235,8 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     const list = [...FEATURED_PACKAGES, ...OPTIONAL_PACKAGES.filter(p => installed.has(p.pkg))];
     list.forEach((p, i) => wm.registerApp({
       id: p.pkg, name: p.name, icon: appIcon(p.pkg), order: 20 + i,
+      // htop stays loose (the live demo); the rest stack as Programs when crowded
+      group: p.pkg === 'htop' ? undefined : 'programs',
       launch: () => openTerminal({
         title: p.name, appId: p.pkg,
         command: installed.has(p.pkg) ? p.cmd : `apt install ${p.pkg} && clear && ${p.cmd}`,
@@ -233,34 +255,44 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
   deps.fs.onChange((_ev, path) => { if (path === PKG_STATUS) void refreshInstalled(); });
 
   // ── Dock rendering ──
+  // Dock stacks (wm.registerGroup): these stay loose so the best demos are one tap away
+  wm.registerGroup({ id: 'system', name: 'System', order: 10 });
+  wm.registerGroup({ id: 'programs', name: 'Programs', order: 30 });
+  wm.registerGroup({ id: 'debian', name: 'Debian apps', order: 60, maxLoose: 4 });
+  /** An app's stack: its own `group`, else Debian GUI apps (order ≥ 60, registered by src/gui) */
+  const groupOf = (a: AppDescriptor): string | undefined => a.group ?? ((a.order ?? 0) >= 60 ? 'debian' : undefined);
+  let openStackEl: HTMLElement | null = null;
+  const closeStack = () => { openStackEl?.remove(); openStackEl = null; };
   const renderDock = () => {
     dock.textContent = '';
+    closeStack();
     const running = new Set(wm.windows().filter(w => w.state !== 'closed' && !w.options.override && !w.options.skipTaskbar).map(w => w.appId));
     const all = wm.apps();
-    const core = all.filter(a => a.dock !== false && (a.order ?? 100) < 20);
-    const pkgs = all.filter(a => a.dock !== false && (a.order ?? 100) >= 20);
+    const docked = all.filter(a => a.dock !== false);
     const extra = [...running].filter(id => id && !all.some(a => a.id === id && a.dock !== false));
+    const iconHtml = (id: string, icon: string | undefined) => icon?.trim().startsWith('<') ? icon : icon ? `<img src="${icon}" alt="">` : appIcon(id);
+    const activate = (id: string, launch: () => void, b?: HTMLElement) => {
+      const wins = wm.visibleOrder().filter(w => w.appId === id);
+      if (wins.length) {
+        const top = wins.find(w => w.state !== 'minimized') ?? wins[0];
+        if (wm.focused() === top && wins.length === 1 && id !== 'terminal') top.minimize();
+        else top.focus();
+        return;
+      }
+      if (b && !prefersReducedMotion()) { b.classList.add('sd-launching'); setTimeout(() => b.classList.remove('sd-launching'), 900); }
+      launch();
+    };
     const add = (id: string, name: string, icon: string | undefined, launch: () => void) => {
       const b = el('button', 'sd-dock-item');
       b.dataset.app = id;
       b.setAttribute('aria-label', name);
-      b.innerHTML = (icon?.trim().startsWith('<') ? icon : icon ? `<img src="${icon}" alt="">` : appIcon(id)) + `<span class="sd-dock-tip">${name}</span>`;
+      b.innerHTML = iconHtml(id, icon) + `<span class="sd-dock-tip">${name}</span>`;
       if (running.has(id)) b.classList.add('sd-running');
       if (FEATURED_PACKAGES.some(p => p.pkg === id) && !installed.has(id)) {
         b.classList.add('sd-not-installed');
         b.querySelector('.sd-dock-tip')!.textContent = `${name} — click to install`;
       }
-      b.addEventListener('click', () => {
-        const wins = wm.visibleOrder().filter(w => w.appId === id);
-        if (wins.length) {
-          const top = wins.find(w => w.state !== 'minimized') ?? wins[0];
-          if (wm.focused() === top && wins.length === 1 && id !== 'terminal') top.minimize();
-          else top.focus();
-          return;
-        }
-        if (!prefersReducedMotion()) { b.classList.add('sd-launching'); setTimeout(() => b.classList.remove('sd-launching'), 900); }
-        launch();
-      });
+      b.addEventListener('click', () => activate(id, launch, b));
       b.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         const wins = wm.visibleOrder().filter(w => w.appId === id);
@@ -274,9 +306,64 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
       });
       dock.append(b);
     };
-    for (const a of core) add(a.id, a.name, a.icon, () => void wm.openApp(a.id));
-    if (pkgs.length) dock.append(el('div', 'sd-dock-sep'));
-    for (const a of pkgs) add(a.id, a.name, a.icon, () => void wm.openApp(a.id));
+    const addStack = (g: DockGroup, members: AppDescriptor[]) => {
+      const b = el('button', 'sd-dock-item sd-stack-tile');
+      b.dataset.group = g.id;
+      b.setAttribute('aria-label', `${g.name} (${members.length})`);
+      b.setAttribute('aria-haspopup', 'true');
+      b.innerHTML = `<span class="sd-stack-grid">${members.slice(0, 4).map(m => `<span>${iconHtml(m.id, m.icon)}</span>`).join('')}</span><span class="sd-dock-tip">${g.name}</span>`;
+      if (members.some(m => running.has(m.id))) b.classList.add('sd-running');
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (openStackEl?.dataset.group === g.id) { closeStack(); return; }
+        closeStack();
+        const pop = el('div', 'sd-stack');
+        pop.dataset.group = g.id;
+        pop.setAttribute('role', 'dialog');
+        pop.setAttribute('aria-label', g.name);
+        pop.innerHTML = `<div class="sd-stack-title">${g.name}</div><div class="sd-stack-items"></div>`;
+        const items = pop.querySelector<HTMLElement>('.sd-stack-items')!;
+        items.style.setProperty('--sd-stack-cols', String(Math.min(4, members.length)));
+        for (const m of members) {
+          const it = el('button', 'sd-stack-item');
+          it.innerHTML = `<span class="sd-stack-icon">${iconHtml(m.id, m.icon)}</span><span class="sd-stack-name"></span>`;
+          it.querySelector('.sd-stack-name')!.textContent = m.name;
+          if (running.has(m.id)) it.classList.add('sd-running');
+          it.addEventListener('click', () => { closeStack(); activate(m.id, () => void wm.openApp(m.id)); });
+          items.append(it);
+        }
+        root.append(pop);
+        const r = b.getBoundingClientRect();
+        const w = pop.offsetWidth;
+        pop.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, r.left + r.width / 2 - w / 2))}px`;
+        pop.style.bottom = `${Math.max(8, root.getBoundingClientRect().bottom - r.top + 10)}px`;
+        openStackEl = pop;
+      });
+      dock.append(b);
+    };
+    // Stack groups when the dock would not fit, or a group outgrew maxLoose
+    const groups = new Map((wm.groups?.() ?? []).map(g => [g.id, g]));
+    const perItem = wm.compact ? 50 : 56;
+    const crowded = (docked.length + 2) * perItem > window.innerWidth - 32;
+    const stacked = (gid: string | undefined) => {
+      const g = gid ? groups.get(gid) : undefined;
+      if (!g) return false;
+      if (g.collapse === 'always' || crowded) return true;
+      return docked.filter(a => groupOf(a) === gid).length > (g.maxLoose ?? 4);
+    };
+    const emitted = new Set<string>();
+    let lastSide: 'core' | 'rest' | null = null;
+    for (const a of docked) {
+      const side = (a.order ?? 100) < 20 ? 'core' : 'rest';
+      if (lastSide && side !== lastSide) dock.append(el('div', 'sd-dock-sep'));
+      lastSide = side;
+      const gid = groupOf(a);
+      if (gid && stacked(gid)) {
+        if (emitted.has(gid)) continue;
+        emitted.add(gid);
+        addStack(groups.get(gid)!, docked.filter(x => groupOf(x) === gid));
+      } else add(a.id, a.name, a.icon, () => void wm.openApp(a.id));
+    }
     if (extra.length) {
       dock.append(el('div', 'sd-dock-sep'));
       for (const id of extra) {
@@ -285,6 +372,10 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
       }
     }
   };
+  document.addEventListener('pointerdown', (e) => {
+    if (openStackEl && !openStackEl.contains(e.target as Node) && !(e.target as HTMLElement).closest?.('.sd-stack-tile')) closeStack();
+  }, true);
+  window.addEventListener('resize', () => queueDock());
   let dockQueued = false;
   const queueDock = () => {
     if (dockQueued) return;
@@ -295,6 +386,31 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
   wm.on('window-created', queueDock);
   wm.on('window-closed', queueDock);
   renderDock();
+  layout.relayout = () => { wm.relayout(); queueDock(); };
+
+  // ── Touch devices: the extra-keys bar and visual-viewport layout (own chunk) ──
+  if (coarse) {
+    const keysBtn = el('button', 'sd-mb-item sd-mb-status sd-mb-keys', GLYPHS.keyboard);
+    keysBtn.title = 'Extra keys';
+    menubar.insertBefore(keysBtn, searchBtn);
+    void import('./mobile').then((m) => {
+      const paint = (mode: string) => {
+        keysBtn.classList.toggle('sd-on', mode !== 'off');
+        keysBtn.setAttribute('aria-pressed', String(mode !== 'off'));
+        keysBtn.setAttribute('aria-label', mode === 'off' ? 'Show extra keys' : 'Hide extra keys');
+      };
+      // Off ↔ the last "on" mode (Auto, or Always from Settings)
+      let lastOn = m.keybarMode() === 'pinned' ? 'pinned' as const : 'auto' as const;
+      keysBtn.addEventListener('click', () => {
+        const cur = m.keybarMode();
+        if (cur !== 'off') lastOn = cur;
+        m.setKeybarMode(cur === 'off' ? lastOn : 'off');
+      });
+      m.onKeybarMode(paint);
+      paint(m.keybarMode());
+      m.initMobile(ctx, layout);
+    });
+  }
 
   // ── Menu bar behaviour ──
   const focusedApp = () => wm.app(wm.focused()?.appId);
@@ -452,7 +568,9 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     themeBtn.innerHTML = t === 'dark' ? GLYPHS.moon : GLYPHS.sun;
     themeBtn.title = t === 'dark' ? 'Dark appearance (click for light)' : 'Light appearance (click for dark)';
     themeBtn.setAttribute('aria-label', themeBtn.title);
-    meta?.setAttribute('content', t === 'dark' ? '#0c0f1f' : '#eef0ff');
+    // The browser chrome and status bar match the (solid, on phones) menu bar
+    meta?.setAttribute('content', t === 'dark' ? THEME_COLOR.dark : THEME_COLOR.light);
+    statusBarMeta?.setAttribute('content', t === 'dark' ? 'black-translucent' : 'default');
     applyTerminalTheme(t, mainTerm ? [mainTerm] : []);
   };
   themeBtn.addEventListener('click', () => wm.setTheme(wm.theme() === 'dark' ? 'light' : 'dark'));
@@ -525,6 +643,9 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     },
   };
 }
+
+/** Solid menu bar colors on phones (desktop.css .sd-compact .sd-menubar), also the theme-color */
+const THEME_COLOR = { dark: '#161824', light: '#f4f4f8' };
 
 function prefersReducedMotion(): boolean {
   return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;

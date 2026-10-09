@@ -186,7 +186,7 @@ describe('uiMode', () => {
   });
 });
 
-describe('brand (src/brand.json)', () => {
+describe('brand (profiles/tabcomputer/profile.json)', () => {
   it('server.mjs titles the app shell and adds meta tags, except on shiro.computer', async () => {
     const { execFileSync } = await import('node:child_process');
     // Plain Node (vitest's polyfilled modules can't load server.mjs)
@@ -276,5 +276,46 @@ describe('quarters, launcher matching, session', () => {
     await s.restoreSession(wm, saved, () => null);
     expect(opened).toEqual([{ newWindow: true, path: '/usr/bin' }]);
     expect(wm.windows().filter(w => w.appId === 'files').pop()!.state).toBe('snapped-right');
+  });
+});
+
+describe('dock stacks and the touch key bar (v1.2)', () => {
+  it('registerGroup() lists groups by order and announces apps-changed', () => {
+    let changed = 0;
+    wm.on('apps-changed', () => { changed++; });
+    wm.registerGroup({ id: 'b', name: 'B', order: 30 });
+    wm.registerGroup({ id: 'a', name: 'A', order: 10, maxLoose: 2 });
+    expect(wm.groups().map(g => g.id)).toEqual(['a', 'b']);
+    expect(changed).toBe(2);
+    wm.registerGroup({ id: 'b', name: 'B2', order: 5 }); // same id: replaced
+    expect(wm.groups().map(g => g.name)).toEqual(['B2', 'A']);
+    wm.registerApp({ id: 'x', name: 'X', group: 'a', launch: () => null });
+    expect(wm.app('x')!.group).toBe('a');
+  });
+
+  it('ctrlChar() maps letters to control characters', async () => {
+    const { ctrlChar } = await import('@shiro/desktop/mobile');
+    expect(ctrlChar('c')).toBe('\x03');
+    expect(ctrlChar('C')).toBe('\x03');
+    expect(ctrlChar('[')).toBe('\x1b');
+    expect(ctrlChar(' ')).toBe('\x00');
+    expect(ctrlChar('?')).toBe('\x7f');
+    expect(ctrlChar('1')).toBe('1');
+  });
+
+  it('key bar mode is remembered and announced', async () => {
+    const m = await import('@shiro/desktop/mobile');
+    localStorage.removeItem(m.KEYBAR_KEY);
+    expect(m.keybarMode()).toBe('auto');
+    const seen: string[] = [];
+    const off = m.onKeybarMode((x) => seen.push(x));
+    m.setKeybarMode('pinned');
+    expect(m.keybarMode()).toBe('pinned');
+    m.setKeybarMode('off');
+    off();
+    m.setKeybarMode('auto');
+    expect(seen).toEqual(['pinned', 'off']);
+    // Two rows of nine fit a 375 px phone
+    expect(m.KEY_ROWS.map(r => r.length)).toEqual([9, 9]);
   });
 });

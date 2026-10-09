@@ -130,6 +130,19 @@ describe('X11 protocol', () => {
     expect(r.u8()).toBe(1);
   });
 
+  it('reports the display scale as DPI: Xft.dpi, an outline font for xterm, toolkit scale variables', async () => {
+    const at = (dpi: number) => new TextDecoder().decode(new XServer({ dpi }).root.props.get(23 /* RESOURCE_MANAGER */)!.data);
+    expect(at(96)).toContain('Xft.dpi:\t96\n');
+    expect(at(96)).not.toContain('faceName');
+    expect(at(192)).toContain('Xft.dpi:\t192\n');
+    expect(at(192)).toContain('Xcursor.size:\t48\n');
+    expect(at(192)).toContain('XTerm*faceName:\tDejaVu Sans Mono\n');
+    const { toolkitScaleEnv } = await import('@shiro/gui/display-scale');
+    expect(toolkitScaleEnv(1)).toEqual({});
+    expect(toolkitScaleEnv(2)).toMatchObject({ GDK_SCALE: '2', GDK_DPI_SCALE: '0.5', QT_SCALE_FACTOR: '2', QT_FONT_DPI: '96' });
+    expect(toolkitScaleEnv(1.5)).toMatchObject({ GDK_SCALE: '1', QT_SCALE_FACTOR: '1.5' });
+  });
+
   it('maps a window, sends Expose, draws, and composes the pixels', async () => {
     const { c, tops } = await newServer();
     const wid = c.id(1), gc = c.id(2);
@@ -248,6 +261,32 @@ describe('X11 protocol', () => {
     let black = 0;
     for (let x = 2; x < 14; x++) for (let y = 4; y < 17; y++) if (pixelAt(tops[0], x, y) === 0) black++;
     expect(black).toBeGreaterThan(10);
+  });
+
+  it('DOM-text mode reports core text instead of drawing glyphs, and CopyArea moves', async () => {
+    const { server, c, tops } = await newServer();
+    server.domText = true;
+    const runs: { x: number; y: number; text: string; width: number; fg: number; bg: number | null; font: string }[] = [];
+    const copies: unknown[][] = [];
+    server.hooks.text = (_top, run) => runs.push(run);
+    server.hooks.copy = (_top, ...args) => copies.push(args);
+    const wid = c.id(1), gc = c.id(2), fid = c.id(3);
+    createWindow(c, wid, 0, 0, 100, 40, 0);
+    c.send(8, 0, (w) => w.u32(wid));
+    c.send(45, 0, (w) => w.u32(fid).u16(5).u16(0).str('fixed'));
+    c.send(55, 0, (w) => w.u32(gc).u32(wid).u32(0x4 | 0x8 | 0x4000).u32(0x102030).u32(0xffffff).u32(fid));
+    c.send(76, 2, (w) => w.u32(wid).u32(gc).i16(2).i16(15).str('Hi'));                    // ImageText8
+    c.send(74, 0, (w) => w.u32(wid).u32(gc).i16(20).i16(30).u8(3).u8(0).str('abc').u8(0)); // PolyText8
+    c.send(62, 0, (w) => w.u32(wid).u32(wid).u32(gc).i16(0).i16(20).i16(0).i16(5).u16(100).u16(20)); // CopyArea (scroll)
+    c.send(43, 0);
+    await c.reply();
+    expect(runs.map((r) => r.text)).toEqual(['Hi', 'abc']);
+    expect(runs[0]).toMatchObject({ x: 2, y: 15, width: 12, fg: 0x102030, bg: 0xffffff });
+    expect(runs[1]).toMatchObject({ x: 20, y: 30, width: 18, bg: null });
+    expect(runs[0].font).toMatch(/-misc-fixed-medium-r-.*-c-60-/);
+    // no glyph pixels: ImageText painted its (white) background only
+    for (let x = 2; x < 14; x++) for (let y = 4; y < 17; y++) expect(pixelAt(tops[0], x, y)).toBe(0xffffff);
+    expect(copies).toEqual([['begin', 0, 20, 100, 20, 0, 5], ['end', 0, 20, 100, 20, 0, 5]]);
   });
 
   it('transfers a selection between two clients', async () => {
