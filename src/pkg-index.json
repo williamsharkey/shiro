@@ -1952,7 +1952,7 @@
   },
   {
    "name": "vim",
-   "version": "9.2.0000",
+   "version": "9.2.0000-1",
    "description": "Vi IMproved (huge features, syntax highlighting, :help; static x86-64 build)",
    "license": "Vim",
    "source": "https://github.com/vim/vim/tree/v9.2.0000",
@@ -1964,14 +1964,14 @@
    "files": [
     {
      "path": "bin/vim",
-     "url": "/pkg/vim/9.2.0000/vim.gz",
-     "sha256": "f34559a8ecf901f8c0799231b7b2d4ce154601d3a6e14b193eb5df9678bd80e3",
-     "size": 1586122,
+     "url": "/pkg/vim/9.2.0000-1/vim.gz",
+     "sha256": "4b5afbd324928d8edb10022e6281e28849b7919aa313c94e8b08ffbde5de7beb",
+     "size": 1586138,
      "unpack": "gzip"
     },
     {
      "path": "share",
-     "url": "/pkg/vim/9.2.0000/share.tar.gz",
+     "url": "/pkg/vim/9.2.0000-1/share.tar.gz",
      "sha256": "90ebb4a74e90927a370d29fbf7604ec8e6434f584bf4281540e57d6e5d54b272",
      "size": 7129534,
      "unpack": "tar.gz"
