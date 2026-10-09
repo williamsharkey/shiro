@@ -35,21 +35,9 @@
    ]
   },
   "word-split": {
-   "pass": 44,
+   "pass": 48,
    "total": 53,
    "failures": [
-    {
-     "i": 23,
-     "name": "default value with unquoted IFS char"
-    },
-    {
-     "i": 30,
-     "name": "Empty IFS (regression for bug)"
-    },
-    {
-     "i": 31,
-     "name": "Unset IFS (regression for bug)"
-    },
     {
      "i": 34,
      "name": "IFS and joining arrays by assignments"
@@ -69,10 +57,6 @@
     {
      "i": 51,
      "name": "\"\"$A\"\" - empty string on both sides - derived from spec/toysh-posix #15"
-    },
-    {
-     "i": 54,
-     "name": "Regression: \"${v:-AxBxC}\"x should not be split"
     }
    ]
   },

@@ -505,4 +505,12 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe("hello world !!!\nX y\nalias q='quux'\ngone\nalias s='echo it'\\''s'\nx B- z\nst=2\n");
   });
+
+  it('set a b c sets the positional parameters; unquoted ${v:-word} splits its word on IFS', async () => {
+    const r = await script([
+      'set a b c; echo "n=$# $2"; set -e x y; echo "n=$# $1"; set +e',
+      'IFS=; echo ["$*"]; IFS=x; v=; echo ${v:-AxBxC} "${v:-AxBxC}"x; unset IFS',
+    ].join('\n'));
+    expect(r.out).toBe('n=3 b\nn=2 x\n[xy]\nA B C AxBxCx\n');
+  });
 });

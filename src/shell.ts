@@ -2458,8 +2458,24 @@ export class Shell {
 
         // Shell builtin: set -- args (positional parameter assignment)
         if (!_builtinDisabled && effectiveCmdName === 'set') {
-          // Check for -- to set positional parameters
-          const ddIdx = cmdArgs.indexOf('--');
+          // Check for -- to set positional parameters; the first word that isn't an
+          // option (set a b c) starts them too, as does a lone - (set - a b)
+          let ddIdx = cmdArgs.indexOf('--');
+          if (ddIdx < 0) {
+            let k = 0;
+            for (; k < cmdArgs.length; k++) {
+              if (cmdArgs[k] === '-o' || cmdArgs[k] === '+o') { k++; continue; }
+              if (!/^[-+]./.test(cmdArgs[k])) break;
+            }
+            if (k < cmdArgs.length) {
+              // options before the parameters still apply
+              if (k > 0) await this.execute(`set ${quoteArgsForShell(cmdArgs.slice(0, k))}`, writeStdout, stderrWriter, false, undefined, true);
+              cmdArgs.splice(0, k);
+              if (cmdArgs[0] === '-') cmdArgs.shift();
+              cmdArgs.unshift('--');
+              ddIdx = 0;
+            }
+          }
           if (cmdArgs.length === 0) {
             // Bare `set` lists shell variables, quoted so they can be read back
             const names = Object.keys(this.env).filter(k => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k) && !k.startsWith('__')).sort();
@@ -3537,7 +3553,7 @@ export class Shell {
             // The value is data, except for ${x-word} ${x=word} ${x+word} ${x?word},
             // whose word was expanded as shell text (its quotes still to be removed)
             const wordOp = /^(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-]):?[-=+?]/.test(inner);
-            result += wordOp ? expanded
+            result += wordOp ? (inDouble ? expanded : this.splitWordText(expanded))
               : inDouble ? protectExpansion(expanded) : splitFields(expanded, this.fieldIFS());
             i = j + 1;
             continue;
@@ -3723,6 +3739,28 @@ export class Shell {
       picked = picked.slice(0, len);
     }
     return picked;
+  }
+
+  /**
+   * The word of an unquoted ${x-word}/${x:+word}: its unquoted literal text is
+   * field-split like an expansion's value (IFS characters separate, other
+   * blanks are kept); quoted parts stay as they are.
+   */
+  private splitWordText(text: string): string {
+    const ifs = this.fieldIFS() ?? ' \t\n';
+    if (ifs === ' \t\n') return text;
+    let out = '';
+    let q = '';
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (q) { out += c; if (c === '\\' && q === '"') out += text[++i] ?? ''; else if (c === q) q = ''; continue; }
+      if (c === '\\') { out += c + (text[i + 1] ?? ''); i++; continue; }
+      if (c === "'" || c === '"') { q = c; out += c; continue; }
+      if (ifs.includes(c)) out += ' ';
+      else if (c === ' ' || c === '\t' || c === '\n') out += BLANK_PROTECT[c];
+      else out += c;
+    }
+    return out;
   }
 
   /** ${NAME<op>} applied to a value (an array element) instead of a variable */
