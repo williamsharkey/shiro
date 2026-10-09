@@ -8,7 +8,7 @@ const R = '\x1b[0m';
 
 /** Curated man pages for top commands */
 const manPages: Record<string, string> = {
-  ls: `${B}LS(1)${R}                        Shiro Manual                       ${B}LS(1)${R}
+  ls: `${B}LS(1)${R}                     tabcomputer Manual                    ${B}LS(1)${R}
 
 ${B}NAME${R}
        ls - list directory contents
@@ -39,7 +39,7 @@ ${B}DESCRIPTION${R}
        ${B}-1${R}     list one file per line
 `,
 
-  cat: `${B}CAT(1)${R}                       Shiro Manual                      ${B}CAT(1)${R}
+  cat: `${B}CAT(1)${R}                    tabcomputer Manual                   ${B}CAT(1)${R}
 
 ${B}NAME${R}
        cat - concatenate files and print on standard output
@@ -59,7 +59,7 @@ ${B}DESCRIPTION${R}
        ${B}-E${R}     display $ at end of each line
 `,
 
-  grep: `${B}GREP(1)${R}                      Shiro Manual                     ${B}GREP(1)${R}
+  grep: `${B}GREP(1)${R}                   tabcomputer Manual                  ${B}GREP(1)${R}
 
 ${B}NAME${R}
        grep - print lines that match patterns
@@ -118,7 +118,7 @@ ${B}EXAMPLES${R}
               Count error occurrences
 `,
 
-  sed: `${B}SED(1)${R}                       Shiro Manual                      ${B}SED(1)${R}
+  sed: `${B}SED(1)${R}                    tabcomputer Manual                   ${B}SED(1)${R}
 
 ${B}NAME${R}
        sed - stream editor for filtering and transforming text
@@ -156,7 +156,7 @@ ${B}EXAMPLES${R}
               Print lines 10 through 20
 `,
 
-  awk: `${B}AWK(1)${R}                       Shiro Manual                      ${B}AWK(1)${R}
+  awk: `${B}AWK(1)${R}                    tabcomputer Manual                   ${B}AWK(1)${R}
 
 ${B}NAME${R}
        awk - pattern scanning and text processing language
@@ -187,7 +187,7 @@ ${B}EXAMPLES${R}
               Print lines 5 through 10
 `,
 
-  find: `${B}FIND(1)${R}                      Shiro Manual                     ${B}FIND(1)${R}
+  find: `${B}FIND(1)${R}                   tabcomputer Manual                  ${B}FIND(1)${R}
 
 ${B}NAME${R}
        find - search for files in a directory hierarchy
@@ -218,7 +218,7 @@ ${B}EXAMPLES${R}
               Delete all log files in /tmp
 `,
 
-  cd: `${B}CD(1)${R}                        Shiro Manual                       ${B}CD(1)${R}
+  cd: `${B}CD(1)${R}                     tabcomputer Manual                    ${B}CD(1)${R}
 
 ${B}NAME${R}
        cd - change the working directory
@@ -234,7 +234,7 @@ ${B}DESCRIPTION${R}
        ${B}cd ..${R}  change to parent directory
 `,
 
-  echo: `${B}ECHO(1)${R}                      Shiro Manual                     ${B}ECHO(1)${R}
+  echo: `${B}ECHO(1)${R}                   tabcomputer Manual                  ${B}ECHO(1)${R}
 
 ${B}NAME${R}
        echo - display a line of text
@@ -256,7 +256,7 @@ ${B}ESCAPE SEQUENCES${R}
        \\0nnn  octal value
 `,
 
-  cp: `${B}CP(1)${R}                        Shiro Manual                       ${B}CP(1)${R}
+  cp: `${B}CP(1)${R}                     tabcomputer Manual                    ${B}CP(1)${R}
 
 ${B}NAME${R}
        cp - copy files and directories
@@ -273,7 +273,7 @@ ${B}DESCRIPTION${R}
        ${B}-f${R}     force overwrite
 `,
 
-  mv: `${B}MV(1)${R}                        Shiro Manual                       ${B}MV(1)${R}
+  mv: `${B}MV(1)${R}                     tabcomputer Manual                    ${B}MV(1)${R}
 
 ${B}NAME${R}
        mv - move (rename) files
@@ -287,7 +287,7 @@ ${B}DESCRIPTION${R}
        ${B}-f${R}     do not prompt before overwriting
 `,
 
-  rm: `${B}RM(1)${R}                        Shiro Manual                       ${B}RM(1)${R}
+  rm: `${B}RM(1)${R}                     tabcomputer Manual                    ${B}RM(1)${R}
 
 ${B}NAME${R}
        rm - remove files or directories
@@ -303,7 +303,7 @@ ${B}DESCRIPTION${R}
               remove directories and their contents recursively
 `,
 
-  mkdir: `${B}MKDIR(1)${R}                     Shiro Manual                   ${B}MKDIR(1)${R}
+  mkdir: `${B}MKDIR(1)${R}                  tabcomputer Manual                ${B}MKDIR(1)${R}
 
 ${B}NAME${R}
        mkdir - make directories
@@ -317,7 +317,7 @@ ${B}DESCRIPTION${R}
        ${B}-p${R}     make parent directories as needed
 `,
 
-  head: `${B}HEAD(1)${R}                      Shiro Manual                     ${B}HEAD(1)${R}
+  head: `${B}HEAD(1)${R}                   tabcomputer Manual                  ${B}HEAD(1)${R}
 
 ${B}NAME${R}
        head - output the first part of files
@@ -335,7 +335,7 @@ ${B}DESCRIPTION${R}
               print the first NUM bytes
 `,
 
-  tail: `${B}TAIL(1)${R}                      Shiro Manual                     ${B}TAIL(1)${R}
+  tail: `${B}TAIL(1)${R}                   tabcomputer Manual                  ${B}TAIL(1)${R}
 
 ${B}NAME${R}
        tail - output the last part of files
@@ -355,7 +355,7 @@ ${B}DESCRIPTION${R}
        ${B}-f${R}     output appended data as the file grows
 `,
 
-  wc: `${B}WC(1)${R}                        Shiro Manual                       ${B}WC(1)${R}
+  wc: `${B}WC(1)${R}                     tabcomputer Manual                    ${B}WC(1)${R}
 
 ${B}NAME${R}
        wc - print newline, word, and byte counts
@@ -372,7 +372,7 @@ ${B}DESCRIPTION${R}
        ${B}-m${R}     print the character counts
 `,
 
-  sort: `${B}SORT(1)${R}                      Shiro Manual                     ${B}SORT(1)${R}
+  sort: `${B}SORT(1)${R}                   tabcomputer Manual                  ${B}SORT(1)${R}
 
 ${B}NAME${R}
        sort - sort lines of text files
@@ -392,7 +392,7 @@ ${B}DESCRIPTION${R}
               use SEP as the field separator
 `,
 
-  uniq: `${B}UNIQ(1)${R}                      Shiro Manual                     ${B}UNIQ(1)${R}
+  uniq: `${B}UNIQ(1)${R}                   tabcomputer Manual                  ${B}UNIQ(1)${R}
 
 ${B}NAME${R}
        uniq - report or omit repeated lines
@@ -409,7 +409,7 @@ ${B}DESCRIPTION${R}
        ${B}-i${R}     ignore differences in case
 `,
 
-  chmod: `${B}CHMOD(1)${R}                     Shiro Manual                   ${B}CHMOD(1)${R}
+  chmod: `${B}CHMOD(1)${R}                  tabcomputer Manual                ${B}CHMOD(1)${R}
 
 ${B}NAME${R}
        chmod - change file mode bits
@@ -426,7 +426,7 @@ ${B}MODE${R}
        Octal (e.g. 755) or symbolic (e.g. u+x, go-w).
 `,
 
-  curl: `${B}CURL(1)${R}                      Shiro Manual                     ${B}CURL(1)${R}
+  curl: `${B}CURL(1)${R}                   tabcomputer Manual                  ${B}CURL(1)${R}
 
 ${B}NAME${R}
        curl - transfer a URL
@@ -459,7 +459,7 @@ ${B}EXAMPLES${R}
               POST JSON data
 `,
 
-  git: `${B}GIT(1)${R}                       Shiro Manual                      ${B}GIT(1)${R}
+  git: `${B}GIT(1)${R}                    tabcomputer Manual                   ${B}GIT(1)${R}
 
 ${B}NAME${R}
        git - distributed version control system
@@ -469,7 +469,7 @@ ${B}SYNOPSIS${R}
 
 ${B}DESCRIPTION${R}
        Git is a version control system for tracking changes in files.
-       Shiro implements a subset of git commands using isomorphic-git.
+       tabcomputer implements a subset of git commands using isomorphic-git.
 
 ${B}COMMANDS${R}
        ${B}init${R}       Create an empty git repository
@@ -485,7 +485,7 @@ ${B}COMMANDS${R}
        ${B}pull${R}       Fetch and integrate with remote
 `,
 
-  vi: `${B}VI(1)${R}                        Shiro Manual                       ${B}VI(1)${R}
+  vi: `${B}VI(1)${R}                     tabcomputer Manual                    ${B}VI(1)${R}
 
 ${B}NAME${R}
        vi - screen-oriented text editor
@@ -510,7 +510,7 @@ ${B}NORMAL MODE${R}
        ${B}:wq${R}    save and quit
 `,
 
-  less: `${B}LESS(1)${R}                      Shiro Manual                     ${B}LESS(1)${R}
+  less: `${B}LESS(1)${R}                   tabcomputer Manual                  ${B}LESS(1)${R}
 
 ${B}NAME${R}
        less - view file contents with pagination
@@ -539,7 +539,7 @@ ${B}KEYS${R}
        ${B}N${R}          previous search match
 `,
 
-  speak: `${B}SPEAK(1)${R}                     Shiro Manual                   ${B}SPEAK(1)${R}
+  speak: `${B}SPEAK(1)${R}                  tabcomputer Manual                ${B}SPEAK(1)${R}
 
 ${B}NAME${R}
        speak - text-to-speech via browser SpeechSynthesis
@@ -572,7 +572,7 @@ ${B}EXAMPLES${R}
        speak --list
 `,
 
-  listen: `${B}LISTEN(1)${R}                    Shiro Manual                 ${B}LISTEN(1)${R}
+  listen: `${B}LISTEN(1)${R}                 tabcomputer Manual              ${B}LISTEN(1)${R}
 
 ${B}NAME${R}
        listen - speech-to-text via browser SpeechRecognition
@@ -598,7 +598,7 @@ ${B}EXAMPLES${R}
        listen -t 5              listen for 5 seconds
 `,
 
-  camera: `${B}CAMERA(1)${R}                    Shiro Manual                 ${B}CAMERA(1)${R}
+  camera: `${B}CAMERA(1)${R}                 tabcomputer Manual              ${B}CAMERA(1)${R}
 
 ${B}NAME${R}
        camera - take a webcam snapshot
@@ -619,7 +619,7 @@ ${B}EXAMPLES${R}
        camera -o pic.png && img pic.png  capture and display
 `,
 
-  notify: `${B}NOTIFY(1)${R}                    Shiro Manual                 ${B}NOTIFY(1)${R}
+  notify: `${B}NOTIFY(1)${R}                 tabcomputer Manual              ${B}NOTIFY(1)${R}
 
 ${B}NAME${R}
        notify - send a browser notification
@@ -632,7 +632,7 @@ ${B}DESCRIPTION${R}
        Requests permission automatically on first use.
 
        ${B}-t${R} ${U}title${R}
-              notification title (default: "Shiro")
+              notification title (default: "tabcomputer")
 
 ${B}EXAMPLES${R}
        notify "Build complete"
@@ -641,7 +641,7 @@ ${B}EXAMPLES${R}
        build && notify "Finished"
 `,
 
-  top: `${B}TOP(1)${R}                       Shiro Manual                      ${B}TOP(1)${R}
+  top: `${B}TOP(1)${R}                    tabcomputer Manual                   ${B}TOP(1)${R}
 
 ${B}NAME${R}
        top - real-time process monitor
@@ -667,7 +667,7 @@ ${B}INTERACTIVE KEYS${R}
        ${B}Space${R}      force refresh
 `,
 
-  factor: `${B}FACTOR(1)${R}                    Shiro Manual                   ${B}FACTOR(1)${R}
+  factor: `${B}FACTOR(1)${R}                 tabcomputer Manual                ${B}FACTOR(1)${R}
 
 ${B}NAME${R}
        factor - print prime factors of numbers
@@ -690,7 +690,7 @@ ${B}EXAMPLES${R}
               100: 2 2 5 5
 `,
 
-  cksum: `${B}CKSUM(1)${R}                     Shiro Manual                   ${B}CKSUM(1)${R}
+  cksum: `${B}CKSUM(1)${R}                  tabcomputer Manual                ${B}CKSUM(1)${R}
 
 ${B}NAME${R}
        cksum - print CRC checksum and byte count
@@ -712,7 +712,7 @@ ${B}EXAMPLES${R}
               3287646509 6
 `,
 
-  base32: `${B}BASE32(1)${R}                    Shiro Manual                   ${B}BASE32(1)${R}
+  base32: `${B}BASE32(1)${R}                 tabcomputer Manual                ${B}BASE32(1)${R}
 
 ${B}NAME${R}
        base32 - RFC 4648 Base32 encode or decode
@@ -738,7 +738,7 @@ ${B}EXAMPLES${R}
               foo
 `,
 
-  numfmt: `${B}NUMFMT(1)${R}                    Shiro Manual                   ${B}NUMFMT(1)${R}
+  numfmt: `${B}NUMFMT(1)${R}                 tabcomputer Manual                ${B}NUMFMT(1)${R}
 
 ${B}NAME${R}
        numfmt - convert numbers from/to human-readable strings
@@ -783,7 +783,7 @@ ${B}EXAMPLES${R}
               1000
 `,
 
-  csplit: `${B}CSPLIT(1)${R}                    Shiro Manual                   ${B}CSPLIT(1)${R}
+  csplit: `${B}CSPLIT(1)${R}                 tabcomputer Manual                ${B}CSPLIT(1)${R}
 
 ${B}NAME${R}
        csplit - split a file into sections by context
@@ -819,7 +819,7 @@ ${B}EXAMPLES${R}
        csplit file.txt '/^Chapter/' '{*}'
               Split before each "Chapter" heading
 `,
-  spirit: `${B}SPIRIT(1)${R}                    Shiro Manual                     ${B}SPIRIT(1)${R}
+  spirit: `${B}SPIRIT(1)${R}                 tabcomputer Manual                  ${B}SPIRIT(1)${R}
 
 ${B}NAME${R}
        spirit - AI assistant powered by Claude
@@ -866,7 +866,7 @@ ${B}EXAMPLES${R}
 };
 
 function autoGenerateManPage(name: string, description: string): string {
-  return `${B}${name.toUpperCase()}(1)${R}${' '.repeat(Math.max(1, 30 - name.length))}Shiro Manual${' '.repeat(Math.max(1, 30 - name.length))}${B}${name.toUpperCase()}(1)${R}
+  return `${B}${name.toUpperCase()}(1)${R}${' '.repeat(Math.max(1, 27 - name.length))}tabcomputer Manual${' '.repeat(Math.max(1, 27 - name.length))}${B}${name.toUpperCase()}(1)${R}
 
 ${B}NAME${R}
        ${name} - ${description}

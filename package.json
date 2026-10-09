@@ -1,7 +1,7 @@
 {
-  "name": "shiro",
+  "name": "tabcomputer",
   "version": "0.1.0",
-  "description": "Browser-native Unix shell with Git, pipes, and IndexedDB filesystem - no servers, runs entirely in JavaScript",
+  "description": "tabcomputer: a Unix-like computer that lives in your browser tab - a real shell, processes and ptys, Debian packages, a desktop",
   "type": "module",
   "scripts": {
     "dev": "vite",

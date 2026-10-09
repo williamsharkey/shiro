@@ -11,8 +11,8 @@ const __dirname = path.dirname(__filename);
 const base = process.env.VITE_BASE_PATH || './';
 
 // Same cross-origin isolation headers as server.mjs, so SharedArrayBuffer works
-// under `npm run dev` / `vite preview` too. SHIRO_ISOLATION=0 turns them off.
-const isolationHeaders: Record<string, string> = process.env.SHIRO_ISOLATION === '0' ? {} : {
+// under `npm run dev` / `vite preview` too. TABCOMPUTER_ISOLATION=0 (or SHIRO_ISOLATION=0) turns them off.
+const isolationHeaders: Record<string, string> = (process.env.TABCOMPUTER_ISOLATION ?? process.env.SHIRO_ISOLATION) === '0' ? {} : {
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Cross-Origin-Embedder-Policy': 'credentialless',
 };

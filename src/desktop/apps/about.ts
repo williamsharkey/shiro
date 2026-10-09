@@ -6,7 +6,7 @@ import { ICONS } from '../icons';
 import { BRAND } from '../../brand';
 import buildNumber from '../../../build-number.txt?raw';
 
-const REPO = 'https://github.com/williamsharkey/shiro/blob/main/docs';
+const REPO = 'https://github.com/williamsharkey/tabcomputer/blob/main/docs';
 
 /**
  * Measured numbers, each with the document that records it. Update these

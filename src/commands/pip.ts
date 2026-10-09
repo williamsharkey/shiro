@@ -177,7 +177,7 @@ export class PyPI {
       if (versions.some(({ p }) => satisfies(p, specs, false))) break;
     }
     const spec = specs.map(s => s.op + s.version).join(',');
-    if (sdistOnly) throw new Error(`${proj.info.name}${spec}: version ${sdistOnly} has no pure-Python wheel (only a source distribution, which Shiro's pip can't build yet)`);
+    if (sdistOnly) throw new Error(`${proj.info.name}${spec}: version ${sdistOnly} has no pure-Python wheel (only a source distribution, which tabcomputer's pip can't build yet)`);
     throw new Error(`No matching distribution found for ${req.name}${spec}`);
   }
 }
@@ -424,7 +424,7 @@ export async function pipMain(ctx: CommandContext, argv: string[], target: PipTa
   const rest = argv.slice(1);
   if (!sub || sub === 'help' || sub === '-h' || sub === '--help') { out(HELP); return sub ? 0 : 1; }
   if (sub === '--version' || sub === '-V') {
-    out(`pip 24.0 (shiro) from ${target.site} (python ${PY_SHORT})\n`);
+    out(`pip 24.0 (tabcomputer) from ${target.site} (python ${PY_SHORT})\n`);
     return 0;
   }
   const flag = (...names: string[]) => {

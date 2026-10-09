@@ -270,7 +270,7 @@ describe('seed gif — GIF export + import roundtrip', () => {
   it('should download a GIF with embedded seed data', async () => {
     const { output, exitCode } = await run(shell, 'seed gif');
     expect(exitCode).toBe(0);
-    expect(output).toContain('Shiro GIF Seed');
+    expect(output).toContain('tabcomputer GIF Seed');
     expect(output).toContain('Downloaded:');
     expect(lastDownloadBlob).not.toBeNull();
     expect(lastDownloadFilename).toMatch(/\.gif$/);
@@ -400,7 +400,7 @@ describe('seed html — HTML export + verify seed injection', () => {
   it('should download an HTML file', async () => {
     const { output, exitCode } = await run(shell, 'seed html');
     expect(exitCode).toBe(0);
-    expect(output).toContain('Shiro HTML Seed');
+    expect(output).toContain('tabcomputer HTML Seed');
     expect(output).toContain('Downloaded:');
     expect(lastDownloadBlob).not.toBeNull();
     expect(lastDownloadFilename).toMatch(/\.html$/);

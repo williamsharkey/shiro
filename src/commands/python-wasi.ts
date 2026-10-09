@@ -11,7 +11,7 @@ export async function runPythonFrontend(ctx: CommandContext, args: string[], inv
   const rest = args.slice(i + 2);
   if (mod === 'venv') return venvMain(ctx, rest);
   if (mod === 'ensurepip') {
-    ctx.stdout += 'pip is built into Shiro (python -m pip, pip); nothing to bootstrap.\n';
+    ctx.stdout += 'pip is built into tabcomputer (python -m pip, pip); nothing to bootstrap.\n';
     return 0;
   }
   // a venv's python installs into that venv, like real pip

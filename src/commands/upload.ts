@@ -245,8 +245,8 @@ async function showFileBrowser(ctx: import('./index').CommandContext): Promise<n
 }
 
 export const shiroConfigCmd: Command = {
-  name: 'shiro',
-  description: 'Shiro OS configuration',
+  name: 'tabcomputer',
+  description: 'tabcomputer configuration',
   async exec(ctx) {
     // Helper to mask API keys for display
     const maskKey = (key: string, prefix: string) => {
@@ -335,12 +335,12 @@ export const shiroConfigCmd: Command = {
 
     ctx.stdout = [
       'Usage:',
-      '  shiro config set anthropic_key <key>  Set Anthropic (Claude) API key',
-      '  shiro config set openai_key <key>     Set OpenAI (GPT) API key',
-      '  shiro config set google_key <key>     Set Google (Gemini) API key',
-      '  shiro config set github_token <tok>   Set GitHub token for git push/pull',
-      '  shiro config get <key_name>           Show a config value',
-      '  shiro config list                     Show all configuration',
+      '  tabcomputer config set anthropic_key <key>  Set Anthropic (Claude) API key',
+      '  tabcomputer config set openai_key <key>     Set OpenAI (GPT) API key',
+      '  tabcomputer config set google_key <key>     Set Google (Gemini) API key',
+      '  tabcomputer config set github_token <tok>   Set GitHub token for git push/pull',
+      '  tabcomputer config get <key_name>           Show a config value',
+      '  tabcomputer config list                     Show all configuration',
       '',
       'Get API keys at:',
       '  Anthropic: https://console.anthropic.com/settings/keys',

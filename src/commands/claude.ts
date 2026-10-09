@@ -98,7 +98,7 @@ export const claudeCmd: Command = {
       return installNativeClaude(ctx, nativeClaudePath(ctx.env), version);
     }
     if (args[0] === 'update' || args[0] === 'upgrade' || args[0] === 'install') {
-      ctx.stdout += `Claude Code in Shiro is pinned to ${CLAUDE_CODE_VERSION}, the last release that ships as JavaScript\n`
+      ctx.stdout += `Claude Code in tabcomputer is pinned to ${CLAUDE_CODE_VERSION}, the last release that ships as JavaScript\n`
         + `(later releases are native binaries). It reports itself as ${CLAUDE_CODE_REPORTED_VERSION} so current models work.\n`
         + 'The native build can run in the x86-64 emulator (experimental, slow): claude install --native, then claude --native.\n';
       return 0;

@@ -114,7 +114,7 @@ async function setupPythonStdlib(ctx: CommandContext): Promise<void> {
   }
 
   // Write minimal site.py and encodings/__init__.py so CPython can bootstrap
-  await fs.writeFile('/usr/lib/python3.12/site.py', '# Minimal site.py for Shiro\n');
+  await fs.writeFile('/usr/lib/python3.12/site.py', '# Minimal site.py for tabcomputer\n');
   await fs.writeFile('/usr/lib/python3.12/encodings/__init__.py',
     '# encodings package stub\nimport codecs\ndef search_function(name):\n    return None\ncodecs.register(search_function)\n');
   await fs.writeFile('/usr/lib/python3.12/encodings/utf_8.py',

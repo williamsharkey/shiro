@@ -228,7 +228,7 @@ class HCOuterSession {
     return new Promise<string>((resolve) => {
       const timer = setTimeout(() => {
         this._pending.delete(id);
-        resolve('✗ timeout: no response from host page (is Shiro injected?)');
+        resolve('✗ timeout: no response from host page (is tabcomputer injected?)');
       }, 5000);
       this._pending.set(id, { resolve, timer });
       window.parent.postMessage({ type: 'shiro-hc', id, cmd }, '*');
@@ -301,7 +301,7 @@ Example:
   hc a
 `;
       if (getRuntimeContext()?.hcOuterAvailable) {
-        ctx.stdout += '\nDetected host-page bridge. Run "hc outer" to inspect the page that spawned this Shiro instance.\n';
+        ctx.stdout += '\nDetected host-page bridge. Run "hc outer" to inspect the page that spawned this tabcomputer instance.\n';
       }
       return 0;
     }
@@ -367,7 +367,7 @@ Example:
     // Run HC command
     if (!window.__hc.session) {
       if (getRuntimeContext()?.hcOuterAvailable) {
-        ctx.stderr = 'hc: no session. This Shiro instance was injected into a host page; run "hc outer" first.\n';
+        ctx.stderr = 'hc: no session. This tabcomputer instance was injected into a host page; run "hc outer" first.\n';
       } else {
         ctx.stderr = 'hc: no session. Use "hc open <file>", "hc live", or "hc outer" first.\n';
       }

@@ -472,7 +472,7 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
       { label: 'Welcome Tour', action: () => showTour(ctx) },
       { label: 'Getting Started', action: () => openTerminal({ command: 'help' }) },
       { label: 'Keyboard Shortcuts', action: () => showToast(root, SHORTCUTS_HTML, 9000) },
-      { label: 'Desktop & /dom docs', action: () => window.open('https://github.com/williamsharkey/shiro/blob/main/docs/DESKTOP.md', '_blank', 'noopener') },
+      { label: 'Desktop & /dom docs', action: () => window.open('https://github.com/williamsharkey/tabcomputer/blob/main/docs/DESKTOP.md', '_blank', 'noopener') },
     ] };
     return [file, edit, view, windowMenu, ...(focusedApp()?.menus?.() ?? []), help];
   };

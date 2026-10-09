@@ -2015,7 +2015,7 @@ export class Kernel {
         }
         case A.SYS_uname: { // → struct utsname (engines that report their own machine take the names from here)
           if (data.length < A.UTSNAME_FIELD * 6) return -A.EFAULT;
-          const fields = ['Linux', this.hostname, '6.1.0-shiro', '#1 Shiro', 'wasm32', '(none)'];
+          const fields = ['Linux', this.hostname, `6.1.0-${this.hostname}`, '#1 SMP', 'wasm32', '(none)'];
           data.fill(0, 0, A.UTSNAME_FIELD * 6);
           fields.forEach((f, i) => data.set(enc.encode(f).subarray(0, A.UTSNAME_FIELD - 1), i * A.UTSNAME_FIELD));
           return 0;

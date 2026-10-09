@@ -1296,7 +1296,7 @@ export class LinuxSyscalls {
     // Use fetch() to make the actual HTTP request
     const response = await fetch(url, {
       method,
-      headers: { 'User-Agent': 'Shiro-x86/1.0' },
+      headers: { 'User-Agent': 'tabcomputer-x86/1.0' },
     });
 
     // Build HTTP response

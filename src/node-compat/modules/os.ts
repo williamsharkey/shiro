@@ -33,7 +33,7 @@ export function createOsModule(ctx: CommandContext): any {
     uptime: () => performance.now() / 1000,
     machine: () => 'x86_64',
     availableParallelism: () => (navigator?.hardwareConcurrency || 4),
-    version: () => 'Shiro 0.1.0',
+    version: () => 'tabcomputer 0.1.0',
     devNull: '/dev/null',
     constants: {
       signals: {

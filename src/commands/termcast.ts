@@ -128,7 +128,7 @@ export const termcastCmd: Command = {
           width: session.width,
           height: session.height,
           timestamp: Math.floor(session.startTime / 1000),
-          title: `Shiro Terminal Recording`,
+          title: `tabcomputer Terminal Recording`,
           env: {
             SHELL: '/bin/sh',
             TERM: 'xterm-256color',

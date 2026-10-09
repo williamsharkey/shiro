@@ -1,156 +1,104 @@
-# Shiro
+# tabcomputer
 
-> A standalone Unix environment that runs in a browser tab — shell, git, npm, node, vi, C compiler, SQLite, Python, and Claude Code. One HTML file. No server.
+> A computer that lives in your browser tab: a desktop, a real shell with
+> processes, pipes and ptys, Debian packages you `apt install`, and Claude Code.
+> Your files stay in the tab's storage. Nothing to install.
 
-**Live:** [shiro.computer](https://shiro.computer)
-**Docs:** [shiro.computer/docs](https://shiro.computer/docs)
-**About:** [shiro.computer/about](https://shiro.computer/about)
-**Examples:** [examples/](examples/)
+**Live:** [tabcomputer.com](https://tabcomputer.com)
+**Docs:** [tabcomputer.com/docs](https://tabcomputer.com/docs)
 
 ## What's in it
 
-- **220+ commands** — ls, grep, awk, sed, find, curl, diff, xargs, tar, wc, sort, uniq, factor, base32, numfmt, dos2unix...
-- **Persistent filesystem** — IndexedDB-backed. Files survive reloads.
-- **Git** — isomorphic-git: init, add, commit, diff, log, clone, push
-- **npm** — Real tarballs from registry.npmjs.org. require() resolves node_modules.
-- **Node.js runtime** — Run .js files. CommonJS and ES module transforms.
-- **C compiler** — xcc compiles C to WebAssembly, runs via WASI
-- **SQLite** — sql.js WASM. Persistent databases in IndexedDB.
-- **Python** — Pyodide WASM. pip installs packages.
-- **Lua, jq, esbuild** — Lazy-loaded WASM runtimes, cached on first use
-- **x86-64 emulator** — Runs real Linux ELF binaries (musl-static) via instruction-level emulation. ~135 instructions, ~60 syscalls, SSE2, JIT block cache.
-- **tmux** — Terminal multiplexer with split panes, sessions, detach/attach
-- **SSH/SCP over WebRTC** — Peer-to-peer shell sessions and file transfer between browser tabs
-- **Compression** — bzip2, xz, zstd with full tar integration (-j/-J/--zstd)
-- **Init system** — systemctl services, cron scheduling, journalctl logs
-- **Claude Code** — The real @anthropic-ai/claude-code CLI runs inside the browser
-- **Virtual servers** — `serve` hosts apps, `page` interacts with them
-- **Windowed terminals** — `spawn` opens commands in their own window with interactive REPL
-- **Template palette** — 13 educational templates across 4 categories (Web, Languages, Packages, Tools) including WASM package manager, x86 Linux binaries, full-stack Express+SQLite, and cross-language data pipelines
-- **One HTML file** — ~420 KB gzipped. Deploy anywhere. Works offline.
+- **A desktop** with windows, a dock, a file manager and terminals
+  ([docs/DESKTOP.md](docs/DESKTOP.md)). `?ui=terminal` gives the classic full-page terminal.
+- **A Unix kernel in the page.** It has processes, fork/exec, signals, ptys, job control, pipes and an
+  IndexedDB filesystem that survives reloads ([docs/UNIX_COMPAT.md](docs/UNIX_COMPAT.md),
+  [docs/KERNEL_ABI.md](docs/KERNEL_ABI.md)).
+- **Real Linux programs.** The Blink x86-64 emulator, compiled to WebAssembly, runs unmodified
+  ELF binaries against that kernel ([docs/X86_ENGINES.md](docs/X86_ENGINES.md)).
+- **Debian.** `apt install htop vim python3 git …` installs real Debian packages, streamed
+  from a Debian mirror ([docs/DEBIAN.md](docs/DEBIAN.md)).
+- **The internet.** Guest sockets go out through a TCP relay, so `curl`, `git`, `ssh` and
+  `pip` reach real hosts ([docs/NETWORKING.md](docs/NETWORKING.md)).
+- **X11 and GUI programs** in desktop windows ([docs/GUI.md](docs/GUI.md)).
+- **220+ built-in commands.** They include a bash-compatible shell, coreutils, grep/sed/awk, git, gh, node and npm
+  (a Node.js runtime with real npm tarballs), Python, SQLite, tmux, and
+  WebAssembly packages ([docs/PACKAGES.md](docs/PACKAGES.md)).
+- **Coding agents.** Claude Code is installed in the background on first boot. Other agent CLIs
+  are covered in [docs/COMPAT.md](docs/COMPAT.md).
 
-## vs WebContainers
-
-| | Shiro | WebContainers |
-|---|---|---|
-| Deployment | Single HTML file | SDK integration |
-| Server needed | No | Yes (proxy) |
-| Persistence | IndexedDB | Memory only |
-| Claude Code | Built-in | No |
-| C/Python/Lua/SQL | WASM runtimes | Node.js only |
-| Size | ~420 KB | ~30 MB |
-
-## Examples
+## Try it
 
 ```bash
-# Shell basics
-echo "hello" | sed 's/hello/world/' | wc -c
-mkdir -p src && echo 'console.log("hi")' > src/app.js
-find . -name "*.js" | grep -l "console"
+apt install cowsay && cowsay hello from tabcomputer
+apt install htop && htop
+apt install python3 && python3
 
-# Git (isomorphic-git)
-git init && git add . && git commit -m "initial"
-git log --oneline
+git clone https://github.com/williamsharkey/tabcomputer
+gh auth login                     # one-time code; private repos work too
 
-# npm (real tarballs from registry.npmjs.org)
-npm install lodash prettier
-node -e "console.log(require('lodash').uniq([1,1,2]))"
-
-# C compiler → WebAssembly
-echo '#include <stdio.h>\nint main(){printf("hello\\n");}' > hi.c
-cc hi.c -o hi && ./hi
-
-# SQLite
-sqlite3 app.db "CREATE TABLE users(name TEXT); INSERT INTO users VALUES('alice');"
-sqlite3 app.db "SELECT * FROM users;"
-
-# x86-64 emulator (runs real Linux binaries)
-./hello              # Auto-detect ELF binary, run in emulator
-x86 run ./hello      # Explicit execution
-x86 debug ./hello    # Step-through with register dumps
-
-# Serve and interact with web apps
-serve /tmp/myapp 3000
-page :3000 click "#button"
-page :3000 text "body"
-
-# Heredocs
-cat > /tmp/hello.html << 'EOF'
-<h1>Hello World</h1>
-EOF
-serve /tmp 3000
-
-# Windowed terminals
-spawn                    # Open a blank interactive terminal window
-spawn node server.js     # Run command in a window, then drop to REPL
-title "My App"           # Set the window title
-
-# Claude Code (runs inside the browser)
-claude -p "create a todo app with localStorage"
+claude                            # Claude Code; a sign-in panel opens if needed
+doctor                            # one OK/WARN/FAIL line per subsystem, for bug reports
 ```
 
-## Claude Code Integration
+## Claude Code
 
-The real `@anthropic-ai/claude-code` CLI runs inside Shiro's Node.js runtime shim. The tools Claude Code relies on — file reads, edits, grep, glob, bash — are shimmed to use the virtual filesystem. Both print mode (`claude -p "..."`) and interactive mode (`claude`) work. API calls route through a CORS proxy to Anthropic's API.
+Type `claude`. tabcomputer installs Claude Code in the background on first boot. If you aren't
+signed in, a panel opens with a button for the sign-in page and a box for the code it gives
+you. Credentials persist in the tab's storage. `claude-window` runs it in a new window, and
+`claude login` signs in again.
 
-Type `claude`. Shiro installs Claude Code in the background on first boot. If you aren't signed in, a panel opens with a button for the sign-in page and a box for the code it gives you; credentials persist in IndexedDB. `claude-window` (formerly `sc`) runs it in a new window, and `claude login` signs in again.
+The default is `@anthropic-ai/claude-code@2.1.112`, the last pure-JavaScript release. It runs on
+tabcomputer's Node.js runtime. `claude --native` (and `claude install --native`) runs Anthropic's
+current native binary under the x86 engine instead.
 
-Shiro pins `@anthropic-ai/claude-code@2.1.112`, the last pure-JavaScript release (later ones ship native binaries). It reports a newer version to the API so current models work, and defaults to `claude-opus-5-5` with the flicker-free fullscreen renderer.
-
-An outer Claude Code instance can also control Shiro remotely via MCP tools over WebRTC. Run `remote start` in Shiro, then connect with the `shiro-mcp` package.
-
-Shiro records its console from page load into a bounded log (newest 3000 entries, repeats collapsed), plus the tail of the previous page load, so a peer that connects later can still see what happened: `console -g error --prev` in the shell, or the shiro-mcp `console` tool.
-
-To profile a live session, run `remote start` in Shiro and then `node shiro-mcp/probe.mjs <code>` locally. It logs heap, freezes (long tasks and page response time), filesystem traffic, and errors every 2 seconds to `probe.jsonl`, reconnects after a reload, and serves ad-hoc `eval`/`exec` and `console` queries on `127.0.0.1:7788` (`PROBE_LITE=1` skips the sampling).
+An outer Claude Code can drive a tab over WebRTC: run `remote start` here, then connect with
+the `shiro-mcp` package ([shiro-mcp/](shiro-mcp/)).
 
 ## Git and GitHub
 
-`git` (isomorphic-git) and a `gh` compatible with the common GitHub CLI commands are built in. Sign in once and private repos work too:
+`git` and a `gh` compatible with the common GitHub CLI commands are built in:
 
 ```bash
-gh auth login        # shows a one-time code and a panel with Copy / Open GitHub buttons
-                     # approve on github.com; git name/email are filled in from your account
-
+gh auth login        # shows a one-time code; git name/email are filled in from your account
 gh repo clone owner/private-repo
-git init && git add . && git commit -m "First commit"
 gh repo create my-project --private --source . --push
 ```
 
-`gh auth login --with-token` still accepts a token on stdin, `gh auth refresh -s delete_repo` adds a scope, and `gh auth logout` removes the token. Use a subdomain (for example `music.shiro.computer`) to keep a project's storage, including its token, separate.
-
-### ssh
-
-The builtin `ssh CODE` is Shiro's tab-to-tab ssh (a code from `remote start`
-in another tab, over WebRTC). OpenSSH usage (`ssh -T git@github.com`,
-`ssh user@host`, a dotted host name) runs OpenSSH when it is installed
-(`pkg install openssh`, or Debian's `openssh-client`); without it, `ssh`
-says how to install it instead of trying to reach a tab.
+Debian's own `git` and OpenSSH (`apt install git openssh-client`) work too. They use the relay.
 
 ## Something wrong?
 
-`doctor` (or `tabinfo`) checks the tab and prints one OK/WARN/FAIL line each
-for: the build and deploy, cross-origin isolation and the browser, the x86
-engine (Blink build, same-instance fork), the internet relay (token request
-and a TCP connection to example.com:443 through the kernel), the network,
-GitHub and Claude sign-ins, Debian, storage (usage, quota, persisted) and the
-kernel (processes, JS heap). It never prints tokens: paste its output into a
-bug report.
-
-## Node.js Compatibility
-
-~50 shimmed Node.js modules. Core modules (fs, path, buffer, events, process, crypto, os, url, util, child_process) are fully functional. See the [full compatibility table](https://shiro.computer/docs#node-compat).
+`doctor` (or `tabinfo`) checks the tab. It prints one line for each of these: the build, cross-origin
+isolation, the x86 engine, the internet relay, sign-ins, Debian, storage and the kernel.
+It never prints tokens, so you can paste its output into a bug report.
 
 ## Development
 
 ```bash
 npm install
-npm run dev          # Dev server at localhost:5173
-npm run build        # Build to dist/
-npm run deploy       # Build + deploy to shiro.computer
+npm run dev                            # dev server at localhost:5173
+npm run build                          # build to dist/
+PORT=3000 STATIC_DIR=$PWD/dist node server.mjs   # the production server (relay, mirror, isolation)
+npm test                               # the vitest suite
 ```
+
+The page runs as a *profile*, which sets its UI, branding and defaults. tabcomputer is the default
+profile. The engine also serves shiro.computer, the terminal-first edition, as the `shiro`
+profile ([docs/PROFILES.md](docs/PROFILES.md)). Server options are `TABCOMPUTER_*` environment
+variables. The older `SHIRO_*` names still work.
+
+Contributors and coding agents: start with [AGENTS.md](AGENTS.md).
+
+## History
+
+tabcomputer grew out of [Shiro](https://shiro.computer), a browser Unix shell, and keeps its
+full history. Data saved under Shiro's names (the `shiro-fs` database, `shiro-*` settings)
+moves to tabcomputer's names on first boot.
 
 ## License
 
 MIT
 
-> **Note:** Experimental. Claude Code runs with `--dangerously-skip-permissions` (all tool calls auto-approved). API requests transit a CORS proxy. Don't use with sensitive data.
+> **Note:** Experimental. Claude Code runs with all tool calls auto-approved. Don't use it with
+> sensitive data.

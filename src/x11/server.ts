@@ -42,7 +42,7 @@ export interface Property { type: number; format: number; data: Uint8Array }
 
 const ROOT_ID = 0x100, COLORMAP_ID = 0x20, VISUAL_24 = 0x21, VISUAL_32 = 0x22, CMAP_32 = 0x23;
 const CLIENT_SHIFT = 21, RESOURCE_MASK = (1 << CLIENT_SHIFT) - 1;
-const VENDOR = 'Shiro in-page X server';
+const VENDOR = 'tabcomputer in-page X server';
 const RELEASE = 12101011;
 export const SERVER_DEFAULTS = { width: 1600, height: 1000 };
 

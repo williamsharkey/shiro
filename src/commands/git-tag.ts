@@ -1,5 +1,6 @@
 import git from 'isomorphic-git';
 import { CommandContext } from './index';
+import { activeProfile } from '../profile';
 
 export async function gitTagHandler(ctx: CommandContext, fs: any, dir: string): Promise<number> {
   let deleteMode = false;
@@ -66,7 +67,7 @@ export async function gitTagHandler(ctx: CommandContext, fs: any, dir: string): 
           object: oid,
           type: 'commit',
           tag: tagName,
-          tagger: { name: 'user', email: 'user@shiro.computer', timestamp: Math.floor(Date.now() / 1000), timezoneOffset: 0 },
+          tagger: { name: 'user', email: `user@${activeProfile().hostname}.local`, timestamp: Math.floor(Date.now() / 1000), timezoneOffset: 0 },
           message,
         },
       });

@@ -520,7 +520,7 @@ export class ShiroTerminal {
       this.term.writeln(row(visible, '  ' + cmdLink(cmd) + ' '.repeat(15 - cmd.length) + `\x1b[90m${desc}\x1b[0m`));
     }
     const sep = '\x1b[36m · \x1b[0m';
-    const footer = [cmdLink('help'), link('files', 'shiro://cmd/finder'), link('github', 'https://github.com/williamsharkey/shiro')].join(sep);
+    const footer = [cmdLink('help'), link('files', 'shiro://cmd/finder'), link('github', 'https://github.com/williamsharkey/tabcomputer')].join(sep);
     this.term.writeln(row('  help · files · github', '  ' + footer));
 
     // Bottom border with 白 (double-width CJK = 2 cols)
@@ -1531,8 +1531,8 @@ export class ShiroTerminal {
         }
       }
 
-      // shiro config subcommand completion
-      if (command === 'shiro') {
+      // tabcomputer (or shiro) config subcommand completion
+      if (command === 'tabcomputer' || command === 'shiro') {
         if (parts.length === 2) {
           const matches = ShiroTerminal.SHIRO_SUBCOMMANDS.filter(s => s.startsWith(partial));
           if (matches.length > 0) {

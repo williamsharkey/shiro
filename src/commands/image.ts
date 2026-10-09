@@ -381,7 +381,7 @@ Use Cases:
 
 export const imageCmd: Command = {
   name: 'image',
-  description: 'Manage shiro images (filesystem snapshots)',
+  description: 'Manage tabcomputer images (filesystem snapshots)',
 
   async exec(ctx: CommandContext): Promise<number> {
     const args = ctx.args;
@@ -445,7 +445,7 @@ export const imageCmd: Command = {
 
       default:
         ctx.stderr = `image: unknown command: ${command}\n`;
-        ctx.stderr += `Run 'shiro image --help' for usage\n`;
+        ctx.stderr += `Run 'image --help' for usage\n`;
         return 1;
     }
   }

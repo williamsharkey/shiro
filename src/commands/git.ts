@@ -11,6 +11,7 @@ import {
   type DiffOpts,
 } from './git-utils';
 import { getShiroOrigin } from '../utils/shiro-origin';
+import { activeProfile } from '../profile';
 import { GLOBAL_GITCONFIG, parseGitConfig, formatGitConfig } from './git-config';
 
 // --- Main command ---
@@ -812,7 +813,7 @@ export const gitCmd: Command = {
           const subject = commitObj.commit.message.split('\n')[0];
           const msg = `Revert "${subject}"\n\nThis reverts commit ${oid.slice(0, 7)}.`;
           await git.commit({ fs, dir, message: msg,
-            author: { name: 'user', email: 'user@shiro.computer', timestamp: Math.floor(Date.now() / 1000), timezoneOffset: 0 } });
+            author: { name: 'user', email: `user@${activeProfile().hostname}.local`, timestamp: Math.floor(Date.now() / 1000), timezoneOffset: 0 } });
           ctx.stdout = `[revert ${oid.slice(0, 7)}] Revert "${subject}"\n`;
           return 0;
         }
@@ -926,7 +927,7 @@ async function resolveAuthor(ctx: CommandContext, fs: any, dir: string): Promise
   const global = await readGlobalConfig(ctx);
   return {
     name: (await repoValue('user.name')) || global['user.name'] || ctx.env['GIT_AUTHOR_NAME'] || ctx.env['USER'] || 'user',
-    email: (await repoValue('user.email')) || global['user.email'] || ctx.env['GIT_AUTHOR_EMAIL'] || 'user@shiro.local',
+    email: (await repoValue('user.email')) || global['user.email'] || ctx.env['GIT_AUTHOR_EMAIL'] || `user@${activeProfile().hostname}.local`,
   };
 }
 

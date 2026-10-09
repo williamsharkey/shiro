@@ -93,7 +93,7 @@ export function createHudPanel(shell: Shell): HudPanel {
     { label: 'Remote', desc: 'Connect an agent (MCP)', icon: '○', action: 'remote' },
     { label: 'Files', desc: 'File manager', icon: '↕', action: 'files' },
     { label: 'Help', desc: 'Getting started', icon: '?', action: 'help' },
-    { label: 'Source', desc: 'github.com/williamsharkey/shiro', icon: '白', action: 'source' },
+    { label: 'Source', desc: 'github.com/williamsharkey/tabcomputer', icon: '白', action: 'source' },
   ];
 
   items.forEach((item, i) => {
@@ -312,7 +312,7 @@ function handleAction(action: string, shell: Shell) {
       break;
     }
     case 'source': {
-      window.open('https://github.com/williamsharkey/shiro', '_blank', 'noopener');
+      window.open('https://github.com/williamsharkey/tabcomputer', '_blank', 'noopener');
       break;
     }
     case 'help': {

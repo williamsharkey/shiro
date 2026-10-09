@@ -15,8 +15,8 @@ export function isIsolated(): boolean {
 /** One boot-time console line saying whether blocking syscalls are available. */
 export function logIsolationStatus(): void {
   if (isIsolated()) {
-    console.log('[shiro] Cross-origin isolated: SharedArrayBuffer and Atomics.wait available');
+    console.log('[tabcomputer] Cross-origin isolated: SharedArrayBuffer and Atomics.wait available');
   } else {
-    console.log('[shiro] Not cross-origin isolated (no COOP/COEP): SharedArrayBuffer unavailable, worker syscalls use the async fallback');
+    console.log('[tabcomputer] Not cross-origin isolated (no COOP/COEP): SharedArrayBuffer unavailable, worker syscalls use the async fallback');
   }
 }

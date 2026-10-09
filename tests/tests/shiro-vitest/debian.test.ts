@@ -51,13 +51,13 @@ describe.skipIf(!haveRootfs)('Debian rootfs', () => {
     expect(list).toContain('local diversion of /usr/lib/apt/methods/http to /usr/lib/apt/methods/http.debian');
     expect(await fs.readFile('/usr/lib/apt/methods/http', 'utf8')).toBe('#!/usr/bin/shiro-apt-method\n');
     expect((await fs.lstat('/usr/lib/apt/methods/http.debian')).size).toBeGreaterThan(100000);
-    expect((await run(shell, 'shiro-alternatives --display /usr/lib/apt/methods/http')).output).toMatch(/shiro \(shiro-apt-method\)\s+\(auto, default shiro\)/);
+    expect((await run(shell, 'shiro-alternatives --display /usr/lib/apt/methods/http')).output).toMatch(/tabcomputer \(shiro-apt-method\)\s+\(auto, default tabcomputer\)/);
   }, 60000);
 
   it('switches a program between Shiro and Debian with shiro-alternatives', async () => {
     expect((await run(shell, 'type -a env 2>&1; command -v env')).exitCode).toBe(0);
     let r = await run(shell, 'shiro-alternatives --set env shiro');
-    expect(r.output).toContain("/usr/bin/env: now Shiro's");
+    expect(r.output).toContain("/usr/bin/env: now tabcomputer's");
     expect(await fs.exists('/usr/bin/env')).toBe(false);
     expect((await fs.lstat('/usr/bin/env.debian')).isFile()).toBe(true);
     expect((await run(shell, 'dpkg-divert --list /usr/bin/env')).output).toContain('local diversion of /usr/bin/env to /usr/bin/env.debian');

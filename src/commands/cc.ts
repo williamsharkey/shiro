@@ -602,7 +602,7 @@ export const ccCmd: Command = {
 
     if (args[0] === '--version' || args[0] === '-v') {
       ctx.stdout += 'cc (xcc/wcc) — C to WebAssembly compiler\n';
-      ctx.stdout += 'Running in Shiro browser OS\n';
+      ctx.stdout += 'Running in tabcomputer browser OS\n';
       ctx.stdout += 'https://github.com/tyfkda/xcc\n';
       return 0;
     }

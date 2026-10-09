@@ -1,8 +1,8 @@
-# Debian in Shiro (unix/debian)
+# Debian in tabcomputer (unix/debian)
 
-Shiro can run a real Debian system: Debian 13 "trixie" amd64, Debian's own
+tabcomputer can run a real Debian system: Debian 13 "trixie" amd64, Debian's own
 dynamically linked binaries (ld-linux-x86-64.so.2, glibc, apt, dpkg) running
-in the Blink x86-64 engine as kernel processes, with Shiro's fast builtins
+in the Blink x86-64 engine as kernel processes, with tabcomputer's fast builtins
 and WASM programs layered over the hot programs. This is the hybrid design:
 
 ```
@@ -10,7 +10,7 @@ debian install                     # stream the root filesystem in (nothing big 
 sudo apt update
 sudo apt install -y hello jq
 hello; jq --version; dpkg -l | tail
-shiro-alternatives --list          # which programs are Shiro's, which are Debian's
+tabcomputer-alternatives --list          # which programs are tabcomputer's, which are Debian's
 ```
 
 Status, numbers and the package scoreboard: [DEBIAN_SCORE.md](DEBIAN_SCORE.md),
@@ -24,7 +24,7 @@ Status, numbers and the package scoreboard: [DEBIAN_SCORE.md](DEBIAN_SCORE.md),
    timestamp (`SNAPSHOT`, default `20261001T000000Z`), with debootstrap and
    the archive keyring themselves pinned by sha256. debootstrap checks every
    package against the signed Release.
-2. Shiro's customization: deb822 sources for trixie, trixie-updates and
+2. tabcomputer's customization: deb822 sources for trixie, trixie-updates and
    trixie-security (the real archive URLs), apt defaults
    (`/etc/apt/apt.conf.d/90shiro`: no translations, no recommends, downloads
    as root), Docker-slim style `path-exclude`s for docs, translated man
@@ -54,14 +54,14 @@ the compressed chunk in the Cache API (`shiro-debian-chunks-v1`) and stores
 the file's bytes in IndexedDB like any other file. A warm boot needs no
 network: everything read before is a normal file, and boot only reads
 `/var/lib/shiro/rootfs.json` to re-attach the lazy loader. Conflicts with
-Shiro's own files: Debian's replace them (`/etc/passwd`, `/bin/sh`), Shiro
+tabcomputer's own files: Debian's replace them (`/etc/passwd`, `/bin/sh`), tabcomputer
 directories that Debian makes symlinks (`/bin` → `usr/bin`) have their
-contents moved to the target, and the `/usr/local/bin` shims Shiro writes
+contents moved to the target, and the `/usr/local/bin` shims tabcomputer writes
 for its builtins are removed.
 
 ## 2. apt and dpkg
 
-Debian's apt and dpkg run unmodified. What Shiro provides around them:
+Debian's apt and dpkg run unmodified. What tabcomputer provides around them:
 
 - **uid 0**: `sudo` (builtin, `src/commands/sudo.ts`) runs its command with
   kernel uid/gid 0 (`SpawnOptions.uid`, `Shell.uid`), which Blink forwards
@@ -71,21 +71,21 @@ Debian's apt and dpkg run unmodified. What Shiro provides around them:
   program (the kernel's `shebangLoader`): dpkg's maintainer scripts run under
   Debian's dash (`/bin/sh`), perl scripts under Debian's perl.
 - **The package mirror.** Browsers can't open TCP connections, so apt's
-  http/https transport is Shiro's: `/usr/lib/apt/methods/http` is diverted
+  http/https transport is tabcomputer's: `/usr/lib/apt/methods/http` is diverted
   to `http.debian` (see the overlay below) and replaced by a
-  `#!/usr/bin/shiro-apt-method` stub, a Shiro kernel program
+  `#!/usr/bin/shiro-apt-method` stub, a tabcomputer kernel program
   (`src/debian/apt-method.ts`) that speaks apt's method protocol and fetches
   `http://HOST/PATH` from the page's own origin as `/debian/mirror/HOST/PATH`.
   apt still verifies InRelease with sqv and every index and .deb hash, so the
-  mirror is untrusted. `Acquire::Shiro::Mirror` (apt.conf) or
-  `$SHIRO_DEBIAN_MIRROR` point it elsewhere.
+  mirror is untrusted. `Acquire::tabcomputer::Mirror` (apt.conf) or
+  `$TABCOMPUTER_DEBIAN_MIRROR` point it elsewhere.
 - **Index decompression.** apt's `store` method (it turns each downloaded
   `Packages.xz` into `Packages` and hashes it) is diverted the same way to
   `#!/usr/bin/shiro-apt-store` (`src/debian/apt-store.ts`): the xz/gz/bz2/
   zstd codecs and hashes run in the page. Under the x86 engine the original
   spent ~33 s of a ~72 s `apt-get update` decoding trixie's 56 MB index.
   apt checks the result's hashes against the signed Release file as before;
-  `shiro-alternatives --set /usr/lib/apt/methods/store debian` restores it.
+  `tabcomputer-alternatives --set /usr/lib/apt/methods/store debian` restores it.
 
 ### Package mirror: what the operator hosts
 
@@ -93,9 +93,9 @@ Debian's apt and dpkg run unmodified. What Shiro provides around them:
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `SHIRO_DEBIAN_MIRRORS` | `deb.debian.org=https://deb.debian.org,security.debian.org=https://security.debian.org` | archive host names apt uses → upstream base URL. Only these hosts and only `…/dists/…` and `…/pool/…` paths are served (not an open proxy). Point a host at a local mirror or `https://snapshot.debian.org/archive/debian/<ts>` to pin. |
-| `SHIRO_DEBIAN_CACHE` | `$TMPDIR/shiro-debian` | disk cache (`SHIRO_DEB_CACHE` is the old name). `pool/` and `by-hash/` files are immutable and kept forever; other index files for `SHIRO_DEBIAN_INDEX_TTL` seconds (600). |
-| `SHIRO_DEBIAN_SNAPSHOT` | `https://snapshot.debian.org/archive/debian/20260712T000000Z/` | where a `deb.debian.org` pool file the mirror no longer has (removed by a point release) is fetched from instead |
+| `TABCOMPUTER_DEBIAN_MIRRORS` | `deb.debian.org=https://deb.debian.org,security.debian.org=https://security.debian.org` | archive host names apt uses → upstream base URL. Only these hosts and only `…/dists/…` and `…/pool/…` paths are served (not an open proxy). Point a host at a local mirror or `https://snapshot.debian.org/archive/debian/<ts>` to pin. |
+| `TABCOMPUTER_DEBIAN_CACHE` | `$TMPDIR/shiro-debian` | disk cache (`TABCOMPUTER_DEB_CACHE` is the old name). `pool/` and `by-hash/` files are immutable and kept forever; other index files for `TABCOMPUTER_DEBIAN_INDEX_TTL` seconds (600). |
+| `TABCOMPUTER_DEBIAN_SNAPSHOT` | `https://snapshot.debian.org/archive/debian/20260712T000000Z/` | where a `deb.debian.org` pool file the mirror no longer has (removed by a point release) is fetched from instead |
 
 The GUI apps (src/gui/apps.ts, docs/GUI.md) fetch their pinned .debs as
 `/debian/pool/PATH`, which is the same mirror (`/debian/mirror/deb.debian.org/debian/pool/PATH`)
@@ -113,29 +113,29 @@ with the same `<host>/<path>` layout.
 Which implementation runs is recorded in dpkg's own database, as local
 diversions, so apt and dpkg stay truthful (`src/debian/overlay.ts`):
 
-- **Shiro's**: `dpkg-divert --local --rename --divert PATH.debian --add PATH`.
+- **tabcomputer's**: `dpkg-divert --local --rename --divert PATH.debian --add PATH`.
   Debian's file lives at `PATH.debian` (upgrades land there too); `PATH`
   itself is absent, and the kernel and the shell resolve an absent
-  `/usr/bin/NAME` to the Shiro command of that name. Programs that must exist
+  `/usr/bin/NAME` to the tabcomputer command of that name. Programs that must exist
   as files (apt's methods) get a `#!/usr/bin/<command>` stub instead.
 - **Debian's**: no diversion; `PATH` is the package's own file, and in
   Debian mode a program file in `/usr/{local/,}{s,}bin` takes precedence
-  over a Shiro builtin of the same name (`debianShadows`, kept current as
+  over a tabcomputer builtin of the same name (`debianShadows`, kept current as
   dpkg adds and removes files).
 
 `dpkg-divert --list`, `dpkg -S /usr/bin/grep` and `dpkg --verify` show what
 runs. Switching is `update-alternatives` style:
 
 ```
-shiro-alternatives --list                 # every overlay-able program: who runs it, auto/manual, default
-shiro-alternatives --display grep
-shiro-alternatives --set grep debian      # manual choice; defaults never undo it
-shiro-alternatives --auto grep            # back to the default policy
-shiro-alternatives --auto all             # apply defaults (also run after installs)
+tabcomputer-alternatives --list                 # every overlay-able program: who runs it, auto/manual, default
+tabcomputer-alternatives --display grep
+tabcomputer-alternatives --set grep debian      # manual choice; defaults never undo it
+tabcomputer-alternatives --auto grep            # back to the default policy
+tabcomputer-alternatives --auto all             # apply defaults (also run after installs)
 ```
 
 Defaults are in `src/debian/overlay-policy.json`, one entry per program with
-the reason. A program defaults to Shiro's only where Shiro's implementation
+the reason. A program defaults to tabcomputer's only where tabcomputer's implementation
 passes the same tests as Debian's (see the overlay tests); everything else is
 Debian's.
 

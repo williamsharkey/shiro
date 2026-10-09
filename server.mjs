@@ -38,7 +38,7 @@ const STATIC_DIR = process.env.STATIC_DIR || optDir('public');
 // syscalls from worker processes; see docs/UNIX_COMPAT.md). credentialless
 // (not require-corp) lets no-cors CDN loads (Pyodide, esm.sh, fonts) through
 // without CORP headers; they just go out without cookies.
-// SHIRO_ISOLATION=0 turns it off.
+// TABCOMPUTER_ISOLATION=0 (or SHIRO_ISOLATION=0) turns it off.
 export function isolationEnabled() {
   return process.env.SHIRO_ISOLATION !== '0';
 }

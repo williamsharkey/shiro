@@ -53,8 +53,8 @@ describe('Claude Code version reporting', () => {
     const out = patchClaudeCodeSource(src);
     expect(out).not.toContain('Opus 4.7 is here');
     expect(out).not.toContain('Welcome to Opus 4.7');
-    expect(out).toContain('title:"Claude Code in Shiro"');
-    expect(out).toContain('pdK="Running in your browser on Shiro · /effort');
+    expect(out).toContain('title:"Claude Code in tabcomputer"');
+    expect(out).toContain('pdK="Running in your browser on tabcomputer · /effort');
     expect(out).toContain('case"claude-opus-5-5":return"Opus 5.5"+K;');
   });
 

@@ -415,7 +415,7 @@ export async function installPackages(fs: FileSystem, index: PkgIndex, names: st
     for (const p of todo) {
       const missing = missingFeatures(p);
       if (missing.length) {
-        throw new Error(`${p.name} needs kernel support Shiro doesn't have yet: ${missing.join(', ')}` +
+        throw new Error(`${p.name} needs kernel support tabcomputer doesn't have yet: ${missing.join(', ')}` +
           (p.notes ? `\n  ${p.notes}` : '') + `\n  (install anyway with --force)`);
       }
     }
@@ -757,7 +757,7 @@ export async function runPackageBinary(binPath: string, argv0: string, args: str
   if (entry) {
     const missing = missingFeatures(entry);
     if (missing.length && envVar(ctx.env, 'PKG_FORCE') !== '1') {
-      ctx.stderr += `${argv0}: needs kernel support Shiro doesn't have yet: ${missing.join(', ')}\n`;
+      ctx.stderr += `${argv0}: needs kernel support tabcomputer doesn't have yet: ${missing.join(', ')}\n`;
       return 126;
     }
   }

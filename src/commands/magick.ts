@@ -117,7 +117,7 @@ export const convertCmd: Command = {
 
     if (args.length === 0 || args.includes('--help') || args.includes('-help')) {
       ctx.stdout = [
-        'convert (Shiro) — ImageMagick powered by magick-wasm',
+        'convert (tabcomputer) — ImageMagick powered by magick-wasm',
         '',
         'Usage: convert input [options] output',
         '',

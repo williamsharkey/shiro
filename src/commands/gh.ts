@@ -170,7 +170,7 @@ export const ghCmd: Command = {
     const sub = ctx.args[0];
 
     if (sub === '--version' || sub === '-v') {
-      ctx.stdout = 'gh 0.1.0 (shiro)\n';
+      ctx.stdout = 'gh 0.1.0 (tabcomputer)\n';
       return 0;
     }
 

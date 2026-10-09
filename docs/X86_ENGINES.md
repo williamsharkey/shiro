@@ -1,6 +1,6 @@
 # x86-64 engines for closed-source Linux ELF
 
-Which engine runs closed-source static amd64 Linux binaries in Shiro, and how
+Which engine runs closed-source static amd64 Linux binaries in tabcomputer, and how
 fast. The target that motivated this is Google's `agy` CLI: a ~200 MB static
 Go binary that uses threads, futex, epoll, signals and TLS
 ([UNIX_COMPAT.md](UNIX_COMPAT.md), phase 5). All numbers below were measured
@@ -8,9 +8,9 @@ on 2026-10-07/08 in a 4-vCPU cloud container (Node 22.22, Chromium 141
 headless via Playwright). They are not from memory or from vendor pages.
 
 **Recommendation: Blink** (jart/blink, ISC) compiled to WebAssembly with
-emscripten pthreads, patched for Shiro and wired to the kernel (src/kernel).
+emscripten pthreads, patched for tabcomputer and wired to the kernel (src/kernel).
 It is the only candidate that is user-mode (syscall level, so it can share
-Shiro's files, pipes, processes and network), runs amd64, has a permissive
+tabcomputer's files, pipes, processes and network), runs amd64, has a permissive
 license, and passed every functional test. Its weak point is speed: the wasm
 build now has its own JIT (patch 0012, x86-64 to WebAssembly): a hot Go loop
 runs at about 2–3x native and `gh --version` takes 6.3 s on its first run
@@ -19,7 +19,7 @@ machine). See "The wasm JIT" and "What agy still needs".
 
 ## Candidates
 
-| Engine | amd64 | Kind | License / can Shiro ship it | SAB needed | Go hello | Go cpuloop 50M (native 107 ms) | Go net/http (loopback) |
+| Engine | amd64 | Kind | License / can tabcomputer ship it | SAB needed | Go hello | Go cpuloop 50M (native 107 ms) | Go net/http (loopback) |
 |---|---|---|---|---|---|---|---|
 | **Blink → wasm (this branch)** | yes | user-mode syscalls | ISC, yes (self-hosted, 550 KB wasm) | yes (pthreads) | **0.17 s** per process | **0.25 s wall (2.4x native) with the wasm JIT**; 12.8 s (~120x) interpreted | **works**, 0.34–0.37 s |
 | src/x86 (current built-in) | partial | user-mode, TS interpreter | ours | no | fails: `fatal error: float64nan` | fails (same) | fails (same) |
@@ -33,9 +33,9 @@ machine). See "The wasm JIT" and "What agy still needs".
 Notes:
 - Full-system engines (container2wasm, JSLinux, qemu-wasm) boot their own
   Linux kernel. Their binaries see that VM's filesystem, network and
-  processes, not Shiro's; bridging needs 9p/virtio plumbing. Their per-run
+  processes, not tabcomputer's; bridging needs 9p/virtio plumbing. Their per-run
   numbers exclude the VM boot. Blink's include a fresh Worker, wasm
-  instantiation and the binary's load from Shiro's filesystem.
+  instantiation and the binary's load from tabcomputer's filesystem.
 - JSLinux and container2wasm interpret faster than Blink-wasm (1.4–1.7x on the
   loop; it was 2.4–2.9x before patch 0010). JSLinux can't be embedded without a license from its author;
   container2wasm needs Docker to build 145 MB+ images per container and runs
@@ -48,7 +48,7 @@ Notes:
 
 ### What runs
 
-Measured end to end through Shiro's shell (`./binary`, a kernel process in a
+Measured end to end through tabcomputer's shell (`./binary`, a kernel process in a
 Worker), in Chromium on a cross-origin isolated page, three runs each. The
 "before" column is the round-1 build (patches 0001–0005).
 
@@ -151,10 +151,10 @@ in the test when `go`/`gcc` exist.
   over the worker's own channel, faulted in with
   `lstat`/`openat`/`read`/`getdents64`.
 - `src/x86-engine/`: `chooseX86Engine` (Blink when SharedArrayBuffer is
-  usable, else src/x86; `SHIRO_X86_ENGINE=x86` forces the old one),
+  usable, else src/x86; `TABCOMPUTER_X86_ENGINE=x86` forces the old one),
   `runElfWithBlink` (the shell's `./binary` path) and `registerBlinkLoader`
   (main.ts registers it, so `kernel.spawn()` of an ELF runs in Blink). Blink
-  processes appear in `ps` and die on `kill`. `SHIRO_BLINK_DEBUG=1` logs the
+  processes appear in `ps` and die on `kill`. `TABCOMPUTER_BLINK_DEBUG=1` logs the
   worker's kernel syscalls.
 - The shell's ELF path (`src/shell-kernel.ts`) calls `chooseElfRunner`, so a
   `./static-go-binary` at the prompt is a kernel process in the foreground job
@@ -165,7 +165,7 @@ in the test when `go`/`gcc` exist.
   blocking guest calls wait on kernel readiness pings, and guest `epoll`/`poll`
   see kernel readiness through emscripten's wait queues. So Go gets loopback
   between guests, real TCP through the unix/net WebSocket relay
-  (`SHIRO_TCP_RELAY`), and DNS: `/etc/resolv.conf` points at a nameserver whose
+  (`TABCOMPUTER_TCP_RELAY`), and DNS: `/etc/resolv.conf` points at a nameserver whose
   UDP 53 the kernel answers over DNS-over-HTTPS.
 - tty: fds 0–2 forward `TCGETS`/`TCSETS*`/`TIOCGWINSZ` to the kernel pty
   (unix/pty), so `isatty`, raw mode and the window size work. The worker
@@ -177,7 +177,7 @@ in the test when `go`/`gcc` exist.
   kernel's default action and `fg` resumes it.
 - `$(./binary)` at the prompt captures the program's stdout (src/shell.ts);
   before, any kernel program inside `$(...)` wrote to the tty.
-- `SHIRO_BLINK_STRACE=1` adds Blink's own syscall trace.
+- `TABCOMPUTER_BLINK_STRACE=1` adds Blink's own syscall trace.
 
 ### The wasm JIT (patch 0012, `blink/wjit.c`)
 
@@ -307,13 +307,13 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    them (`CAN_ATOMIC64`).
 
 11. Kernel passthrough (`blink/shiro.inc`, included by `syscall.c`): under
-   Shiro the guest's fd, filesystem and process syscalls go to the Shiro
+   tabcomputer the guest's fd, filesystem and process syscalls go to the tabcomputer
    kernel through `shiro_ksys()` (`vendor/blink/shiro-kernel.js`), so guest
    fd N is kernel fd N. `vfork`/`clone(CLONE_VFORK)` run the child on
    the calling thread until it calls `execve` or `_exit` (vfork semantics; the
    kernel creates the child with `SYS_shiro_vfork`). `fork` worked the same
    way until patch 14. `execve` goes through `SYS_shiro_execve`: an ELF is reloaded
-   in this Blink, anything else (WASM, scripts, Shiro builtins like
+   in this Blink, anything else (WASM, scripts, tabcomputer builtins like
    `/bin/sh`) replaces the worker in the same process. `rt_sigaction`
    mirrors the guest's dispositions into the kernel (caught signals are
    forwarded, ignored ones stay ignored across exec). File `mmap` reads the
@@ -323,7 +323,7 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    transfer) and the tty ioctls (`TIOCSCTTY`, `TIOCGPTN`, ...) are covered;
    locks (`fcntl F_SETLK`, `flock`) always succeed.
 12. The wasm JIT (`blink/wjit.c`), described above.
-13. Under Shiro a stop signal's default action stops the process.
+13. Under tabcomputer a stop signal's default action stops the process.
 14. A real `fork()` (and `clone()` without `CLONE_VM`): the process is
    snapshotted (every mapped page, untouched anonymous pages without
    contents and untouched file pages faulted in; the forking thread's
@@ -348,8 +348,8 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
 19. sendmsg/recvmsg pass control data (`SCM_RIGHTS`), `sockaddr_un`
    lengths, `SO_PEERCRED`.
 20. `pause()` waits like `sigsuspend` (signals the embedder queues end it);
-   Shiro `TIOCPKT`/`TIOCGPKT`.
-21. Under Shiro `CLOCK_BOOTTIME` comes from the kernel (uptime and process
+   tabcomputer `TIOCPKT`/`TIOCGPKT`.
+21. Under tabcomputer `CLOCK_BOOTTIME` comes from the kernel (uptime and process
    start times match `/proc`).
 22. `lzcnt` returns the leading zero count (it returned `bsr`'s bit index);
    the 32-bit one-operand `imul` zero-extends `%rdx` (it stored the
@@ -366,12 +366,12 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    so ssh-agent survives its daemonizing fork; `RLIMIT_STACK` reads 8 MiB).
 25. `mlock`/`munlock`/`mlockall`/`munlockall` succeed (wasm memory is never
    paged out; gnupg locks its secure memory).
-26. Under Shiro `uname` takes the kernel's host and domain names (Blink's
+26. Under tabcomputer `uname` takes the kernel's host and domain names (Blink's
    kernel version and machine otherwise; emscripten's nodename was
    "emscripten", which tmux showed).
 27. `mremap` grows (in place, or with `MREMAP_MAYMOVE` by mapping, copying
    and unmapping), shrinks and moves to a fixed place (it always failed
-   with ENOMEM; apt's DynamicMMap needs it). Under Shiro `getgroups`
+   with ENOMEM; apt's DynamicMMap needs it). Under tabcomputer `getgroups`
    reports the process's gid (it reached emscripten: EINVAL for size 0,
    which broke coreutils `id`). Tests: `fixtures/x86/mremap.c`,
    `getgroups.c`.
@@ -384,7 +384,7 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    -1 as a float, -1.0), and predicates NLT/NLE are true for NaN. GTK's
    cubic-bezier easing selects with those masks, so l3afpad's main thread
    spun forever in the solve. Test: `fixtures/x86/ssecmp.c`.
-30. Under Shiro `lchown` and `fchownat(AT_SYMLINK_NOFOLLOW)` don't follow a
+30. Under tabcomputer `lchown` and `fchownat(AT_SYMLINK_NOFOLLOW)` don't follow a
    symlink (dpkg lchowns NAME.dpkg-new links before their targets exist),
    and `fchownat` fails for a missing path. Ownership isn't kept; they
    check existence. Test: `fixtures/x86/lchown.c`.
@@ -407,13 +407,13 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    a child's alarm is its own and SIGALRM interrupts blocking calls like
    any signal. Test: `fixtures/x86/alarmfork.c`.
 33. `prctl` `PR_SET_NAME`/`PR_GET_NAME` (per thread; perl's `$0 = ...` died
-   with EINVAL) and `PR_CAPBSET_READ`; under Shiro `capget` reports every
+   with EINVAL) and `PR_CAPBSET_READ`; under tabcomputer `capget` reports every
    capability for uid 0 and none otherwise (Linux's version handshake), and
    `capset` accepts (libcap's `cap_get_proc` failed with ENOSYS). Test:
    `fixtures/x86/prctlcap.c`.
 34. Futexes are keyed by host address, so a same-instance fork child and
    its parent meet on a `MAP_SHARED` futex; a same-instance child's extra
-   threads end with it (`exit_group`, a kill); under Shiro `stat` and
+   threads end with it (`exit_group`, a kill); under tabcomputer `stat` and
    friends with a NULL buffer are EFAULT once the file is found (LTP
    fstat03). Tests: `fixtures/x86/shfutex.c`, `mtchild.c`, `statnull.c`.
 35. `FUTEX_WAKE` wakes at most `count` waiters and returns how many (it
@@ -422,7 +422,7 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    own clock for `FUTEX_WAIT_BITSET`, not by the condition variable's
    coarser realtime ticks (LTP futex_wait_bitset01 saw it end early).
    Test: `fixtures/x86/futexwake.c`.
-36. Under Shiro a futex wait in a process's main thread shows the process
+36. Under tabcomputer a futex wait in a process's main thread shows the process
    sleeping (S in `/proc/PID/stat`) after its first polling tick, through
    `SYS_shiro_sleeping` (LTP waits for S before signalling a child:
    futex_wait03, futex_wait07); `FUTEX_WAKE` on an unmapped address is
@@ -435,7 +435,7 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    `CAP_AMBIENT` are recorded and reported back, not enforced;
    `PR_CAPBSET_DROP` is accepted under emscripten. Test:
    `fixtures/x86/prctlcap.c`.
-38. Under Shiro `mknod`/`mknodat` go to the kernel's `mknodat`, which
+38. Under tabcomputer `mknod`/`mknodat` go to the kernel's `mknodat`, which
    makes FIFOs (and regular files) and refuses devices; with a kernel
    that has no `mknodat` they stay EPERM. Test: `fixtures/x86/mkfifo.c`
    (runs once the kernel defines `SYS_mknodat`).
@@ -460,16 +460,16 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    one Vim function); `rep movs`/`rep stos` of words, dwords and qwords
    (musl's memcpy and memset) go a page at a time going up. Test:
    `fixtures/x86/strops.c` (native output).
-42. Under Shiro `sendfile` with a NULL offset reads at the input's file
+42. Under tabcomputer `sendfile` with a NULL offset reads at the input's file
    position (it read `*NULL`: EFAULT); systemd-sysusers' backup of
    `/etc/group` failed with it, and with that the postinst of systemd,
    cron, udev and logrotate. Test: `fixtures/x86/sendfile.c`.
-43. Under Shiro `sendmmsg`/`recvmmsg` go to the kernel as one
+43. Under tabcomputer `sendmmsg`/`recvmmsg` go to the kernel as one
    `sendmsg`/`recvmsg` per message (Blink's own failed with EBADF on kernel
    sockets, and glibc's resolver, which sends its A and AAAA queries with
    `sendmmsg`, gave up: pip couldn't resolve PyPI). Test:
    `fixtures/x86/mmsg.c` (two DNS queries over the kernel's DoH).
-44. Under Shiro `/proc/self/maps` (and `/proc/thread-self/maps`, and the
+44. Under tabcomputer `/proc/self/maps` (and `/proc/thread-self/maps`, and the
    process's own `/proc/<pid>/maps`) come from the guest page table and
    Blink's file maps, in Linux's format, through a kernel pipe (up to 64
    KB): glibc's `pthread_getattr_np` finds the main stack there, and glibc
@@ -567,9 +567,9 @@ multi-threaded Go programs; the wasm build doesn't use it.
   SSE/x87, string ops, xadd/cmpxchg and 16-bit shifts still call Blink's
   handlers.
 - Memory: wasm32, 4 GB max. File mappings are now one copy inside Blink, but
-  the binary is still copied on its way in (Shiro's FS, the kernel read,
+  the binary is still copied on its way in (tabcomputer's FS, the kernel read,
   MEMFS).
-- Non-loopback TCP needs the relay (`SHIRO_TCP_RELAY`); without it `connect`
+- Non-loopback TCP needs the relay (`TABCOMPUTER_TCP_RELAY`); without it `connect`
   fails like an offline host. `socketpair` is ENOSYS.
 - Signals sent before the guest has loaded are dropped. SIGTSTP is the
   kernel's default stop; a guest can't catch it.
@@ -608,7 +608,7 @@ Honest estimate for a ~200 MB static Go CLI that talks TLS to Google APIs:
    compiled regions is outside it (Node's process peak for `gh` went from
    278 to 426 MB).
 
-Blink makes agy *possible* in Shiro; with the wasm JIT its start should be measured in seconds rather than a minute.
+Blink makes agy *possible* in tabcomputer; with the wasm JIT its start should be measured in seconds rather than a minute.
 
 ## Reproducing
 

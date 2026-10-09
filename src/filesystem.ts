@@ -288,7 +288,7 @@ class ProcProvider implements VirtualFSProvider {
       const cores = navigator?.hardwareConcurrency || 4;
       return Array.from({ length: cores }, (_, i) => [
         `processor\t: ${i}`,
-        `model name\t: Shiro Virtual CPU`,
+        `model name\t: tabcomputer Virtual CPU`,
         `cpu MHz\t\t: 3000.000`,
         `cache size\t: 8192 KB`,
       ].join('\n')).join('\n\n') + '\n';
@@ -424,7 +424,7 @@ function baseEtcFiles(): Record<string, string> {
 
 /** These files as the build before the rename made them: still untouched, they are rewritten. */
 const LEGACY_ETC_FILES: Record<string, string> = {
-  '/etc/passwd': 'root:x:0:0:root:/root:/bin/sh\nuser:x:1000:1000:Shiro User:/home/user:/bin/sh\nnobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n',
+  '/etc/passwd': 'root:x:0:0:root:/root:/bin/sh\nuser:x:1000:1000:tabcomputer User:/home/user:/bin/sh\nnobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n',
   '/etc/hostname': 'shiro\n',
   '/etc/hosts': '127.0.0.1\tlocalhost shiro\n::1\tlocalhost ip6-localhost ip6-loopback\n',
 };
