@@ -956,6 +956,8 @@ export class NetStack {
   socket(domain: number, type: number, protocol = 0): KSocket | KDatagramSocket | number {
     const base = type & 0xf;
     const flags = type & SOCK_NONBLOCK ? O_NONBLOCK : 0;
+    // A type outside SOCK_STREAM..SOCK_PACKET (or unknown flag bits) is EINVAL, like Linux
+    if (base < 1 || base > 10 || (type & ~(0xf | SOCK_NONBLOCK | SOCK_CLOEXEC))) return -EINVAL;
     if (domain === AF_UNIX) {
       if (base !== SOCK_STREAM) return -EPROTONOSUPPORT; // no AF_UNIX datagrams yet
       if (protocol !== 0) return -EPROTONOSUPPORT;
@@ -1304,7 +1306,15 @@ export async function netSyscall(
       return install(s, (args[1] & SOCK_CLOEXEC) !== 0);
     }
     case SYS_socketpair: { // domain, type → int32 sv[2]
-      if (args[0] !== AF_UNIX) return args[0] === AF_INET || args[0] === AF_INET6 ? -EOPNOTSUPP : -EAFNOSUPPORT;
+      if (args[0] !== AF_UNIX) {
+        // Linux creates the socket first (bad type, protocol or domain fail there), then the family says no
+        const s = stack.socket(args[0], args[1], args[2]);
+        if (typeof s === 'number') return s;
+        await s.close();
+        return -EOPNOTSUPP;
+      }
+      const base = args[1] & 0xf;
+      if (base < 1 || base > 10 || (args[1] & ~(0xf | SOCK_NONBLOCK | SOCK_CLOEXEC))) return -EINVAL;
       const pair = stack.socketpair(args[1]);
       if (typeof pair === 'number') return pair;
       for (const p of pair) p.ownerPid = p.peerPid = proc.pid ?? 0;
@@ -1326,6 +1336,7 @@ export async function netSyscall(
         if (sa.family !== AF_UNIX) return -EINVAL;
         return nr === SYS_bind ? stack.bindUnix(s, sa, unix ?? noUnix) : stack.connectUnix(s, sa, unix ?? noUnix);
       }
+      if (sa.family === AF_UNIX) return -EAFNOSUPPORT; // an AF_UNIX address on an inet socket
       if (nr === SYS_bind) return s.bind(sa);
       return s instanceof KSocket ? s.connect(sa, sig) : s.connect(sa);
     }
