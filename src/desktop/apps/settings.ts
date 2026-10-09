@@ -25,6 +25,7 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
   const { wm } = ctx;
   const root = document.createElement('div');
   root.className = 'sd-app';
+  root.tabIndex = -1;
   root.innerHTML = `<div class="sd-app-split"><aside class="sd-sidebar"></aside><section class="sd-main"><div class="sd-scroll"><div class="sd-panel"></div></div></section></div>`;
   const side = root.querySelector('.sd-sidebar')!;
   const panel = root.querySelector<HTMLElement>('.sd-panel')!;
