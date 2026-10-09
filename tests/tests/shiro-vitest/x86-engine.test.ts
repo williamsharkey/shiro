@@ -92,6 +92,8 @@ const sleepintrBin = join(out, 'sleepintr');
 const haveSleepintr = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', sleepintrBin, 'sleepintr.c']);
 const unameBin = join(out, 'uname');
 const haveUname = tryBuild('gcc', ['-static', '-O1', '-o', unameBin, 'uname.c']);
+const cpuclockBin = join(out, 'cpuclock');
+const haveCpuclock = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', cpuclockBin, 'cpuclock.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -774,6 +776,14 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const { shell } = await setup(readFileSync(unameBin));
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe('sysname Linux machine x86_64 release-6.1 1 version-SMP 1 nodename-in-release 1\n');
+  }, 60_000);
+
+  // GHC's runtime (getCurrentThreadCPUTime), Redis 8 (epoll_wait with maxclients + 128)
+  it.skipIf(!haveCpuclock)('CPU-time clocks, including getcpuclockid ids; epoll_wait maxevents 10000', async () => {
+    const { shell } = await setup(readFileSync(cpuclockBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('process 1 thread 1 getcpuclockid 0 0 pid-clock 1 thread-clock 1\n' +
+      'epoll_wait maxevents 10000: 0\n');
   }, 60_000);
 
   // vim's typeahead check blocked for a key when two reads straddled a ms tick
