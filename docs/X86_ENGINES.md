@@ -374,6 +374,10 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    the wasm build the automatic-placement range scales down to the
    program's neighborhood, so apt's 120 MB cache landed at the break and
    malloc's next `brk` overwrote it. Test: `fixtures/x86/brkmap.c`.
+29. `cmpps`/`cmppd`/`cmpss`/`cmpsd` write all-ones masks (Blink stored the
+   -1 as a float, -1.0), and predicates NLT/NLE are true for NaN. GTK's
+   cubic-bezier easing selects with those masks, so l3afpad's main thread
+   spun forever in the solve. Test: `fixtures/x86/ssecmp.c`.
 
 Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.

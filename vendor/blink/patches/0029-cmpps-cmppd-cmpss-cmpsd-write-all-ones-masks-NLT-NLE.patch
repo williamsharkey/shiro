@@ -1,0 +1,95 @@
+From 3514682ae6113858b41f745fa259252155b7be84 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 05:02:13 +0000
+Subject: [PATCH 29/29] cmpps/cmppd/cmpss/cmpsd write all-ones masks; NLT/NLE
+ are true when unordered
+
+The comparison result (-1 or 0) was assigned to the float/double member of
+the pun, so a true compare stored -1.0 (0xbff0000000000000) instead of
+all ones, and branch-free selects built with and/andn/or (gcc's ?: on
+doubles; GTK's cubic-bezier easing solve) computed garbage: l3afpad's
+main thread spun forever in the bisection. Predicates 5 and 6 (NLT, NLE)
+were >= and >, false for NaN; they're true when unordered.
+---
+ blink/ssefloat.c | 32 ++++++++++++++++----------------
+ 1 file changed, 16 insertions(+), 16 deletions(-)
+
+diff --git a/blink/ssefloat.c b/blink/ssefloat.c
+index a13ddda..c254db0 100644
+--- a/blink/ssefloat.c
++++ b/blink/ssefloat.c
+@@ -594,10 +594,10 @@ static int Cmps(int imm, float x, float y) {
+       return isnan(x) || isnan(y) ? -1 : 0;
+     case 4:
+       return x != y ? -1 : 0;
+-    case 5:
+-      return x >= y ? -1 : 0;
+-    case 6:
+-      return x > y ? -1 : 0;
++    case 5:  // NLT: true when unordered
++      return !(x < y) ? -1 : 0;
++    case 6:  // NLE
++      return !(x <= y) ? -1 : 0;
+     case 7:
+       return !(isnan(x) || isnan(y)) ? -1 : 0;
+     default:
+@@ -617,10 +617,10 @@ static i32 Cmpd(int imm, double x, double y) {
+       return isnan(x) || isnan(y) ? -1 : 0;
+     case 4:
+       return x != y ? -1 : 0;
+-    case 5:
+-      return x >= y ? -1 : 0;
+-    case 6:
+-      return x > y ? -1 : 0;
++    case 5:  // NLT: true when unordered
++      return !(x < y) ? -1 : 0;
++    case 6:  // NLE
++      return !(x <= y) ? -1 : 0;
+     case 7:
+       return !(isnan(x) || isnan(y)) ? -1 : 0;
+     default:
+@@ -635,13 +635,13 @@ void OpCmppsd(P) {
+     union DoublePun x, y;
+     y.i = Read64(GetModrmRegisterXmmPointerRead8(A));
+     x.i = Read64(XmmRexrReg(m, rde));
+-    x.f = Cmpd(imm, x.f, y.f);
++    x.i = (i64)Cmpd(imm, x.f, y.f);  // the mask's bits, not -1.0
+     Write64(XmmRexrReg(m, rde), x.i);
+   } else if (Rep(rde) == 3) {
+     union FloatPun x, y;
+     y.i = Read32(GetModrmRegisterXmmPointerRead4(A));
+     x.i = Read32(XmmRexrReg(m, rde));
+-    x.f = Cmps(imm, x.f, y.f);
++    x.i = Cmps(imm, x.f, y.f);
+     Write32(XmmRexrReg(m, rde), x.i);
+   } else if (Osz(rde)) {
+     u8 *p;
+@@ -652,8 +652,8 @@ void OpCmppsd(P) {
+     p = XmmRexrReg(m, rde);
+     x[0].i = Read64(p + 0 * 8);
+     x[1].i = Read64(p + 1 * 8);
+-    x[0].f = Cmpd(imm, x[0].f, y[0].f);
+-    x[1].f = Cmpd(imm, x[1].f, y[1].f);
++    x[0].i = (i64)Cmpd(imm, x[0].f, y[0].f);
++    x[1].i = (i64)Cmpd(imm, x[1].f, y[1].f);
+     Write64(p + 0 * 8, x[0].i);
+     Write64(p + 1 * 8, x[1].i);
+   } else {
+@@ -669,10 +669,10 @@ void OpCmppsd(P) {
+     x[1].i = Read32(p + 1 * 4);
+     x[2].i = Read32(p + 2 * 4);
+     x[3].i = Read32(p + 3 * 4);
+-    x[0].f = Cmps(imm, x[0].f, y[0].f);
+-    x[1].f = Cmps(imm, x[1].f, y[1].f);
+-    x[2].f = Cmps(imm, x[2].f, y[2].f);
+-    x[3].f = Cmps(imm, x[3].f, y[3].f);
++    x[0].i = Cmps(imm, x[0].f, y[0].f);
++    x[1].i = Cmps(imm, x[1].f, y[1].f);
++    x[2].i = Cmps(imm, x[2].f, y[2].f);
++    x[3].i = Cmps(imm, x[3].f, y[3].f);
+     Write32(p + 0 * 4, x[0].i);
+     Write32(p + 1 * 4, x[1].i);
+     Write32(p + 2 * 4, x[2].i);
+-- 
+2.43.0
+
