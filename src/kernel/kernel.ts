@@ -849,6 +849,30 @@ export class Kernel {
   }
 
   /** A registered device node, or a directory that holds one (/dev, /dev/pts). */
+  /**
+   * /proc/<pid>/exe as Linux gives it: absolute and resolved. A process
+   * started by name ("perl") or by a relative path has that as its path;
+   * glibc's ld.so asserts the link is absolute when it expands $ORIGIN.
+   */
+  private async exePath(caller: Process, procPath: string, target: string): Promise<string> {
+    const fs = this.fs;
+    if (!fs) return target;
+    let abs = target;
+    if (!abs.startsWith('/')) {
+      const pid = procPath.split('/')[2];
+      const owner = pid === 'self' || pid === 'thread-self' ? caller : this.procs.get(Number(pid)) ?? caller;
+      if (abs.includes('/')) abs = fs.resolvePath(abs, owner.cwd);
+      else {
+        for (const dir of (owner.env.PATH || '/usr/local/bin:/usr/bin:/bin').split(':').filter(Boolean)) {
+          const c = `${dir.replace(/\/$/, '')}/${abs}`;
+          if (await fs.exists(c).catch(() => false)) { abs = c; break; }
+        }
+        if (!abs.startsWith('/')) abs = fs.resolvePath(abs, owner.cwd);
+      }
+    }
+    return fs.realpath(abs).catch(() => abs);
+  }
+
   isDevicePath(p: string): boolean {
     if (this.devices.has(p)) return true;
     for (const d of this.devices.keys()) if (d.startsWith(p + '/')) return true;
@@ -1892,7 +1916,7 @@ export class Kernel {
             target = proct;
             // /proc/<pid>/exe is the resolved path, as on Linux (ld.so's $ORIGIN;
             // a venv's bin/python is a symlink). procfs only resolves from the cache.
-            if (/^\/proc\/[^/]+\/exe$/.test(p) && target.startsWith('/')) target = await fs().realpath(target).catch(() => target);
+            if (/^\/proc\/[^/]+\/exe$/.test(p)) target = await this.exePath(proc, p, target);
           } else if (this.isDevicePath(p)) return -A.EINVAL; // a device node or /dev, /dev/pts: not links
           else try { target = await fs().readlink(p); } catch (e) { return A.errnoFromError(e, A.EINVAL); }
           const b = enc.encode(target);
