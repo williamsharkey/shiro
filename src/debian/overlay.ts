@@ -233,11 +233,15 @@ export async function enableDebianShadows(fs: FileSystem, isCommand: (name: stri
   shadowSets.set(fs, { names: isCommand, set });
   extraShadows.set(fs, set);
   await refreshShadows(fs);
-  fs.onChange((_ev, path, newPath) => {
+  fs.onChange((ev, path, newPath) => {
     for (const p of [path, newPath]) {
       if (!p) continue;
       const i = p.lastIndexOf('/');
-      if (BIN_DIRS.includes(p.slice(0, i))) void refreshShadows(fs, p.slice(i + 1));
+      if (!BIN_DIRS.includes(p.slice(0, i))) continue;
+      // A file going away stops shadowing at once (a command typed right after
+      // `apt remove` mustn't find the old name); the check below may add it back
+      if (ev === 'delete' || (ev === 'rename' && p === path)) set.delete(p.slice(i + 1));
+      void refreshShadows(fs, p.slice(i + 1));
     }
   });
 }

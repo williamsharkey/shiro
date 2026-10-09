@@ -27,6 +27,7 @@ import { createPipe, Pipe, PipeEnd, FifoRdWr } from './pipe';
 import type { PtyFile } from './pty';
 import { LockTable, F_RDLCK, F_WRLCK, F_UNLCK } from './locks';
 import { Process } from './process';
+import { SysvShm } from './sysvshm';
 import { EpollFile, waitReady } from './epoll';
 import { SignalFile, notifySignalPending } from './signalfd';
 import { EventFile, TimerFile } from './fd';
@@ -183,6 +184,8 @@ export class Kernel {
   /** The last pid handed out (/proc/stat, /proc/loadavg). */
   lastPid = 0;
   readonly procfs = new ProcFs(this);
+  /** System V shared memory segments (the engine maps them). */
+  readonly shm = new SysvShm();
   /** fcntl record locks (F_SETLK, F_OFD_SETLK) */
   readonly locks = new LockTable();
   private detachTable?: () => void;
@@ -558,6 +561,7 @@ export class Kernel {
     if (proc.pid === 1 || !proc.beginExit()) return;
     await proc.fds.closeAll();
     this.locks.release(proc.pid);
+    this.shm.detachAll(proc);
     for (const child of this.procs.values()) {
       if (child.ppid === proc.pid) {
         child.ppid = 1;
@@ -1602,6 +1606,10 @@ export class Kernel {
         }
         case A.SYS_geteuid: return proc.uid;
         case A.SYS_getegid: return proc.gid;
+        case A.SYS_shmget: return this.shm.shmget(proc, args[0], (args[1] >>> 0) + (args[2] >>> 0) * 0x100000000, args[3]);
+        case A.SYS_shmctl: return this.shm.shmctl(proc, args[0], args[1], data);
+        case A.SYS_shiro_shmat: return this.shm.attach(proc, args[0], args[1], data);
+        case A.SYS_shiro_shmdt: return this.shm.detach(proc, args[0]);
         case A.SYS_setuid: case A.SYS_setgid: case A.SYS_setreuid: case A.SYS_setregid:
         case A.SYS_setresuid: case A.SYS_setresgid: case A.SYS_getresuid: case A.SYS_getresgid:
         case A.SYS_getgroups: case A.SYS_setgroups: case A.SYS_setfsuid: case A.SYS_setfsgid:
@@ -2403,6 +2411,7 @@ export class Kernel {
     child.uid = parent.uid;
     child.gid = parent.gid;
     copyCredentials(parent, child);
+    this.shm.forked(parent, child);
     child.data.embryo = true;
     child.data.forkParent = parent.pid; // startForkChild: the parent may have exited (and the child been reparented) by then
     this.procs.set(pid, child);
@@ -2477,6 +2486,7 @@ export class Kernel {
     if ((embryo || !inproc) && !runner) return -A.ENOEXEC;
     // The point of no return: exec bookkeeping, as Linux does it
     await proc.fds.closeOnExec();
+    this.shm.detachAll(proc); // exec drops SysV shm attachments
     proc.path = path;
     proc.argv = argv;
     proc.env = env;

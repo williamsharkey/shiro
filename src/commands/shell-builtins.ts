@@ -125,9 +125,13 @@ const GETTING_STARTED = `tabcomputer: a computer that lives in your browser tab.
 site's storage, in this browser.
 
 Install software
-  apt install NAME       tabcomputer's prebuilt programs: vim, htop, git, python3, ...
-                         (also pkg; pkg available lists them all)
-  debian install         stream in Debian 13; then sudo apt install is Debian's apt
+  debian install         stream in Debian 13 (real Debian, x86-64 in an emulator)
+  sudo apt update        then: sudo apt install -y NAME   (Debian's apt; about a
+                         minute per small package, python3 about 4 minutes)
+  pkg install NAME       tabcomputer's 72 prebuilt programs (WebAssembly or static
+                         x86-64): vim, htop, git, python3, jq, ... in about a second;
+                         pkg available lists them. Before debian install, apt is pkg.
+  tabcomputer-alternatives --list   builtin or Debian's, per program (Debian mode)
   gui                    Linux desktop apps (X11) that open in windows
 
 Claude Code

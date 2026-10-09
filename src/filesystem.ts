@@ -230,7 +230,8 @@ class DevProvider implements VirtualFSProvider {
     return null;
   }
   readdir(path: string): string[] | null {
-    if (path === '/dev') return ['null', 'zero', 'random', 'urandom', 'stdin', 'stdout', 'stderr', 'fd'];
+    // shm: a real directory (shm_open's files), the rest synthetic
+    if (path === '/dev') return ['null', 'zero', 'random', 'urandom', 'stdin', 'stdout', 'stderr', 'fd', 'shm'];
     return null;
   }
   exists(path: string): boolean { return this.handles(path); }
@@ -588,10 +589,11 @@ export class FileSystem {
     }
 
     // Ensure basic directories exist
-    for (const dir of ['/home', '/tmp', '/home/user', '/etc', '/var', '/var/log']) {
+    for (const dir of ['/home', '/tmp', '/home/user', '/etc', '/var', '/var/log', '/dev', '/dev/shm']) {
       const existing = await this._get(dir);
       if (!existing) {
-        await this._put(this._makeNode(dir, 'dir'));
+        // /dev/shm is a tmpfs on Linux: anyone may create files there (shm_open), sticky
+        await this._put({ ...this._makeNode(dir, 'dir'), ...(dir === '/dev/shm' ? { mode: 0o1777 } : {}) });
       }
     }
     // The account database Unix programs look themselves up in (getpwuid:

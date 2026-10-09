@@ -99,9 +99,9 @@ describe('Compression Suite', () => {
     });
 
     it('unxz is alias for xz -d', async () => {
-      const { output, exitCode } = await run(shell, 'unxz --help');
-      // Should error because no file provided (which means the -d flag was correctly injected)
-      // The xz command won't find a file to decompress
+      // Should error: it decompresses (the -d flag was injected) a file that isn't there
+      // (`unxz --help` answers with usage now, like every built-in)
+      const { exitCode } = await run(shell, 'unxz /tmp/nonexistent.xz');
       expect(exitCode).toBe(1);
     });
   });
@@ -127,7 +127,7 @@ describe('Compression Suite', () => {
     });
 
     it('unzstd is alias for zstd -d', async () => {
-      const { output, exitCode } = await run(shell, 'unzstd --help');
+      const { exitCode } = await run(shell, 'unzstd /tmp/nonexistent.zst');
       expect(exitCode).toBe(1);
     });
   });

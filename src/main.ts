@@ -116,6 +116,11 @@ const PERSIST_AFTER_BYTES = 64 << 20;
 
 async function main() {
   console.log(`[tabcomputer] Starting... (build #${buildNumber.trim()})`);
+  // Hard Restart (src/desktop/index.ts) adds ?reload= to get past the HTTP cache; drop it again
+  try {
+    const u = new URL(location.href);
+    if (u.searchParams.has('reload')) { u.searchParams.delete('reload'); history.replaceState(history.state, '', u.toString()); }
+  } catch { /* not a page */ }
   logIsolationStatus();
 
   // The desktop (src/desktop) is its own chunk: shiro.computer's terminal UI
