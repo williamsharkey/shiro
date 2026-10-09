@@ -189,6 +189,13 @@ export const SYS_shiro_execve = 1011;
  * kernel (Blink's futex waits): the process shows as sleeping (S) meanwhile.
  */
 export const SYS_shiro_sleeping = 1012;
+/** SysV shm attach/detach bookkeeping (the engine maps the memory; src/kernel/sysvshm.ts). */
+export const SYS_shiro_shmat = 1013;
+export const SYS_shiro_shmdt = 1014;
+export const SYS_shmget = 29;
+export const SYS_shmat = 30;
+export const SYS_shmctl = 31;
+export const SYS_shmdt = 67;
 
 // ── errno (Linux) ──────────────────────────────────────────────────────────
 export const EPERM = 1;
