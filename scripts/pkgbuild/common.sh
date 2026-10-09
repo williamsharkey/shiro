@@ -107,3 +107,17 @@ setup_proc() {
   PROC_CFLAGS="-I$COMPAT_DIR/include"
   PROC_LIBS="$d/libshiro-proc.a"
 }
+
+# Sockets for wasi-sdk programs (compat/wasi-sock.c over the kernel's WASIX
+# sock_* calls and resolve): socket, connect, bind, listen, getaddrinfo, ...
+# plus <netdb.h>. Builds $PKG_WORK/shiro-sock/libshiro-sock.a; then use
+# $SOCK_CFLAGS / $SOCK_LIBS.
+setup_sock() {
+  local d="$PKG_WORK/shiro-sock"
+  mkdir -p "$d"
+  $CC -O2 $EMU_CFLAGS -I"$COMPAT_DIR/include" -c "$COMPAT_DIR/wasi-sock.c" -o "$d/wasi-sock.o"
+  rm -f "$d/libshiro-sock.a"
+  $AR rcs "$d/libshiro-sock.a" "$d/wasi-sock.o"
+  SOCK_CFLAGS="-I$COMPAT_DIR/include"
+  SOCK_LIBS="$d/libshiro-sock.a"
+}

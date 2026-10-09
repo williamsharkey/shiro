@@ -79,6 +79,32 @@ async function syncToNative(py: any, ctx: CommandContext, dir: string) {
   } catch { /* non-fatal */ }
 }
 
+/**
+ * Run `code` after `setup` with sys.stdout/stderr captured, appending what it
+ * printed to the command's output (also when it raises) and restoring them.
+ * Exit status 1 when it raises (the traceback goes to stderr), else 0:
+ * warnings on stderr are not failures.
+ */
+function runCaptured(py: any, ctx: CommandContext, setup: string, code: string): number {
+  let failure = '';
+  py.runPython(`import sys, io
+_shiro_out = io.StringIO()
+_shiro_err = io.StringIO()
+sys.stdout = _shiro_out
+sys.stderr = _shiro_err`);
+  try {
+    py.runPython(setup);
+    py.runPython(code);
+  } catch (err: any) {
+    failure = String(err?.message ?? err).replace(/\n?$/, '\n');
+  }
+  ctx.stdout += py.runPython('_shiro_out.getvalue()');
+  ctx.stderr += py.runPython('_shiro_err.getvalue()');
+  py.runPython('sys.stdout = sys.__stdout__; sys.stderr = sys.__stderr__');
+  ctx.stderr += failure;
+  return failure ? 1 : 0;
+}
+
 export const pythonCmd: Command = {
   name: 'python',
   description: 'Python interpreter (Pyodide)',
@@ -99,7 +125,7 @@ export const pythonCmd: Command = {
     try {
       py = await ensurePyodide(ctx);
     } catch (err: any) {
-      ctx.stderr = `error: failed to load Pyodide: ${err.message}\n`;
+      ctx.stderr += `error: failed to load Pyodide: ${err.message}\n`;
       return 1;
     }
 
@@ -109,28 +135,7 @@ export const pythonCmd: Command = {
     const cIdx = args.indexOf('-c');
     if (cIdx !== -1 && args[cIdx + 1]) {
       const code = args[cIdx + 1];
-      try {
-        // Set up sys.argv
-        py.runPython(`import sys; sys.argv = ['python', '-c']`);
-        // Redirect stdout/stderr
-        py.runPython(`
-import sys, io
-_shiro_out = io.StringIO()
-_shiro_err = io.StringIO()
-sys.stdout = _shiro_out
-sys.stderr = _shiro_err
-`);
-        py.runPython(code);
-        const stdout = py.runPython('_shiro_out.getvalue()');
-        const stderr = py.runPython('_shiro_err.getvalue()');
-        py.runPython('sys.stdout = sys.__stdout__; sys.stderr = sys.__stderr__');
-        if (stdout) ctx.stdout += stdout;
-        if (stderr) ctx.stderr += stderr;
-        return stderr ? 1 : 0;
-      } catch (err: any) {
-        ctx.stderr = err.message + '\n';
-        return 1;
-      }
+      return runCaptured(py, ctx, `import sys; sys.argv = ['-c', *${JSON.stringify(args.slice(cIdx + 2))}]`, code);
     }
 
     // python3 script.py [args...]
@@ -141,39 +146,21 @@ sys.stderr = _shiro_err
       try {
         content = await ctx.fs.readFile(scriptPath, 'utf8') as string;
       } catch {
-        ctx.stderr = `python: can't open file '${scriptArg}': [Errno 2] No such file or directory\n`;
+        ctx.stderr += `python: can't open file '${scriptArg}': [Errno 2] No such file or directory\n`;
         return 2;
       }
 
       // Sync CWD to Pyodide FS
       await syncToNative(py, ctx, ctx.cwd);
 
-      try {
-        py.runPython(`
-import sys, io, os
-sys.argv = ${JSON.stringify(['python', scriptArg, ...args.slice(args.indexOf(scriptArg) + 1)])}
-os.chdir('/shiro${ctx.cwd}')
-_shiro_out = io.StringIO()
-_shiro_err = io.StringIO()
-sys.stdout = _shiro_out
-sys.stderr = _shiro_err
-`);
-        py.runPython(content);
-        const stdout = py.runPython('_shiro_out.getvalue()');
-        const stderr = py.runPython('_shiro_err.getvalue()');
-        py.runPython('sys.stdout = sys.__stdout__; sys.stderr = sys.__stderr__');
-        if (stdout) ctx.stdout += stdout;
-        if (stderr) ctx.stderr += stderr;
-        return stderr ? 1 : 0;
-      } catch (err: any) {
-        ctx.stderr = err.message + '\n';
-        return 1;
-      }
+      return runCaptured(py, ctx, `import sys, os
+sys.argv = ${JSON.stringify([scriptArg, ...args.slice(args.indexOf(scriptArg) + 1)])}
+os.chdir('/shiro${ctx.cwd}')`, content);
     }
 
     // Interactive REPL
     if (!ctx.terminal) {
-      ctx.stderr = 'python: interactive mode requires a terminal\n';
+      ctx.stderr += 'python: interactive mode requires a terminal\n';
       return 1;
     }
 
@@ -270,7 +257,7 @@ export const pipCmd: Command = {
 
     const args = ctx.args;
     if (args[0] !== 'install' || !args[1]) {
-      ctx.stderr = 'usage: pip install <package> [<package>...]\n';
+      ctx.stderr += 'usage: pip install <package> [<package>...]\n';
       return 1;
     }
 
@@ -278,7 +265,7 @@ export const pipCmd: Command = {
     try {
       py = await ensurePyodide(ctx);
     } catch (err: any) {
-      ctx.stderr = `error: failed to load Pyodide: ${err.message}\n`;
+      ctx.stderr += `error: failed to load Pyodide: ${err.message}\n`;
       return 1;
     }
 
@@ -293,7 +280,7 @@ export const pipCmd: Command = {
       }
       return 0;
     } catch (err: any) {
-      ctx.stderr = `pip: error installing packages: ${err.message}\n`;
+      ctx.stderr += `pip: error installing packages: ${err.message}\n`;
       return 1;
     }
   },
