@@ -275,6 +275,10 @@ const haveForkcpu = blinkHasForkcpu && tryBuild('gcc', ['-static', '-O1', '-w', 
 const timerthreadBin = join(out, 'timerthread');
 const blinkHasTimerthread = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_timerthread');
 const haveTimerthread = blinkHasTimerthread && tryBuild('gcc', ['-static', '-O1', '-w', '-o', timerthreadBin, 'timerthread.c', '-lpthread', '-lrt']);
+// Blink 0511: a file mapping's last page is the file's to its end
+const mmaptailBin = join(out, 'mmaptail');
+const blinkHasMmaptail = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_mmaptail');
+const haveMmaptail = blinkHasMmaptail && tryBuild('gcc', ['-static', '-O1', '-w', '-o', mmaptailBin, 'mmaptail.c']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -941,6 +945,12 @@ it.skipIf(!haveTimerthread)('a SIGEV_THREAD timer runs its function in another t
   const { shell } = await setup(readFileSync(timerthreadBin));
   const r = await run(shell, './prog');
   expect(r.output.replace(/\r\n/g, '\n')).toBe('runs 1 value 42 other thread 1\nchild runs 0\nparent runs 1\n');
+}, 60_000);
+
+it.skipIf(!haveMmaptail)('a file mapping whose length ends mid-page shows the file to the end of the page; MAP_FIXED over it shows the new file (Open POSIX mmap_3-1)', async () => {
+  const { shell } = await setup(readFileSync(mmaptailBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('tail a\nreplaced 1 tail b\n');
 }, 60_000);
 
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
