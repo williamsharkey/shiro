@@ -195,4 +195,132 @@ describe('FileSystem big files', () => {
       kernel.kill(proc.pid, A.SIGKILL);
     } finally { kernel.dispose(); }
   });
+  /** Every block record belongs to a blob the stored map gives to a stored node of that blob, and every such node's blocks are there. */
+  function checkStore(recs: Map<string, any>): void {
+    const map = new Map<string, string>(recs.get('\u0001blobs')?.blobs ?? []);
+    const owners = new Map([...map].map(([p, id]) => [id, p]));
+    for (const k of recs.keys()) {
+      if (!k.startsWith('\u0001b/')) continue;
+      const id = k.slice(3, k.lastIndexOf('/'));
+      const owner = owners.get(id);
+      expect(owner, `orphaned block ${k}`).toBeDefined();
+      expect(recs.get(owner!)?.blob, `block ${k} of a blob its owner ${owner} doesn't use`).toBe(id);
+    }
+    for (const [p, n] of recs) {
+      if (!n.blob) continue;
+      expect(map.get(p), `node ${p} missing from the blob map`).toBe(n.blob);
+      // None past the end (a missing one inside reads as zeros: cut off by a truncate, then grown back)
+      for (const k of blocksOf(recs, n.blob)) expect(parseInt(k.slice(k.lastIndexOf('/') + 1), 16) * FileSystem.BLOCK, `${k} past the end of ${p}`).toBeLessThan(n.size);
+    }
+  }
+
+  it('reads, writes and deletes a big file an earlier build stored as one record', async () => {
+    const fs = await fresh();
+    await fs.mkdir('/tmp/old', { recursive: true });
+    await fs.sync();
+    // As builds before blocks stored it: content inline, no blob
+    const db = (fs as any).db as IDBDatabase;
+    const put = (node: any) => new Promise<void>((r, j) => { const tx = db.transaction('files', 'readwrite'); tx.objectStore('files').put(node); tx.oncomplete = () => r(); tx.onerror = () => j(tx.error); });
+    const now = Date.now();
+    for (const n of ['a', 'b', 'c', 'd']) await put({ path: `/tmp/old/${n}`, type: 'file', content: pattern(20000, n.charCodeAt(0)), mode: 0o644, mtime: now, ctime: now, size: 20000 });
+    const up = await fresh();
+    // Read as it is
+    expect(await up.readFile('/tmp/old/a')).toEqual(pattern(20000, 97));
+    // Rewritten by writeFile: now blocks
+    await up.writeFile('/tmp/old/b', pattern(15000, 3));
+    // Written through the kernel in place, and grown: blocks once it grows
+    const f = await open(up, '/tmp/old/c');
+    await f.pwrite(new Uint8Array(100).fill(9), 500);
+    await f.pwrite(new Uint8Array(3000).fill(8), 20000);
+    await f.close();
+    // Deleted
+    await up.unlink('/tmp/old/d');
+    const recs = await stored(up);
+    checkStore(recs);
+    expect(recs.get('/tmp/old/a').blob).toBeUndefined(); // left as it was until rewritten
+    expect(recs.get('/tmp/old/b').blob).toBeTruthy();
+    expect(recs.has('/tmp/old/d')).toBe(false);
+    const c = pattern(23000, 99); c.set(pattern(20000, 99).subarray(0, 20000)); c.fill(9, 500, 600); c.fill(8, 20000, 23000);
+    const again = await fresh();
+    expect(await again.readFile('/tmp/old/a')).toEqual(pattern(20000, 97));
+    expect(await again.readFile('/tmp/old/b')).toEqual(pattern(15000, 3));
+    expect(await again.readFile('/tmp/old/c')).toEqual(c);
+    expect(await again.exists('/tmp/old/d')).toBe(false);
+  });
+
+  it('a reload at any moment of a kernel write finds a whole earlier state of the file (one transaction per write-back)', async () => {
+    const fs = await fresh();
+    await fs.writeFile('/tmp/crash.bin', new Uint8Array(0));
+    await fs.sync();
+    const f = await open(fs, '/tmp/crash.bin');
+    const data = pattern(120 << 10, 4);
+    let checks = 0;
+    for (let off = 0; off < data.length; off += 1500) {
+      await f.write(data.subarray(off, off + 1500));
+      if ((off / 1500) % 7 === 3) {
+        await new Promise((r) => setTimeout(r, (off / 1500) % 30)); // write-backs and commits happen in between
+        // What another tab (or this one after a reload) would find: only committed transactions
+        const other = await fresh();
+        const got = await other.readFile('/tmp/crash.bin') as Uint8Array;
+        expect(got).toEqual(data.subarray(0, got.length)); // a prefix: never a hole or a torn block
+        checkStore(await stored(other).catch(() => new Map()) as Map<string, any>);
+        checks++;
+      }
+    }
+    await f.close();
+    expect(checks).toBeGreaterThan(5);
+    const recs = await stored(fs);
+    checkStore(recs);
+    expect(await (await fresh()).readFile('/tmp/crash.bin')).toEqual(data);
+  });
+
+  it('a write-back whose transaction aborts leaves the last committed file and blob map', async () => {
+    const fs = await fresh();
+    await fs.writeFile('/tmp/abort.bin', pattern(30000, 6));
+    await fs.sync();
+    const db = (fs as any).db as IDBDatabase;
+    const orig = db.transaction.bind(db);
+    (db as any).transaction = (store: any, mode?: IDBTransactionMode, opts?: any) => {
+      const tx = orig(store, mode, opts);
+      if (mode === 'readwrite') queueMicrotask(() => tx.abort());
+      return tx;
+    };
+    const f = await open(fs, '/tmp/abort.bin');
+    await f.pwrite(new Uint8Array(5000).fill(1), 2000);
+    await f.pwrite(new Uint8Array(4000).fill(2), 30000); // grows it
+    await f.close().catch(() => {});
+    await fs.sync().catch(() => {});
+    await fs.writeFile('/tmp/abort.bin', pattern(9000, 7)).catch(() => {}); // a new blob, its old one dropped: also aborted
+    await fs.sync().catch(() => {});
+    (db as any).transaction = orig;
+    const other = await fresh();
+    expect(await other.readFile('/tmp/abort.bin')).toEqual(pattern(30000, 6));
+    // stored() reads through `other`; its queue is empty
+    checkStore(await stored(other));
+  });
+
+  it('rm -rf of a tree of big files, by range or file by file, leaves no blocks behind', async () => {
+    const fs = await fresh();
+    const files: string[] = [];
+    for (const d of ['/tmp/tree1/a/b', '/tmp/tree1/c', '/tmp/tree2/x/y']) {
+      await fs.mkdir(d, { recursive: true });
+      for (let i = 0; i < 3; i++) { const p = `${d}/f${i}.bin`; files.push(p); await fs.writeFile(p, pattern(9000 + i * 5000, i)); }
+    }
+    // One written through the kernel too
+    await fs.writeFile('/tmp/tree1/c/k.bin', new Uint8Array(0));
+    const k = await open(fs, '/tmp/tree1/c/k.bin');
+    await k.write(pattern(40000, 9));
+    await k.close();
+    let recs = await stored(fs);
+    checkStore(recs);
+    const ids = [...recs].filter(([p, n]) => p.startsWith('/tmp/tree') && n.blob).map(([, n]) => n.blob as string);
+    expect(ids).toHaveLength(10);
+    expect(ids.flatMap((id) => blocksOf(recs, id)).length).toBeGreaterThan(100);
+    await fs.rm('/tmp/tree1', { recursive: true }); // one range delete
+    for (const p of files.filter((x) => x.startsWith('/tmp/tree2/'))) await fs.unlink(p); // as rm -r in Blink does: unlink each
+    recs = await stored(fs);
+    checkStore(recs);
+    expect(ids.flatMap((id) => blocksOf(recs, id))).toEqual([]);
+    expect(recs.get('\u0001blobs').blobs.filter(([p]: [string]) => p.startsWith('/tmp/tree'))).toEqual([]);
+  });
 });
