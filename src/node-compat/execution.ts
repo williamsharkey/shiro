@@ -394,7 +394,9 @@ export async function executeNodeScript(
     };
 
     // CORS proxy setup
-    const corsProxyOrigin = typeof window !== 'undefined' ? getShiroOrigin() : '';
+    // (a kernel guest's worker has the page's origin in its own location)
+    const corsProxyOrigin = typeof window !== 'undefined' ? getShiroOrigin()
+      : nodeGuestOf(ctx) && typeof location !== 'undefined' ? location.origin : '';
     const corsProxyMap: [string, string][] = [
       ['https://api.anthropic.com/', '/api/anthropic/'],
       ['https://platform.claude.com/', '/api/platform/'],
@@ -415,7 +417,8 @@ export async function executeNodeScript(
     ];
     const isBlocked = (u: string) => blockedUrls.some(b => u.includes(b));
 
-    if (corsProxyOrigin) {
+    // A kernel guest routes too (its own servers on localhost), wherever it runs
+    if (corsProxyOrigin || nodeGuestOf(ctx)) {
       globalThis.fetch = _st.installedFetch = (input: RequestInfo | URL, init?: RequestInit) => trackAsync(routedFetch(input, init));
       const routedFetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         let url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;

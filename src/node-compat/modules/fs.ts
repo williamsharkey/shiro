@@ -724,6 +724,12 @@ export function createFsModule(deps: FsDeps): any {
     renameSync: (oldP: string, newP: string) => {
       const oldRes = ctx.fs.resolvePath(oldP, ctx.cwd);
       const newRes = ctx.fs.resolvePath(newP, ctx.cwd);
+      if (writeNowToo) {
+        // A kernel guest: one rename(2), at once; the cache reads both paths again
+        (ctx.fs as any).renameSync(oldRes, newRes);
+        for (const k of [...fileCache.keys()]) if (k === oldRes || k === newRes || k.startsWith(oldRes + '/') || k.startsWith(newRes + '/')) fileCache.delete(k);
+        return;
+      }
       // A directory (pnpm stages a package in name_tmp_PID, then renames it):
       // move the cached tree now, and the stored one once the writes into it
       // have landed (renaming first moved a half-written or missing tree)

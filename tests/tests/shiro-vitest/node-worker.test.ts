@@ -5,47 +5,12 @@
  * The guest is bundled with esbuild and runs in a Node worker_thread.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { Worker } from 'node:worker_threads';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
-import path from 'node:path';
-import { build } from 'esbuild';
 import { createTestShell } from './helpers';
-import type { GuestWorker } from '@shiro/kernel/worker-host';
-import { setNodeWorkerFactory } from '@shiro/node-worker/host';
+import { installNodeWorker } from './node-worker-setup';
 
-const REPO = path.resolve(__dirname, '../../..');
-let tmp: string;
-
-beforeAll(async () => {
-  tmp = mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'shiro-node-worker-'));
-  const entry = path.join(tmp, 'entry.ts');
-  writeFileSync(entry, `
-    import { parentPort } from 'node:worker_threads';
-    import { nodeGuestMain } from ${JSON.stringify(path.join(REPO, 'src/node-worker/guest.ts'))};
-    nodeGuestMain((h) => { parentPort!.on('message', h); }, (m) => parentPort!.postMessage(m));
-  `);
-  const file = path.join(tmp, 'node-guest.mjs');
-  await build({
-    entryPoints: [entry], bundle: true, platform: 'node', format: 'esm', outfile: file, logLevel: 'error',
-    // (a CommonJS dependency's require() of a node builtin, in an ES module bundle)
-    banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" },
-  });
-  setNodeWorkerFactory((): GuestWorker => {
-    const w = new Worker(file);
-    return {
-      postMessage: (m) => w.postMessage(m),
-      terminate: () => w.terminate(),
-      onMessage: (cb) => { w.on('message', cb); },
-      onError: (cb) => { w.on('error', cb); },
-      onExit: (cb) => { w.on('exit', cb); },
-    };
-  });
-}, 120_000);
-
-afterAll(() => {
-  setNodeWorkerFactory(null);
-  rmSync(tmp, { recursive: true, force: true });
-});
+let cleanup: () => void;
+beforeAll(async () => { cleanup = await installNodeWorker(); }, 120_000);
+afterAll(() => cleanup?.());
 
 async function sh(cmd: string, prep?: (fs: any) => Promise<void>) {
   const { shell, fs } = await createTestShell();

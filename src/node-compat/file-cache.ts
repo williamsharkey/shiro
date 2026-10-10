@@ -39,7 +39,7 @@ class ReadThroughMap extends Map<string, string> {
   }
   has(key: string): boolean { return this.get(key) !== undefined || super.has(key); }
   set(key: string, value: string): this { this.misses.delete(key); return super.set(key, value); }
-  delete(key: string): boolean { this.misses.add(key); return super.delete(key); }
+  delete(key: string): boolean { return super.delete(key); }
   /** Files changed elsewhere (a child process ran): read them again */
   clear(): void { this.misses.clear(); super.clear(); }
 }
