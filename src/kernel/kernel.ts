@@ -27,7 +27,7 @@ import {
 import { createPipe, Pipe, PipeEnd, FifoRdWr } from './pipe';
 import type { PtyFile } from './pty';
 import { LockTable, F_RDLCK, F_WRLCK, F_UNLCK } from './locks';
-import { Process } from './process';
+import { Process, abortReason } from './process';
 import { SysvShm } from './sysvshm';
 import { SysvSem } from './sysvsem';
 import { SysvMsg } from './sysvmsg';
@@ -1210,6 +1210,7 @@ export class Kernel {
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
     if (this.devices.has(p) || /^\/(?:dev|proc)\//.test(p)) return undefined;
+    if (this.searchDenied(proc, p)) return -A.EACCES;
     const statusFlags = flags & ~(A.O_CREAT | A.O_EXCL | A.O_TRUNC | A.O_CLOEXEC | A.O_NOCTTY | A.O_DIRECTORY | A.O_NOFOLLOW);
     if (flags & (A.O_CREAT | A.O_TRUNC | A.O_NOFOLLOW)) {
       // Creating, truncating or not following: decided on the last component itself
@@ -1345,6 +1346,7 @@ export class Kernel {
     if (!fs || trailingSlash(path)) return undefined;
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
+    if (this.searchDenied(proc, p)) return -A.EACCES;
     if (this.devices.has(p) || p === '/proc' || p.startsWith('/proc/') || this.socketPaths?.has(p)) return undefined;
     const hit = fs.lookupCached(p, follow);
     if (hit === undefined) return undefined;
@@ -1411,6 +1413,10 @@ export class Kernel {
     }
     const fs = this.fs;
     if (!fs) return -A.ENOSYS;
+    // Known missing in memory: ENOENT without fs.stat's thrown error (an
+    // Error with its stack: most of a missing-file stat, as node's module
+    // resolution makes by the hundred)
+    if (!this.socketPaths?.has(p) && fs.lookupCached?.(p, follow) === null) return -A.ENOENT;
     try {
       const st = follow ? await fs.stat(p) : await fs.lstat(p);
       let type = st.isDirectory() ? A.S_IFDIR : st.isSymbolicLink() ? A.S_IFLNK : st.isFIFO?.() ? A.S_IFIFO : A.S_IFREG;
@@ -1686,7 +1692,7 @@ export class Kernel {
     const abort = new AbortController();
     shell.abortController = null;
     shell.inheritedAbort = abort;
-    proc.onTerminate(() => abort.abort());
+    proc.onTerminate(() => abort.abort(abortReason()));
     return shell;
   }
 

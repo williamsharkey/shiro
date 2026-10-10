@@ -195,7 +195,7 @@ export class Process {
     const old = this.interrupt;
     this.interrupt = new AbortController();
     Process.bySignal.set(this.interrupt.signal, this);
-    old.abort();
+    old.abort(abortReason());
   }
 
   /** Resolves with the wait status when the process exits. Does not reap it. */
@@ -280,4 +280,16 @@ export class Process {
       });
     });
   }
+}
+
+let sharedAbortReason: unknown;
+/**
+ * The reason the kernel's aborts carry: one AbortError made once. abort()
+ * without a reason builds a DOMException (with a stack) every time, ~15% of
+ * a builtin's spawn-to-exit.
+ */
+export function abortReason(): unknown {
+  return sharedAbortReason ??= (typeof DOMException === 'function'
+    ? new DOMException('The operation was aborted.', 'AbortError')
+    : Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' }));
 }

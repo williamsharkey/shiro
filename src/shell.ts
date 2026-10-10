@@ -968,7 +968,8 @@ export class Shell {
   }
   private terminal?: ShiroTerminal;
 
-  constructor(fs: FileSystem, commands: CommandRegistry) {
+  /** `forked`: a fork's (fork()): it shares its parent's history, so it doesn't read ~/.bash_history */
+  constructor(fs: FileSystem, commands: CommandRegistry, forked = false) {
     this.fs = fs;
     this.commands = commands;
     // Commands that read or write a named pipe by name (cat fifo, tee fifo) go through the kernel's pipe
@@ -991,8 +992,8 @@ export class Shell {
       // (no FORCE_COLOR: programs colour when their stdout is a tty, and
       // chalk, npm and python tracebacks put no escapes into pipes and files)
     };
-    // Load history async (don't block construction)
-    this.loadHistory();
+    // Load history async (don't block construction); a fork shares its parent's
+    if (!forked) this.loadHistory();
     this.syncOptionVars();
   }
 
@@ -1482,7 +1483,7 @@ export class Shell {
   }
 
   fork(): Shell {
-    const child = new Shell(this.fs, this.commands);
+    const child = new Shell(this.fs, this.commands, true);
     child.inheritedAbort = this.abortController ?? this.inheritedAbort;
     child.kernelStdio = this.kernelStdio;
     child.kernelStdinLive = this.kernelStdinLive;
