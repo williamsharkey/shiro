@@ -71,6 +71,8 @@ const shmobjBin = join(out, 'shmobj');
 const haveShmobj = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', shmobjBin, 'shmobj.c']);
 const shmoddBin = join(out, 'shmodd');
 const haveShmodd = tryBuild('gcc', ['-static', '-O1', '-o', shmoddBin, 'shmodd.c']);
+const fdreopenBin = join(out, 'fdreopen');
+const haveFdreopen = tryBuild('gcc', ['-static', '-O1', '-o', fdreopenBin, 'fdreopen.c']);
 const statpathBin = join(out, 'statpath');
 const haveStatpath = tryBuild('gcc', ['-static', '-O1', '-o', statpathBin, 'statpath.c']);
 const execenvBin = join(out, 'execenv');
@@ -156,6 +158,8 @@ const sse41bBin = join(out, 'sse41b');
 const haveSse41b = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', sse41bBin, 'sse41b.c']);
 const ssefloatBin = join(out, 'ssefloat');
 const haveSsefloat = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', ssefloatBin, 'ssefloat.c', '-lm']);
+const freewhilewriteBin = join(out, 'freewhilewrite');
+const haveFreewhilewrite = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', freewhilewriteBin, 'freewhilewrite.c']);
 const shmunlinkedBin = join(out, 'shmunlinked');
 const haveShmunlinked = tryBuild('gcc', ['-static', '-O1', '-o', shmunlinkedBin, 'shmunlinked.c']);
 const shmremoteBin = join(out, 'shmremote');
@@ -1349,6 +1353,15 @@ describe('Blink engine: CPU and syscall fixes', () => {
     expect(r.output.replace(/\r\n/g, '\n')).toBe('arith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\narith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\narith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\n');
   }, 60_000);
 
+  // free() of a buffer another thread is writing to a pipe: munmap waited
+  // for the write's page locks holding the GIL the reader needed (0122)
+  it.skipIf(!haveFreewhilewrite)('munmap of a buffer another thread is still writing doesn\'t deadlock, JIT on and off', async () => {
+    const { shell } = await setup(readFileSync(freewhilewriteBin));
+    const r = await run(shell, 'timeout 20 ./prog; echo rc $?; BLINK_WJIT=0 timeout 20 ./prog; echo rc $?');
+    const ok = 'writer and reader done: read what was written\nrc 0\n';
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(ok + ok);
+  }, 90_000);
+
   // Open POSIX mmap_7-4: the object is unlinked before it's mapped, so its
   // fd's inode is no longer the path's; the fd still reads the mapping
   it.skipIf(!haveShmunlinked)('an unlinked /dev/shm object: a fork child\'s private map and pread see the parent\'s shared store', async () => {
@@ -1561,6 +1574,13 @@ describe('Blink engine: CPU and syscall fixes', () => {
       "anon after fork 'c' munmap rounded 0\nshm after close 'qwerty' mapped 'qwerty'\ndone\nrc 0\n";
     expect(r.output.replace(/\r\n/g, '\n')).toBe(ok + ok);
   }, 120_000);
+
+  // open() of /proc/self/fd/N reopens what the fd refers to (LTP splice07, bash's <(…))
+  it.skipIf(!haveFdreopen)('opening /proc/self/fd/N and /dev/fd/N: a pipe\'s other end, a file at its own offset, a memfd', async () => {
+    const { shell } = await setup(readFileSync(fdreopenBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('pipe pipe\nfile file offset 4\nmemfd memfd ro-write refused\n');
+  }, 60_000);
 
   // Path lookup errors (LTP lstat02), as uid 1000
   it.skipIf(!haveStatpath)('stat and lstat: EACCES, ENOENT for "", ENAMETOOLONG, ENOTDIR, ELOOP past 40 links', async () => {

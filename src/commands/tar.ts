@@ -11,8 +11,8 @@ import { decodeBytes, encodeText } from '../utils/byte-text';
  * -f - (the default) is stdin/stdout. Options: -C DIR, -v, -z -j -J --zstd
  * -a, -O, -k, --overwrite, -m, -p, -h, -P, -X FILE, --exclude=PAT, -T FILE,
  * --strip-components=N, --no-recursion, --wildcards. Regular files,
- * directories, symlinks and hard links (extracted as copies; the filesystem
- * has none) are supported. Errors follow GNU: exit 2 with "Exiting with
+ * directories, symlinks and hard links (a second name of an archived file is
+ * stored as a link member and extracted as a real link) are supported. Errors follow GNU: exit 2 with "Exiting with
  * failure status due to previous errors".
  */
 
@@ -388,6 +388,8 @@ async function runTar(ctx: CommandContext): Promise<number> {
     const vout = (s: string) => { if (archive === '-') ctx.stderr += s; else ctx.stdout += s; };
     let warnedSlash = false;
     const user = ctx.env.USER || 'user';
+    // A file with more than one name: its first name in the archive, by inode (later names are hard-link members)
+    const linkedNames = new Map<number, string>();
     const addPath = async (shown: string, abs: string, _top: boolean) => {
       let st: any;
       try { st = derefLinks ? await fs.stat(abs) : await fs.lstat(abs); }
@@ -428,6 +430,16 @@ async function runTar(ctx: CommandContext): Promise<number> {
           await addPath(childShown, abs === '/' ? `/${n}` : `${abs}/${n}`, false);
         }
         return;
+      }
+      if ((st.nlink ?? 1) > 1 && st.ino) {
+        const first = linkedNames.get(st.ino);
+        if (first !== undefined) {
+          const h: Header = { ...base, type: '1', linkname: first };
+          blocks.push(...headerBlocks(h));
+          if (verbose) vout(verbose > 1 ? verboseLine(h, verbose) : name + '\n');
+          return;
+        }
+        linkedNames.set(st.ino, name);
       }
       if (!(st.mode & 0o400)) {
         warn(`${shown}: Cannot open: Permission denied`);
@@ -659,14 +671,11 @@ async function runTar(ctx: CommandContext): Promise<number> {
       if (h.type === '2') {
         await fs.symlink(h.linkname, target);
       } else if (h.type === '1') {
-        // hard link: a copy of the already extracted target
+        // hard link: another name for the already extracted target (a symlink's own entry, as GNU tar)
         const src = fs.resolvePath(h.linkname.replace(/^\/+/, ''), outDir);
         const sst = await fs.lstat(src).catch(() => null);
         if (!sst) { warn(`${name}: Cannot hard link to '${h.linkname}': No such file or directory`); status = 2; continue; }
-        if (sst.isSymbolicLink()) await fs.symlink(await fs.readlink(src), target);
-        else {
-          await fs.writeFile(target, await fs.readFile(src) as Uint8Array, { mode: sst.mode & 0o7777 });
-        }
+        await fs.link(src, target);
       } else if (h.type === '0' || h.type === '7') {
         await fs.writeFile(target, body.slice(), { mode: h.mode & 0o7777 });
         await fs.chmod(target, h.mode & 0o7777).catch(() => {});

@@ -137,8 +137,8 @@ describe('eval with a stdin redirect', () => {
 describe('which, timeout, kill and Ctrl-C', () => {
   it('which prints a line per name found and exits 1 if any is missing', async () => {
     const r = await agentSh('which ls nonesuch-cmd cat 2>&1; echo "rc=$?"');
-    // (builtins without a PATH file print their name)
-    expect(r.out.split('\n').filter(Boolean).sort()).toEqual(['cat', 'ls', 'nonesuch-cmd not found', 'rc=1']);
+    // (builtins without a PATH file print where they count as installed)
+    expect(r.out.split('\n').filter(Boolean).sort()).toEqual(['/usr/bin/cat', '/usr/bin/ls', 'nonesuch-cmd not found', 'rc=1']);
     expect(r.status).toBe(0);
   });
 

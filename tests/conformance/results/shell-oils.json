@@ -416,8 +416,8 @@
      "name": "exit 1 when trap code string is invalid"
     },
     {
-     "i": 26,
-     "name": "trap USR1, sleep, SIGINT: non-interactively"
+     "i": 27,
+     "name": "trap INT, sleep, SIGINT: non-interactively"
     }
    ]
   },
@@ -440,16 +440,12 @@
    ]
   },
   "builtin-cd": {
-   "pass": 26,
+   "pass": 27,
    "total": 28,
    "failures": [
     {
      "i": 14,
      "name": "pwd in symlinked dir on shell initialization"
-    },
-    {
-     "i": 26,
-     "name": "Survey of getcwd() syscall"
     }
    ]
   },
@@ -459,16 +455,12 @@
    "failures": []
   },
   "builtin-type": {
-   "pass": 4,
+   "pass": 5,
    "total": 6,
    "failures": [
     {
      "i": 1,
      "name": "type -> alias external"
-    },
-    {
-     "i": 2,
-     "name": "type of relative path"
     }
    ]
   },
@@ -692,32 +684,16 @@
    "failures": []
   },
   "command_": {
-   "pass": 10,
+   "pass": 14,
    "total": 16,
    "failures": [
-    {
-     "i": 0,
-     "name": "Command block"
-    },
     {
      "i": 1,
      "name": "Permission denied"
     },
     {
-     "i": 9,
-     "name": "filling $PATH cache, then insert the same command earlier in cache"
-    },
-    {
-     "i": 10,
-     "name": "filling $PATH cache, then deleting command"
-    },
-    {
      "i": 11,
      "name": "Non-executable on $PATH"
-    },
-    {
-     "i": 12,
-     "name": "hash without args prints the cache"
     }
    ]
   },
@@ -744,16 +720,12 @@
    ]
   },
   "alias": {
-   "pass": 35,
+   "pass": 36,
    "total": 48,
    "failures": [
     {
      "i": 2,
      "name": "define and use alias on a single line"
-    },
-    {
-     "i": 15,
-     "name": "Alias must be an unquoted word, no expansions allowed"
     },
     {
      "i": 17,
@@ -1180,24 +1152,12 @@
    ]
   },
   "builtin-type-bash": {
-   "pass": 20,
+   "pass": 23,
    "total": 24,
    "failures": [
     {
-     "i": 8,
-     "name": "type -p and -P builtin -> file"
-    },
-    {
      "i": 16,
      "name": "type -f builtin -> function and file exists"
-    },
-    {
-     "i": 23,
-     "name": "type -a -> keyword"
-    },
-    {
-     "i": 30,
-     "name": "type -P does not find directories (regression)"
     }
    ]
   },
@@ -1278,40 +1238,16 @@
    ]
   },
   "builtin-meta": {
-   "pass": 10,
+   "pass": 16,
    "total": 18,
    "failures": [
-    {
-     "i": 1,
-     "name": "command -v executable, builtin"
-    },
-    {
-     "i": 3,
-     "name": "command -v doesn't find non-executable file"
-    },
-    {
-     "i": 4,
-     "name": "command -v doesn't find executable dir"
-    },
-    {
-     "i": 5,
-     "name": "command -V"
-    },
     {
      "i": 10,
      "name": "command -p (override existing program)"
     },
     {
-     "i": 11,
-     "name": "command -p (hide tool in custom path)"
-    },
-    {
      "i": 15,
      "name": "builtin ls not found"
-    },
-    {
-     "i": 16,
-     "name": "builtin usage"
     }
    ]
   },
@@ -1757,13 +1693,9 @@
    ]
   },
   "toysh-posix": {
-   "pass": 15,
+   "pass": 16,
    "total": 23,
    "failures": [
-    {
-     "i": 5,
-     "name": "Function def in pipeline"
-    },
     {
      "i": 8,
      "name": "IFS"
@@ -2037,16 +1969,12 @@
    ]
   },
   "unicode": {
-   "pass": 0,
+   "pass": 1,
    "total": 2,
    "failures": [
     {
      "i": 0,
      "name": "OSH source code doesn't have to be valid Unicode (like other shells)"
-    },
-    {
-     "i": 1,
-     "name": "Unicode escapes \\u03bc \\U000003bc in $'', echo -e, printf"
     }
    ]
   },

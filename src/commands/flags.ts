@@ -118,6 +118,9 @@ export interface StatEntry {
   mode: number;
   mtime: number;
   target?: string;
+  /** st_ino and st_nlink (a hard-linked file has nlink > 1) */
+  ino?: number;
+  nlink?: number;
 }
 
 /**
@@ -156,6 +159,8 @@ export async function statEntry(fs: FileSystem, path: string): Promise<StatEntry
     size: s.size,
     mode: s.isSymbolicLink() ? 0o777 : s.mode,
     mtime: s.mtime.getTime(),
+    ino: (s as { ino?: number }).ino,
+    nlink: (s as { nlink?: number }).nlink,
   };
   if (s.isSymbolicLink()) {
     try { result.target = await fs.readlink(path); } catch {}

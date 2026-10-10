@@ -6,7 +6,7 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **2034/2417 (84.2%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **2052/2417 (84.9%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **2035/2417 (84.2%)** |
 | [Shell: smoosh POSIX tests](#shell-smoosh-posix-tests) | 111/162 (68.5%) | **159/162 (98.1%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **625/635 (98.4%)** |
@@ -53,9 +53,9 @@ The file set grew from 62 to 117 oils spec files (1567 to 2417 cases) with the b
 | builtin-getopts | 0/30 | 28/31 | 3 |
 | builtin-trap | 0/33 | 31/33 | 2 |
 | builtin-bracket | 0/50 | 47/50 | 3 |
-| builtin-cd | 3/28 | 26/28 | 2 |
+| builtin-cd | 3/28 | 27/28 | 1 |
 | builtin-special | 1/12 | 12/12 | 0 |
-| builtin-type | 0/6 | 4/6 | 2 |
+| builtin-type | 0/6 | 5/6 | 1 |
 | builtin-vars | 0/38 | 38/39 | 1 |
 | dbracket | 1/49 | 45/49 | 4 |
 | dparen | 0/14 | 13/14 | 1 |
@@ -71,9 +71,9 @@ The file set grew from 62 to 117 oils spec files (1567 to 2417 cases) with the b
 | exit-status | 0/11 | 8/11 | 3 |
 | errexit | 0/35 | 34/35 | 1 |
 | subshell | 0/2 | 2/2 | 0 |
-| command_ | 2/16 | 10/16 | 6 |
+| command_ | 2/16 | 14/16 | 2 |
 | posix | 2/15 | 11/15 | 4 |
-| alias | 1/48 | 35/48 | 13 |
+| alias | 1/48 | 36/48 | 12 |
 | let | 0/2 | 1/2 | 1 |
 | empty-bodies | 0/3 | 3/3 | 0 |
 | whitespace | 0/0 | 0/0 | 0 |
@@ -95,10 +95,10 @@ The file set grew from 62 to 117 oils spec files (1567 to 2417 cases) with the b
 | builtin-trap-err | — | 8/12 | 4 |
 | builtin-set | — | 18/24 | 6 |
 | builtin-bash | — | 12/13 | 1 |
-| builtin-type-bash | — | 20/24 | 4 |
+| builtin-type-bash | — | 23/24 | 1 |
 | builtin-process | — | 10/23 | 13 |
 | builtin-kill | — | 17/20 | 3 |
-| builtin-meta | — | 10/18 | 8 |
+| builtin-meta | — | 16/18 | 2 |
 | builtin-meta-assign | — | 10/11 | 1 |
 | builtin-misc | — | 5/7 | 2 |
 | builtin-umask | — | 24/24 | 0 |
@@ -119,7 +119,7 @@ The file set grew from 62 to 117 oils spec files (1567 to 2417 cases) with the b
 | arith-dynamic | — | 2/4 | 2 |
 | for-expr | — | 7/8 | 1 |
 | bugs | — | 21/29 | 8 |
-| toysh-posix | — | 15/23 | 8 |
+| toysh-posix | — | 16/23 | 7 |
 | toysh | — | 4/8 | 4 |
 | blog1 | — | 4/9 | 5 |
 | blog2 | — | 4/8 | 4 |
@@ -132,7 +132,7 @@ The file set grew from 62 to 117 oils spec files (1567 to 2417 cases) with the b
 | command-sub-ksh | — | 0/0 | 0 |
 | paren-ambiguity | — | 7/9 | 2 |
 | parse-errors | — | 8/25 | 17 |
-| unicode | — | 0/2 | 2 |
+| unicode | — | 1/2 | 1 |
 | nul-bytes | — | 2/16 | 14 |
 | assign-deferred | — | 6/9 | 3 |
 | vars-bash | — | 0/1 | 1 |
@@ -162,10 +162,10 @@ The file set grew from 62 to 117 oils spec files (1567 to 2417 cases) with the b
 - **builtin-printf**: printf %c unicode - prints the first BYTE of a string - it does not respect UTF-8; bash truncates long strftime string at 128; printf positive integer overflow; printf negative integer overflow
 - **builtin-eval-source**: eval usage; Source with syntax error; Eval with syntax error
 - **builtin-getopts**: getopts with invalid variable name; OPTIND after multiple getopts with same spec; OPTIND after multiple getopts with different spec
-- **builtin-trap**: exit 1 when trap code string is invalid; trap USR1, sleep, SIGINT: non-interactively
+- **builtin-trap**: exit 1 when trap code string is invalid; trap INT, sleep, SIGINT: non-interactively
 - **builtin-bracket**: -k for sticky bit; -ef; test -c
-- **builtin-cd**: pwd in symlinked dir on shell initialization; Survey of getcwd() syscall
-- **builtin-type**: type -\> alias external; type of relative path
+- **builtin-cd**: pwd in symlinked dir on shell initialization
+- **builtin-type**: type -\> alias external
 - **builtin-vars**: local after readonly
 - **dbracket**: [[ regex syntax error; [[ at runtime doesn't work; [[ with env prefix doesn't work; [[ ]] with redirect
 - **dparen**: (( )) with redirect
@@ -178,9 +178,9 @@ The file set grew from 62 to 117 oils spec files (1567 to 2417 cases) with the b
 - **pipeline**: \|&; ! is not a command; Evaluation of argv[0] in pipeline occurs in child; SIGPIPE causes pipeline to die (regression for issue #295)
 - **exit-status**: If subshell false -- exit code is propagated in a weird way (strict_argv prevents); Exit code when command sub evaluates to empty str, e.g. `false` (#2416); More test cases with empty argv
 - **errexit**: pipeline process respects errexit
-- **command_**: Command block; Permission denied; filling $PATH cache, then insert the same command earlier in cache; filling $PATH cache, then deleting command; Non-executable on $PATH; hash without args prints the cache
+- **command_**: Permission denied; Non-executable on $PATH
 - **posix**: Empty for loop without in.  Do can be on the same line I guess.; Empty action for case is syntax error; Bare semi-colon not allowed; Command substitution in default
-- **alias**: define and use alias on a single line; Alias must be an unquoted word, no expansions allowed; first and second word are the same alias, with trailing space; Syntax error after expansion; Loop split across alias in another way; Loop split across both iterative and recursive aliases; Alias with a quote in the middle is a syntax error; Alias can be defined and used on a single line; alias with line continuation in the middle; alias for left brace; alias for left paren; here doc inside alias; Corner case: alias inside LHS array arithmetic expression
+- **alias**: define and use alias on a single line; first and second word are the same alias, with trailing space; Syntax error after expansion; Loop split across alias in another way; Loop split across both iterative and recursive aliases; Alias with a quote in the middle is a syntax error; Alias can be defined and used on a single line; alias with line continuation in the middle; alias for left brace; alias for left paren; here doc inside alias; Corner case: alias inside LHS array arithmetic expression
 - **let**: let with ()
 - **shell-grammar**: If with then on same line missing semicolon
 - **process-sub**: Non-linear pipeline with \>()
@@ -198,10 +198,10 @@ The file set grew from 62 to 117 oils spec files (1567 to 2417 cases) with the b
 - **builtin-trap-err**: trap ERR pipelines without simple commands; Pipeline group quirk; set -o errtrace: trap ERR runs in subprograms; set -o errtrace: trap ERR with &
 - **builtin-set**: set -u with undefined var in interactive shell does NOT exit the interpreter; 'set' and 'eval' round trip; set - leading single dash is ignored, turns off xtrace verbose (#2364); set - stops option processing like set --; A single + is an ignored flag; not an argument; set - + and + -
 - **builtin-bash**: bad help topic
-- **builtin-type-bash**: type -p and -P builtin -\> file; type -f builtin -\> function and file exists; type -a -\> keyword; type -P does not find directories (regression)
+- **builtin-type-bash**: type -f builtin -\> function and file exists
 - **builtin-process**: exec -- 2\>&1; exec -a sets argv[0]; Exit builtin with too many args; ulimit negative flag; ulimit negative arg; ulimit accepts 'unlimited'; ulimit of 2**32, 2**31 (int overflow); ulimit that is 64 bits; arg that would overflow 64 bits is detected; ulimit -f 1 prevents files larger 512 bytes; ulimit -S for soft limit (default), -H for hard limit; Changing resource limit is denied; ulimit -n limits file descriptors
 - **builtin-kill**: kill -L checks for invalid input; kill -l 0 returns EXIT; kill -l 0 INT lists both signals
-- **builtin-meta**: command -v executable, builtin; command -v doesn't find non-executable file; command -v doesn't find executable dir; command -V; command -p (override existing program); command -p (hide tool in custom path); builtin ls not found; builtin usage
+- **builtin-meta**: command -p (override existing program); builtin ls not found
 - **builtin-meta-assign**: builtin declare a=(x y) is allowed
 - **builtin-misc**: history builtin usage; Print shell strings with weird chars: set and printf %q and ${x@Q}
 - **extglob-match**: extglob in variable; nested @(); Turning extglob on changes the meaning of [[ !(str) ]] in bash
@@ -219,7 +219,7 @@ The file set grew from 62 to 117 oils spec files (1567 to 2417 cases) with the b
 - **arith-dynamic**: Double quotes; Substitutions
 - **for-expr**: Accepts { } syntax too
 - **bugs**: assign readonly -- one line; First word like foo$x() and foo$[1+2] (regression); Function names; file with NUL byte; autoconf word split (#1449); command execution $(echo 42 \| tee PWNED) not allowed; unset doesn't allow command execution; Crash after changing $[] to be alias of $(( ))
-- **toysh-posix**: Function def in pipeline; IFS; IFS - http://landley.net/notes.html#05-03-2020; IFS=x and '' and unquoted $@ - reduction of case above - copied into spec/word-split; for loop parsing - http://landley.net/notes.html#04-03-2020; IFS 4; Can't parse extra }; Command Sub Syntax Error
+- **toysh-posix**: IFS; IFS - http://landley.net/notes.html#05-03-2020; IFS=x and '' and unquoted $@ - reduction of case above - copied into spec/word-split; for loop parsing - http://landley.net/notes.html#04-03-2020; IFS 4; Can't parse extra }; Command Sub Syntax Error
 - **toysh**: char class / extglob; patsub of $* - http://landley.net/notes.html#23-04-2020; Brace Expansion; {abc}\<\<\< - http://landley.net/notes-2019.html#09-12-2019
 - **blog1**: ${##}; ${###}; ${####}; ${##2}; ${###2}
 - **blog2**: -a -a -a -a; -a -a -a -a -a; -a -a -a -a -a -a -a; -a -a -a -a -a -a -a -a
@@ -230,7 +230,7 @@ The file set grew from 62 to 117 oils spec files (1567 to 2417 cases) with the b
 - **nocasematch-match**: [[ equality matching; [[ regex matching; case matching
 - **paren-ambiguity**: (( closed with ) ) after multiple lines is command - #2337; $(( closed with ) ) after multiple lines is command - #2337
 - **parse-errors**: Incomplete while; Incomplete for; Incomplete if; } is a parse error; { is its own word, needs a space; bad var name globally isn't parsed like an assignment; bad var name in export; bad var name in local; misplaced parentheses are not a subshell; incomplete command sub; incomplete backticks; misplaced ;;; interactive parse error (regression); array literal inside array is a parse error; array literal inside loop is a parse error; array literal in case; %foo=() is parse error (regression)
-- **unicode**: OSH source code doesn't have to be valid Unicode (like other shells); Unicode escapes \u03bc \U000003bc in $'', echo -e, printf
+- **unicode**: OSH source code doesn't have to be valid Unicode (like other shells)
 - **nul-bytes**: printf - literal NUL in format string; printf - NUL byte in value (OSH and zsh agree); NUL bytes with echo $'\0' (OSH and zsh agree); NUL bytes and IFS splitting; NUL bytes with test -n; NUL bytes with test -f; NUL bytes with ${#s} (OSH and zsh agree); Compare \x00 byte versus \x01 byte - command sub; Compare \x00 byte versus \x01 byte - read builtin; Compare \x00 byte versus \x01 byte - read -n; Compare \x00 byte versus \x01 byte - mapfile builtin; Strip ops # ## % %% with NUL bytes; Issue 2269 Reduction; Issue 2269 - Do NUL bytes match ? in ${a#?}
 - **assign-deferred**: export a[7]=8; is 'builtin' prefix and array allowed?  OSH is smarter; is 'command' prefix and array allowed?  OSH is smarter
 - **vars-bash**: $SHELL is set to what is in /etc/passwd

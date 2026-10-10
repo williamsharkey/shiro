@@ -6,7 +6,7 @@
  * scripts/conformance/report.mjs turns into docs/CONFORMANCE.md.
  */
 import { describe, it } from 'vitest';
-import { readFileSync, writeFileSync, mkdirSync, appendFileSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, appendFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { Shell } from '@shiro/shell';
 import { createTestShell } from '../tests/shiro-vitest/helpers';
@@ -51,7 +51,11 @@ async function runFile(file: string): Promise<CaseResult[]> {
   // Testdata the cases source via $REPO_ROOT/spec/testdata
   await fs.mkdir('/oils/spec/testdata', { recursive: true });
   const td = join(OILS, 'spec/testdata');
-  for (const name of readdirSync(td)) await fs.writeFile(`/oils/spec/testdata/${name}`, readFileSync(join(td, name)));
+  // (with their modes: cases run the executable ones directly)
+  for (const name of readdirSync(td)) {
+    await fs.writeFile(`/oils/spec/testdata/${name}`, readFileSync(join(td, name)));
+    await fs.chmod(`/oils/spec/testdata/${name}`, statSync(join(td, name)).mode & 0o777);
+  }
   await fs.mkdir('/spec-cases', { recursive: true });
   const want = new Set(baseline[file] || []);
   const results: CaseResult[] = [];

@@ -1046,6 +1046,43 @@ export class Kernel {
     return false;
   }
 
+  /**
+   * open() of /proc/self/fd/N (or /dev/fd/N): Linux opens the file the fd
+   * refers to again, a new description with its own offset and the new
+   * flags, not a dup. Files (unlinked ones too) and memfds share their
+   * contents; a pipe gives the end the access mode asks for (bash's <(…),
+   * `cat /dev/fd/3`); a socket is ENXIO. A device or pty reopens by its path;
+   * other kinds (epoll, eventfd…) are the same description, as before.
+   */
+  private async reopenFile(proc: Process, f: OpenFile, flags: number, mode: number): Promise<OpenFile | number> {
+    const statusFlags = flags & ~(A.O_CREAT | A.O_EXCL | A.O_TRUNC | A.O_CLOEXEC | A.O_NOCTTY | A.O_DIRECTORY | A.O_NOFOLLOW);
+    const acc = flags & A.O_ACCMODE;
+    if (f.kind === 'socket') return -A.ENXIO;
+    if (f instanceof DirFile) {
+      if (canWrite(flags)) return -A.EISDIR;
+      return new DirFile(this.fs!, f.path!, statusFlags);
+    }
+    if (flags & A.O_DIRECTORY) return -A.ENOTDIR;
+    if (f instanceof RegularFile) {
+      if (ownerDenies(proc, f.inode.mode, flags)) return -A.EACCES;
+      const r = f.reopen(statusFlags);
+      if ((flags & A.O_TRUNC) && canWrite(flags)) await r.truncate(0);
+      return r;
+    }
+    if (f instanceof MemFile) {
+      const r = f.reopen(statusFlags);
+      if ((flags & A.O_TRUNC) && canWrite(flags)) await r.truncate(0);
+      return r;
+    }
+    if (f instanceof PipeEnd || f instanceof FifoRdWr) {
+      const nb = statusFlags & A.O_NONBLOCK;
+      if (acc === A.O_RDWR) return new FifoRdWr(f.pipe, statusFlags);
+      return new PipeEnd(f.pipe, acc === A.O_WRONLY ? 'w' : 'r', (acc === A.O_WRONLY ? A.O_WRONLY : A.O_RDONLY) | nb);
+    }
+    if (f.path?.startsWith('/dev/') && !/^\/dev\/(fd\/|std)/.test(f.path)) return this.open(proc, f.path, flags, mode);
+    return f;
+  }
+
   /** open(2) without the fd: returns the new OpenFile or -errno. */
   async open(proc: Process, path: string, flags: number, mode = 0o666, dirfd = A.AT_FDCWD): Promise<OpenFile | number> {
     // O_PATH: a descriptor that only names the file (fstat, fchdir, *at, dup, close)
@@ -1056,10 +1093,17 @@ export class Kernel {
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
     if (this.searchDenied(proc, p)) return -A.EACCES;
-    const fdm = /^\/(?:dev\/fd|proc\/self\/fd)\/(\d+)$/.exec(p) ?? (/^\/dev\/(stdin|stdout|stderr)$/.exec(p));
-    if (fdm) {
-      const n = fdm[1] === 'stdin' ? 0 : fdm[1] === 'stdout' ? 1 : fdm[1] === 'stderr' ? 2 : Number(fdm[1]);
-      return proc.fds.get(n) ?? -A.EBADF;
+    // /proc/PID/fd/N, /dev/fd/N, /dev/stdin…: what the fd refers to, opened anew (reopenFile)
+    const fdm = /^\/(?:dev\/fd|proc\/(self|thread-self|\d+)\/fd)\/(\d+)$/.exec(p);
+    const stdm = /^\/dev\/(stdin|stdout|stderr)$/.exec(p);
+    if (fdm || stdm) {
+      const pid = fdm?.[1];
+      const owner = pid === undefined || pid === 'self' || pid === 'thread-self' ? proc : this.procs.get(Number(pid));
+      if (owner) {
+        const n = stdm ? ['stdin', 'stdout', 'stderr'].indexOf(stdm[1]) : Number(fdm![2]);
+        const f = owner.fds.get(n);
+        return f ? this.reopenFile(proc, f, flags, mode) : -A.ENOENT;
+      }
     }
     const dev = this.devices.get(p);
     if (dev) return dev(proc, flags, p);
@@ -2972,6 +3016,22 @@ export class Kernel {
         if (size < 0) return -A.EINVAL;
         if (size > A.PIPE_MAX_SIZE) return -A.EPERM;
         return f.pipe.resize(size);
+      }
+      case A.F_SETLEASE:
+      case A.F_GETLEASE: {
+        // Leases on regular files: a read lease while the file is open for
+        // writing, or a write lease while anything else has it open, is
+        // EAGAIN (LTP fcntl27). Nothing breaks a lease (no other opener is
+        // signalled); the type is kept for F_GETLEASE.
+        if (!(f instanceof RegularFile)) return -A.EINVAL;
+        const held = (f as { lease?: number }).lease ?? F_UNLCK;
+        if (cmd === A.F_GETLEASE) return held;
+        if (arg !== F_RDLCK && arg !== F_WRLCK && arg !== F_UNLCK) return -A.EINVAL;
+        if (proc.uid !== 0 && proc.uid !== 1000) return -A.EACCES; // (files here are uid 1000's)
+        if (arg === F_RDLCK && canWrite(f.flags)) return -A.EAGAIN;
+        if (arg === F_WRLCK && f.inode.opens > 1) return -A.EAGAIN;
+        (f as { lease?: number }).lease = arg;
+        return 0;
       }
       case A.F_ADD_SEALS:
       case A.F_GET_SEALS: {

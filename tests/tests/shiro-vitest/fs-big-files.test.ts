@@ -7,7 +7,9 @@ import { createTestShell } from './helpers';
 
 // Big files (FSNode.blob): stored as block records, written and read by the
 // kernel's open files a page at a time. Small BLOB_MIN/BLOCK keep it quick.
-describe('FileSystem big files', () => {
+// Generous timeouts: these run many IndexedDB transactions and kernel writes,
+// slow under a full parallel suite run (5 s, the default, was hit once)
+describe('FileSystem big files', { timeout: 60_000 }, () => {
   const saved = { min: FileSystem.BLOB_MIN, block: FileSystem.BLOCK };
   beforeEach(() => { FileSystem.BLOB_MIN = 8 << 10; FileSystem.BLOCK = 1 << 10; });
   afterEach(() => { FileSystem.BLOB_MIN = saved.min; FileSystem.BLOCK = saved.block; });
@@ -262,7 +264,9 @@ describe('FileSystem big files', () => {
         // What another tab (or this one after a reload) would find: only committed transactions
         const other = await fresh();
         const got = await other.readFile('/tmp/crash.bin') as Uint8Array;
-        expect(got).toEqual(data.subarray(0, got.length)); // a prefix: never a hole or a torn block
+        // A prefix: never a hole or a torn block (the first differing byte, if any, says where)
+        const bad = got.findIndex((x, i) => x !== data[i]);
+        expect(bad, `byte ${bad} of a ${got.length}-byte snapshot`).toBe(-1);
         checkStore(await stored(other).catch(() => new Map()) as Map<string, any>);
         checks++;
       }
