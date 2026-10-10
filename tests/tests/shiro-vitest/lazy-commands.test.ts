@@ -567,21 +567,14 @@ describe('Lazy-Loaded Commands', () => {
       expect(ctx.stderr).toContain('sql.js');
     });
 
-    it('should use correct CDN URL and UMD loading (not ESM import)', async () => {
-      // Regression: cdnjs URL returned 404, and dynamic import() failed because
-      // sql-wasm.js is UMD (module.exports), not ESM. Must use jsdelivr CDN
-      // with fetch + mock CommonJS module/exports objects.
+    it('loads the bundled sql.js and its .wasm from our own origin, not a CDN', async () => {
+      // (it came from jsdelivr as a UMD script; now a dependency, its .wasm a Vite ?url asset)
       const sqliteSource = await import('@shiro/commands/sqlite?raw');
       const src = typeof sqliteSource === 'string' ? sqliteSource : sqliteSource.default;
-      // Verify CDN URL points to jsdelivr (working CDN)
-      expect(src).toContain('cdn.jsdelivr.net/npm/sql.js');
-      // Verify it loads the IIFE script (.js), not the non-existent ESM module (.mjs)
-      expect(src).toContain('sql-wasm.js');
-      expect(src).not.toContain('sql-wasm.mjs');
-      // Verify UMD loading: provides mock module/exports for CommonJS export
-      expect(src).toContain("new Function('module', 'exports', code)");
-      // Should NOT use dynamic import() which fails with UMD scripts
-      expect(src).not.toContain('await import(');
+      expect(src).toContain("import('sql.js')");
+      expect(src).toContain("import('sql.js/dist/sql-wasm.wasm?url')");
+      expect(src).toContain('locateFile: () => wasmUrl');
+      expect(src).not.toMatch(/cdn\.jsdelivr\.net|unpkg\.com|cdnjs/);
     });
 
   });

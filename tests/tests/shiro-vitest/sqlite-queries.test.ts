@@ -379,17 +379,12 @@ describe('SQLite Queries', () => {
   // ─── Source code validation ────────────────────────────────────
 
   describe('source code structure', () => {
-    it('should use jsdelivr CDN for sql.js', async () => {
+    it('loads the bundled sql.js and its .wasm from our own origin, not a CDN', async () => {
       const sqliteSource = await import('@shiro/commands/sqlite?raw');
       const src = typeof sqliteSource === 'string' ? sqliteSource : sqliteSource.default;
-      expect(src).toContain('cdn.jsdelivr.net/npm/sql.js');
-    });
-
-    it('should use UMD loading (not ESM import)', async () => {
-      const sqliteSource = await import('@shiro/commands/sqlite?raw');
-      const src = typeof sqliteSource === 'string' ? sqliteSource : sqliteSource.default;
-      expect(src).toContain("new Function('module', 'exports', code)");
-      expect(src).not.toContain('await import(');
+      expect(src).toContain("import('sql.js')");
+      expect(src).toContain("import('sql.js/dist/sql-wasm.wasm?url')");
+      expect(src).not.toMatch(/cdn\.jsdelivr\.net|unpkg\.com|cdnjs/);
     });
 
     it('should format results with pipe-separated columns', async () => {
