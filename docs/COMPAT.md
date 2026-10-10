@@ -17,7 +17,7 @@ Blink engine.
 | --- | --- | --- |
 | python3, venv | `pkg install python3` (CPython 3.13.7 WASI) | works |
 | pip | builtin (PyPI over fetch) / Debian `python3-pip` | works for pure-Python wheels / works with the TCP relay |
-| node, npm, npx | builtin | works (commander, mocha, tsc 5, prettier); `node` alone is the REPL on a terminal (`let`/`const` persist, `...` continuation lines, `await`, .help/.exit, ^C/^D as node) and reads its program from a pipe |
+| node, npm, npx | builtin | works (commander, mocha, tsc 5, prettier); `node` alone is the REPL on a terminal (`let`/`const` persist, `...` continuation lines, `await`, .help/.exit, ^C/^D as node) and reads its program from a pipe; on a terminal process.stdin reads the pty as the foreground job (cooked lines with echo and ^D, `setRawMode` sets its termios, ^C is SIGINT) |
 | pnpm 9 | `npm install pnpm` | works (add, store, symlinks, run, exec, bins) |
 | yarn 1 | `npm install yarn` | works (add, lockfile, run, bins, offline) |
 | ruby, gem, rake | `pkg install ruby` (ruby.wasm 3.4.1) | works (no sockets) |

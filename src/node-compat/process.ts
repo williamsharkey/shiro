@@ -3,6 +3,7 @@ import type { SharedState } from './types';
 import { ProcessExitError } from '../commands/jseval/utils';
 import { getShiroOrigin } from '../utils/shiro-origin';
 import { CLAUDE_CODE_DEFAULT_MODEL } from '../claude-code-version';
+import { TtyStdin, ttySessionOf } from './tty-stdin';
 
 /**
  * Create the fake process object for the Node.js compat layer.
@@ -373,11 +374,75 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
   let stdinEncoding: string | null = null;
   let stdinDataTaken = false; // piped input already went to 'data' listeners
   const stdinReadBuffer: string[] = [];
+  const emitData = (data: string) => {
+    stdinReadBuffer.push(data);
+    (stdinEvents['data'] || []).forEach(f => f(data));
+    (stdinEvents['readable'] || []).forEach(f => f());
+  };
+  const forceExit = (code = 130) => {
+    if (!_st.exitCalled) { _st.exitCode = code; _st.exitCalled = true; }
+    _st.deferredExitResolve?.(_st.exitCode);
+  };
+  // A terminal with a pty session: node reads the pty as its foreground job (tty-stdin.ts)
+  const session = stdinTTY ? ttySessionOf(ctx.terminal) : undefined;
+  let ttyIn: TtyStdin | null = null;
+  let lastCtrlC = 0;
+  const ttyReader = (): TtyStdin => {
+    if (ttyIn) return ttyIn;
+    ttyIn = new TtyStdin(session!, {
+      data: (data) => {
+        // Raw mode as the page's passthrough had it: ^C also reaches 'SIGINT'
+        // listeners, and twice within a second ends the script
+        if (stdinRawMode && data.includes('\x03')) {
+          const now = Date.now();
+          if (now - lastCtrlC < 1000) { forceExit(); return; }
+          lastCtrlC = now;
+          try { (processEvents['SIGINT'] || []).forEach(fn => fn('SIGINT')); } catch (_) {}
+        }
+        emitData(data);
+      },
+      end: () => {
+        stdinEnded = true;
+        (stdinEvents['end'] || []).forEach(f => f());
+        (stdinEvents['close'] || []).forEach(f => f());
+        releaseTerminal();
+      },
+      signal: (sig) => {
+        // (^C twice within a second ends the script whatever it does with SIGINT: the page's way out)
+        if (sig === 2) {
+          const now = Date.now();
+          if (now - lastCtrlC < 1000) { forceExit(); return; }
+          lastCtrlC = now;
+        }
+        const name = sig === 2 ? 'SIGINT' : sig === 3 ? 'SIGQUIT' : '';
+        const listeners = name ? processEvents[name] || [] : [];
+        if (listeners.length) { try { listeners.forEach(fn => fn(name)); } catch (_) {} return; }
+        forceExit(128 + sig);
+      },
+    });
+    _st.ttyStdin = ttyIn;
+    return ttyIn;
+  };
+  /** Reading the terminal keeps the script running, as an open tty does in node */
+  const holdTerminal = () => {
+    ttyReader().start();
+    _st.isInteractiveMode = true;
+    _st.ownsStdinPassthrough = true;
+    if (_st.scriptTimeoutId) { clearTimeout(_st.scriptTimeoutId); _st.scriptTimeoutId = null; }
+  };
+  /** Paused or ended: the script ends unless it reads the terminal again soon */
+  const releaseTerminal = () => {
+    ttyIn?.pause();
+    if (!_st.isInteractiveMode) return;
+    setTimeout(() => { if (!ttyIn?.reading && !_st.exitCalled) forceExit(0); }, 500);
+  };
   const stdinObj: any = {
     isTTY: stdinTTY,
     fd: 0,
     on: (event: string, fn: Function) => {
       (stdinEvents[event] ??= []).push(fn);
+      // A 'data' or 'readable' listener sets a tty flowing, as in node
+      if (session && (event === 'data' || event === 'readable') && !stdinEnded) holdTerminal();
       // Piped input flows once something listens: 'end', or 'data'/'readable' as in Node (readline)
       if (!stdinTTY && (event === 'end' || event === 'data' || event === 'readable') && !stdinEnded) {
         stdinEnded = true;
@@ -412,6 +477,7 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
     },
     emit: (event: string, ...args: any[]) => { (stdinEvents[event] || []).forEach(f => f(...args)); return false; },
     resume: () => {
+      if (session) { if (!stdinEnded) holdTerminal(); return stdinObj; }
       if (ctx.terminal && stdinTTY && !stdinEnded) {
         const forceExit = () => {
           if (!_st.exitCalled) { _st.exitCode = 130; _st.exitCalled = true; }
@@ -428,13 +494,20 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
       }
       return stdinObj;
     },
-    pause: () => stdinObj,
+    pause: () => { if (ttyIn?.reading) releaseTerminal(); return stdinObj; },
     read: (_size?: number) => {
       if (stdinReadBuffer.length === 0) return null;
       return stdinReadBuffer.shift()!;
     },
     setRawMode: (mode: boolean) => {
       stdinRawMode = mode;
+      if (session) {
+        ttyReader().setRaw(mode);
+        if (mode && !stdinEnded) holdTerminal();
+        // back to cooked with nothing listening: the script may end (ink's cleanup)
+        else if (!mode && !stdinEvents['data']?.length && !stdinEvents['readable']?.length) releaseTerminal();
+        return stdinObj;
+      }
       if (mode && ctx.terminal && stdinTTY && !stdinEnded) {
         _st.isInteractiveMode = true;
         _st.ownsStdinPassthrough = true;
@@ -508,6 +581,7 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
       };
     },
     destroy: () => {
+      ttyIn?.pause();
       if (ctx.terminal) ctx.terminal.exitStdinPassthrough();
       stdinEnded = true;
       return stdinObj;
