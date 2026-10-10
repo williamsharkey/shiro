@@ -5,6 +5,8 @@ import type { CommandContext } from '../../commands/index';
 
 export interface MiscDeps {
   ctx: CommandContext;
+  /** The script's own timers (execution.ts), for 'timers' and 'timers/promises' */
+  scriptTimers?: { setTimeout: Function; clearTimeout: Function; setInterval: Function; clearInterval: Function; setImmediate: Function; clearImmediate: Function };
   FakeBuffer: any;
   fakeProcess: any;
   fakeConsole: any;
@@ -158,18 +160,26 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
     };
 
     case 'timers':
-    case 'node:timers': return {
-      setTimeout, setInterval, setImmediate: (fn: Function, ...args: any[]) => setTimeout(fn, 0, ...args),
-      clearTimeout, clearInterval, clearImmediate: clearTimeout,
-    };
+    case 'node:timers': {
+      // (the script's own: cancelled with it, as the setTimeout it calls by name)
+      const t = deps.scriptTimers;
+      if (t) return { setTimeout: t.setTimeout, setInterval: t.setInterval, setImmediate: t.setImmediate, clearTimeout: t.clearTimeout, clearInterval: t.clearInterval, clearImmediate: t.clearImmediate };
+      return {
+        setTimeout, setInterval, setImmediate: (fn: Function, ...args: any[]) => setTimeout(fn, 0, ...args),
+        clearTimeout, clearInterval, clearImmediate: clearTimeout,
+      };
+    }
 
     case 'timers/promises':
-    case 'node:timers/promises': return {
-      setTimeout: (ms: number, value?: any) => new Promise(resolve => globalThis.setTimeout(() => resolve(value), ms)),
-      setInterval: async function*(ms: number, value?: any) { while (true) { await new Promise(r => globalThis.setTimeout(r, ms)); yield value; } },
-      setImmediate: (value?: any) => new Promise(resolve => globalThis.setTimeout(() => resolve(value), 0)),
-      scheduler: { wait: (ms: number) => new Promise(r => globalThis.setTimeout(r, ms)), yield: () => new Promise(r => globalThis.setTimeout(r, 0)) },
-    };
+    case 'node:timers/promises': {
+      const st = (deps.scriptTimers?.setTimeout ?? globalThis.setTimeout) as (fn: () => void, ms?: number) => unknown;
+      return {
+        setTimeout: (ms: number, value?: any) => new Promise(resolve => st(() => resolve(value), ms)),
+        setInterval: async function*(ms: number, value?: any) { while (true) { await new Promise<void>(r => st(r, ms)); yield value; } },
+        setImmediate: (value?: any) => new Promise(resolve => st(() => resolve(value), 0)),
+        scheduler: { wait: (ms: number) => new Promise<void>(r => st(r, ms)), yield: () => new Promise<void>(r => st(r, 0)) },
+      };
+    }
 
     case 'module':
     case 'node:module': {
@@ -203,7 +213,7 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
           'assert', 'assert/strict', 'async_hooks', 'buffer', 'child_process', 'constants', 'crypto',
           'diagnostics_channel', 'dns', 'dns/promises', 'events', 'fs', 'fs/promises', 'http', 'https',
           'module', 'net', 'os', 'path', 'perf_hooks', 'process', 'querystring',
-          'readline', 'stream', 'stream/consumers', 'stream/promises', 'string_decoder', 'timers', 'timers/promises', 'tls',
+          'readline', 'stream', 'stream/consumers', 'stream/promises', 'stream/web', 'string_decoder', 'timers', 'timers/promises', 'tls',
           'tty', 'url', 'util', 'v8', 'worker_threads', 'zlib',
         ],
         isBuiltin: (name: string) => {
@@ -218,6 +228,7 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
           return mk(dir).resolve(request);
         },
         _cache: moduleCache,
+        _extensions: (requireModule as any).extensions ?? {},
         Module: class Module {
           id: string;
           exports: any = {};

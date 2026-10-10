@@ -1,4 +1,4 @@
-import git from 'isomorphic-git';
+import git from './git-cached';
 import { CommandContext } from './index';
 
 interface StashEntry {

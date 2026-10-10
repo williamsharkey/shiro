@@ -835,6 +835,25 @@ c.unref(); c.stdin.write('x'); console.log('parent done')`)).toBe('parent done\n
     expect(r.out).toBe('1 0\n');
   }, 60_000);
 
+  it("process.chdir is the process's own: its fs follows it, the shell that ran it doesn't move", async () => {
+    await fs.mkdir('/home/user/m/sub', { recursive: true });
+    await fs.writeFile('/home/user/m/sub/here.txt', 'in sub');
+    const r = await sh(shell, `cd /home/user/m && node -e "process.chdir('sub'); console.log(process.cwd(), require('fs').readFileSync('here.txt', 'utf8'))"; pwd`);
+    expect(r.out).toBe('/home/user/m/sub in sub\n/home/user/m\n');
+  }, 60_000);
+
+  it('fs.opendir: a Dir to read, close and `for await` (Next.js lists its pages so)', async () => {
+    await fs.mkdir('/home/user/m/od/sub', { recursive: true });
+    await fs.writeFile('/home/user/m/od/a.txt', 'a');
+    expect(await node(`const fs = require('fs');
+(async () => {
+  const names = [];
+  for await (const e of await require('fs/promises').opendir('od')) names.push(e.name + (e.isDirectory() ? '/' : '') + ':' + e.parentPath.endsWith('/od'));
+  const d = fs.opendirSync('od'); const first = d.readSync(); d.closeSync();
+  fs.opendir('od', (err, dir) => dir.read((e2, ent) => { console.log(names.sort().join(), !!first, !!ent); dir.close(); }));
+})();`)).toBe('a.txt:true,sub/:true true true\n');
+  }, 60_000);
+
   it('path follows Node (relative paths stay relative)', async () => {
     expect(await node(`const p = require('path');
 console.log(JSON.stringify([p.dirname('a'), p.dirname('/a'), p.dirname('a/b/'), p.join('a', '../b', './c'), p.join(''), p.normalize('./x/../y/'),
@@ -1195,6 +1214,11 @@ describe('node: real npm packages', () => {
     const r = await sh(shell, 'cd /home/user/app && npm init -y > /dev/null && npm install commander@12.1.0 chalk@4.1.2 dayjs@1.11.13 uuid@10.0.0 mocha@10.8.2 typescript@5.6.3 prettier@3.3.3');
     expect(r.exitCode).toBe(0);
   }, 300_000);
+
+  it('npm config get/set/delete, from ~/.npmrc and npm\'s defaults (Next.js asks for the registry)', async () => {
+    const r = await sh(shell, 'cd /home/user && npm config get registry && npm config set fund false && npm config get fund && npm get cache && npm config delete fund && npm config get fund');
+    expect(r.out).toBe('https://registry.npmjs.org/\nfalse\n/home/user/.npm\nundefined\n');
+  });
 
   it('npm install in a directory without package.json starts one, as npm does', async () => {
     const r = await sh(shell, 'mkdir -p /home/user/nopkg && cd /home/user/nopkg && npm install dayjs@1.11.13 > /dev/null; echo "e=$?"; cat package.json; node -e "console.log(typeof require(\'dayjs\'))"; npm install; echo "f=$?"');
@@ -1785,6 +1809,27 @@ describe('npm install: the node_modules tree (npm-tree.ts)', () => {
     expect(['vite@latest', 'vite', '@vue', '@vue@3', '@scope/app@1.2.0'].map(initializerPackage))
       .toEqual(['create-vite@latest', 'create-vite', '@vue/create', '@vue/create@3', '@scope/create-app@1.2.0']);
   });
+
+  it('takes linux-x64 builds that ship an executable (codex, opencode), not Node addons, musl builds or ones with a WebAssembly build', async () => {
+    const t = await buildTree([{ name: 'cli', range: '1' }, { name: 'oc', range: '1' }, { name: 'tool', range: '1' }], registry({
+      cli: {
+        '1.0.0-linux-x64': { os: ['linux'], cpu: ['x64'] },
+        '1.0.0-darwin-arm64': { os: ['darwin'], cpu: ['arm64'] },
+        '1.0.0': { optionalDependencies: { 'cli-linux-x64': 'npm:cli@1.0.0-linux-x64', 'cli-darwin-arm64': 'npm:cli@1.0.0-darwin-arm64' } },
+      },
+      oc: { '1.0.0': { optionalDependencies: { 'oc-linux-x64': '1.0.0', 'oc-linux-x64-musl': '1.0.0', 'oc-windows-x64': '1.0.0' } } },
+      'oc-linux-x64': { '1.0.0': { os: ['linux'], cpu: ['x64'] } },
+      'oc-linux-x64-musl': { '1.0.0': { os: ['linux'], cpu: ['x64'], libc: ['musl'] } },
+      'oc-windows-x64': { '1.0.0': { os: ['win32'], cpu: ['x64'] } },
+      tool: { '1.0.0': { optionalDependencies: { 'tool-linux-x64-gnu': '1.0.0' } } },
+      'tool-linux-x64-gnu': { '1.0.0': { os: ['linux'], cpu: ['x64'], libc: ['glibc'], main: 'tool.linux-x64-gnu.node' } },
+    }));
+    expect(layout(t.nodes)).toEqual({
+      'node_modules/cli': '1.0.0', 'node_modules/oc': '1.0.0',
+      'node_modules/tool': '1.0.0', 'node_modules/cli-linux-x64': 'cli@1.0.0-linux-x64', 'node_modules/oc-linux-x64': '1.0.0',
+    });
+    expect(t.skipped.sort()).toEqual(['cli-darwin-arm64@1.0.0-darwin-arm64', 'oc-linux-x64-musl@1.0.0', 'oc-windows-x64@1.0.0', 'tool-linux-x64-gnu@1.0.0']);
+  });
 });
 
 import { transformESModules } from '@shiro/commands/jseval/module-transform';
@@ -1841,6 +1886,13 @@ describe('live bindings for code-split chunks: an import named like a member key
     expect(out).toContain('__dynamic_import("./x.js")');
   });
 
+  it("`const __dirname = …` as template text is left alone (Next's build/utils.js generates such a file)", () => {
+    const src = 'const code = isEsm ? `import module from "node:module"\nconst __dirname = fileURLToPath(new URL(".", import.meta.url))\n` : `x`;\nfoo(code);\nmodule.exports = { code };\n';
+    const out = transformESModules(src);
+    expect(out).toContain('const __dirname = fileURLToPath(new URL(".", import.meta.url))\n`');
+    expect(() => new Function(out)).not.toThrow();
+  });
+
   it("a `/*` inside a template or string isn't a comment (tsconfck's `**/*` hid the exports after it)", () => {
     const out = transformESModules('const G = `**/*`;\nconst S = "/*";\n/** doc */\nexport function f() { return 1; }\nexport const x = 2;\n');
     expect(out).not.toMatch(/^export /m);
@@ -1859,4 +1911,72 @@ describe('live bindings for code-split chunks: an import named like a member key
     expect(out).toContain('get y() { return 1; }');
     expect(out).toMatch(/get: __shiro_live\d+\.get \}/);
   });
+});
+
+describe('npm install: install scripts and platform packages', () => {
+  let shell: Shell;
+  let fs: FileSystem;
+  let saved: typeof fetch;
+  const tgz = new Map<string, Uint8Array>();
+  const meta = new Map<string, any>();
+  /** A fake registry package: files under package/, its package.json from `pkg` */
+  const publish = async (pkg: Record<string, any>, files: Record<string, string> = {}) => {
+    const { execSync } = await import('node:child_process');
+    const dir = mkdtempSync('/tmp/fakepkg-');
+    mkdirSync(`${dir}/package`, { recursive: true });
+    writeFileSync(`${dir}/package/package.json`, JSON.stringify(pkg));
+    for (const [f, c] of Object.entries(files)) { mkdirSync(path.dirname(`${dir}/package/${f}`), { recursive: true }); writeFileSync(`${dir}/package/${f}`, c); }
+    execSync(`tar czf ${dir}/p.tgz -C ${dir} package`);
+    const url = `https://registry.npmjs.org/${pkg.name}/-/fake-${pkg.version}.tgz`;
+    tgz.set(url, new Uint8Array(readFileSync(`${dir}/p.tgz`)));
+    rmSync(dir, { recursive: true, force: true });
+    const m = meta.get(pkg.name) ?? { name: pkg.name, 'dist-tags': {}, versions: {} };
+    m.versions[pkg.version] = { ...pkg, dist: { tarball: url } };
+    if (!/-/.test(pkg.version)) m['dist-tags'].latest = pkg.version;
+    meta.set(pkg.name, m);
+  };
+  beforeAll(async () => {
+    ({ fs, shell } = await createTestShell());
+    await bootFiles(fs);
+    saved = globalThis.fetch;
+    globalThis.fetch = (async (input: any, init?: any) => {
+      const url = String(input);
+      if (tgz.has(url)) return new Response(tgz.get(url));
+      const name = decodeURIComponent(url.replace('https://registry.npmjs.org/', ''));
+      if (meta.has(name)) return new Response(JSON.stringify(meta.get(name)), { headers: { 'content-type': 'application/json' } });
+      return saved(input, init);
+    }) as typeof fetch;
+    await publish({ name: 'zzfake-cli', version: '1.0.0-linux-x64', os: ['linux'], cpu: ['x64'] }, { 'vendor/cli': '#!/bin/sh\necho native\n' });
+    await publish({ name: 'zzfake-cli', version: '1.0.0-darwin-arm64', os: ['darwin'], cpu: ['arm64'] });
+    await publish({
+      name: 'zzfake-cli', version: '1.0.0', bin: { 'zzfake-cli': 'bin/cli.js' },
+      optionalDependencies: { 'zzfake-cli-linux-x64': 'npm:zzfake-cli@1.0.0-linux-x64', 'zzfake-cli-darwin-arm64': 'npm:zzfake-cli@1.0.0-darwin-arm64' },
+      dependencies: { 'zzfake-dep': '1' },
+      scripts: { postinstall: 'node post.js' },
+    }, {
+      'bin/cli.js': '#!/usr/bin/env node\nconsole.log("cli ok", require("fs").existsSync(require("path").join(__dirname, "../../zzfake-cli-linux-x64/vendor/cli")));\n',
+      'post.js': 'require("fs").writeFileSync("installed.txt", [process.env.npm_lifecycle_event, process.env.npm_package_name, require("fs").existsSync("../zzfake-dep/dep-ran") ].join(" "));\n',
+    });
+    await publish({ name: 'zzfake-dep', version: '1.0.0', scripts: { install: 'echo ran > dep-ran' } });
+    await publish({ name: 'zzfake-bad', version: '1.0.0', scripts: { postinstall: 'echo cannot build the addon >&2; exit 3' } }, { 'index.js': 'module.exports = 42;\n' });
+  }, 60_000);
+  afterAll(() => { globalThis.fetch = saved; });
+
+  it('npm i -g installs the linux-x64 build and runs install scripts, dependencies first', async () => {
+    const r = await sh(shell, 'npm i -g zzfake-cli; echo "e=$?"; cat /usr/local/lib/node_modules/zzfake-cli/installed.txt; echo; ls /usr/local/lib/node_modules | grep zzfake; zzfake-cli');
+    expect(r.out).toContain('e=0');
+    expect(r.out).toContain('postinstall zzfake-cli true');
+    expect(r.out).toContain('zzfake-cli\nzzfake-cli-linux-x64\nzzfake-dep\n');
+    expect(r.out).toContain('cli ok true');
+  }, 60_000);
+
+  it("a failing install script is a warning; --ignore-scripts and ignore-scripts=true skip them", async () => {
+    let r = await sh(shell, 'mkdir -p /home/user/scr && cd /home/user/scr && npm i zzfake-bad > /dev/null; echo "e=$?"; node -p "require(\'zzfake-bad\')"');
+    expect(r.out).toBe('e=0\n42\n');
+    expect(r.err).toContain('npm warn zzfake-bad@1.0.0 postinstall: `echo cannot build the addon >&2; exit 3` exited with 3');
+    expect(r.err).toContain('cannot build the addon');
+    r = await sh(shell, 'mkdir -p /home/user/scr2 && cd /home/user/scr2 && npm i --ignore-scripts zzfake-dep > /dev/null; ls node_modules/zzfake-dep; echo ignore-scripts=true > ~/.npmrc; cd /home/user/scr && rm -rf node_modules && npm i > /dev/null 2>&1; ls node_modules/zzfake-bad; rm ~/.npmrc');
+    expect(r.out).toBe('package.json\nindex.js\npackage.json\n');
+    expect(r.err).toBe('');
+  }, 60_000);
 });

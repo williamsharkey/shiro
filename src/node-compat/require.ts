@@ -4,6 +4,7 @@
  * Extracted from node-cmd.ts requireModule()/_requireModule().
  */
 
+import { SCRIPT_TIMER_NAMES } from './page-globals';
 import type { CommandContext } from '../commands/index';
 import { patchPackageSource } from './source-patches';
 import { transformESModules, transformTS, transformJSX } from '../commands/jseval/module-transform';
@@ -11,6 +12,8 @@ import { ProcessExitError } from '../commands/jseval/utils';
 
 export interface RequireDeps {
   ctx: CommandContext;
+  /** The script's own timers (execution.ts), bound by name in every module it loads */
+  scriptTimers?: Record<string, Function>;
   fileCache: Map<string, string>;
   fileMtimes: Map<string, number>;
   moduleCache: Map<string, { exports: any }>;
@@ -106,6 +109,17 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
     if (fileCache.has(base)) return base;
     for (const ext of ['.ts', '.tsx', '.js', '.jsx', '.json']) {
       if (fileCache.has(base + ext)) return base + ext;
+    }
+    // A directory with a package.json names its file in "main" (next/dist/compiled/zod: index.cjs)
+    const pj = fileCache.get(base + '/package.json');
+    if (pj) {
+      try {
+        const main = JSON.parse(pj).main;
+        if (typeof main === 'string' && main) {
+          const m = ctx.fs.resolvePath(main, base);
+          for (const c of [m, m + '.js', m + '.json', m + '/index.js']) if (fileCache.has(c)) return c;
+        }
+      } catch { /* not JSON */ }
     }
     for (const idx of ['/index.ts', '/index.tsx', '/index.js', '/index.jsx', '/index.json']) {
       if (fileCache.has(base + idx)) return base + idx;
@@ -452,6 +466,7 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
         'module', 'exports', 'require', '__filename', '__dirname',
         'console', 'process', 'global', 'Buffer', '__import_meta',
         '__shiro_module', '__shiro_require', '__dynamic_import', '__shiro_require_ready', 'globalThis', 'Function',
+        ...(deps.scriptTimers ? SCRIPT_TIMER_NAMES : []),
       ];
       const dynamicImport = async (specifier: unknown) => {
         let spec = String(specifier);
@@ -461,7 +476,8 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
       };
       const fnArgs = [mod, mod.exports, nestedRequire, resolved, modDir,
         fakeConsole, fakeProcess, deps.processGlobal ?? globalThis, FakeBuffer, modImportMeta,
-        mod, nestedRequire, dynamicImport, (p: string) => requireReady(p, modDir, resolved), deps.processGlobal ?? globalThis, deps.processFunction ?? Function];
+        mod, nestedRequire, dynamicImport, (p: string) => requireReady(p, modDir, resolved), deps.processGlobal ?? globalThis, deps.processFunction ?? Function,
+        ...(deps.scriptTimers ? SCRIPT_TIMER_NAMES.map((k) => deps.scriptTimers![k]) : [])];
 
       // Try synchronous execution first — most npm packages don't use top-level await.
       // This ensures module.exports is populated before require() returns,
@@ -550,6 +566,7 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
         ? { value: moduleCache.get(k), enumerable: true, configurable: true } : undefined,
     });
     req.main = mainModule;
+    req.extensions = extensions;
     if (mod) {
       mod.require = req;
       mod.paths ??= req.resolve.paths('x');
@@ -558,6 +575,17 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
   }
   let mainModule: any;
   (requireModule as any).makeRequire = makeRequire;
+  /**
+   * require.extensions / Module._extensions: what loads each kind of file, as
+   * node has them (Next's config loader reads `require.extensions['.js']` to
+   * chain its .ts hook). Loading goes through this module's own loader.
+   */
+  const extensions: Record<string, (mod: any, filename: string) => void> = {
+    '.js': (mod, filename) => { mod.exports = requireModule(filename, '/'); },
+    '.json': (mod, filename) => { mod.exports = requireModule(filename, '/'); },
+    '.node': (_mod, filename) => { throw Object.assign(new Error(`Cannot load native addon ${filename}`), { code: 'ERR_DLOPEN_FAILED' }); },
+  };
+  (requireModule as any).extensions = extensions;
   (requireModule as any).setMain = (m: any) => { mainModule = m; };
 
   return Object.assign(requireModule, { ready: requireReady });

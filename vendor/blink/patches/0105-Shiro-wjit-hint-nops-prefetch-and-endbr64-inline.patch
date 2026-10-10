@@ -1,0 +1,55 @@
+From 51e7066ba12224e44331c66d06a88f67cd64ddac Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 05:55:37 +0000
+Subject: [PATCH 105/109] Shiro wjit: hint nops, prefetch and endbr64 inline
+
+---
+ blink/wjit.c | 18 +++++++++++++++++-
+ 1 file changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/blink/wjit.c b/blink/wjit.c
+index 30a27f2..ee8e130 100644
+--- a/blink/wjit.c
++++ b/blink/wjit.c
+@@ -1622,6 +1622,14 @@ static void Analyze(struct Ins *in) {
+     case 0x090:
+       if (RexbSrm(rde)) goto Call;  // xchg %r8,%rax
+       return;
++    case 0x10D:  // prefetch
++    case 0x118:
++    case 0x119:
++    case 0x11A:
++    case 0x11B:
++    case 0x11C:
++    case 0x11D:
++    case 0x11E:  // endbr64 at every function of a CET build
+     case 0x11F:  // nopl
+       return;
+     case 0x050:
+@@ -1757,7 +1765,7 @@ static bool MayExit(struct Ins *in, bool modrm) {
+   int op = Mopcode(in->rde);
+   if (0x050 <= op && op <= 0x05F) return true;
+   if ((op == 0x0F6 || op == 0x0F7) && ModrmReg(in->rde) >= 6) return true;
+-  if (op == 0x08D || op == 0x11F) return false;
++  if (op == 0x08D || op == 0x10D || (0x118 <= op && op <= 0x11F)) return false;  // (no access)
+   return modrm && !IsModrmRegister(in->rde);
+ }
+ 
+@@ -3016,6 +3024,14 @@ static void Translate(struct Cg *g, struct Ins *in) {
+       PutRegField(g, in, w);
+       return;
+     case 0x090:
++    case 0x10D:
++    case 0x118:
++    case 0x119:
++    case 0x11A:
++    case 0x11B:
++    case 0x11C:
++    case 0x11D:
++    case 0x11E:
+     case 0x11F:
+       return;
+     case 0x050:
+-- 
+2.43.0
+

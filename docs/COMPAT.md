@@ -203,7 +203,15 @@ Shell and platform fixes these needed (all with tests in the same file):
   memory, lightningcss's 16 MB module) and ArrayBuffers (file contents).
   Rolldown's shared memory used to start at 1 GB (16384 pages; the module
   needs 1001): it starts at 64 MB now and grows (−23 MB resident, and no
-  1 GB commit on a phone). What it took:
+  1 GB commit on a phone). Most of "after build" is the build's peak, which
+  V8 returns when idle: 20 s later the renderer is at 832 MB. Packages run as
+  browser builds are let go 30 s after the last process using them ends
+  (their Workers terminated, blob: URLs revoked; they run as a function, not
+  an import()ed module, which the page's module map would keep): with the dev
+  server stopped, rolldown's 8 workers go and the renderer is at 727 MB.
+  Still held then: rolldown's 112 MB SharedArrayBuffer (by the browser
+  itself, not by script), the page's own esbuild-wasm (80 MB of Go memory)
+  and the files npm installed. What it took:
   - Rolldown runs as its browser build. `npm install` puts `@rolldown/browser`
     where `rolldown` goes (same API and versions); a process that imports it
     gets it bundled from the VFS with the page's esbuild
@@ -305,6 +313,36 @@ Shell and platform fixes these needed (all with tests in the same file):
   Not yet: node output into a pipe or file comes when the process exits
   (only the terminal streams), so `npm run dev > log &` shows nothing while
   it runs.
+- Next.js 16 (in progress): `npx create-next-app` works in the page. `next
+  build` in the page stops where it compiles SWC's wasm (Chromium refuses a
+  synchronous `WebAssembly.Module` over 8 MB on the main thread), so Next
+  goes through worker mode (`TABCOMPUTER_NODE_WORKER=1`), where the module
+  compiles; `NEXT_TEST_WASM_DIR` pointing at an installed
+  `@next/swc-wasm-nodejs` avoids Next's own download (the test container's
+  relay can't fetch it). Remaining, on the worker side: jest-worker forks
+  children and talks over `child.send` (fork IPC; worked around with
+  `experimental: { webpackBuildWorker: false, workerThreads: false, cpus: 1 }`),
+  then "Maximum call stack size exceeded" in `resolve` during "Creating an
+  optimized production build". What Next's CommonJS needed in the page,
+  all general: `require.extensions` / `Module._extensions`, a directory
+  `require` using its package.json `main`, `stream/web`,
+  `process.prependOnceListener`, `fs.opendir` / `opendirSync` /
+  `promises.opendir`, a process-local `process.chdir` (the shell's cwd comes
+  back when the script exits), `npm config get/set/delete/list`, and
+  `__dirname` text inside template literals left alone.
+- npm: an optional platform package for linux-x64 (glibc) is installed when it
+  ships an executable, which Blink runs: `npm i -g @openai/codex` gets
+  `@openai/codex-linux-x64`, `opencode-ai` gets `opencode-linux-x64` (and
+  `-baseline`, as npm does). Node addons (`main: *.node`: @next/swc-*,
+  @rollup/rollup-*), musl builds, other platforms, and natives of a package
+  that also offers a WebAssembly build (sharp, @tailwindcss/oxide) are still
+  left out. Install scripts (preinstall, install, postinstall) run after
+  extraction, dependencies first, in the package's directory with npm's
+  `npm_lifecycle_event`/`npm_package_*` variables; `--ignore-scripts` and
+  `ignore-scripts=true` skip them. Unlike npm, a failing script is a warning
+  (its last lines are shown) and the install goes on: a script that builds a
+  native addon can't succeed in the tab, and the package usually works
+  without it.
 - Node: a script's timers and intervals end with it. An interval left by a
   script that called `process.exit()` kept firing in the page, and its
   `setTimeout`s became the next script's timers, so that script never went

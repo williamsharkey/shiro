@@ -1,0 +1,98 @@
+From 7fb0ed8a64803360d0ab3998e8ba38b16f7aba64 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 07:15:24 +0000
+Subject: [PATCH] Shiro: mlock/munlock of unmapped memory is ENOMEM; mlockall
+ and mmap answer bad arguments as Linux
+
+mlock and munlock of a range with an unmapped page are ENOMEM, and
+mlockall takes MCL_CURRENT and/or MCL_FUTURE (0, or MCL_ONFAULT alone,
+is EINVAL): Open POSIX mlock_8-1, munlock_10-1, mlockall_13-1. mmap of a
+kernel file: neither MAP_SHARED nor MAP_PRIVATE is EINVAL, a length past
+the address space ENOMEM, a pipe or socket ENODEV, and MAP_HUGETLB with
+a huge page size Linux doesn't have EINVAL (mmap_21-1, 23-1, 24-2).
+
+Exports blink_shiro_memerrs.
+---
+ blink/shiro.inc | 16 +++++++++++++++-
+ blink/syscall.c | 14 ++++++++++++--
+ 2 files changed, 27 insertions(+), 3 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index e999d72..8e947d0 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2353,6 +2353,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_siginfo(void) { return 1; }
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_sigmodes(void) { return 1; }
+ // 0097/0098: write-only pages readable; shared kernel-file maps written back before a new map and at exit
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_sharedmaps(void) { return 1; }
++// 0099: mlock/munlock/mlockall and mmap answer bad arguments as Linux
++EMSCRIPTEN_KEEPALIVE int blink_shiro_memerrs(void) { return 1; }
+ 
+ // the kernel signalled hosted child `pid` (host.mjs routes by pid)
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid(int pid, int sig) {
+@@ -2649,6 +2651,10 @@ static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
+   u8 st[144], *buf;
+   i64 addr, fsize, o, r;
+   bool shared = (flags & 3) == 1 || (flags & 3) == 3;
++  // (Linux: neither MAP_SHARED nor MAP_PRIVATE is EINVAL; a length past the
++  // address space is ENOMEM)
++  if (!(flags & 3)) return -EINVAL_LINUX;
++  if (size > ((u64)1 << 47)) return -ENOMEM_LINUX;
+   if (off < 0 || (off & 4095)) return -EINVAL_LINUX;
+   // as Linux: an O_PATH fd is EBADF; a mapping needs the fd readable, and a
+   // writable shared one needs it open for writing too (EACCES)
+@@ -2659,7 +2665,9 @@ static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
+   // first, so a new mapping of one sees it (as one page cache would)
+   if (g_shiro_maps) ShiroSyncMaps(m, 0, (i64)1 << 47, false);
+   if ((r = ShiroStatAt(m, fd, 0, 0, 0x1000, st)) < 0) return r;
+-  if ((Read32(st + 24) & 0170000) == 0040000) return -ENODEV_LINUX;
++  // a directory, pipe or socket can't be mapped
++  if ((Read32(st + 24) & 0170000) == 0040000 || (Read32(st + 24) & 0170000) == 0010000 ||
++      (Read32(st + 24) & 0170000) == 0140000) return -ENODEV_LINUX;
+   fsize = Read64(st + 48);
+   addr = SysMmap(m, virt, size, prot | 3 /* RW while we fill it */,
+                  (flags & ~3 & ~0x08000000) | 2 | 0x20 /* PRIVATE|ANONYMOUS */, -1, 0);
+@@ -3768,6 +3776,12 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       r = -EBADF_LINUX;
+       break;
+     case 0x009:                                                       // mmap
++      // MAP_HUGETLB with a huge page size Linux doesn't have (2 MiB, 1 GiB):
++      // EINVAL (flags of ~0, Open POSIX mmap_21-1)
++      if ((d & 0x40000) && ((d >> 26) & 63) && ((d >> 26) & 63) != 21 && ((d >> 26) & 63) != 30) {
++        r = -EINVAL_LINUX;
++        break;
++      }
+       if ((d & 0x20) || (i64)e < 0) return false;
+       r = ShiroMmapFile(m, a, b, c, d, e, f);  // SysMmap/SysMprotect take mmap_lock
+       break;
+diff --git a/blink/syscall.c b/blink/syscall.c
+index a5031d2..c873c7d 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -5991,11 +5991,21 @@ static int SysSchedGetPriorityMin(struct Machine *m, int policy) {
+ #ifdef __EMSCRIPTEN__
+ // WebAssembly memory is never paged out: locking it always succeeds (GnuPG
+ // and ssh-agent lock their secret memory, and warn when they can't)
++// (as Linux, a range with a page that isn't mapped is ENOMEM, and mlockall
++// takes MCL_CURRENT and/or MCL_FUTURE, MCL_ONFAULT only with one of them)
+ static int SysMlock(struct Machine *m, i64 addr, u64 len) {
+-  return 0;
++  u64 start = (u64)addr & -4096, end;
++  bool ok;
++  if (!len) return 0;
++  end = ((u64)addr + len + 4095) & -4096;
++  if (end <= start || end > ((u64)1 << 47)) return enomem();
++  LOCK(&m->system->mmap_lock);
++  ok = IsFullyMapped(m->system, start, end - start);
++  UNLOCK(&m->system->mmap_lock);
++  return ok ? 0 : enomem();
+ }
+ static int SysMlockall(struct Machine *m, int flags) {
+-  if (flags & ~7) return einval();
++  if (!flags || (flags & ~7) || flags == 4) return einval();
+   return 0;
+ }
+ static int SysMunlockall(struct Machine *m) {
+-- 
+2.43.0
+

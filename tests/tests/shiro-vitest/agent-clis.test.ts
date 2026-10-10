@@ -7,7 +7,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { createTestShell, run } from './helpers';
+import { createTestShell, createTestOS, run } from './helpers';
 import { transformESModules } from '@shiro/commands/jseval/module-transform';
 import { isEsbuildChunk, liveEsbuildChunk } from '@shiro/commands/jseval/esm-live';
 import { claudeCmd } from '@shiro/commands/claude';
@@ -281,4 +281,22 @@ describe("a process's globalThis", () => {
     const r = await run(shell, `node -e "const s = Symbol.for('undici.globalDispatcher.1'); Object.defineProperty(globalThis, s, { value: 7, writable: true, enumerable: false, configurable: false }); console.log(globalThis[s], Object.getOwnPropertyDescriptor(globalThis, s).configurable)"`);
     expect(r.output).toContain('7 false');
   });
+});
+
+describe('the terminal after a script exits from a timer', () => {
+  it('keeps drawing (gemini -p and the codex launcher froze it)', async () => {
+    const ST = globalThis.setTimeout;
+    const sleep = (ms: number) => new Promise((r) => ST(r, ms));
+    const { terminal, type } = await createTestOS();
+    const screen = () => {
+      const b = (terminal.term as any).buffer.active, rows: string[] = [];
+      for (let y = 0; y < b.length; y++) rows.push(b.getLine(y)?.translateToString(true) ?? '');
+      return rows.join('\n');
+    };
+    await sleep(300);
+    // xterm's write was scheduled through the script's setTimeout, which exit cancelled
+    type(`node -e "setTimeout(()=>{console.log('late');process.exit(7)},100)"; echo "rc=$?"\r`);
+    for (let i = 0; i < 50 && !/rc=\d/.test(screen()); i++) await sleep(100);
+    expect(screen()).toMatch(/late\s*\n\s*rc=7/);
+  }, 20000);
 });

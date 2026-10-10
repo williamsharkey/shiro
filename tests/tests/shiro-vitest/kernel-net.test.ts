@@ -170,6 +170,10 @@ describe('kernel sockets over the TCP relay', () => {
     expect(d.getsockname().address).toBe('::ffff:10.0.2.15');
     expect((d.getpeername() as any).address).toBe('::ffff:151.101.0.223');
     void d.close();
+    // an IPv6 socket connected with an AF_INET sockaddr (glibc's try_connect does that for
+    // an IPv4 answer) has a v4-mapped source: Firefox aborted in getaddrinfo on a plain one
+    expect(src(AF_INET6, v4('151.101.0.223', 0))).toBe('::ffff:10.0.2.15');
+    expect(src(AF_INET6, v4('127.0.0.1', 53))).toBe('::ffff:127.0.0.1');
   });
 
   it('AF_UNIX SOCK_SEQPACKET socketpairs keep records whole (Rust std::process::Command)', async () => {

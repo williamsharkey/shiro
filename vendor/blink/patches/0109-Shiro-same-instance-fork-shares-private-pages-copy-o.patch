@@ -1,0 +1,427 @@
+From 1c6592ac9eb206c636f4ed58d0fed2bf4a7a89c7 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 07:06:28 +0000
+Subject: [PATCH 109/109] Shiro: same-instance fork shares private pages
+ copy-on-write
+
+---
+ blink/machine.h      |  8 +++++
+ blink/memory.c       | 83 +++++++++++++++++++++++++++++++++++++++++++-
+ blink/memorymalloc.c | 18 ++++++++++
+ blink/shiro.inc      | 38 ++++++++++++++++----
+ blink/syscall.c      | 20 ++++++-----
+ blink/wjit.c         |  1 +
+ 6 files changed, 152 insertions(+), 16 deletions(-)
+
+diff --git a/blink/machine.h b/blink/machine.h
+index d4e42a4..f818607 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -105,6 +105,11 @@
+ #define PAGE_LOCK  0x0080000000000000  // a bit used to increment lock counts
+ #define PAGE_LOCKS 0x7f80000000000000  // a page can be locked by 255 threads
+ #define PAGE_XD    0x8000000000000000  // disable executing memory if bit set
++// Shiro: a private page a same-instance fork left shared copy-on-write
++// (with PAGE_GROW: refcounted; PAGE_RW clear), and whether its mapping is
++// writable (a write gets this process its own copy)
++#define PAGE_COW   0x0002000000000000
++#define PAGE_COWRW 0x0004000000000000
+ 
+ #define SREG_ES 0
+ #define SREG_CS 1
+@@ -674,6 +679,9 @@ void OpRetIw(P);
+ void OpSsePclmulqdq(P);
+ extern bool g_shiro_trace;
+ bool ShiroInVfork(void);
++u64 BreakCow(struct Machine *, i64);
++u8 *LookupAddressWrite(struct Machine *, i64);
++long HostPageRefs(u8 *);
+ bool ShiroTakeSiginfo(struct Machine *, int, u8 *);
+ void ShiroQueueSiginfo(struct System *, int, const int *);
+ void ShiroFreeSigq(struct System *);
+diff --git a/blink/memory.c b/blink/memory.c
+index 26b42eb..a3c0ada 100644
+--- a/blink/memory.c
++++ b/blink/memory.c
+@@ -32,6 +32,7 @@
+ #include "blink/linux.h"
+ #include "blink/log.h"
+ #include "blink/machine.h"
++#include "blink/wjit.h"
+ #include "blink/macros.h"
+ #include "blink/pml4t.h"
+ #include "blink/stats.h"
+@@ -264,6 +265,67 @@ MapError:
+   return (uintptr_t)efault0();
+ }
+ 
++// the level-1 slot of `page`'s entry, or 0
++static u8 *FindPteSlot(struct Machine *m, i64 page) {
++  u64 entry = m->system->cr3;
++  u8 *pslot = 0;
++  int level;
++  for (level = 39; level >= 12; level -= 9) {
++    if (!(pslot = GetPageAddress(m->system, entry, level == 39))) return 0;
++    pslot += ((page >> level) & 511) * 8;
++    entry = LoadPte(pslot);
++    if (!(entry & PAGE_V)) return 0;
++    if ((entry & PAGE_PS) && level > 12) return 0;
++  }
++  return pslot;
++}
++
++// Gives this process its own copy of the copy-on-write page at `virt`
++// (PAGE_COW, left by a same-instance fork), or the page itself when no other
++// process maps it any more; returns the new entry (0: no memory).
++// Copies before dropping the reference: the other side may take the page
++// over and write it as soon as the count falls to one.
++u64 BreakCow(struct Machine *m, i64 virt) {
++  struct System *s = m->system;
++  u8 *pslot, *old, *np;
++  u64 entry, e2, n;
++  bool ok;
++  if (!(pslot = FindPteSlot(m, virt & -4096))) return 0;
++  for (;;) {
++    entry = LoadPte(pslot);
++    if (!(entry & PAGE_V)) return 0;
++    if (!(entry & PAGE_COW)) return entry;
++    old = (u8 *)FindHostPage(entry);
++    e2 = (entry & (PAGE_U | PAGE_XD | PAGE_LOCKS | PAGE_FILE)) | PAGE_V |
++         ((entry & PAGE_COWRW) ? PAGE_RW : 0);
++    if (HostPageRefs(old) <= 1) {
++      // the last mapper: the page is this process's again
++      e2 |= entry & (PAGE_TA | PAGE_HOST);
++      if (!CasPte(pslot, entry, e2)) continue;
++      UnshareHostPage(old);
++      break;
++    }
++    if ((n = AllocateAnonymousPage(s)) == (u64)-1) return 0;
++    np = (u8 *)FindHostPage(n);
++    memcpy(np, old, 4096);
++    e2 |= n & (PAGE_TA | PAGE_HOST);
++    ok = CasPte(pslot, entry, e2);
++    if (!ok) {
++      FreeAnonymousPage(s, np);  // another thread broke it first
++      continue;
++    }
++    if (!UnshareHostPage(old) && !(entry & PAGE_LOCKS)) {
++      memset(old, 0, 4096);  // the other mapper went away meanwhile (a
++      FreeAnonymousPage(s, old);  // page our own threads hold stays)
++    }
++    break;
++  }
++  if (!(entry & PAGE_XD)) WjPageChanged(virt & -4096);
++  InvalidateSystem(s, true, false);  // threads may hold the shared page's entry
++  ResetTlb(m);
++  return e2;
++}
++
+ u8 *LookupAddress2(struct Machine *m, i64 virt, u64 mask, u64 need) {
+   u8 *host;
+   u64 entry;
+@@ -280,6 +342,14 @@ u8 *LookupAddress2(struct Machine *m, i64 virt, u64 mask, u64 need) {
+     m->segvcode = SEGV_MAPERR_LINUX;
+     return (u8 *)efault0();
+   }
++  // A page shared copy-on-write since a fork becomes this process's own as
++  // soon as Blink resolves an address in it: many of its paths write
++  // through a resolved pointer without checking PAGE_RW (only compiled
++  // code's inline reads keep sharing; its writes come here)
++  if ((entry & PAGE_COW) && !(entry = BreakCow(m, virt))) {
++    m->segvcode = SEGV_MAPERR_LINUX;
++    return (u8 *)enomem();
++  }
+   if ((entry & mask) != need) {
+     m->segvcode = SEGV_ACCERR_LINUX;
+     return (u8 *)efault0();
+@@ -299,6 +369,16 @@ u8 *LookupAddress2(struct Machine *m, i64 virt, u64 mask, u64 need) {
+   }
+ }
+ 
++// LookupAddress for Blink's own writes to guest memory (futex words, signal
++// frames, the clear-tid word): a copy-on-write page becomes this process's
++u8 *LookupAddressWrite(struct Machine *m, i64 virt) {
++  u64 entry;
++  if ((entry = FindPageTableEntry(m, virt & -4096)) && (entry & PAGE_COW) && !BreakCow(m, virt)) {
++    return (u8 *)enomem();
++  }
++  return LookupAddress(m, virt);
++}
++
+ u8 *LookupAddress(struct Machine *m, i64 virt) {
+   u64 need = 0;
+   if (Cpl(m) == 3) need = PAGE_U;
+@@ -363,6 +443,7 @@ bool IsValidMemory(struct Machine *m, i64 virt, i64 size, int prot) {
+     if (!(pte = FindPageTableEntry(m, p))) {
+       return false;
+     }
++    if ((pte & PAGE_COWRW)) pte |= PAGE_RW;  // (writable: copied on write)
+     if ((pte & mask) != need) {
+       errno = EFAULT;
+       return false;
+@@ -377,7 +458,7 @@ int VirtualCopy(struct Machine *m, i64 v, char *r, u64 n, bool d) {
+   k = 4096 - (v & 4095);
+   while (n) {
+     k = MIN(k, n);
+-    if (!(p = LookupAddress(m, v))) return -1;
++    if (!(p = d ? LookupAddress(m, v) : LookupAddressWrite(m, v))) return -1;
+     if (d) {
+       memcpy(r, p, k);
+     } else if (!IsRomAddress(m, p)) {
+diff --git a/blink/memorymalloc.c b/blink/memorymalloc.c
+index 8da4e5a..a1c38b0 100644
+--- a/blink/memorymalloc.c
++++ b/blink/memorymalloc.c
+@@ -162,6 +162,20 @@ void ShareHostPage(u8 *page) {
+   UNLOCK(&g_shared_lock);
+ }
+ 
++// how many processes map a shared host page (0: not shared)
++long HostPageRefs(u8 *page) {
++  uintptr_t k = (uintptr_t)page;
++  long i, r = 0;
++  LOCK(&g_shared_lock);
++  if (g_shared.c) {
++    for (i = SharedSlot(k); g_shared.key[i] && g_shared.key[i] != k; i = (i + 1) & (g_shared.c - 1)) {
++    }
++    if (g_shared.key[i]) r = g_shared.refs[i];
++  }
++  UNLOCK(&g_shared_lock);
++  return r;
++}
++
+ // drops a reference; returns how many remain
+ long UnshareHostPage(u8 *page) {
+   uintptr_t k = (uintptr_t)page;
+@@ -1429,6 +1443,10 @@ int ProtectVirtual(struct System *s, i64 virt, i64 size, int prot,
+         if (!hostonly) {
+           for (;;) {
+             pt2 = (pt & ~(PAGE_U | PAGE_RW | PAGE_XD)) | key;
++            if (pt & PAGE_COW) {  // still shared: writable means copy on write
++              pt2 &= ~(PAGE_RW | PAGE_COWRW);
++              if (key & PAGE_RW) pt2 |= PAGE_COWRW;
++            }
+             if (CasPte(mi, pt, pt2)) break;
+             pt = LoadPte(mi);
+             if (!(pt & PAGE_V)) {
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index ae75a0c..f72d481 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -25,6 +25,7 @@
+ // Memory, threads, futexes, signal delivery and timing stay Blink's.
+ 
+ int g_shiro_pid;  // kernel pid; 0 = not running under Shiro
++static bool g_shiro_nocow;  // BLINK_FORK_COW=0: a same-instance child gets copies, not shared pages
+ static int g_shiro_mmlog;  // SHIRO_BLINK_MMLOG=1: log the guest's mappings, 2: ring, 3: 1 + writes
+ static struct { int tid, nr; u64 a, b, c, r; } g_shiro_mmring[256];
+ static _Atomic(unsigned) g_shiro_mmringi;
+@@ -52,6 +53,7 @@ void ShiroInitSystem(struct System *s, bool first) {
+   if (!g_shiro_pid) return;
+   g_shiro_trace = (e = getenv("SHIRO_BLINK_CRASH")) && !strcmp(e, "2");
+   g_shiro_mmlog = (e = getenv("SHIRO_BLINK_MMLOG")) ? atoi(e) : 0;
++  g_shiro_nocow = (e = getenv("BLINK_FORK_COW")) && *e == '0';
+   if (first) ShiroProfInit();
+   if (g_shiro_trace && (e = getenv("SHIRO_BLINK_PROBE"))) {  // addr,addr,...
+     int k;
+@@ -517,7 +519,7 @@ static void ShiroMapsEnd(struct ShiroMaps *u, i64 end) {
+   k = snprintf(u->b + u->n, u->cap - u->n,
+                "%08" PRIx64 "-%08" PRIx64 " %c%c%cp %08" PRIx64 " 00:00 0",
+                u->start, end, (u->flags & PAGE_U) ? 'r' : '-',
+-               (u->flags & PAGE_RW) ? 'w' : '-', (u->flags & PAGE_XD) ? '-' : 'x',
++               (u->flags & (PAGE_RW | PAGE_COWRW)) ? 'w' : '-', (u->flags & PAGE_XD) ? '-' : 'x',
+                u->fm && u->fm->offset > 0 ? u->fm->offset + (u->start - u->fm->virt) : 0);
+   u->n += k;
+   if (u->fm && u->fm->path) {  // Linux pads the name to column 73
+@@ -528,7 +530,7 @@ static void ShiroMapsEnd(struct ShiroMaps *u, i64 end) {
+ }
+ 
+ static void ShiroMapsPage(struct System *s, struct ShiroMaps *u, i64 addr, u64 entry) {
+-  u64 flags = entry & (PAGE_U | PAGE_RW | PAGE_XD);
++  u64 flags = entry & (PAGE_U | PAGE_RW | PAGE_XD | PAGE_COWRW);
+   int i;
+   if (u->on && (flags != u->flags || addr >= u->limit)) ShiroMapsEnd(u, addr);
+   if (!u->on) {
+@@ -2001,6 +2003,7 @@ struct ShiroWalk {
+   struct ShiroForkRun cur;
+   u64 nruns;
+   bool ok;
++  bool cow;  // same-instance child: private pages shared copy-on-write
+ };
+ 
+ static void ShiroCloseRun(struct ShiroWalk *w) {
+@@ -2054,6 +2057,25 @@ static void ShiroWalkTable(struct ShiroWalk *w, u64 entry, int level, i64 base)
+       continue;
+     }
+     u64 key = e & (PAGE_U | PAGE_RW | PAGE_XD);
++    if (w->cow && (e & (PAGE_U | PAGE_RW | PAGE_HOST | PAGE_MAP | PAGE_MUG | PAGE_RSRV | PAGE_GROW)) ==
++                      (PAGE_U | PAGE_RW | PAGE_HOST)) {
++      // a private page of its own: parent and child map it read-only, and the
++      // first to write it gets a copy (BreakCow). Not one a thread holds
++      // locked in a system call: its writes would land in the shared page
++      u8 *slot = table + i * 8;
++      u64 e2;
++      for (;;) {
++        if (e & PAGE_LOCKS) break;
++        e2 = (e & ~PAGE_RW) | PAGE_GROW | PAGE_COW | PAGE_COWRW;
++        if (CasPte(slot, e, e2)) {
++          ShareHostPage(FindHostPage(e));  // the parent's reference
++          e = e2;
++          break;
++        }
++        e = LoadPte(slot);
++        if (!(e & PAGE_V) || (e & PAGE_GROW)) break;
++      }
++    }
+     if (e & PAGE_GROW) {
+       // shared with a same-instance child: it maps this very host page
+       ShareHostPage(FindHostPage(e));
+@@ -2102,7 +2124,7 @@ static bool ShiroHasSharedMemory(struct System *s) {
+ 
+ // A snapshot of this process for its fork() child (in *out).
+ static int ShiroSnapshot(struct Machine *m, u64 flags, i64 stack, i64 ctid,
+-                         struct ShiroBuf *out) {
++                         struct ShiroBuf *out, bool cow) {
+   struct ShiroBuf b = {0};
+   struct ShiroForkHeader h;
+   struct ShiroWalk w;
+@@ -2149,7 +2171,7 @@ static int ShiroSnapshot(struct Machine *m, u64 flags, i64 stack, i64 ctid,
+     return -ENOMEM_LINUX;
+   }
+   memset(&w, 0, sizeof(w));
+-  w.m = m, w.b = &b, w.ok = true;
++  w.m = m, w.b = &b, w.ok = true, w.cow = cow;
+   // Other guest threads are held off by the GIL (we hold it), so the
+   // snapshot is consistent; this thread becomes the child's only thread.
+   LOCK(&s->mmap_lock);
+@@ -2171,7 +2193,7 @@ static i64 ShiroForkReal(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
+   i64 pid;
+   int rc;
+   if ((pid = KS(m, K_SYS_vfork, A12((int)(flags & 0x8000)))) < 0) return pid;
+-  if ((rc = ShiroSnapshot(m, flags, stack, ctid, &b)) < 0) {
++  if ((rc = ShiroSnapshot(m, flags, stack, ctid, &b, false)) < 0) {
+     KS(m, 62, A12(pid, 9));
+     return rc;
+   }
+@@ -2549,11 +2571,15 @@ static i64 ShiroForkSame(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
+   InvalidateSystem(s, true, false);
+   ResetTlb(m);
+   WjResetTlb(m);
+-  if ((rc = ShiroSnapshot(m, flags, stack, ctid, &c->snap)) < 0) {
++  if ((rc = ShiroSnapshot(m, flags, stack, ctid, &c->snap, !g_shiro_nocow)) < 0) {
+     free(c);
+     KS(m, 62, A12(pid, 9));
+     return rc;
+   }
++  // its pages are read-only now (copy on write): no cached writable entries
++  InvalidateSystem(s, true, false);
++  ResetTlb(m);
++  WjResetTlb(m);
+   c->pid = pid;
+   c->exec = s->exec;
+   ++g_shiro_kids_starting;
+diff --git a/blink/syscall.c b/blink/syscall.c
+index cdb5585..1aa3543 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -430,7 +430,7 @@ static void ClearChildTid(struct Machine *m) {
+   _Atomic(int) *ctid;
+   if (m->ctid) {
+     THR_LOGF("ClearChildTid(%#" PRIx64 ")", m->ctid);
+-    if ((ctid = (_Atomic(int) *)LookupAddress(m, m->ctid))) {
++    if ((ctid = (_Atomic(int) *)LookupAddressWrite(m, m->ctid))) {
+       atomic_store_explicit(ctid, 0, memory_order_seq_cst);
+     } else {
+       THR_LOGF("invalid clear child tid address %#" PRIx64, m->ctid);
+@@ -574,7 +574,7 @@ static int Fork(struct Machine *m, u64 flags, u64 stack, u64 ctid) {
+ #endif
+     if ((flags & (CLONE_CHILD_SETTID_LINUX | CLONE_CHILD_CLEARTID_LINUX)) &&
+         !(ctid & (sizeof(i32) - 1)) &&
+-        (ctid_ptr = (_Atomic(i32) *)LookupAddress(m, ctid))) {
++        (ctid_ptr = (_Atomic(i32) *)LookupAddressWrite(m, ctid))) {
+       if (flags & CLONE_CHILD_SETTID_LINUX) {
+         atomic_store_explicit(ctid_ptr, Little32(newpid), memory_order_release);
+       }
+@@ -650,11 +650,11 @@ static int SysSpawn(struct Machine *m, u64 flags, u64 stack, u64 ptid, u64 ctid,
+   if (((flags & CLONE_PARENT_SETTID_LINUX) &&
+        ((ptid & (sizeof(int) - 1)) ||
+         !IsValidMemory(m, ptid, 4, PROT_READ | PROT_WRITE) ||
+-        !(ptid_ptr = (_Atomic(int) *)LookupAddress(m, ptid)))) ||
++        !(ptid_ptr = (_Atomic(int) *)LookupAddressWrite(m, ptid)))) ||
+       ((flags & CLONE_CHILD_SETTID_LINUX) &&
+        ((ctid & (sizeof(int) - 1)) ||
+         !IsValidMemory(m, ctid, 4, PROT_READ | PROT_WRITE) ||
+-        !(ctid_ptr = (_Atomic(int) *)LookupAddress(m, ctid))))) {
++        !(ctid_ptr = (_Atomic(int) *)LookupAddressWrite(m, ctid))))) {
+     LOGF("bad clone() ptid / ctid pointers: %#" PRIx64, flags);
+     return efault();
+   }
+@@ -967,7 +967,7 @@ static int SysFutexWakeOp(struct Machine *m, i64 uaddr, u32 nwake, u32 nwake2,
+     oparg = 1 << oparg;
+   }
+   if (op > 4 || cmp > 5) return enosys();
+-  if (!(word = (_Atomic(u32) *)LookupAddress(m, uaddr2))) return -1;
++  if (!(word = (_Atomic(u32) *)LookupAddressWrite(m, uaddr2))) return -1;
+   old = atomic_load_explicit(word, memory_order_relaxed);
+   do {
+     switch (op) {
+@@ -1004,7 +1004,7 @@ static int SysFutexLockPi(struct Machine *m, i64 uaddr, int op, i64 timeout_addr
+   bool waited = false;
+   _Atomic(u32) *word;
+   for (;;) {
+-    if (!(word = (_Atomic(u32) *)LookupAddress(m, uaddr))) return -1;
++    if (!(word = (_Atomic(u32) *)LookupAddressWrite(m, uaddr))) return -1;
+     v = atomic_load_explicit(word, memory_order_acquire);
+     if (!(v & FUTEX_TID_MASK_LINUX)) {
+       if (atomic_compare_exchange_strong_explicit(
+@@ -1038,7 +1038,7 @@ static int SysFutexLockPi(struct Machine *m, i64 uaddr, int op, i64 timeout_addr
+ static int SysFutexUnlockPi(struct Machine *m, i64 uaddr) {
+   u32 v;
+   _Atomic(u32) *word;
+-  if (!(word = (_Atomic(u32) *)LookupAddress(m, uaddr))) return -1;
++  if (!(word = (_Atomic(u32) *)LookupAddressWrite(m, uaddr))) return -1;
+   v = atomic_load_explicit(word, memory_order_acquire);
+   do {
+     if ((int)(v & FUTEX_TID_MASK_LINUX) != m->tid) return eperm();
+@@ -1100,7 +1100,8 @@ static void UnlockRobustFutex(struct Machine *m, u64 futex_addr,
+     LOGF("robust futex isn't aligned");
+     return;
+   }
+-  if (!(futex = (_Atomic(u32) *)SchlepR(m, futex_addr, 4))) {
++  if (!LookupAddressWrite(m, futex_addr) ||
++      !(futex = (_Atomic(u32) *)SchlepR(m, futex_addr, 4))) {
+     LOGF("encountered efault in robust futex list");
+     return;
+   }
+@@ -1483,6 +1484,7 @@ static int SysMadvise(struct Machine *m, i64 addr, u64 len, int advice) {
+     LOCK(&m->system->mmap_lock);
+     for (p = addr; p < end; p += 4096) {
+       e = FindPageTableEntry(m, p);
++      if ((e & PAGE_COWRW) && !(e = BreakCow(m, p))) continue;  // (zeros here only)
+       if ((e & (PAGE_V | PAGE_U | PAGE_RW)) != (PAGE_V | PAGE_U | PAGE_RW)) continue;
+       if (e & (PAGE_RSRV | PAGE_FILE | PAGE_MAP)) continue;  // untouched, or file
+       if ((h = GetPageAddress(m->system, e, false))) memset(h, 0, 4096);
+@@ -1761,7 +1763,7 @@ static i64 SysMremap(struct Machine *m, i64 old_address, u64 old_size,
+   if (!IsFullyMapped(m->system, old_address, old_size)) return efault();
+   entry = PeekPte(m->system, old_address);
+   prot = (entry & PAGE_U ? PROT_READ_LINUX : 0) |
+-         (entry & PAGE_RW ? PROT_WRITE_LINUX : 0) |
++         (entry & (PAGE_RW | PAGE_COWRW) ? PROT_WRITE_LINUX : 0) |
+          (entry & PAGE_XD ? 0 : PROT_EXEC_LINUX);
+ #ifdef __EMSCRIPTEN__
+   for (int i = 0; i < m->system->nshared; ++i) {
+diff --git a/blink/wjit.c b/blink/wjit.c
+index a5f96fc..1ae9820 100644
+--- a/blink/wjit.c
++++ b/blink/wjit.c
+@@ -3354,6 +3354,7 @@ static u8 *CodePage(struct Machine *m, i64 page) {
+   u8 *host;
+   if (!(entry = FindPageTableEntry(m, page))) return 0;
+   if ((entry & (PAGE_U | PAGE_RW | PAGE_XD)) != PAGE_U) return 0;
++  if (entry & PAGE_COW) return 0;  // (writable once a write copies it)
+   if (!(host = GetPageAddress(m->system, entry, false))) return 0;
+   if (IsRomAddress(m, host)) return 0;
+   return host;
+-- 
+2.43.0
+
