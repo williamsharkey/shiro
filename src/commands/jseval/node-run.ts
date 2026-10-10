@@ -1,5 +1,6 @@
 import type { CommandContext } from '../index';
 import { executeNodeScript } from '../../node-compat/execution';
+import { NODE_REPL } from './node-repl';
 
 /**
  * node (node-cmd.ts runs it here, or in a Worker as a kernel guest): executes JS files from the virtual filesystem.
@@ -74,7 +75,10 @@ export async function runNode(ctx: CommandContext): Promise<number> {
     }
   }
 
-  // If no file and no -e, read from stdin
+  // Neither: the REPL on a terminal, else the program is stdin
+  if (!code && !fileArgs.length && !ctx.stdin && ctx.terminal && (ctx.stdinIsTTY ?? true)) {
+    return executeNodeScript(ctx, NODE_REPL, '', [], false);
+  }
   if (!code && ctx.stdin) {
     code = ctx.stdin;
   }
