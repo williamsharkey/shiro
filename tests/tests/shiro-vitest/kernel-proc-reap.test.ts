@@ -170,3 +170,27 @@ describe("killing a program's sh -c child doesn't interrupt the page shell's for
     }
   });
 });
+
+describe('tabcomputer#14: /proc/$$ of a shell that is a kernel process', () => {
+  let shell: Shell;
+  let kernel: Kernel;
+  beforeAll(async () => {
+    ({ shell } = await createTestShell());
+  });
+  beforeEach(() => { kernel = new Kernel({ shell }); });
+  afterEach(() => kernel.dispose());
+
+  it('has its whole argv in cmdline and its real fds (not /dev/pts/0)', async () => {
+    const { SinkFile } = await import('@shiro/wasi/stdio');
+    const { DevNull } = await import('@shiro/kernel/fd');
+    let out = '';
+    const sink = new SinkFile((t: string) => { out += t; });
+    const script = 'cat /proc/$$/cmdline | tr "\\0" "|"; echo; readlink /proc/$$/fd/0 /proc/$$/fd/1';
+    const p = kernel.spawn({ path: '/bin/bash', argv: ['/bin/bash', '-c', script], cwd: '/tmp', fds: { 0: new DevNull(A.O_RDONLY), 1: sink, 2: sink } });
+    await p.wait();
+    const lines = out.replace(/\r\n/g, '\n').split('\n');
+    expect(lines[0]).toBe(`/bin/bash|-c|${script}|`);
+    expect(lines[1]).toBe('/dev/null');
+    expect(lines[2]).not.toBe('/dev/pts/0');
+  });
+});

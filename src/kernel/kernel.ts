@@ -1493,7 +1493,7 @@ export class Kernel {
     shell.env = { ...proc.env, PWD: proc.cwd, 0: proc.argv[0] ?? proc.path };
     shell.localVars = new Set(['0']); // $0 is not exported
     // $$, $PPID and $BASHPID are the process's
-    shell.shellPid = shell.bashPid = proc.pid;
+    shell.shellPid = shell.bashPid = shell.kernelPid = proc.pid;
     shell.parentPid = proc.ppid;
     shell.uid = proc.uid;
     // Its fds are the process's (KernelStdio, adoptFds), not whatever exec did in the page's shell

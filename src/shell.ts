@@ -329,7 +329,8 @@ addProcInfoSource({
   get(pid) {
     const active = activeShell?.deref();
     const sh = shellForPid(pid) ?? (active?.shellPid === pid ? active : undefined);
-    if (!sh) return undefined;
+    // A shell that is a kernel process: the kernel's table has its argv and fds
+    if (!sh || sh.kernelPid === pid) return undefined;
     const comm = sh.invokedAsSh ? 'sh' : 'bash';
     return {
       pid, ppid: sh.parentPid, pgid: pid, sid: pid, comm, state: sh === active ? 'R' : 'S', cmdline: [comm],
@@ -702,6 +703,8 @@ export class Shell {
    * process's real fds 0-2 (binary-safe, the tty) and stay in its process
    * group, as a real non-interactive sh would do it.
    */
+  /** This shell's $$ is a kernel process (Kernel.forkShell): /proc describes it from the kernel's table */
+  kernelPid?: number;
   kernelHost: { kernel: import('./kernel/kernel').Kernel; proc: import('./kernel/process').Process } | null = null;
   /** File descriptors for `read -u FD` and `exec N< file` */
   fileDescriptors: Map<number, { content: string; offset: number }> = new Map();
@@ -1067,6 +1070,7 @@ export class Shell {
     this.localVars.add('IFS');
     this.parentPid = ppid;
     this.shellPid = pid;
+    this.kernelPid = undefined;
     shellsByPid.set(pid, new WeakRef(this));
     const own = new AbortController();
     const outer = this.inheritedAbort?.signal;
@@ -1261,6 +1265,7 @@ export class Shell {
     child.errexitSuppressed = this.errexitSuppressed;
     child.inheritedReturn = this.canReturn();
     child.kernelHost = this.kernelHost;
+    child.kernelPid = this.kernelPid;
     child.uid = this.uid;
     child.bootGate = this.bootGate;
     return child;
