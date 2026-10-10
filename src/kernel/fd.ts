@@ -1238,6 +1238,11 @@ export class RegularFile implements OpenFile {
   get path(): string { return this.ino.path; }
   /** (attachInodeShared) */
   get inode(): Inode { return this.ino; }
+  /** open() of /proc/self/fd/N: a new description (its own offset and flags) of the same file, unlinked or not */
+  reopen(flags: number): RegularFile {
+    this.ino.opens++;
+    return new RegularFile(this.ino, flags);
+  }
 
   async read(buf: Uint8Array): Promise<number> {
     if (!canRead(this.flags)) return -EBADF;
@@ -1541,21 +1546,44 @@ let nextMemIno = 1;
  * refuses it, as it does regular files). Blink backs the /proc files it
  * generates (/proc/self/maps) with one, so they seek and poll as Linux's do.
  */
+/** A memfd's contents, shared by its open descriptions (a reopen through /proc/self/fd makes another). */
+interface MemStore {
+  data: Uint8Array<ArrayBufferLike>;
+  len: number;
+  ino: number;
+  mtimeMs: number;
+  seals: number;
+  listeners: ReadyListeners;
+  /** Open descriptions */
+  refs: number;
+}
+
 export class MemFile implements OpenFile {
   kind: OpenFileKind = 'file';
-  private data: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
-  private len = 0;
   private pos = 0;
-  private ino = nextMemIno++;
-  private mtimeMs = Date.now();
-  private listeners = new ReadyListeners();
+  private store: MemStore;
+  private get data(): Uint8Array<ArrayBufferLike> { return this.store.data; }
+  private set data(d: Uint8Array<ArrayBufferLike>) { this.store.data = d; }
+  private get len(): number { return this.store.len; }
+  private set len(n: number) { this.store.len = n; }
+  private get ino(): number { return this.store.ino; }
+  private get mtimeMs(): number { return this.store.mtimeMs; }
+  private set mtimeMs(t: number) { this.store.mtimeMs = t; }
+  private get listeners(): ReadyListeners { return this.store.listeners; }
   /**
    * fcntl F_ADD_SEALS/F_GET_SEALS bits (F_SEAL_*). Without MFD_ALLOW_SEALING
    * a memfd starts sealed against more seals, as Linux's does.
    */
-  seals = F_SEAL_SEAL;
+  get seals(): number { return this.store.seals; }
+  set seals(v: number) { this.store.seals = v; }
 
-  constructor(public path: string, public flags = O_RDWR) {}
+  constructor(public path: string, public flags = O_RDWR, store?: MemStore) {
+    this.store = store ?? { data: new Uint8Array(0), len: 0, ino: nextMemIno++, mtimeMs: Date.now(), seals: F_SEAL_SEAL, listeners: new ReadyListeners(), refs: 0 };
+    this.store.refs++;
+  }
+
+  /** open() of /proc/self/fd/N: a new description (its own offset and flags) of the same memfd */
+  reopen(flags: number): MemFile { return new MemFile(this.path, flags, this.store); }
 
   /** Shared-object key (shmobj.ts): unique per memfd */
   get shareKey(): string { return `memfd:${this.ino}`; }
@@ -1648,5 +1676,10 @@ export class MemFile implements OpenFile {
     };
   }
   async stat(): Promise<KStat> { return this.statSync(); }
-  async close(): Promise<void> { this.data = new Uint8Array(0); this.len = 0; }
+  async close(): Promise<void> {
+    // (the last description frees the contents)
+    if (--this.store.refs > 0) return;
+    this.data = new Uint8Array(0);
+    this.len = 0;
+  }
 }
