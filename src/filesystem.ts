@@ -1665,6 +1665,52 @@ export class FileSystem {
     this._emitChange('delete', path);
   }
 
+  /**
+   * writeFile of a regular file whose node is cached, now (the kernel writing
+   * back an open file on close): false when it needs writeFile (uncached,
+   * lazy, not a file, or storage full).
+   */
+  writeCachedSync(path: string, content: Uint8Array, times: { mtime: number; mtimeNs?: number; atime?: number; atimeNs?: number }): boolean {
+    const node = this.cache.get(path);
+    if (!node || node.type !== 'file' || node.lazy || node.special || this._full) return false;
+    this._putNow({
+      ...node, content, size: content.length, mtime: times.mtime,
+      mtimeNs: times.mtimeNs || undefined, atime: times.atime, atimeNs: times.atimeNs || undefined,
+    });
+    this._emitChange('write', path);
+    return true;
+  }
+
+  /** Create a directory at canonical `path` now (the kernel's syscallSync checked the parent); false when it needs the async path. */
+  createDirNow(path: string, mode: number): boolean {
+    if (this._full) return false;
+    const node = this._makeNode(path, 'dir');
+    node.mode = mode & 0o7777;
+    this._putNow(node);
+    this._emitChange('mkdir', path);
+    return true;
+  }
+
+  /** Rename the cached non-directory at canonical `from` to canonical `to` now; false when it needs the async path. */
+  renameNow(from: string, to: string): boolean {
+    const node = this.cache.get(from);
+    const dst = this.cache.get(to);
+    if (!node || node.type === 'dir' || dst?.type === 'dir') return false;
+    this._putNow({ ...node, path: to, ctime: Date.now(), ino: node.ino ?? pathIno(from) }, true);
+    this._deleteNow(from);
+    this._emitChange('rename', from, to);
+    return true;
+  }
+
+  /** Remove the directory at canonical `path` when the child index knows it: true, false (not empty), undefined (unknown). */
+  rmdirNow(path: string): boolean | undefined {
+    if (!this._children || this.cache.get(path)?.type !== 'dir') return undefined;
+    if (this._children.get(path)?.size) return false;
+    this._deleteNow(path);
+    this._emitChange('delete', path);
+    return true;
+  }
+
   async rmdir(path: string): Promise<void> {
     path = await this._canon(path, false);
     const node = await this._get(path);
