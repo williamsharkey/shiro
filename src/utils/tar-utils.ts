@@ -207,6 +207,69 @@ export async function untar(tarData: Uint8Array): Promise<TarEntry[]> {
 }
 
 /**
+ * The files of a .tar.gz that `want` picks, read as the archive streams in:
+ * nothing else is copied, and neither the archive nor its decompressed bytes
+ * are ever whole in memory. (Claude Code's tarball is 19 MB, 60 MB unpacked,
+ * mostly other platforms' binaries; tabcomputer keeps its 14 MB cli.js. The
+ * page held all of it while a node guest loaded cli.js.)
+ */
+export async function extractTarGzFiles(source: ReadableStream<Uint8Array> | Uint8Array, want: (name: string) => boolean): Promise<TarEntry[]> {
+  const input = source instanceof Uint8Array ? new Response(new Blob([source.buffer as ArrayBuffer])).body! : source;
+  const reader = (input.pipeThrough(new DecompressionStream('gzip') as unknown as ReadableWritablePair<Uint8Array, Uint8Array>)).getReader();
+  const chunks: Uint8Array[] = [];
+  let have = 0;
+  let ended = false;
+  const fill = async (n: number) => {
+    while (have < n && !ended) {
+      const { done, value } = await reader.read();
+      if (done) { ended = true; break; }
+      chunks.push(value); have += value.length;
+    }
+    return have >= n;
+  };
+  /** The next n bytes, copied out (or skipped: null) */
+  const take = async (n: number, keep: boolean): Promise<Uint8Array | null | undefined> => {
+    const out = keep ? new Uint8Array(n) : null;
+    let got = 0;
+    while (got < n) {
+      if (!chunks.length && !(await fill(1))) return undefined;
+      const c = chunks[0];
+      const k = Math.min(c.length, n - got);
+      if (out) out.set(c.subarray(0, k), got);
+      got += k; have -= k;
+      if (k === c.length) chunks.shift(); else chunks[0] = c.subarray(k);
+    }
+    return out;
+  };
+  const entries: TarEntry[] = [];
+  try {
+    for (;;) {
+      const headerBytes = await take(512, true);
+      if (!headerBytes) break;
+      const header = parseTarHeader(headerBytes);
+      if (!header) break;
+      let fullPath = header.prefix ? `${header.prefix}/${header.name}` : header.name;
+      if (fullPath.startsWith('package/')) fullPath = fullPath.slice(8);
+      const type: TarEntry['type'] = header.typeflag === '5' ? 'directory' : header.typeflag === '2' ? 'symlink' : 'file';
+      const padded = header.size + ((512 - (header.size % 512)) % 512);
+      const keep = want(fullPath);
+      const data = await take(header.size, keep && type === 'file');
+      if (data === undefined) throw new Error(`Incomplete tar file: ${fullPath}`);
+      await take(padded - header.size, false);
+      if (!keep) continue;
+      entries.push({
+        name: fullPath, type, mode: header.mode ? parseInt(header.mode, 8) : 0o644, size: header.size,
+        mtime: new Date(parseInt(header.mtime, 8) * 1000), data: type === 'file' ? data ?? new Uint8Array(0) : undefined,
+        linkname: header.linkname || undefined,
+      });
+    }
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+  return entries;
+}
+
+/**
  * Extract tar.gz (tgz) archive
  */
 export async function extractTarGz(compressedData: Uint8Array): Promise<TarEntry[]> {
