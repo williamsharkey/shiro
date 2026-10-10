@@ -1,8 +1,8 @@
-From 86d969448de8da9e8d51d10b20959d23c0d7be80 Mon Sep 17 00:00:00 2001
+From 45deaeb85517266e29a32c57be9d5147a1087d0c Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 04:12:28 +0000
-Subject: [PATCH] Shiro: FUTEX_WAKE_OP and the PI futex ops (LOCK_PI, LOCK_PI2,
- TRYLOCK_PI, UNLOCK_PI)
+Subject: [PATCH 94/95] Shiro: FUTEX_WAKE_OP and the PI futex ops (LOCK_PI,
+ LOCK_PI2, TRYLOCK_PI, UNLOCK_PI)
 
 ---
  blink/linux.h   |   5 +++
