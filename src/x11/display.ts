@@ -70,7 +70,7 @@ export async function startDisplay(kernel: Kernel, n = 0): Promise<DisplayHandle
     env: { DISPLAY: `:${n}` },
     run: async (p) => {
       for (const l of listeners) l.ownerPid = p.pid;
-      for (const l of listeners) void acceptLoop(l, handle, () => stopped);
+      for (const l of listeners) void acceptLoop(l, handle, kernel, () => stopped);
       p.onTerminate(() => handle.stop());
       await done;
       return 0;
@@ -82,18 +82,20 @@ export async function startDisplay(kernel: Kernel, n = 0): Promise<DisplayHandle
   return handle;
 }
 
-async function acceptLoop(listener: KSocket, handle: DisplayHandle, stopped: () => boolean): Promise<void> {
+async function acceptLoop(listener: KSocket, handle: DisplayHandle, kernel: Kernel, stopped: () => boolean): Promise<void> {
   while (!stopped()) {
     const s = await listener.accept();
     if (typeof s === 'number') { if (stopped()) return; await new Promise((r) => setTimeout(r, 50)); continue; }
     handle.connections++;
-    void serveClient(s, handle.display);
+    void serveClient(s, handle.display, kernel);
   }
 }
 
-async function serveClient(sock: KSocket, display: number): Promise<void> {
+async function serveClient(sock: KSocket, display: number, kernel: Kernel): Promise<void> {
   const { getXSession } = await import('./session');
   const { server } = await getXSession(display);
+  // GL apps (docs/research/GL.md): GLX and libGLX_tabcomputer when the page has WebGL2
+  await (await import('../gl/setup')).prepareGL(kernel, server);
   let chain: Promise<unknown> = Promise.resolve();
   let closed = false;
   const client = server.connect({

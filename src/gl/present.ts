@@ -6,6 +6,7 @@
  */
 import { Executor, type ExecHost, type Present } from './exec';
 import type { Backend } from './server';
+import { MSG_FRAME } from './wire';
 import { peekXSession } from '../x11/session';
 import type { XServer } from '../x11/server';
 import { Painter, defaultGC } from '../x11/raster';
@@ -40,7 +41,31 @@ export function drawIntoWindow(server: XServer, xid: number, f: Present): void {
   p.finish();
 }
 
-export async function createWebGLBackend(send: (data: Uint8Array) => void): Promise<Backend> {
+/**
+ * Paces the guest to the page's frames: frame acks wait for the next
+ * animation frame, and libGLX_tabcomputer stops at its swap once it's
+ * MAX_FRAMES_AHEAD frames ahead. A hidden tab gets no animation frames, so
+ * its GL apps wait instead of rendering frames nobody sees. Other messages
+ * go at once.
+ */
+export function pacedSend(send: (data: Uint8Array) => void, nextFrame: (cb: () => void) => void): (data: Uint8Array) => void {
+  let held: Uint8Array[] = [];
+  let scheduled = false;
+  const flush = () => {
+    scheduled = false;
+    const h = held;
+    held = [];
+    for (const m of h) send(m);
+  };
+  return (data) => {
+    if (data.length < 4 || new DataView(data.buffer, data.byteOffset, 4).getUint32(0, true) !== MSG_FRAME) { send(data); return; }
+    held.push(data);
+    if (!scheduled) { scheduled = true; nextFrame(flush); }
+  };
+}
+
+export async function createWebGLBackend(rawSend: (data: Uint8Array) => void): Promise<Backend> {
+  const send = typeof requestAnimationFrame === 'function' ? pacedSend(rawSend, (cb) => requestAnimationFrame(() => cb())) : rawSend;
   const gl = webgl2();
   const session = await peekXSession(0);
   const xs = session ? (await session).server : null;

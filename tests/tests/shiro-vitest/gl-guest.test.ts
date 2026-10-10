@@ -61,7 +61,8 @@ async function setup() {
   });
   const run = async (argv: string[], ms: number, env: Record<string, string> = {}) => {
     const out = new BufferFile(null);
-    const p = kernel.spawn({ path: argv[0], argv, cwd: '/', env: { DISPLAY: ':0', PATH: '/usr/bin:/bin', HOME: '/root', __GLX_VENDOR_LIBRARY_NAME: 'tabcomputer', ...env }, fds: { 0: new BufferFile(''), 1: out, 2: out } });
+    // as in the page, nothing forces the vendor: libglvnd asks Xshiro's GLX (GLX_VENDOR_NAMES_EXT)
+    const p = kernel.spawn({ path: argv[0], argv, cwd: '/', env: { DISPLAY: ':0', PATH: '/usr/bin:/bin', HOME: '/root', ...env }, fds: { 0: new BufferFile(''), 1: out, 2: out } });
     const t0 = Date.now();
     const status = await Promise.race([p.wait(), new Promise<number>((r) => setTimeout(() => { p.kill?.(9); r(-1); }, ms))]);
     return { status, out: out.text(), ms: Date.now() - t0 };

@@ -72,7 +72,7 @@ import { processTable } from './process-table';
 import { createPathShims, installAlwaysShims } from './path-shims';
 import { getKernel } from './kernel/kernel';
 import { startDisplay } from './x11/display';
-import { startGLServer } from './gl/server';
+import { startGLServer, getGLServer } from './gl/server';
 import { installNet } from './kernel/net';
 import { attachKernelTty } from './kernel/pty';
 import { sudoCmd } from './commands/sudo';
@@ -667,6 +667,7 @@ async function main() {
     iframeServer, // Iframe-based virtual HTTP server
     processTable, // Windowed process registry
     kernel, // Process table, fds, pipes and syscalls for worker guests (src/kernel)
+    gl: getGLServer, // glshiro (src/gl/server.ts): connections and per-client command and frame counts
     desktop: desktop?.wm ?? null, // Window manager API (docs/DESKTOP.md), null in the classic UI
     uiMode: mode,
     profile, // The product profile (src/profile.ts, docs/PROFILES.md)

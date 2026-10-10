@@ -119,6 +119,47 @@ function createWindow(c: TC, wid: number, x: number, y: number, w: number, h: nu
   c.send(1, 0, (q) => q.u32(wid).u32(c.root).i16(x).i16(y).u16(w).u16(h).u16(0).u16(1).u32(0).u32(0x2 | 0x800).u32(0xffffff).u32(mask));
 }
 
+describe('GLX for libglvnd (src/gl/glx-ext.ts)', () => {
+  it('names the tabcomputer vendor and answers which screen a drawable is on', async () => {
+    const { installGLX } = await import('@shiro/gl/glx-ext');
+    const { server, c } = await newServer();
+    installGLX(server);
+    c.send(98, 0, (w) => w.u16(3).u16(0).str('GLX'));
+    const q = await c.reply();
+    q.skip(8);
+    expect(q.u8()).toBe(1);
+    const major = q.u8();
+    q.u8();
+    const firstError = q.u8();
+    const serverString = async (name: number) => {
+      c.send(major, 19, (w) => w.u32(0).u32(name));
+      const r = await c.reply();
+      r.skip(12);
+      const n = r.u32();
+      r.skip(16);
+      return new TextDecoder().decode(r.bytes(n - 1));
+    };
+    expect(await serverString(0x20f6)).toBe('tabcomputer'); // GLX_VENDOR_NAMES_EXT
+    expect((await serverString(3)).split(' ')).toContain('GLX_EXT_libglvnd'); // without it glvnd uses libGLX_indirect
+    c.send(major, 7, (w) => w.u32(1).u32(4)); // QueryVersion
+    const v = await c.reply();
+    v.skip(8);
+    expect([v.u32(), v.u32()]).toEqual([1, 4]);
+    createWindow(c, c.id(1), 0, 0, 120, 90, 0);
+    c.send(major, 29, (w) => w.u32(c.id(1))); // GetDrawableAttributes
+    const a = await c.reply();
+    a.skip(8);
+    const n = a.u32();
+    a.skip(20);
+    const attrs = new Map<number, number>();
+    for (let i = 0; i < n; i++) attrs.set(a.u32(), a.u32());
+    expect(attrs.get(0x800c)).toBe(0); // GLX_SCREEN
+    expect([attrs.get(0x801d), attrs.get(0x801e)]).toEqual([120, 90]);
+    c.send(major, 29, (w) => w.u32(c.id(77)));
+    await expect(c.reply()).rejects.toThrow(`X error ${firstError + 2} `); // GLXBadDrawable
+  });
+});
+
 describe('X11 protocol', () => {
   it('sets up a connection with one TrueColor screen', async () => {
     const { c } = await newServer();

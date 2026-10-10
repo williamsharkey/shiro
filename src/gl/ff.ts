@@ -321,6 +321,8 @@ ${s.twoSide ? `  Material mb = u_back;\n  ${cmBack ? applyCM('mb') : ''}\n  ligh
         if (!(u.texGen & (1 << c))) continue;
         const comp = 'xyzw'[c];
         const mode = u.texGenMode[c];
+        // GL allows these for s, t and r only (q is INVALID_ENUM): q keeps its coordinate
+        if (c === 3 && (mode === E.NORMAL_MAP || mode === E.REFLECTION_MAP)) continue;
         if (mode === E.OBJECT_LINEAR) vs += `  tcg${i}.${comp} = dot(u_objPlane${i}[${c}], a_Vertex);\n`;
         else if (mode === E.SPHERE_MAP) {
           vs += `  { vec3 u = normalize(eye4.xyz); vec3 nn = normalize(u_nm * a_Normal); vec3 r = reflect(u, nn); float m = 2.0 * sqrt(r.x * r.x + r.y * r.y + (r.z + 1.0) * (r.z + 1.0)); tcg${i}.${comp} = ${c === 0 ? 'r.x' : 'r.y'} / m + 0.5; }\n`;

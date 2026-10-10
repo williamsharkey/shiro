@@ -92,15 +92,12 @@ export function translateShader(input: string, stage: 'vertex' | 'fragment' | 'g
       ['gl_Vertex', 'Vertex', 'vec4'], ['gl_Normal', 'Normal', 'vec3'], ['gl_Color', 'Color', 'vec4'],
       ['gl_SecondaryColor', 'SecondaryColor', 'vec4'], ['gl_FogCoord', 'FogCoord', 'float'],
     ];
+    // ftransform() is the fixed-function transform: spelled out, the built-ins below declare what it uses
+    src = src.replace(/\bftransform\s*\(\s*\)/g, '(gl_ModelViewProjectionMatrix * gl_Vertex)');
     for (let i = 0; i < 8; i++) vattr.push([`gl_MultiTexCoord${i}`, `MultiTexCoord${i}`, 'vec4']);
     for (const [gl, name, type] of vattr) {
       const re = new RegExp(`\\b${gl}\\b`, 'g');
       if (re.test(src)) { attribs.add(name); src = src.replace(re, `_tc_${name}`); decls.push(`in ${type} _tc_${name};`); }
-    }
-    if (/\bftransform\s*\(\s*\)/.test(src)) {
-      src = src.replace(/\bftransform\s*\(\s*\)/g, '(_tc_ModelViewProjectionMatrix * _tc_Vertex)');
-      uniforms.add('ModelViewProjectionMatrix');
-      if (!attribs.has('Vertex')) { attribs.add('Vertex'); decls.push('in vec4 _tc_Vertex;'); }
     }
   }
   for (const m of MATRIX_UNIFORMS) {

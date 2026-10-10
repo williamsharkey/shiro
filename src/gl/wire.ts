@@ -40,7 +40,7 @@ export function specOf(op: number): CompiledSpec | undefined {
   let c = compiled[op];
   if (c) return c;
   const e = OPS[op];
-  if (!e) return undefined;
+  if (!e || !e[0]) return undefined;
   const s = e[1];
   const codes: string[] = [];
   for (let i = 0; i < s.length; i++) {
