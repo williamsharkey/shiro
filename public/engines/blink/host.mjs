@@ -550,9 +550,16 @@ async function run(msg) {
   let M = null;
 
   // ── The channel pool for the guest's own syscalls (shiro-kernel.js) ──
-  const pool = (msg.pool || []).map((sab) => ({
-    i32: new Int32Array(sab, 0, CH_DATA / 4), data: new Uint8Array(sab, CH_DATA), busy: false, done: null,
-  }));
+  // poolWake 'atomics': the page watches each channel's state word, so a call
+  // is a store + notify and its reply a wait on that word (no blink-sys, no
+  // blink-done). The kernel pid a call is for goes in the word after the data area.
+  const poolAtomics = msg.poolWake === 'atomics' && typeof Atomics.waitAsync === 'function';
+  const asBytes = msg.poolAsBytes | 0;
+  const channel = (sab) => ({
+    i32: new Int32Array(sab, 0, CH_DATA / 4), data: new Uint8Array(sab, CH_DATA, sab.byteLength - CH_DATA - asBytes),
+    as: asBytes ? new Int32Array(sab, sab.byteLength - asBytes, 1) : null, busy: false, done: null,
+  });
+  const pool = (msg.pool || []).map(channel);
   const chunk = pool.length ? pool[0].data.length : 0;
   const waiting = [];
   // Every channel busy (threads or same-instance fork children blocked in
@@ -568,7 +575,8 @@ async function run(msg) {
   const addChannel = (sab) => {
     growing = false;
     if (!sab) return; // at the cap: the waiters queue for a free channel
-    const ch = { i32: new Int32Array(sab, 0, CH_DATA / 4), data: new Uint8Array(sab, CH_DATA), busy: true, done: null };
+    const ch = channel(sab);
+    ch.busy = true;
     pool.push(ch);
     release(ch);
     if (waiting.length && !growing) { growing = true; post({ type: 'blink-grow' }); }
@@ -583,9 +591,38 @@ async function run(msg) {
     for (let i = 0; i < CH_NARGS; i++) ch.i32[CH_ARGS + i] = args[i] ?? 0;
     ch.i32[CH_SYSNO] = nr;
     ch.done = resolve;
-    Atomics.store(ch.i32, CH_STATE, 1);
-    post({ type: 'blink-sys', ch: pool.indexOf(ch), as });
+    if (poolAtomics && ch.as) {
+      ch.as[0] = as | 0;
+      Atomics.store(ch.i32, CH_STATE, 1);
+      Atomics.notify(ch.i32, CH_STATE);
+      void awaitReply(ch);
+    } else {
+      if (ch.as) ch.as[0] = -1; // the page's watcher leaves it to blink-sys
+      Atomics.store(ch.i32, CH_STATE, 1);
+      post({ type: 'blink-sys', ch: pool.indexOf(ch), as });
+    }
   });
+  // The page's reply (state 2) on a watched channel
+  const awaitReply = async (ch) => {
+    for (;;) {
+      const s = Atomics.load(ch.i32, CH_STATE);
+      if (s === 2) { complete(ch); return; }
+      if (s !== 1) return; // the page let go of it (the worker is ending)
+      const w = Atomics.waitAsync(ch.i32, CH_STATE, 1);
+      if (w.async) await w.value;
+    }
+  };
+  // A reply: take the result and signal word, free the channel, resume the caller
+  const complete = (ch) => {
+    if (Atomics.load(ch.i32, CH_STATE) !== 2) return;
+    const r = ch.i32[CH_RESULT], hi = ch.i32[CH_ARGS];
+    Atomics.store(ch.i32, CH_STATE, 0);
+    const sig = Atomics.exchange(ch.i32, CH_SIGNAL, 0);
+    const done = ch.done;
+    ch.done = null;
+    if (debug) console.error(`[blink] ${debugPid} ksys ${ch.i32[CH_SYSNO]}(${Array.from(ch.i32.subarray(CH_ARGS + 1, CH_ARGS + 4)).join(',')}) = ${r}`);
+    done?.({ r, hi, sig });
+  };
   // The guest is exiting (Blink's ShiroQuiesce): the calls its other threads
   // have in flight, and any they make now, end with EINTR so the threads get
   // back to Blink, which ends them before the kernel hears exit_group.
@@ -628,14 +665,7 @@ async function run(msg) {
     if (!m || exiting) return;
     if (m.type === 'blink-done') {
       const ch = pool[m.ch];
-      if (!ch || Atomics.load(ch.i32, CH_STATE) !== 2) return;
-      const r = ch.i32[CH_RESULT], hi = ch.i32[CH_ARGS];
-      Atomics.store(ch.i32, CH_STATE, 0);
-      const sig = Atomics.exchange(ch.i32, CH_SIGNAL, 0);
-      const done = ch.done;
-      ch.done = null;
-      if (debug) console.error(`[blink] ${debugPid} ksys ${ch.i32[CH_SYSNO]}(${Array.from(ch.i32.subarray(CH_ARGS + 1, CH_ARGS + 4)).join(',')}) = ${r}`);
-      done?.({ r, hi, sig });
+      if (ch) complete(ch);
     } else if (m.type === 'blink-channel') {
       addChannel(m.sab);
     } else if (m.type === 'blink-signal' && !exiting) {
