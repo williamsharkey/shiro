@@ -721,6 +721,13 @@ composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts,
 a few MiB each. The terminal UI's +19 KiB is /dom, the sign-in hook and the
 other integration changes since db9f698, not desktop code.
 
+### unix/shell-stdio 12 — tty, setsid, script; test -t; no global FORCE_COLOR
+
+`node bench/ab.mjs HEAD~1 HEAD --suites shell,kernel --quick` (c8dd058 →
+8973854): 23 unchanged; isolated:shell.ls_la_1000 improved 10.4 → 7.28 ms
+(-32%, every round). ls -la into the benchmark's sink no longer colours its
+output now that FORCE_COLOR isn't exported.
+
 ### unix/shell-stdio 11 — the shell's builtins read the kernel's /proc
 
 `node bench/ab.mjs 41265dd2~1 41265dd2 --suites shell,kernel --quick`: all 24
