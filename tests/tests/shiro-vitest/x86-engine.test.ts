@@ -50,6 +50,8 @@ const tcpBin = join(out, 'tcpecho');
 const haveTcp = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', tcpBin, 'tcpecho.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const gorunBin = join(out, 'gorun');
 const haveGorun = haveHttp && tryBuild(goExe, ['build', '-ldflags=-s', '-o', gorunBin, 'gorun.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
+const gowaitBin = join(out, 'gowait');
+const haveGowait = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', gowaitBin, 'gowait.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const ttyBin = join(out, 'tty');
 const haveTty = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', ttyBin, 'tty.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const haveGlibc = tryBuild('gcc', ['-static', '-Os', '-o', glibcBin, 'hello.c']);
@@ -528,6 +530,35 @@ describe.skipIf(!haveTcp)('Blink engine: real TCP through the kernel relay', () 
   }, 120_000);
 });
 
+
+// cmd/go's build loop: parallel children that exit close together, each
+// waited for by os/exec in its own goroutine. Under load a SIGURG (Go's
+// preemption signal) for the forking thread can arrive while Blink runs the
+// vfork child on it; the child then dies with "signal received during fork"
+// and the parent hangs with its other children unreaped (toolchains' `go run`
+// hang). BLINK_FORK_STRESS=1 runs the stress (about half its runs hit it).
+describe.skipIf(!haveGowait)('Blink engine: parallel fork/exec/wait (Go os/exec)', () => {
+  const runGowait = async (args: string, ms: number) => {
+    const { shell } = await setup(readFileSync(gowaitBin));
+    let out = '';
+    const r = await Promise.race([
+      shell.execute(`./prog ${args}`, (s) => { out += s; }, (s) => { out += s; }),
+      new Promise((res) => setTimeout(() => res('timeout'), ms)),
+    ]);
+    return { r, out: out.replace(/\r\n/g, '\n') };
+  };
+  it('rounds of 4 children, every exit status collected', async () => {
+    const { r, out } = await runGowait('4 4', 60_000);
+    expect(out).toBe('done 4 4\n');
+    expect(r).toBe(0);
+  }, 90_000);
+  it.skipIf(!process.env.BLINK_FORK_STRESS)('stress: 60 rounds of 8', async () => {
+    const { r, out } = await runGowait('60 8', 200_000);
+    expect(out).not.toContain('signal received during fork');
+    expect(out).toBe('done 60 8\n');
+    expect(r).toBe(0);
+  }, 240_000);
+});
 
 describe.skipIf(!haveTty)('Blink engine: interactive program on a kernel pty', () => {
   it('sees a tty, its size, raw keys without echo, SIGWINCH and Ctrl-C', async () => {
