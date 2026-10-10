@@ -163,6 +163,7 @@ toolchain install c --apt        # the same packages through apt instead
 | `java` | default-jdk-headless | 11 | 156 MB (306 MB unpacked) |
 | `classic` | gfortran, gnucobol, fp-compiler, fp-units-rtl, gnat | 61 | 142 MB (415 MB unpacked) |
 | `tex` | texlive-latex-recommended, latexmk | 65 | 86 MB (235 MB unpacked) |
+| `go` | golang-go, plus std compiled into the build cache | 4 | 116 MB (414 MB unpacked, 163 MB of it the cache) |
 
 Sizes are from `.toolchain-build/layers/index.json` (build of 2026-10-09). Nothing is
 downloaded at install time beyond the layer's index. A program's chunks are
@@ -188,6 +189,18 @@ index holds:
   auto-installed marks), debconf's `*.dat`, `/var/lib/dpkg/diversions`,
   `statoverride` and `triggers/*`, and `/etc/passwd`, `group`, `shadow`,
   `gshadow` and `shells`.
+
+A set can also name `prepare` commands, which run in the chroot after apt
+and are part of the recipe. `go` uses this to run `go build std` with
+`HOME=/home/user` and `CGO_ENABLED=0`, so the layer carries the standard
+library already compiled in the tab user's default build cache
+(`~/.cache/go-build`, unowned files). The tab's `go` has the same GOROOT,
+compiler and settings (no C compiler is on PATH, so cgo is off there too),
+so `go build` and `go run` hit that cache and compile only the user's
+packages. Go deletes cache entries unused for 5 days, judged by mtime, and
+the layer's times are the snapshot's. The layer's `trim.txt` therefore holds
+a last-trim time of 2100, so Go never trims that cache (`go clean -cache`
+empties it).
 
 Chunks are the base rootfs's format (gzip, named by the sha256 of their
 bytes). Each package gets its own chunks, so a package two sets share (gcc-14

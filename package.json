@@ -13,6 +13,7 @@
     "bench:compare": "node bench/compare.mjs",
     "conformance": "(sh scripts/conformance/fetch.sh || echo \"conformance: could not fetch external suites; they will be skipped\") && cd tests && npx vitest run --config vitest.conformance.config.ts; node ../scripts/conformance/report.mjs",
     "debian-score": "node scripts/debian/score.mjs",
+    "gui-score": "node scripts/gui/score.mjs",
     "debian-rootfs": "bash scripts/debian/build-rootfs.sh"
   },
   "dependencies": {

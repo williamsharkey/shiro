@@ -71,6 +71,10 @@ describe('kernel syscalls found by LTP', () => {
     const dup = await call(A.SYS_dup, [fd]);
     expect(await call(A.SYS_read, [dup, 4])).toBe(-A.EBADF);
     expect((await call(A.SYS_fcntl, [dup, A.F_GETFL])) & A.O_PATH).toBe(A.O_PATH);
+    // accept03: socket calls on it are EBADF, not ENOTSOCK
+    expect(await call(A.SYS_accept, [fd, 0, 0])).toBe(-A.EBADF);
+    expect(await call(A.SYS_accept4, [fd, 0, 0, 0])).toBe(-A.EBADF);
+    expect(await call(A.SYS_listen, [fd, 1])).toBe(-A.EBADF);
   });
 
   it('fcntl30/37: F_GETPIPE_SZ and F_SETPIPE_SZ resize a pipe (pipe-max-size 1 MiB)', async () => {
@@ -169,6 +173,26 @@ describe('kernel syscalls found by LTP', () => {
     sun.set(enc.encode('.'), 2);
     expect(await kernel.syscall(proc, A.SYS_bind, [s, 110], sun)).toBe(-A.EAFNOSUPPORT);
     await call(A.SYS_close, [s]);
+    off();
+  });
+
+  it('connect03: connecting to an AF_UNIX socket file takes write permission on it', async () => {
+    const stack = new NetStack();
+    stack.configure({ relayUrl: null, tokenUrl: null, dohUrl: null, portHost: null });
+    const off = installNet(kernel, stack);
+    const sun = new Uint8Array(110);
+    sun[0] = A.AF_UNIX;
+    sun.set(enc.encode('/tmp/kc/c03.sock'), 2);
+    const srv = await call(A.SYS_socket, [A.AF_UNIX, A.SOCK_STREAM, 0]);
+    expect(await kernel.syscall(proc, A.SYS_bind, [srv, 110], sun)).toBe(0);
+    expect(await call(A.SYS_listen, [srv, 5])).toBe(0);
+    const cli = await call(A.SYS_socket, [A.AF_UNIX, A.SOCK_STREAM, 0]);
+    expect(proc.uid).not.toBe(0);
+    await fs.chmod('/tmp/kc/c03.sock', 0o500);
+    expect(await kernel.syscall(proc, A.SYS_connect, [cli, 110], sun)).toBe(-A.EACCES);
+    await fs.chmod('/tmp/kc/c03.sock', 0o700);
+    expect(await kernel.syscall(proc, A.SYS_connect, [cli, 110], sun)).toBe(0);
+    for (const fd of [cli, srv]) await call(A.SYS_close, [fd]);
     off();
   });
 
