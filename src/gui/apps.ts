@@ -393,7 +393,8 @@ async function doInstall(fs: FileSystem, kernel: Kernel, name: string, onProgres
   return res;
 }
 
-const TEXT_HOOK = '/usr/lib/shiro/libshiro-text-hook.so';
+/** The text hook for a toolkit (scripts/gui/text-hook/): GTK 2/3 through cairo and GDK, Qt 5 Widgets through QPainter */
+const TEXT_HOOKS: Record<string, string> = { gtk2: 'libshiro-text-hook.so', gtk3: 'libshiro-text-hook.so', qt5: 'libshiro-qt-text-hook.so' };
 
 /**
  * DOM-text mode (docs/DOM-RENDERING.md): GTK apps load libshiro-text-hook.so,
@@ -457,21 +458,23 @@ async function writeHomeDefaults(kernel: Kernel, files: Record<string, string>):
 }
 
 async function textHookEnv(kernel: Kernel, app: GuiApp): Promise<Record<string, string>> {
-  if (!app.toolkit.startsWith('gtk') || !kernel.fs) return {};
+  const name = TEXT_HOOKS[app.toolkit];
+  if (!name || !kernel.fs) return {};
   if ((await import('../x11/dom-text')).domTextMode() === 'pixels') return {};
   const fs = kernel.fs as FileSystem;
+  const path = `/usr/lib/shiro/${name}`;
   try {
-    // 12 KB, HTTP-cached; rewritten when it changed
-    const r = await fetch(new URL('gui/lib/libshiro-text-hook.so', baseUrl()).href);
-    if (!r.ok) return (await fs.exists(TEXT_HOOK).catch(() => false)) ? { LD_PRELOAD: TEXT_HOOK } : {};
+    // small, HTTP-cached; rewritten when it changed
+    const r = await fetch(new URL(`gui/lib/${name}`, baseUrl()).href);
+    if (!r.ok) return (await fs.exists(path).catch(() => false)) ? { LD_PRELOAD: path } : {};
     const lib = new Uint8Array(await r.arrayBuffer());
-    const have = await fs.readFile(TEXT_HOOK).catch(() => null) as Uint8Array | null;
+    const have = await fs.readFile(path).catch(() => null) as Uint8Array | null;
     if (!have || have.length !== lib.length || have.some((b, i) => b !== lib[i])) {
       await fs.mkdir('/usr/lib/shiro', { recursive: true }).catch(() => {});
-      await fs.writeFile(TEXT_HOOK, lib, { mode: 0o755 });
+      await fs.writeFile(path, lib, { mode: 0o755 });
     }
   } catch { return {}; }
-  return { LD_PRELOAD: TEXT_HOOK };
+  return { LD_PRELOAD: path };
 }
 
 export interface LaunchedApp { pid: number; exited: Promise<number>; output: () => string }
