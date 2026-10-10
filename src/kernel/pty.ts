@@ -188,6 +188,10 @@ const ptyKernels = new Set<Kernel>();
 const livePtys = new Set<Pty>();
 
 let nextPtyIndex = 0;
+/** Alternate screens (restoreScreen leaves them first) */
+const ALT_SCREENS = new Set([47, 1047, 1049]);
+/** DEC private modes restoreScreen puts back: the alternate screens, cursor visibility, application cursor keys, mouse reporting, bracketed paste */
+const SCREEN_MODES = new Set([...ALT_SCREENS, 25, 1, 1000, 1002, 1003, 1005, 1006, 1015, 2004]);
 const utf8 = new TextEncoder();
 
 interface CanonLine { data: number[]; }
@@ -733,8 +737,52 @@ export class Pty {
       if (this.interrupted(caller, abort)) return -EINTR;
     }
     if (this.hungUp) return -EIO;
+    this.trackScreenModes(buf);
     this.output(buf);
     return buf.length;
+  }
+
+  /**
+   * DEC private modes programs set on the terminal that a shell prompt can't
+   * live with: the alternate screen, a hidden cursor, mouse reporting,
+   * application cursor keys, bracketed paste. A TUI resets them as it exits;
+   * when one dies inside them, `restoreScreen` does.
+   */
+  private screenModes = new Set<number>();
+  private modeTail = '';
+
+  private trackScreenModes(buf: Uint8Array): void {
+    if (!this.modeTail && !buf.includes(0x1b)) return;
+    let text = this.modeTail;
+    for (let i = 0; i < buf.length; i++) text += String.fromCharCode(buf[i]);
+    for (const m of text.matchAll(/\x1b\[\?([\d;]+)([hl])/g)) {
+      for (const n of m[1].split(';').map(Number)) {
+        if (!SCREEN_MODES.has(n)) continue;
+        // (for the cursor, 25, what needs undoing is hiding it)
+        if ((m[2] === 'h') !== (n === 25)) this.screenModes.add(n);
+        else this.screenModes.delete(n);
+      }
+    }
+    // An escape sequence cut off at the end of the write
+    const cut = /\x1b(\[(\?[\d;]*)?)?$/.exec(text.slice(-16));
+    this.modeTail = cut ? cut[0] : '';
+  }
+
+  /** Undo the screen modes a program left set (see trackScreenModes) */
+  restoreScreen(): void {
+    this.modeTail = '';
+    if (!this.screenModes.size) return;
+    const off = [...this.screenModes].filter((n) => n !== 25 && !ALT_SCREENS.has(n));
+    let seq = '';
+    // Leave the alternate screen first (1049 restores the cursor it saved)
+    for (const n of [1049, 1047, 47]) if (this.screenModes.has(n)) seq += `\x1b[?${n}l`;
+    if (off.length) seq += `\x1b[?${off.join(';')}l`;
+    if (this.screenModes.has(25)) seq += '\x1b[?25h';
+    this.screenModes.clear();
+    const chunk = utf8.encode(seq);
+    if (this.outListener) this.outListener(chunk);
+    else this.outq.push(chunk);
+    this.notifyReady();
   }
 
   // ── ioctl ──
@@ -1119,12 +1167,7 @@ export class TtySession {
     if (cont) this.jc.kill(-job.pgid, SIGCONT);
     const r = await this.jc.waitJob(job.pgid, job.pids);
     this.pty.setForeground(this.leader.pgid);
-    if (r.type === 'stopped') {
-      job.termios = cloneTermios(this.pty.termios);
-      this.pty.setTermios(this.shellTermios);
-    } else if (!WIFEXITED(r.status)) {
-      this.pty.setTermios(this.shellTermios);
-    }
+    afterForeground(this.pty, job, r, this.shellTermios);
     return r;
   }
 
@@ -1137,6 +1180,24 @@ export class TtySession {
     if (this.leaderProc && this.kernel) void this.kernel.exit(this.leaderProc, 0);
     this.standIn.finish(0);
     this.jc.unregister(this.standIn.pid);
+  }
+}
+
+/**
+ * The terminal after a foreground job: one that stopped keeps its tty modes
+ * for `fg` and the shell's come back. One killed by a signal, or that exited
+ * leaving the tty raw (non-canonical: a TUI that never got to clean up),
+ * gets the shell's modes back, and the screen modes it left set (alternate
+ * screen, hidden cursor, mouse) undone, as bash restores its saved tty state.
+ * A job that exits normally otherwise keeps its modes (`stty -echo` sticks).
+ */
+function afterForeground(pty: Pty, job: TtyJob, r: JobResult, shellTermios: Termios): void {
+  if (r.type === 'stopped') {
+    job.termios = cloneTermios(pty.termios);
+    pty.setTermios(shellTermios);
+  } else if (!WIFEXITED(r.status) || !(pty.termios.lflag & ICANON)) {
+    pty.setTermios(shellTermios);
+    pty.restoreScreen();
   }
 }
 
@@ -1209,12 +1270,7 @@ export class ProcessTty {
     if (cont) this.jc.kill(-job.pgid, SIGCONT);
     const r = await this.jc.waitJob(job.pgid, job.pids);
     this.pty.setForeground(this.proc.pgid);
-    if (r.type === 'stopped') {
-      job.termios = cloneTermios(this.pty.termios);
-      this.pty.setTermios(this.shellTermios);
-    } else if (!WIFEXITED(r.status)) {
-      this.pty.setTermios(this.shellTermios);
-    }
+    afterForeground(this.pty, job, r, this.shellTermios);
     return r;
   }
 }
