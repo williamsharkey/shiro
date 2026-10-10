@@ -21,6 +21,10 @@ const exe = process.env.CHROMIUM || '/opt/pw-browsers/chromium';
 const LIMIT = Number(process.env.STEP_LIMIT_MS || 600_000);
 // VITE=7 for vite 7's template (esbuild and Rollup as their WebAssembly builds)
 const VITE = process.env.VITE || 'latest';
+// APP=astro: a minimal Astro 5 site instead (written here: create-astro fetches its
+// template from codeload.github.com); its page edits reload rather than hot-update
+const ASTRO = process.env.APP === 'astro';
+const PORT = ASTRO ? 4321 : 5173;
 if (shots) mkdirSync(shots, { recursive: true });
 
 const bufferOf = (page) => page.evaluate(() => {
@@ -69,13 +73,13 @@ const side = (page, cmd) => page.evaluate(async (cmd) => {
 /** The preview of port 5173's frame, once it has loaded the app's page */
 async function preview(page) {
   for (let i = 0; i < 300; i++) {
-    for (const el of await page.$$('iframe[data-virtual-port="5173"]')) {
+    for (const el of await page.$$(`iframe[data-virtual-port="${PORT}"]`)) {
       const f = await el.contentFrame();
       if (f && f.url() !== 'about:blank' && f.url() !== '') return f;
     }
     await page.waitForTimeout(100);
   }
-  throw new Error('no preview of :5173');
+  throw new Error(`no preview of :${PORT}`);
 }
 
 /** With MEM=1: resident memory of the browser's processes (Linux), by process type */
@@ -119,14 +123,21 @@ try {
   });
   await page.evaluate(() => window.__tabcomputer.terminal.term.focus());
 
-  await step(page, `npm create vite@${VITE} app -- --template react --no-interactive`);
+  if (ASTRO) {
+    t0 = Date.now();
+    const made = await side(page, `mkdir -p ~/app/src/pages && cd ~/app && printf '%s' '{"name":"app","type":"module","scripts":{"dev":"astro dev","build":"astro build"},"dependencies":{"astro":"^5"}}' > package.json && printf 'import { defineConfig } from "astro/config";\\nexport default defineConfig({});\\n' > astro.config.mjs && printf -- '---\\nconst title = "Hello Astro";\\n---\\n<html><body><h1>{title}</h1><p>count is 0</p></body></html>\\n' > src/pages/index.astro`);
+    if (made.code !== 0) throw new Error(made.out);
+    await record(page, 'write a minimal Astro site', t0);
+  } else {
+    await step(page, `npm create vite@${VITE} app -- --template react --no-interactive`);
+  }
   await step(page, 'cd app && npm i');
   await rss('installed');
 
   t0 = Date.now();
   const from = (await bufferOf(page)).length;
   await page.keyboard.type('npm run dev\r', { delay: 2 });
-  await waitBuffer(page, /ready in \d+ ms|Local:\s+http/, from, 'vite ready');
+  await waitBuffer(page, ASTRO ? /Local\s+http:\/\/localhost:\d+/ : /ready in \d+ ms|Local:\s+http/, from, 'dev server ready');
   await record(page, 'npm run dev → ready', t0);
   await rss('dev up');
   if (process.env.HEAPSNAP) {
@@ -139,8 +150,8 @@ try {
   }
 
   t0 = Date.now();
-  const opened = await side(page, 'serve open 5173');
-  if (opened.code !== 0) throw new Error(`serve open 5173: ${opened.out}`);
+  const opened = await side(page, `serve open ${PORT}`);
+  if (opened.code !== 0) throw new Error(`serve open ${PORT}: ${opened.out}`);
   let frame = await preview(page);
   await frame.waitForFunction(() => /count is \d/i.test(document.body?.innerText ?? ''), null, { timeout: LIMIT });
   frame = await preview(page);
@@ -149,15 +160,26 @@ try {
 
   // The edit, from a shell of its own (the terminal's is running vite)
   t0 = Date.now();
-  await side(page, "sed -i 's|<h1>[^<]*</h1>|<h1>Edited by HMR</h1>|' ~/app/src/App.jsx");
-  await frame.waitForFunction(() => /Edited by HMR/.test(document.body?.innerText ?? ''), null, { timeout: 60_000 });
-  if (!await frame.evaluate(() => window.__notReloaded === true)) throw new Error('the preview reloaded instead of hot-updating');
-  await record(page, 'edit App.jsx → HMR update', t0);
+  if (ASTRO) {
+    await side(page, "sed -i 's|Hello Astro|Edited live|' ~/app/src/pages/index.astro");
+    for (let i = 0; ; i++) {
+      frame = await preview(page);
+      if (await frame.evaluate(() => /Edited live/.test(document.body?.innerText ?? '')).catch(() => false)) break;
+      if (i > 240) throw new Error('the preview never showed the edit');
+      await page.waitForTimeout(250);
+    }
+    await record(page, 'edit index.astro → preview updates', t0);
+  } else {
+    await side(page, "sed -i 's|<h1>[^<]*</h1>|<h1>Edited by HMR</h1>|' ~/app/src/App.jsx");
+    await frame.waitForFunction(() => /Edited by HMR/.test(document.body?.innerText ?? ''), null, { timeout: 60_000 });
+    if (!await frame.evaluate(() => window.__notReloaded === true)) throw new Error('the preview reloaded instead of hot-updating');
+    await record(page, 'edit App.jsx → HMR update', t0);
+  }
 
   t0 = Date.now();
-  const built = await side(page, 'cd ~/app && npm run build && ls dist/assets');
-  if (built.code !== 0 || !/\.css\b/.test(built.out) || !/\.js\b/.test(built.out)) throw new Error(`npm run build: ${built.out.slice(-1500)}`);
-  await record(page, 'npm run build (vite build)', t0);
+  const built = await side(page, ASTRO ? 'cd ~/app && npm run build && cat dist/index.html' : 'cd ~/app && npm run build && ls dist/assets');
+  if (built.code !== 0 || (ASTRO ? !/<h1>Edited live<\/h1>/.test(built.out) : !/\.css\b/.test(built.out) || !/\.js\b/.test(built.out))) throw new Error(`npm run build: ${built.out.slice(-1500)}`);
+  await record(page, ASTRO ? 'npm run build (astro build)' : 'npm run build (vite build)', t0);
   await rss('after build');
   if (errors.length) throw new Error(`page errors: ${errors.join('; ')}`);
 } catch (e) {
@@ -176,6 +198,6 @@ try {
   }
 }
 if (shots) await page.screenshot({ path: `${shots}/vite-react.png` }).catch(() => {});
-console.log(`${failed ? 'FAIL' : 'ok  '} vite@${VITE} react template  ${((Date.now() - T) / 1000).toFixed(0)} s`);
+console.log(`${failed ? 'FAIL' : 'ok  '} ${ASTRO ? 'astro@5 minimal site' : `vite@${VITE} react template`}  ${((Date.now() - T) / 1000).toFixed(0)} s`);
 await browser.close();
 process.exit(failed ? 1 : 0);

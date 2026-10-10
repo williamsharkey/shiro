@@ -285,13 +285,26 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
     const bytesOf = (d: any, enc?: string): Uint8Array => typeof d === 'string' ? FakeBuffer.from(d, enc) : d instanceof Uint8Array ? d : FakeBuffer.from(d);
     let outOpen = true, errOpen = true;
     const proc = deps.getProcess?.();
+    // Delivered on a microtask, in order: the parent's listeners run in the parent,
+    // not inside the child's write (an error in esbuild's reader came back to Go's
+    // fs.write and panicked the service)
+    const deliver = (fn: () => void) => queueMicrotask(() => {
+      try { fn(); } catch (e) { (io.events['error'] || []).length ? (io.events['error'] || []).forEach((h) => h(e)) : reportError(e); }
+    });
+    const reportError = (e: any) => { const p = deps.getProcess?.(); p?.stderr?.write(`${e?.stack ?? e}\n`); };
     const out = (b: Uint8Array) => {
-      if (io.inheritOut) proc?.stdout?.write(b);
-      else if (outOpen) (io.stdoutEvents['data'] || []).forEach((fn) => fn(FakeBuffer.from(b)));
+      const c = b.slice();
+      deliver(() => {
+        if (io.inheritOut) proc?.stdout?.write(c);
+        else if (outOpen) (io.stdoutEvents['data'] || []).forEach((fn) => fn(FakeBuffer.from(c)));
+      });
     };
     const err = (b: Uint8Array) => {
-      if (io.inheritErr) proc?.stderr?.write(b);
-      else if (errOpen) (io.stderrEvents['data'] || []).forEach((fn) => fn(FakeBuffer.from(b)));
+      const c = b.slice();
+      deliver(() => {
+        if (io.inheritErr) proc?.stderr?.write(c);
+        else if (errOpen) (io.stderrEvents['data'] || []).forEach((fn) => fn(FakeBuffer.from(c)));
+      });
     };
     child.stdin = {
       writable: true,
@@ -347,12 +360,14 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       // anything the child left in its ctx (an error report) goes out too
       if (cctx.stdout) out(new TextEncoder().encode(cctx.stdout));
       if (cctx.stderr) err(new TextEncoder().encode(cctx.stderr));
-      for (const ev of ['end', 'close']) { (io.stdoutEvents[ev] || []).forEach((fn) => fn()); (io.stderrEvents[ev] || []).forEach((fn) => fn()); }
-      child.exitCode = code;
-      (io.events['exit'] || []).forEach((fn) => fn(code, null));
-      (io.events['close'] || []).forEach((fn) => fn(code, null));
-      io.resolve({ stdout: '', stderr: '', exitCode: code });
-      unhold();
+      deliver(() => {
+        for (const ev of ['end', 'close']) { (io.stdoutEvents[ev] || []).forEach((fn) => fn()); (io.stderrEvents[ev] || []).forEach((fn) => fn()); }
+        child.exitCode = code;
+        (io.events['exit'] || []).forEach((fn) => fn(code, null));
+        (io.events['close'] || []).forEach((fn) => fn(code, null));
+        io.resolve({ stdout: '', stderr: '', exitCode: code });
+        unhold();
+      });
     });
     return child;
   };
