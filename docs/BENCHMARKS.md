@@ -613,6 +613,16 @@ composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts,
 a few MiB each. The terminal UI's +19 KiB is /dom, the sign-in hook and the
 other integration changes since db9f698, not desktop code.
 
+### unix/shell-stdio 8 — mapfile, pushd/popd, umask, trap DEBUG, PIPESTATUS
+
+`node bench/ab.mjs HEAD~1 HEAD --suites shell,kernel --quick` (b0bc12b →
+46ec6d7) flagged kernel.spawn_wait.builtin +20% in every round. The cause:
+getVar/setVar followed the nameref chain on every call, allocating each time.
+After the fast path (1d14b48), `--suites kernel --quick` b0bc12b → 1d14b48 has all 15
+unchanged. A shell,kernel `--quick` run then flagged shell.loop_1000 +18%. It
+didn't reproduce: the same loop under vitest was 72 → 71 ms, and
+`--suites shell` (full rounds) b0bc12b → 1d14b48 has all 9 unchanged.
+
 ### unix/shell-stdio 7 — bash conformance: declare attributes, namerefs, call stack
 
 `node bench/ab.mjs HEAD~2 HEAD --suites shell,kernel --quick` (55e3426 →
