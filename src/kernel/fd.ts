@@ -840,8 +840,10 @@ export async function openInode(fs: FileSystem, path: string): Promise<Inode> {
   if (!ino) {
     const st = await fs.stat(path);
     // A big file is read a page at a time, not loaded here
-    const blob = fs.blobOf?.(path);
-    const raw = blob ? new Uint8Array(0) : await fs.readFile(path);
+    let blob = fs.blobOf?.(path);
+    let raw = blob ? new Uint8Array(0) : await fs.readFile(path);
+    // A lazy file the read just fetched may be stored as blocks now
+    if (!blob && (blob = fs.blobOf?.(path))) raw = new Uint8Array(0);
     const bytes = typeof raw === 'string' ? new TextEncoder().encode(raw) : raw;
     ino = table.get(path) ?? new Inode(fs, path, bytes, st.mode, st.mtime.getTime(), st.ctime.getTime(),
       { mtimeNs: st.mtimeNs, atime: st.atimeMs === st.mtime.getTime() && st.atimeNs === st.mtimeNs ? undefined : st.atimeMs, atimeNs: st.atimeNs },

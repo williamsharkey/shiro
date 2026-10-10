@@ -766,8 +766,15 @@ export class FileSystem {
         if (content.length !== now.size) throw fsError('EIO', `EIO: lazy file '${path}' is ${content.length} bytes, expected ${now.size}`);
         const filled: FSNode = { ...now, content };
         delete filled.lazy;
-        // Storage full: read it all the same, fetching again next time
-        if (!this._full) this._putNow(filled);
+        // Storage full: read it all the same, fetching again next time.
+        // A big one is stored as blocks (the kernel then reads it a page at a time)
+        if (!this._full) {
+          if (content.length >= FileSystem.BLOB_MIN) {
+            filled.blob = this.newBlobId();
+            this._queueBlocks(filled.blob, content);
+          }
+          this._putNow(filled);
+        }
         return filled;
       }).finally(() => this._materializing.delete(path));
       this._materializing.set(path, p);

@@ -323,4 +323,29 @@ describe('FileSystem big files', () => {
     expect(ids.flatMap((id) => blocksOf(recs, id))).toEqual([]);
     expect(recs.get('\u0001blobs').blobs.filter(([p]: [string]) => p.startsWith('/tmp/tree'))).toEqual([]);
   });
+  it('a big lazy file (streamed root filesystem) is stored as blocks once fetched, and opened by the kernel as pages', async () => {
+    const fs = await fresh();
+    await fs.mkdir('/tmp/lazy', { recursive: true });
+    const now = Date.now();
+    const bytes = { big: pattern(30000, 11), small: pattern(3000, 12) };
+    fs.setLazyLoader(async (ref) => bytes[ref.chunk as 'big' | 'small']);
+    fs.putNodes([
+      { path: '/tmp/lazy/big.so', type: 'file', content: null, mode: 0o755, mtime: now, ctime: now, size: 30000, lazy: { src: 't', chunk: 'big', off: 0 } },
+      { path: '/tmp/lazy/small', type: 'file', content: null, mode: 0o644, mtime: now, ctime: now, size: 3000, lazy: { src: 't', chunk: 'small', off: 0 } },
+    ]);
+    const f = await open(fs, '/tmp/lazy/big.so', A.O_RDONLY);
+    expect((f as any).ino.blob).toBeTruthy(); // pages, not the whole file
+    const buf = new Uint8Array(30000);
+    expect(await f.pread(buf, 0)).toBe(30000);
+    expect(buf).toEqual(bytes.big);
+    await f.close();
+    expect(await fs.readFile('/tmp/lazy/small')).toEqual(bytes.small);
+    const recs = await stored(fs);
+    checkStore(recs);
+    expect(recs.get('/tmp/lazy/big.so').blob).toBeTruthy();
+    expect(recs.get('/tmp/lazy/big.so').lazy).toBeUndefined();
+    expect(recs.get('/tmp/lazy/small').blob).toBeUndefined();
+    const other = await fresh(); // no loader: it is local now
+    expect(await other.readFile('/tmp/lazy/big.so')).toEqual(bytes.big);
+  });
 });
