@@ -13,7 +13,7 @@ import type { Shell } from '../shell';
 import type { Command, CommandContext } from '../commands/index';
 import { KernelStdio, execLazyStdin } from '../shell-stdio';
 import { parseShellArgs } from '../shell-args';
-import { ProcFs, bootMs, fdTarget } from './procfs';
+import { ProcFs, bootMs, fdTarget, syscallText, wchanText } from './procfs';
 import { klog, KmsgFile, LOG_ERR, LOG_INFO, SYSLOG_ACTION_READ_ALL, SYSLOG_ACTION_SIZE_BUFFER, SYSLOG_ACTION_SIZE_UNREAD } from './klog';
 import { processTable, type ShiroProcess } from '../process-table';
 import { packageShadows, pkgOwnShadows, packageArgsForPath, PKG_BIN_DIR } from '../pkg-manager';
@@ -252,6 +252,7 @@ export class Kernel {
           cwd: p.cwd, environ: p.env, exe: typeof p.data.exe === 'string' ? p.data.exe : p.path,
           fds: p.fds.entries().map(([fd, f]) => [fd, fdTarget(f)] as [number, string]),
           startMs: p.startTime, uid: p.uid, gid: p.gid,
+          syscall: syscallText(p), wchan: wchanText(p),
         };
       },
       list: () => [...this.procs.keys()],

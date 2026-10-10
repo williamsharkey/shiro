@@ -272,6 +272,9 @@ export interface ProcInfo {
   startMs?: number;
   uid?: number;
   gid?: number;
+  /** /proc/PID/syscall and wchan: what a kernel process is blocked in (kernel/procfs.ts's format) */
+  syscall?: string;
+  wchan?: string;
 }
 /** Somewhere /proc finds processes: the kernel's table, and in-page shells */
 export interface ProcInfoSource {
@@ -302,7 +305,7 @@ export function setProcSelf(fn: () => number | undefined): void {
   procSelfPid = fn;
 }
 const PROC_PID_RE = /^\/proc\/(\d+|self|thread-self)(?:\/(.*))?$/;
-const PROC_PID_FILES = ['cmdline', 'comm', 'cwd', 'environ', 'exe', 'fd', 'io', 'limits', 'mounts', 'root', 'stat', 'statm', 'status'];
+const PROC_PID_FILES = ['cmdline', 'comm', 'cwd', 'environ', 'exe', 'fd', 'io', 'limits', 'mounts', 'root', 'stat', 'statm', 'status', 'syscall', 'task', 'wchan'];
 type ProcPidNode = { dir: string[] } | { text: string } | { link: string };
 
 /** /proc virtual provider — dynamic system info from Shiro */
@@ -319,8 +322,16 @@ class ProcProvider implements VirtualFSProvider {
     if (self && m[2] === undefined) return { link: String(pid) };
     const info = procInfo(pid);
     if (!info) return null;
-    const rest = m[2] ?? '';
+    let rest = m[2] ?? '';
     if (rest === '') return { dir: PROC_PID_FILES };
+    // One thread per process here: task/PID is the process itself
+    if (rest === 'task') return { dir: [String(pid)] };
+    const task = /^task\/(\d+)(?:\/(.*))?$/.exec(rest);
+    if (task) {
+      if (Number(task[1]) !== pid) return null;
+      if (task[2] === undefined) return { dir: PROC_PID_FILES.filter((f) => f !== 'task') };
+      rest = task[2];
+    }
     const fds = info.fds ?? [[0, '/dev/pts/0'], [1, '/dev/pts/0'], [2, '/dev/pts/0']];
     if (rest === 'fd') return { dir: fds.map(([fd]) => String(fd)) };
     const fdm = /^fd\/(\d+)$/.exec(rest);
@@ -351,6 +362,8 @@ class ProcProvider implements VirtualFSProvider {
       case 'cmdline': return { text: info.state === 'Z' ? '' : info.cmdline.map((a) => a + '\0').join('') };
       case 'comm': return { text: info.comm.slice(0, 15) + '\n' };
       case 'environ': return { text: Object.entries(info.environ ?? {}).map(([k, v]) => `${k}=${v}\0`).join('') };
+      case 'syscall': return { text: info.syscall ?? 'running\n' };
+      case 'wchan': return { text: info.wchan ?? '0' };
       case 'statm': return { text: '0 0 0 0 0 0 0\n' };
       case 'io': return { text: 'rchar: 0\nwchar: 0\nsyscr: 0\nsyscw: 0\nread_bytes: 0\nwrite_bytes: 0\ncancelled_write_bytes: 0\n' };
       case 'mounts': return { text: 'rootfs / rootfs rw 0 0\nproc /proc proc rw 0 0\n' };
