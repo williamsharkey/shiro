@@ -1,0 +1,244 @@
+From f64ee12042902e8070452bb469ba4451602ba263 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 05:59:51 +0000
+Subject: [PATCH 106/107] Shiro wjit: SSE2/SSSE3 integer ops inline as wasm
+ SIMD (padd/psub, logic, compares, unpacks, pshufd, pshufb, palignr, shifts by
+ immediates, pmovmskb, aligned memory forms)
+
+---
+ blink/wjit.c | 191 +++++++++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 187 insertions(+), 4 deletions(-)
+
+diff --git a/blink/wjit.c b/blink/wjit.c
+index ee8e130..0bdcd94 100644
+--- a/blink/wjit.c
++++ b/blink/wjit.c
+@@ -926,6 +926,188 @@ static void XmmStore(struct Cg *g, struct Ins *in, int r, int n) {
+   }
+ }
+ 
++static void PutRegField(struct Cg *, struct Ins *, int);
++
++// 66-prefixed SSE2/SSSE3 integer ops on xmm registers, as wasm SIMD ops
++// (OpenSSL's SHA-1, glibc's string functions): the binary ones' opcodes
++static int SseBinary(int op) {
++  switch (op) {
++    case 0x1FC: return 0x6e;  // paddb  i8x16.add
++    case 0x1FD: return 0x8e;  // paddw  i16x8.add
++    case 0x1FE: return 0xae;  // paddd  i32x4.add
++    case 0x1D4: return 0xce;  // paddq  i64x2.add
++    case 0x1F8: return 0x71;  // psubb
++    case 0x1F9: return 0x91;  // psubw
++    case 0x1FA: return 0xb1;  // psubd
++    case 0x1FB: return 0xd1;  // psubq
++    case 0x1DB: return 0x4e;  // pand   v128.and
++    case 0x1DF: return 0x4f;  // pandn  v128.andnot (operands swapped)
++    case 0x1EB: return 0x50;  // por
++    case 0x1EF: return 0x51;  // pxor
++    case 0x174: return 0x23;  // pcmpeqb i8x16.eq
++    case 0x175: return 0x2d;  // pcmpeqw
++    case 0x176: return 0x37;  // pcmpeqd
++    case 0x164: return 0x27;  // pcmpgtb i8x16.gt_s
++    case 0x165: return 0x31;  // pcmpgtw
++    case 0x166: return 0x3b;  // pcmpgtd
++    case 0x1DA: return 0x77;  // pminub i8x16.min_u
++    case 0x1DE: return 0x79;  // pmaxub i8x16.max_u
++    default: return 0;
++  }
++}
++
++// punpck{l,h}{bw,wd,dq,qdq}: the byte lanes of i8x16.shuffle(dst, src)
++static bool SseUnpack(int op, u8 *lanes) {
++  int e, base, k, i, n = 0;
++  switch (op) {
++    case 0x160: case 0x168: e = 1; break;
++    case 0x161: case 0x169: e = 2; break;
++    case 0x162: case 0x16A: e = 4; break;
++    case 0x16C: case 0x16D: e = 8; break;
++    default: return false;
++  }
++  base = (op == 0x168 || op == 0x169 || op == 0x16A || op == 0x16D) ? 8 : 0;
++  for (k = 0; k < 16 / (2 * e); ++k) {
++    for (i = 0; i < e; ++i) lanes[n++] = base + k * e + i;
++    for (i = 0; i < e; ++i) lanes[n++] = 16 + base + k * e + i;
++  }
++  return true;
++}
++
++static bool SseInline(u64 rde, u64 imm) {
++  int op = Mopcode(rde), r = ModrmReg(rde);
++  u8 lanes[16];
++  if (!Osz(rde) || Rep(rde)) return false;  // mmx forms, pshuflw/hw
++  if (SseBinary(op) || SseUnpack(op, lanes) || op == 0x170 || op == 0x200) return true;
++  if (op == 0x30F) return imm <= 16;  // palignr
++  if (op == 0x1D7) return IsModrmRegister(rde);  // pmovmskb
++  if (op == 0x171 || op == 0x172) return IsModrmRegister(rde) && (r == 2 || r == 4 || r == 6);
++  if (op == 0x173) return IsModrmRegister(rde) && (r == 2 || r == 3 || r == 6 || r == 7);
++  return false;
++}
++
++static void Shuffle(struct Cg *g, const u8 *lanes) {
++  int i;
++  Simd(g, 0x0d, 0);
++  for (i = 0; i < 16; ++i) B(&g->b, lanes[i]);
++}
++
++static void V128Zero(struct Cg *g) {
++  int i;
++  Simd(g, 0x0c, 0);
++  for (i = 0; i < 16; ++i) B(&g->b, 0);
++}
++
++// a legacy SSE memory operand must be 16-byte aligned: the interpreter
++// raises the #GP (wjhot = 0: it runs this instruction)
++static void AlignOrExit(struct Cg *g, struct Ins *in) {
++  Get(g, L_EA);
++  Op(g, W_I32_WRAP_I64);
++  I32(g, 15);
++  Op(g, W_I32_AND);
++  If(g, T_VOID);
++  Get(g, L_M);
++  I32(g, 0);
++  Mem(g, W_I32_STORE8, 0, OFF(wjhot));
++  ExitTo(g, in->pc);
++  End(g);
++}
++
++// pushes the source operand (xmm r/m or the 16 bytes at L_HR)
++static void SseSrc(struct Cg *g, struct Ins *in) {
++  if (IsModrmRegister(in->rde)) {
++    Get(g, L_M);
++    Simd(g, V128_LOAD, XMM(RexbRm(in->rde)));
++  } else {
++    Get(g, L_HR);
++    Simd(g, V128_LOAD, 0);
++  }
++}
++
++static void TranslateSse(struct Cg *g, struct Ins *in) {
++  u64 rde = in->rde;
++  int op = Mopcode(rde), d = RexrReg(rde), x = RexbRm(rde), r = ModrmReg(rde);
++  int code, bits, c, i;
++  u8 lanes[16];
++  if (op == 0x1D7) {  // pmovmskb: one bit per byte's top bit, into a gpr
++    Get(g, L_M);
++    Simd(g, V128_LOAD, XMM(x));
++    Simd(g, 0x64, 0);  // i8x16.bitmask
++    Op(g, W_I64_EXTEND_I32_U);
++    PutRegField(g, in, 4);
++    return;
++  }
++  if (op == 0x171 || op == 0x172 || op == 0x173) {  // shifts by an immediate
++    c = in->uimm0 & 255;
++    Get(g, L_M);
++    if (op == 0x173 && (r == 3 || r == 7)) {  // psrldq, pslldq: whole bytes
++      for (i = 0; i < 16; ++i) {
++        int j = r == 3 ? i + c : i - c;
++        lanes[i] = (j >= 0 && j < 16) ? j : 16;
++      }
++      Get(g, L_M);
++      Simd(g, V128_LOAD, XMM(x));
++      V128Zero(g);
++      Shuffle(g, lanes);
++    } else {
++      bits = op == 0x171 ? 16 : op == 0x172 ? 32 : 64;
++      code = (op == 0x171 ? 0x8b : op == 0x172 ? 0xab : 0xcb) + (r == 2 ? 2 : r == 4 ? 1 : 0);
++      if (c >= bits && r != 4) {
++        V128Zero(g);  // a logical shift by the lane width or more
++      } else {
++        Get(g, L_M);
++        Simd(g, V128_LOAD, XMM(x));
++        I32(g, c >= bits ? bits - 1 : c);
++        Simd(g, code, 0);
++      }
++    }
++    Simd(g, V128_STORE, XMM(x));
++    return;
++  }
++  if (!IsModrmRegister(rde)) {
++    Ea(g, in, true);
++    AlignOrExit(g, in);
++    Resolve(g, in, 16, false);
++  }
++  Get(g, L_M);
++  if (op == 0x1DF) {  // pandn: src & ~dst
++    SseSrc(g, in);
++    Get(g, L_M);
++    Simd(g, V128_LOAD, XMM(d));
++    Simd(g, 0x4f, 0);
++  } else if ((code = SseBinary(op))) {
++    Get(g, L_M);
++    Simd(g, V128_LOAD, XMM(d));
++    SseSrc(g, in);
++    Simd(g, code, 0);
++  } else if (SseUnpack(op, lanes)) {
++    Get(g, L_M);
++    Simd(g, V128_LOAD, XMM(d));
++    SseSrc(g, in);
++    Shuffle(g, lanes);
++  } else if (op == 0x170) {  // pshufd
++    for (i = 0; i < 16; ++i) lanes[i] = ((in->uimm0 >> (i / 4 * 2)) & 3) * 4 + i % 4;
++    SseSrc(g, in);
++    SseSrc(g, in);
++    Shuffle(g, lanes);
++  } else if (op == 0x200) {  // pshufb: a selector byte with its top bit set gives 0
++    Get(g, L_M);
++    Simd(g, V128_LOAD, XMM(d));
++    SseSrc(g, in);
++    I32(g, 0x8f);
++    Simd(g, 0x0f, 0);  // i8x16.splat
++    Simd(g, 0x4e, 0);  // v128.and: >= 16 selects 0 in i8x16.swizzle
++    Simd(g, 0x0e, 0);
++  } else {  // palignr: (dst:src) >> imm bytes
++    for (i = 0; i < 16; ++i) lanes[i] = in->uimm0 + i;
++    SseSrc(g, in);
++    Get(g, L_M);
++    Simd(g, V128_LOAD, XMM(d));
++    Shuffle(g, lanes);
++  }
++  Simd(g, V128_STORE, XMM(d));
++}
++
+ // pushes the zero-extended r/m operand
+ static void GetRm(struct Cg *g, struct Ins *in, int w) {
+   u64 rde = in->rde;
+@@ -1688,9 +1870,6 @@ static void Analyze(struct Ins *in) {
+       if (!Osz(rde) && Rep(rde) != 3) goto Call;  // mmx movq
+       if (Osz(rde) && !IsModrmRegister(rde)) goto Call;  // aligned
+       return;
+-    case 0x1EF:  // pxor xmm (register form)
+-      if (!Osz(rde) || !IsModrmRegister(rde)) goto Call;
+-      return;
+     case 0x1A3:  // bt Ev,Gv
+     case 0x1AB:  // bts
+     case 0x1B3:  // btr
+@@ -1710,6 +1889,7 @@ static void Analyze(struct Ins *in) {
+       if (Rep(rde) || !IsModrmRegister(rde)) goto Call;
+       return;
+     default:
++      if (SseInline(rde, in->uimm0)) return;
+       if (IsJcc(op)) {
+         in->fr = CondFlags(op & 15);
+         return;
+@@ -3142,7 +3322,6 @@ static void Translate(struct Cg *g, struct Ins *in) {
+       }
+       return;
+     }
+-    case 0x1EF:
+     case 0x157:
+       Get(g, L_M);
+       Get(g, L_M);
+@@ -3153,6 +3332,10 @@ static void Translate(struct Cg *g, struct Ins *in) {
+       Simd(g, V128_STORE, XMM(RexrReg(rde)));
+       return;
+     default:
++      if (SseInline(rde, in->uimm0)) {
++        TranslateSse(g, in);
++        return;
++      }
+       abort();
+   }
+ }
+-- 
+2.43.0
+

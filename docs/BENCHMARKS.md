@@ -715,6 +715,37 @@ medians 1240 and 1215 proc/s, base 1200. One of those passes stalled at
 ≈10 proc/s for its last 11 samples and did not recur in two more; worth
 watching if it shows up on other branches.
 
+### unix/perf-blink 11 — hashing and SSE code stays compiled
+
+Blink patches 0103–0107. perf-fs-shell found that a git clone (axios, 29 MB
+pack) takes 88 s, nearly all of it git's own CPU in Blink: index-pack
+inflating objects and hashing them. A static stand-in, ipb (2000 8 KiB
+zlib objects inflated, then SHA-1'd with OpenSSL's SSSE3 code), shows
+where compiled code left for Blink's handlers. The profiler now lists
+those calls (0103):
+
+| handler calls in compiled code | before |
+|---|---|
+| rol/ror by a constant (OpBsuwiImm) | 42.6 M |
+| endbr64 / hint nops (OpHintNopEv) | 25.0 M |
+| psrld/pslld by an immediate (Op172) | 9.3 M |
+| paddd, movdqa store, pcmpeqb, pmovmskb, punpcklqdq, pshufd, por | 4–6 M each |
+
+All are now inline (0104–0107). Rotates set CF/OF as alu.c does. Hint
+nops, prefetch and endbr64 are nothing. SSE2/SSSE3 integer ops run as wasm
+SIMD. movdqa/movaps memory forms check alignment and exit to the
+interpreter's #GP.
+
+| ipb (Node, same container) | before | after | native |
+|---|---|---|---|
+| SHA-1 of 16 MB | 3300 ms (5 MB/s) | 610–680 ms (25 MB/s) | 21 ms |
+| inflate 16 MB | 740 ms | 680 ms (same) | 63 ms |
+
+The x86 suite A/B is unchanged ("same" everywhere: none of it hashes much).
+Correctness: fixtures/x86/rotates.c and ssei.c (51 SSE cases, register and
+memory forms, shift counts past the lane width, glibc's string functions,
+misaligned movdqa faulting) match native and the interpreter.
+
 ### unix/perf-blink 10 — compiled blocks chain without the Actor loop
 
 Blink patch 0085. In native Claude Code's startup (agent-clis' profile,

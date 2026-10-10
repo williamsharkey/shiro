@@ -128,6 +128,10 @@ const siginfoBin = join(out, 'siginfo');
 const haveSiginfo = tryBuild('gcc', ['-static', '-O1', '-o', siginfoBin, 'siginfo.c']);
 const hugetlbBin = join(out, 'hugetlb');
 const haveHugetlb = tryBuild('gcc', ['-static', '-O1', '-o', hugetlbBin, 'hugetlb.c']);
+const rotatesBin = join(out, 'rotates');
+const haveRotates = tryBuild('gcc', ['-static', '-O1', '-o', rotatesBin, 'rotates.c']);
+const sseiBin = join(out, 'ssei');
+const haveSsei = tryBuild('gcc', ['-static', '-O1', '-mssse3', '-o', sseiBin, 'ssei.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -985,6 +989,20 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const { shell } = await setup(readFileSync(sysvmsgBin));
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe("msgget ok\nsend 0 0\nqnum 2\nrcv type 2: 6 2 world\nrcv any: 6 1 hello\nrcv empty nowait: -1 No message of desired type\nchild got 5 7 late\nrmid 0\nsend after rmid -1 Invalid argument\n");
+  }, 60_000);
+
+  // compiled rol/ror by constants (SHA-1, hashes): values and flags as native (OF masked where undefined)
+  it.skipIf(!haveRotates)('rol/ror by constants in compiled code: values and CF/OF/ZF/SF as native', async () => {
+    const { shell } = await setup(readFileSync(rotatesBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('264f883ef48b6082 8b442bf2ddfdc970 14896776f64e11fa a59f6813927c4b87 8f67ccf91bd7d2c7\n28812440d3ea14ea 6374e9275901902a 987e01781fe71d73 52f8b67ac299aa7f\n7e64dbe8e066cf2a 54783cbf17eb4ce7 5dace5e6b81b1638 e2e5855b7ecb3df6\nmem 74cca3ae32bd6133\n');
+  }, 60_000);
+
+  // SSE2/SSSE3 integer ops compiled to wasm SIMD (OpenSSL SHA-1, glibc string functions), misaligned movdqa is #GP
+  it.skipIf(!haveSsei)('SSE2/SSSE3 integer ops in compiled code (wasm SIMD) match native, aligned forms fault when misaligned', async () => {
+    const { shell } = await setup(readFileSync(sseiBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('misaligned faults 200\nmoves 5022a87e047adf0a\n00 7ee345218afcb239\n01 a391afcb2fab11d7\n02 96a4eae743305de5\n03 4f1fdbab20276a60\n04 2dd5c5e6b7d3e4c1\n05 1ea1f24828c932b8\n06 7252ee31cd46eac9\n07 a7d2613e2dbb0e13\n08 a8113f5bdd1f72c3\n09 07148d3151ffb9b6\n10 524e60ed9625a69b\n11 cf7ff38f3eef12f3\n12 7e7f27c94b126a65\n13 cb3818cf16c8e140\n14 cb3818cf16c8e140\n15 8e0e6be8bc8c6a2d\n16 4bcc7f190e24bd97\n17 1203fb1b726bbd12\n18 ab189b3fd9f24c9e\n19 950527b9d4f0dabc\n20 78c257c240f6f10d\n21 cf1ade267c265c1d\n22 c973936bed53b154\n23 aea16f40d5405a05\n24 eaf4afc255a34129\n25 17685060ffef0b34\n26 65d590d7ead5f7cf\n27 fd54d777ca69c642\n28 c00277b74ad06d8a\n29 5641aadecea618a1\n30 e3c2aed0e370a373\n31 2b57dc7aff029b1d\n32 d0aadbb892e4986b\n33 ec7115c07c008552\n34 3cb357330446786f\n35 92d70ae93be3a4a1\n36 0000000000000000\n37 1e890edd978855e7\n38 c7a0d592de6396ef\n39 f6cb7bac6e55409e\n40 0000000000000000\n41 9ce8b41d4b876de3\n42 25b1756106f5daf1\n43 8000000000000000\n44 0000000000000000\n45 e572344fc39ee05a\n46 c598c655170411b1\n47 c01044d0040f6876\n48 0000000000000000\n49 0000000000000000\n50 014a2157c3be93e2\nstrings 52edaac7a097348e\nall 6691258bf5fa7cfc\n');
   }, 60_000);
 
   // PostgreSQL's huge_pages=try maps MAP_HUGETLB first and falls back on ENOMEM
