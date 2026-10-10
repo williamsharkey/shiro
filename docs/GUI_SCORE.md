@@ -118,10 +118,10 @@ Second round (after the first scoreboard; the coordinator's list):
   Qt apps stop failing their settings and portal lookups.
 - **Firefox ESR aborted ~20 s in** on a glibc assertion in `getaddrinfo`
   (`IN6_IS_ADDR_V4MAPPED`), not a MOZ_CRASH: glibc sorts DNS answers by
-  connecting one IPv6 UDP socket to each, and the kernel kept the first
-  source address (`fd00::15`) for a later v4-mapped connect, or computed a
-  non-mapped one for an `AF_INET` sockaddr on an IPv6 socket
-  (`src/kernel/net.ts`). It now gets to its window (after minutes).
+  connecting one IPv6 UDP socket to each, an IPv4 answer with its own
+  `AF_INET` sockaddr, and the kernel gave that connect a plain IPv6 source
+  instead of a v4-mapped one, as Linux does (`src/kernel/net.ts`). It now
+  gets to its window (after minutes).
 - **VLC ran with only its Qt interface**: gen-apps.py kept an optional
   plugin only when its package was needed anyway, and nothing needs
   `vlc-plugin-base`, so all of its 288 plugins (logger, demuxers, file

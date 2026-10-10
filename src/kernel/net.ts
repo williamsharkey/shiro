@@ -884,15 +884,15 @@ export class KDatagramSocket implements OpenFile {
   connect(addr: SockAddr): number {
     this.remote = { ...addr };
     this.soError = 0;
-    // A connected datagram socket has a source address (getsockname), chosen
-    // again on each connect unless bind() named one: glibc's getaddrinfo
-    // connects one IPv6 socket to an IPv6 answer and then to a v4-mapped one.
-    // An IPv6 socket connected with an AF_INET address talks IPv4: its source
-    // is v4-mapped (Linux's ip6_datagram_connect)
+    // A connected datagram socket has a source address (getsockname). An IPv6
+    // socket connected with an AF_INET address talks IPv4, so its source is
+    // v4-mapped (Linux's ip6_datagram_connect): glibc's getaddrinfo connects
+    // its IPv6 socket with an IPv4 answer's own sockaddr and asserts that
+    // (Firefox aborted on it)
     const to = this.domain === AF_INET6 && addr.family === AF_INET ? { ...addr, family: AF_INET6, address: `::ffff:${addr.address}` } : { ...addr, family: this.domain };
     const src = localAddressFor(to);
     if (!this.local) this.autobind(src);
-    else if (!this.boundAddr) this.local = { ...this.local, address: src };
+    else if (this.local.address === '::' || this.local.address === '0.0.0.0') this.local = { ...this.local, address: src };
     return 0;
   }
   bind(addr: SockAddr): number {

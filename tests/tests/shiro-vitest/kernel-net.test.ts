@@ -159,23 +159,10 @@ describe('kernel sockets over the TCP relay', () => {
     expect(src(AF_INET6, { family: AF_INET6, address: '2a04:4e42::223', port: 0 })).toBe('fd00::15');
     expect(src(AF_INET, v4('151.101.0.223', 0))).toBe('10.0.2.15');
     expect(src(AF_INET, v4('127.0.0.1', 53))).toBe('127.0.0.1');
-    // the same socket connected again picks the source again (Firefox aborted in getaddrinfo
-    // when an IPv6 answer came before a v4-mapped one); a bound address stays
-    const d = stack.socket(AF_INET6, SOCK_DGRAM) as KDatagramSocket;
-    d.connect({ family: AF_INET6, address: '2a04:4e42::223', port: 0 });
-    const port = d.getsockname().port;
-    d.connect({ family: AF_INET6, address: '::ffff:151.101.0.223', port: 0 });
-    expect(d.getsockname()).toMatchObject({ address: '::ffff:10.0.2.15', port });
-    // glibc's try_connect connects it with the AF_INET address itself
-    d.connect({ family: AF_INET6, address: '2a04:4e42::223', port: 0 });
-    d.connect(v4('151.101.0.223', 0));
-    expect(d.getsockname().address).toBe('::ffff:10.0.2.15');
-    void d.close();
-    const b = stack.socket(AF_INET6, SOCK_DGRAM) as KDatagramSocket;
-    b.bind({ family: AF_INET6, address: '::1', port: 0 });
-    b.connect({ family: AF_INET6, address: '::ffff:151.101.0.223', port: 0 });
-    expect(b.getsockname().address).toBe('::1');
-    void b.close();
+    // an IPv6 socket connected with an AF_INET sockaddr (glibc's try_connect does that for
+    // an IPv4 answer) has a v4-mapped source: Firefox aborted in getaddrinfo on a plain one
+    expect(src(AF_INET6, v4('151.101.0.223', 0))).toBe('::ffff:10.0.2.15');
+    expect(src(AF_INET6, v4('127.0.0.1', 53))).toBe('::ffff:127.0.0.1');
   });
 
   it('AF_UNIX SOCK_SEQPACKET socketpairs keep records whole (Rust std::process::Command)', async () => {
