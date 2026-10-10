@@ -912,6 +912,76 @@ describe('kernel syscalls found by LTP', () => {
     off();
   });
 
+  it('splice, tee, vmsplice and copy_file_range move bytes between pipes and files as Linux checks them (LTP splice01-07, tee01-02, vmsplice01-04, copy_file_range03)', async () => {
+    const off = (a: number | null, b: number | null) => {
+      const d = new Uint8Array(4096); const dv = new DataView(d.buffer);
+      if (a !== null) dv.setBigInt64(0, BigInt(a), true);
+      if (b !== null) dv.setBigInt64(8, BigInt(b), true);
+      return d;
+    };
+    await fs.writeFile('/tmp/kc/spl', 'hello world');
+    const f = await open('/tmp/kc/spl', A.O_RDWR);
+    const [r, w] = await pipe();
+    const [r2, w2] = await pipe();
+    // file → pipe at an offset (the offset moves, the file position doesn't)
+    let d = off(6, null);
+    expect(await kernel.syscall(proc, A.SYS_splice, [f, 1, w, 0, 5, 0], d)).toBe(5);
+    expect(new DataView(d.buffer).getBigInt64(0, true)).toBe(11n);
+    // tee copies without taking; then pipe → file at its position
+    expect(await kernel.syscall(proc, A.SYS_tee, [r, w2, 100, 0], new Uint8Array(0))).toBe(5);
+    expect(await kernel.syscall(proc, A.SYS_splice, [r, 0, f, 0, 100, 0], off(null, null))).toBe(5);
+    const back = new Uint8Array(32);
+    expect(await kernel.syscall(proc, A.SYS_pread64, [f, 32, 0, 0], back)).toBe(11);
+    expect(new TextDecoder().decode(back.subarray(0, 11))).toBe('worldworld\0'.slice(0, 5) + ' world');
+    expect(await kernel.syscall(proc, A.SYS_read, [r2, 32], back)).toBe(5);
+    // errors: no pipe, an offset on a pipe, the same pipe, a nonblocking empty pipe
+    expect(await kernel.syscall(proc, A.SYS_splice, [f, 0, f, 0, 1, 0], off(null, null))).toBe(-A.EINVAL);
+    expect(await kernel.syscall(proc, A.SYS_splice, [r, 1, f, 0, 1, 0], off(0, null))).toBe(-A.ESPIPE);
+    expect(await kernel.syscall(proc, A.SYS_tee, [r, w, 1, 0], new Uint8Array(0))).toBe(-A.EINVAL);
+    expect(await kernel.syscall(proc, A.SYS_splice, [r, 0, f, 0, 1, 2], off(null, null))).toBe(-A.EAGAIN);
+    // vmsplice moves what fits in the pipe (64 KiB of 128 KiB)
+    const big = new Uint8Array(128 * 1024).fill(7);
+    expect(await kernel.syscall(proc, A.SYS_vmsplice, [w, big.length, 0], big)).toBe(65536);
+    expect(await kernel.syscall(proc, A.SYS_vmsplice, [f, 1, 0], big)).toBe(-A.EBADF);
+    const out = new Uint8Array(70000);
+    expect(await kernel.syscall(proc, A.SYS_vmsplice, [r, out.length, 0], out)).toBe(65536);
+    // copy_file_range within one file: overlapping ranges are EINVAL
+    d = off(0, 20);
+    expect(await kernel.syscall(proc, A.SYS_copy_file_range, [f, 1, f, 1, 5, 0], d)).toBe(5);
+    expect(new DataView(d.buffer).getBigInt64(8, true)).toBe(25n);
+    expect(await kernel.syscall(proc, A.SYS_copy_file_range, [f, 1, f, 1, 5, 0], off(0, 2))).toBe(-A.EINVAL);
+    expect(await kernel.syscall(proc, A.SYS_copy_file_range, [f, 1, f, 1, 5, 1], off(0, 40))).toBe(-A.EINVAL);
+    for (const fd of [f, r, w, r2, w2]) await call(A.SYS_close, [fd]);
+  });
+
+  it('flock: whole-file locks of the open file description, apart from fcntl locks; LOCK_NB, conversion, release at the last close and at exit (LTP flock02-04)', async () => {
+    await fs.writeFile('/tmp/kc/flk', 'x');
+    const a = await open('/tmp/kc/flk', A.O_RDWR), b = await open('/tmp/kc/flk', A.O_RDWR);
+    expect(await call(A.SYS_flock, [a, 0])).toBe(-A.EINVAL);
+    expect(await call(A.SYS_flock, [a, A.LOCK_SH])).toBe(0);
+    expect(await call(A.SYS_flock, [b, A.LOCK_SH | A.LOCK_NB])).toBe(0);
+    expect(await call(A.SYS_flock, [b, A.LOCK_EX | A.LOCK_NB])).toBe(-A.EAGAIN);
+    expect(await call(A.SYS_flock, [a, A.LOCK_UN])).toBe(0);
+    expect(await call(A.SYS_flock, [b, A.LOCK_EX | A.LOCK_NB])).toBe(0); // (converted)
+    expect(await call(A.SYS_flock, [a, A.LOCK_SH | A.LOCK_NB])).toBe(-A.EAGAIN);
+    // a dup shares the description (and its lock); the last close drops it
+    const c = await call(A.SYS_dup, [b]);
+    expect(await call(A.SYS_close, [b])).toBe(0);
+    expect(await call(A.SYS_flock, [a, A.LOCK_SH | A.LOCK_NB])).toBe(-A.EAGAIN);
+    expect(await call(A.SYS_close, [c])).toBe(0);
+    expect(await call(A.SYS_flock, [a, A.LOCK_EX | A.LOCK_NB])).toBe(0);
+    // a waiter gets it once the holder exits
+    const p = kernel.spawn({ path: 'flk', cwd: '/tmp/kc', fds: {}, run: () => new Promise<number>(() => {}) });
+    const d = new Uint8Array(64); d.set(new TextEncoder().encode('/tmp/kc/flk'));
+    const pf = await kernel.syscall(p, A.SYS_openat, [A.AT_FDCWD, 11, A.O_RDWR, 0], d);
+    const waiting = kernel.syscall(p, A.SYS_flock, [pf, A.LOCK_EX], new Uint8Array(0));
+    expect(await call(A.SYS_close, [a])).toBe(0);
+    expect(await waiting).toBe(0);
+    expect(await call(A.SYS_flock, [await open('/tmp/kc/flk', A.O_RDWR), A.LOCK_EX | A.LOCK_NB])).toBe(-A.EAGAIN);
+    await kernel.exit(p, 0);
+    expect(await call(A.SYS_flock, [await open('/tmp/kc/flk', A.O_RDWR), A.LOCK_EX | A.LOCK_NB])).toBe(0);
+  });
+
   it('timer_create SIGEV_THREAD_ID to a thread the engine vouches for; its signal\'s siginfo names the thread in its last word (Blink 0510, Open POSIX fork_18-1)', async () => {
     const p = kernel.spawn({ path: 'tt', cwd: '/tmp/kc', fds: {}, run: () => new Promise<number>(() => {}) });
     p.dispositions.set(34, 0x1234);

@@ -94,9 +94,9 @@ const ID = /[A-Za-z0-9_$\u0080-￿]/;
  * as it is. A direct `eval(X)` becomes `eval(__shiroAls.e(X))` (still direct:
  * the code it runs is rewritten the same way when it runs).
  */
-export function carryAsyncContext(src: string): string {
+export function carryAsyncContext(src: string, codeMaskOfSrc?: Uint8Array): string {
   if (!src.includes('await') && !src.includes('eval')) return src;
-  const mask = codeMask(src);
+  const mask = codeMaskOfSrc ?? codeMask(src);
   const n = src.length;
   const isCode = (i: number) => mask[i] === 1;
   // Whitespace and comments (a comment is a run of non-code from `//` or `/*`)

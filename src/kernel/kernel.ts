@@ -22,7 +22,7 @@ import { elfInterpreter } from '../elf-interp';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
   RegularFile, DirFile, abortableWait, openInode, openInodeSync, isInodeOpen, exchangeInodes, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
-  linkCount, writeBackAll, attachInodeShared,
+  linkCount, writeBackAll, attachInodeShared, detachOpenFileShared, unlinkedFileKey, sharedBufferOf,
 } from './fd';
 import { createPipe, Pipe, PipeEnd, FifoRdWr } from './pipe';
 import type { PtyFile } from './pty';
@@ -33,6 +33,7 @@ import { SysvSem } from './sysvsem';
 import { SysvMsg } from './sysvmsg';
 import { MessageQueues, MqFile } from './mqueue';
 import { PosixTimers } from './posixtimers';
+import { splice, tee, vmsplice, copyFileRange, type Moved } from './splice';
 import { CONTROL_BYTES, SharedObjects, isShareablePath, type ShmObjMessage } from './shmobj';
 import { EpollFile, waitReady } from './epoll';
 import { SignalFile, notifySignalPending, pendingSignalListeners } from './signalfd';
@@ -240,6 +241,8 @@ export class Kernel {
   }
   /** fcntl record locks (F_SETLK, F_OFD_SETLK) */
   readonly locks = new LockTable();
+  /** flock(2) locks: whole-file, an open file description's, apart from fcntl's (as on Linux) */
+  readonly flocks = new LockTable();
   private detachTable?: () => void;
   /** How long an unreaped child of init stays a zombie before it is reaped automatically. */
   initReapDelayMs = 30_000;
@@ -651,8 +654,11 @@ export class Kernel {
   /** Terminate `proc` with a wait status: close its fds, reparent its children, notify its parent. */
   async exit(proc: Process, status: number): Promise<void> {
     if (proc.pid === 1 || !proc.beginExit()) return;
+    const files = new Set(proc.fds.entries().map(([, f]) => f));
     await proc.fds.closeAll();
     this.locks.release(proc.pid);
+    // the descriptions it held last: their OFD and flock locks go
+    for (const f of files) if (refCount(f) === 0) { this.locks.release(f); this.flocks.release(f); }
     this.shm.detachAll(proc);
     this.sem.exited(proc);
     for (const child of this.procs.values()) {
@@ -984,6 +990,32 @@ export class Kernel {
     return normalize(d.path + m[3]);
   }
 
+  /** Directories chmod or mkdir left without owner search (x) permission (searchDenied). */
+  private noSearchDirs = new Set<string>();
+
+  /** chmod/mkdir set `path`'s mode: remember a directory it can't be searched through. */
+  private noteDirMode(path: string, mode: number): void {
+    if (mode & 0o100) { this.noSearchDirs.delete(path); return; }
+    if (this.fs?.lookupCached?.(path)?.node.type === 'dir') this.noSearchDirs.add(path);
+  }
+
+  /**
+   * A directory on the way to `p` that a non-root process may not search: its
+   * owner bits lack x (mode 0666: EACCES, LTP lstat02). Only directories the
+   * kernel's chmod/mkdir made so are looked at: nothing to check otherwise
+   * (stat and open are hot), and one whose mode isn't known never refuses.
+   */
+  private searchDenied(proc: Process, p: string): boolean {
+    if (!this.noSearchDirs.size || proc.uid === 0) return false;
+    for (const d of this.noSearchDirs) {
+      if (!p.startsWith(d + '/')) continue;
+      const node = this.fs?.lookupCached?.(d)?.node;
+      if (node?.type === 'dir' && !(node.mode & 0o100)) return true;
+      if (node !== undefined) this.noSearchDirs.delete(d); // (searchable again, or gone)
+    }
+    return false;
+  }
+
   /** open(2) without the fd: returns the new OpenFile or -errno. */
   async open(proc: Process, path: string, flags: number, mode = 0o666, dirfd = A.AT_FDCWD): Promise<OpenFile | number> {
     // O_PATH: a descriptor that only names the file (fstat, fchdir, *at, dup, close)
@@ -992,6 +1024,7 @@ export class Kernel {
       if ((flags & A.O_NOFOLLOW) && this.fs && !trailingSlash(path)) {
         const p = this.resolvePath(proc, path, dirfd);
         if (typeof p === 'string' && !/^\/(?:proc|dev)(?:\/|$)/.test(p)) {
+          if (this.searchDenied(proc, p)) return -A.EACCES;
           const lst = await this.fs.lstat(p).catch(() => null);
           if (lst?.isSymbolicLink()) {
             if (flags & A.O_DIRECTORY) return -A.ENOTDIR;
@@ -1004,6 +1037,7 @@ export class Kernel {
     }
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
+    if (this.searchDenied(proc, p)) return -A.EACCES;
     // O_TMPFILE: an unnamed regular file in directory `p` (linkat names it)
     if (flags & A.__O_TMPFILE) {
       if (!canWrite(flags)) return -A.EINVAL;
@@ -1255,7 +1289,9 @@ export class Kernel {
         if (own) return -A.EEXIST;
         const real = this.childPathSync(p);
         if (typeof real !== 'string') return real;
-        return fs.createDirNow(real, mode & ~proc.umask) ? 0 : undefined;
+        if (!fs.createDirNow(real, mode & ~proc.umask)) return undefined;
+        this.noteDirMode(real, mode & ~proc.umask);
+        return 0;
       }
       case A.SYS_rename: case A.SYS_renameat: case A.SYS_renameat2: {
         const [od, ol, nd, nl, flags] = nr === A.SYS_rename
@@ -1328,6 +1364,7 @@ export class Kernel {
     }
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
+    if (this.searchDenied(proc, p)) return -A.EACCES;
     const dev = this.devices.get(p);
     if (dev) {
       // A description just for the stat: O_NOCTTY (stat must not make a pty the
@@ -2069,7 +2106,12 @@ export class Kernel {
             if (f.kind !== 'file' || !path || !isShareablePath(path) || !this.fs) return -A.EINVAL;
             const fs = this.fs;
             const ino = inodeNumber(fs, path);
-            key = `file:${ino}`;
+            // (unlinked before it was mapped: its own inode is the object, not its old name's)
+            // (mapped before the unlink, it still is that object)
+            const attached = sharedBufferOf(f);
+            const existing = attached ? this.shmobj.keyOfBuffer(attached) : undefined;
+            const unlinkedKey = existing ? undefined : unlinkedFileKey(f);
+            key = existing ?? unlinkedKey ?? `file:${ino}`;
             // (through the fd: writes it holds may not have reached the filesystem yet)
             initial = async () => {
               if (f.pread) {
@@ -2085,8 +2127,14 @@ export class Kernel {
             // unlinks (glibc's sem_open maps a temporary file, links it to the
             // semaphore's name and unlinks the temporary one: Open POSIX sem_close_3-2)
             writeBack = async (b) => {
-              const own = f instanceof RegularFile && !f.inode.unlinked ? f.inode.path : path;
-              if (!(await writeInodeBytes(fs, own, b)) && await fs.exists(own)) await fs.writeFile(own, b);
+              // An unlinked object's bytes stay with its fds (the name may be another file's now)
+              if (unlinkedKey) { detachOpenFileShared(f); return; }
+              const ownIno = f instanceof RegularFile ? f.inode : undefined;
+              const own = ownIno ? ownIno.path : path;
+              // Unlinked since the map, or closed and its name now another file's: nothing to write by name
+              const live = ownIno ? !ownIno.unlinked && (ownIno.opens > 0 || fs.inoOf(own) === ino) : fs.inoOf(own) === ino;
+              if (live && !(await writeInodeBytes(fs, own, b)) && await fs.exists(own)) await fs.writeFile(own, b);
+              detachOpenFileShared(f);
             };
           } else if (kind === 1) {
             const seg = this.shm.list().find((x) => x.id === args[0]);
@@ -2378,6 +2426,44 @@ export class Kernel {
         }
         case A.SYS_fcntl:
           return this.fcntl(proc, args[0], args[1], args[2], data);
+        case A.SYS_splice:
+        case A.SYS_copy_file_range: {
+          // offsets as i64 in data (in and out), when args[1] / args[3] say there are
+          const dv = new DataView(data.buffer, data.byteOffset, 16);
+          const offIn = args[1] ? Number(dv.getBigInt64(0, true)) : null;
+          const offOut = args[3] ? Number(dv.getBigInt64(8, true)) : null;
+          const r: Moved | number = nr === A.SYS_splice
+            ? await splice(file(args[0]), offIn, file(args[2]), offOut, args[4] >>> 0, args[5], sig)
+            : await copyFileRange(file(args[0]), offIn, file(args[2]), offOut, args[4] >>> 0, args[5]);
+          if (typeof r === 'number') {
+            if (r === -A.EPIPE) this.deliver(proc, A.SIGPIPE);
+            return r;
+          }
+          if (r.offIn !== null) dv.setBigInt64(0, BigInt(r.offIn), true);
+          if (r.offOut !== null) dv.setBigInt64(8, BigInt(r.offOut), true);
+          return r.n;
+        }
+        case A.SYS_vmsplice: {
+          const r = await vmsplice(file(args[0]), data.subarray(0, Math.min(args[1] >>> 0, data.length)), args[2], sig);
+          if (r === -A.EPIPE) this.deliver(proc, A.SIGPIPE);
+          return r;
+        }
+        case A.SYS_tee: {
+          const r = await tee(file(args[0]), file(args[1]), args[2] >>> 0, args[3], sig);
+          if (r === -A.EPIPE) this.deliver(proc, A.SIGPIPE);
+          return r;
+        }
+        case A.SYS_flock: {
+          // whole-file locks of the open file description: shared or
+          // exclusive, waiting unless LOCK_NB (EWOULDBLOCK), interrupted by a
+          // signal (EINTR); converting replaces the description's own lock
+          const f = file(args[0]);
+          if (!f) return -A.EBADF;
+          const op = args[1] & ~A.LOCK_NB;
+          if (op !== A.LOCK_SH && op !== A.LOCK_EX && op !== A.LOCK_UN) return -A.EINVAL;
+          const type = op === A.LOCK_SH ? F_RDLCK : op === A.LOCK_EX ? F_WRLCK : F_UNLCK;
+          return this.flocks.set(f.path ?? `anon:${fileKey(f)}`, f, -1, type, 0, Infinity, !(args[1] & A.LOCK_NB), proc.syscallSignal);
+        }
         case A.SYS_fsync: { // (and fdatasync: Blink sends both here)
           const f = file(args[0]);
           if (!f) return -A.EBADF;
@@ -2499,6 +2585,7 @@ export class Kernel {
           if (await fs().exists(p)) return -A.EEXIST;
           await fs().mkdir(p);
           await fs().chmod(p, mode & ~proc.umask & 0o7777).catch(() => {});
+          this.noteDirMode(p, mode & ~proc.umask);
           return 0;
         }
         case A.SYS_rmdir:
@@ -2656,6 +2743,7 @@ export class Kernel {
           const real = await fs().realpath(path);
           await flushInode(fs(), real);
           await fs().chmod(real, mode & 0o7777);
+          this.noteDirMode(real, mode);
           setInodeMode(fs(), real, mode);
           return 0;
         }
@@ -2854,7 +2942,7 @@ export class Kernel {
   /** Closing any fd for a file drops the process's POSIX locks on it; the last close of a description, its OFD locks */
   private releaseLocks(proc: Process, f: OpenFile): void {
     if (f.path) this.locks.release(proc.pid, f.path);
-    if (refCount(f) === 0) this.locks.release(f);
+    if (refCount(f) === 0) { this.locks.release(f); this.flocks.release(f); }
   }
 
   /** fcntl record locks; `data` holds the struct flock (l_type, l_whence, l_start, l_len, l_pid) */
@@ -3111,8 +3199,19 @@ export class Kernel {
   /** SYS_shiro_execve (see abi.ts). */
   private async sysExecve(proc: Process, req: { path: string; argv?: string[]; env?: string[]; inproc?: boolean }, data: Uint8Array): Promise<number> {
     if (!req || typeof req.path !== 'string' || !req.path) return -A.ENOENT;
-    const path = this.resolvePath(proc, req.path);
-    if (typeof path === 'number') return path;
+    const resolved = this.resolvePath(proc, req.path);
+    if (typeof resolved === 'number') return resolved;
+    let path: string = resolved;
+    // /proc/self/exe and /proc/PID/fd/N: the file they name (the engine loads
+    // the path it gets back, and /proc isn't a directory it can read)
+    for (let hops = 0; hops < 8 && path.startsWith('/proc/'); hops++) {
+      const t = this.procfs.readlink(proc, path);
+      if (typeof t !== 'string') break;
+      // (exe as readlink gives it: absolute and resolved, however the program was started)
+      const next = /^\/proc\/[^/]+\/exe$/.test(path) ? await this.exePath(proc, path, t) : t.startsWith('/') ? t : `/proc/${t}`;
+      if (next === path) break;
+      path = next;
+    }
     const st = await this.statPath(proc, path);
     // A Shiro command under /bin, /usr/bin, ... (sh, env, ls) has no file but runs
     // A Shiro command with no file anywhere runs as /bin/NAME and /usr/bin/NAME.

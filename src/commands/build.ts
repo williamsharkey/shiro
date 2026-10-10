@@ -19,10 +19,19 @@ import * as esbuild from 'esbuild-wasm';
  *   - WASM binary cached in IndexedDB for fast subsequent loads
  */
 
-const ESBUILD_WASM_URL = 'https://unpkg.com/esbuild-wasm@0.27.2/esbuild.wasm';
 const WASM_CACHE_DB = 'tabcomputer-wasm-cache';
 const WASM_CACHE_STORE = 'wasm-binaries';
-const WASM_CACHE_KEY = 'esbuild-0.27.2';
+/** (the version of the bundled esbuild-wasm, whose esbuild.wasm the JS API must match) */
+const WASM_CACHE_KEY = `esbuild-${esbuild.version}`;
+
+/**
+ * esbuild.wasm from tabcomputer's own origin: the bundled esbuild-wasm's file,
+ * a hashed asset of the build. It came from unpkg.com, so a blocked or slow
+ * CDN broke `build`, vite and everything else on the page's esbuild.
+ */
+async function esbuildWasmUrl(): Promise<string> {
+  return (await import('esbuild-wasm/esbuild.wasm?url')).default;
+}
 
 let esbuildInitialized = false;
 let initPromise: Promise<void> | null = null;
@@ -103,7 +112,9 @@ export async function ensureEsbuildInitialized(): Promise<void> {
         });
       } else {
         // Download and cache for future sessions
-        const response = await fetch(ESBUILD_WASM_URL);
+        const url = await esbuildWasmUrl();
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
         wasmBinary = await response.arrayBuffer();
 
         // Initialize with downloaded WASM

@@ -1,0 +1,100 @@
+From 1db6ed6be0581dad8c3098b33e5d7a60c0485e7b Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 17:10:43 +0000
+Subject: [PATCH] Shiro: splice, tee, vmsplice and copy_file_range go to the
+ kernel
+
+They were ENOSYS (copy_file_range on purpose, for cosmo's feature check),
+so coreutils' cp and anything splicing fell back or failed (LTP splice,
+tee, vmsplice, copy_file_range). They are now the kernel's calls 275, 276,
+278 and 326; Blink moves the offsets (in and out) and vmsplice's iovecs (a
+chunk a call: it moves what fits, as Linux's does).
+
+Exports blink_shiro_splice.
+---
+ blink/shiro.inc | 55 ++++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 54 insertions(+), 1 deletion(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index c2e2dd3..90efc51 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2496,6 +2496,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_timerthread(void) { return 1; }
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_mmaptail(void) { return 1; }
+ // 0512: flock goes to the kernel
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_flock(void) { return 1; }
++// 0513: splice, tee, copy_file_range go to the kernel; vmsplice
++EMSCRIPTEN_KEEPALIVE int blink_shiro_splice(void) { return 1; }
+ 
+ // the same with the signal's siginfo (the kernel's call 1030, made as `pid`)
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid_info(int pid, int sig, int w0, int w1, int w2,
+@@ -4176,6 +4178,58 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+     case 0x012: r = ShiroPread(m, 18, a, b, c, d); break;
+     case 0x013: r = ShiroIov(m, false, a, b, c, -1); break;
+     case 0x014: r = ShiroIov(m, true, a, b, c, -1); break;
++    case 0x113:                                                       // splice
++    case 0x146: {                                                     // copy_file_range
++      // the kernel's (275, 326): the offsets it reads and moves go in data
++      u8 o[16];
++      int hasin = b != 0, hasout = d != 0;
++      memset(o, 0, sizeof(o));
++      if ((hasin && CopyFromUserRead(m, o, b, 8) == -1) ||
++          (hasout && CopyFromUserRead(m, o + 8, d, 8) == -1)) {
++        r = -EFAULT_LINUX;
++        break;
++      }
++      r = ShiroCall(m, nr == 0x113 ? 275 : 326, A12((int)a, hasin, (int)c, hasout, (int)MIN(e, 0x7fffffff), (int)f),
++                    o, 16, 16, true, true);
++      if (r == -ENOSYS_LINUX) break;
++      if (r > 0 && ((hasin && CopyToUserWrite(m, b, o, 8) == -1) ||
++                    (hasout && CopyToUserWrite(m, d, o + 8, 8) == -1))) {
++        r = -EFAULT_LINUX;
++      }
++      break;
++    }
++    case 0x114:                                                       // tee
++      r = ShiroCall(m, 276, A12((int)a, (int)b, (int)MIN(c, 0x7fffffff), (int)d), 0, 0, 0, true, true);
++      break;
++    case 0x116: {                                                     // vmsplice
++      // the kernel's (278): the user's memory into a pipe's write end, or a
++      // pipe's read end into it, as much as fits (up to a chunk a call)
++      u8 v[16], *buf;
++      i64 total = 0, base, len, k, i;
++      bool wr;
++      if (c > 1024) { r = -EINVAL_LINUX; break; }
++      if ((r = KS(m, 72, A12((int)a, 3, 0))) < 0) break;              // F_GETFL
++      wr = (r & 3) == 1;
++      buf = (u8 *)ShiroAlloc(m, g_shiro_chunk);
++      for (i = 0, r = 0; i < (i64)c && total < g_shiro_chunk; ++i) {
++        if (CopyFromUserRead(m, v, b + i * 16, 16) == -1) { r = -EFAULT_LINUX; break; }
++        base = Read64(v), len = Read64(v + 8);
++        k = MIN(len, (i64)g_shiro_chunk - total);
++        if (wr && k && CopyFromUserRead(m, buf + total, base, k) == -1) { r = -EFAULT_LINUX; break; }
++        total += k;
++      }
++      if (r < 0) break;
++      r = ShiroCall(m, 278, A12((int)a, (int)total, (int)d), buf, wr ? total : 0, wr ? 0 : total, true, true);
++      if (r > 0 && !wr) {  // (scattered back over the iovecs)
++        for (i = 0, total = 0; i < (i64)c && total < r; ++i) {
++          if (CopyFromUserRead(m, v, b + i * 16, 16) == -1) { r = -EFAULT_LINUX; break; }
++          k = MIN(Read64(v + 8), r - total);
++          if (CopyToUserWrite(m, Read64(v), buf + total, k) == -1) { r = -EFAULT_LINUX; break; }
++          total += k;
++        }
++      }
++      break;
++    }
+     case 0x127: r = ShiroIov(m, false, a, b, c, d); break;           // preadv
+     case 0x128: r = ShiroIov(m, true, a, b, c, d); break;            // pwritev
+     case 0x147: r = ShiroIov(m, false, a, b, c, (i64)d); break;      // preadv2
+@@ -4440,7 +4494,6 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       }
+       break;
+     }
+-    case 0x146: r = -ENOSYS_LINUX; break;                             // copy_file_range
+     case 0x13F: {                                                     // memfd_create
+       // the kernel's anonymous in-memory file (Firefox's shared memory,
+       // Mesa, Wayland, PulseAudio); a kernel without it is ENOSYS
+-- 
+2.43.0
+
