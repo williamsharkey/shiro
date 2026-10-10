@@ -279,6 +279,9 @@ const haveTimerthread = blinkHasTimerthread && tryBuild('gcc', ['-static', '-O1'
 const mmaptailBin = join(out, 'mmaptail');
 const blinkHasMmaptail = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_mmaptail');
 const haveMmaptail = blinkHasMmaptail && tryBuild('gcc', ['-static', '-O1', '-w', '-o', mmaptailBin, 'mmaptail.c']);
+// a named semaphore's count survives sem_close (the kernel writes a /dev/shm object back to its linked names)
+const semreopenBin = join(out, 'semreopen');
+const haveSemreopen = tryBuild('gcc', ['-static', '-O1', '-w', '-o', semreopenBin, 'semreopen.c', '-lpthread']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -951,6 +954,12 @@ it.skipIf(!haveMmaptail)('a file mapping whose length ends mid-page shows the fi
   const { shell } = await setup(readFileSync(mmaptailBin));
   const r = await run(shell, './prog');
   expect(r.output.replace(/\r\n/g, '\n')).toBe('tail a\nreplaced 1 tail b\n');
+}, 60_000);
+
+it.skipIf(!haveSemreopen)('a named semaphore keeps its count across sem_close and sem_open: a /dev/shm object goes back to the names link() gave it (Open POSIX sem_close_3-2)', async () => {
+  const { shell } = await setup(readFileSync(semreopenBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('value 1\n');
 }, 60_000);
 
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
