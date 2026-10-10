@@ -731,10 +731,11 @@ tabcomputer changes these programs needed (tests in `x86-engine.test.ts`,
   the program's working directory.
 - `rename` keeps a file's modification time (it set it to now): `rsync -a`
   sets times on a temp file and renames it. `filesystem.test.ts`.
-- `link(2)` still copies (the filesystem has no hard links) but the copy
-  reports the source's inode number, which git's local clone checks, and
-  both names report a link count of 2 (shadow's lock files: `groupadd`,
-  `useradd` in openssh-client's and other postinsts). `kernel-core.test.ts`.
+- `link(2)` makes a real hard link (053330da): both names are one file with
+  one inode number, which git's local clone checks, and a link count that
+  follows links and unlinks (shadow's lock files: `groupadd`, `useradd` in
+  openssh-client's and other postinsts). Node's `fs.link` does the same. The
+  built-in `ln` and `cp -l` still copy. `kernel-core.test.ts`.
 - Files keep no owner, so `stat` reports them as the caller's (root's in a
   root shell): git refused root's own repositories ("dubious ownership").
 - tabcomputer's commands look like files only where exec runs them (`/bin`,

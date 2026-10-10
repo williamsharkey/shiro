@@ -502,7 +502,10 @@ export class KSocket implements OpenFile {
       if (this.soError) return -this.takeError();
       if (this.rxEof || this.rdShut) return 0;
       if (this.state === 'closed') return -EBADF;
-      if (this.state !== 'connected' && this.state !== 'connecting' && !(this.type === SOCK_DGRAM && this.state === 'bound')) return -ENOTCONN;
+      // (an AF_UNIX stream socket's is EINVAL on Linux: unix_stream_read_generic)
+      if (this.state !== 'connected' && this.state !== 'connecting' && !(this.type === SOCK_DGRAM && this.state === 'bound')) {
+        return this.domain === AF_UNIX && this.type !== SOCK_DGRAM ? -EINVAL : -ENOTCONN;
+      }
       if (dontwait) return got || -EAGAIN;
       if (signal?.aborted) return got || -EINTR;
       const t0 = Date.now();
