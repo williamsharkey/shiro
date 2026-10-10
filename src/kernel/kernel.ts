@@ -1977,7 +1977,7 @@ export class Kernel {
           return 0;
         }
         case A.SYS_timer_create:
-          return this.timers.create(proc, args[0] | 0, args[1] ? new DataView(data.buffer, data.byteOffset, 24) : null);
+          return this.timers.create(proc, args[0] | 0, args[1] ? new DataView(data.buffer, data.byteOffset, 24) : null, (args[2] & 1) === 1);
         case A.SYS_timer_settime:
           return this.timers.settime(proc, args[0] | 0, args[1], new DataView(data.buffer, data.byteOffset, 32));
         case A.SYS_timer_gettime:

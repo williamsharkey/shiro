@@ -271,6 +271,10 @@ const haveSigbus = blinkHasSigbus && tryBuild('gcc', ['-static', '-O1', '-w', '-
 const forkcpuBin = join(out, 'forkcpu');
 const blinkHasForkcpu = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_forkcpu');
 const haveForkcpu = blinkHasForkcpu && tryBuild('gcc', ['-static', '-O1', '-w', '-o', forkcpuBin, 'forkcpu.c', '-lpthread']);
+// Blink 0510: a SIGEV_THREAD_ID timer's signal goes to its thread (SIGEV_THREAD timers)
+const timerthreadBin = join(out, 'timerthread');
+const blinkHasTimerthread = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_timerthread');
+const haveTimerthread = blinkHasTimerthread && tryBuild('gcc', ['-static', '-O1', '-w', '-o', timerthreadBin, 'timerthread.c', '-lpthread', '-lrt']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -931,6 +935,12 @@ it.skipIf(!haveForkcpu)('a fork child\'s and a new thread\'s CPU-time clocks, an
   const r = await run(shell, './prog');
   expect(r.output.replace(/\r\n/g, '\n')).toBe('parent process 1 thread 1 utime 1\nnew thread 1\nchild process 1 thread 1 utime 1\nchild moves\n' +
     'wait4 1\nchildren utime 1 cutime 1\nsleeping child 1\n');
+}, 60_000);
+
+it.skipIf(!haveTimerthread)('a SIGEV_THREAD timer runs its function in another thread with its value at each expiry; a fork child does not inherit it (Open POSIX fork_18-1)', async () => {
+  const { shell } = await setup(readFileSync(timerthreadBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('runs 1 value 42 other thread 1\nchild runs 0\nparent runs 1\n');
 }, 60_000);
 
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink

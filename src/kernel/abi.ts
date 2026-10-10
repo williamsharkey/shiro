@@ -468,6 +468,8 @@ export interface SigInfo {
   timerid?: number;
   overrun?: number;
   status?: number;
+  /** The thread a SIGEV_THREAD_ID timer's signal is for (struct siginfo's last word, which Linux leaves zero: Blink 0510 routes it) */
+  tid?: number;
 }
 /** `info` into `out` as the x86-64 Linux struct siginfo (128 bytes) */
 export function encodeSiginfo(info: SigInfo, out: Uint8Array): void {
@@ -485,6 +487,7 @@ export function encodeSiginfo(info: SigInfo, out: Uint8Array): void {
     if (info.status !== undefined) dv.setInt32(24, info.status, true); // si_status (SIGCHLD)
     else dv.setBigInt64(24, info.value ?? 0n, true); // si_value
   }
+  if (info.tid) dv.setInt32(SIGINFO_SIZE - 4, info.tid, true);
 }
 /** The fields of a struct siginfo in `data` */
 export function decodeSiginfo(data: Uint8Array): SigInfo {

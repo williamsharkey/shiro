@@ -87,9 +87,12 @@ let blinkModule = null;
 // (sender, si_code, sigqueue's value); Blink puts it in the handler's frame.
 const SYS_shiro_siginfo = 1030;
 let siginfoCall = true;
-function queueSignal(sig, info, pid) {
+function queueSignal(sig, info, pid, tid = 0) {
   const m = blinkModule;
-  if (info && info[0] === sig && !pid && m?._blink_shiro_signal_info) {
+  if (info && info[0] === sig && !pid && tid && m?._blink_shiro_signal_tid_info) {
+    // a SIGEV_THREAD_ID timer's: for that thread (Blink 0510)
+    m._blink_shiro_signal_tid_info(tid, sig, ...info);
+  } else if (info && info[0] === sig && !pid && m?._blink_shiro_signal_info) {
     m._blink_shiro_signal_info(sig, ...info);
   } else if (info && info[0] === sig && pid && m?._blink_shiro_signal_pid_info) {
     m._blink_shiro_signal_pid_info(pid, sig, ...info);
@@ -101,16 +104,17 @@ function queueSignal(sig, info, pid) {
 }
 function takeSignal(sig) {
   if (debug) console.error('[blink] signal', sig);
-  let info = null;
+  let info = null, tid = 0;
   if (siginfoCall && blinkModule?._blink_shiro_signal_info) {
     // (the reply being taken is in `data`: 1030 writes there too)
     const saved = data.slice();
     const r = sys(SYS_shiro_siginfo, sig);
     if (r === 0) info = Array.from(new Int32Array(data.buffer, data.byteOffset, 8));
     else if (r === -38) siginfoCall = false;
+    tid = r === 0 ? new Int32Array(data.buffer, data.byteOffset, 32)[31] : 0;
     data.set(saved);
   }
-  queueSignal(sig, info, 0);
+  queueSignal(sig, info, 0, tid);
   sys(SYS.rt_sigreturn);
 }
 
@@ -661,7 +665,8 @@ async function run(msg) {
             const ri = await issue(ch, SYS_shiro_siginfo, [sig], as);
             if (ri.r === 0) info = Array.from(new Int32Array(ch.data.buffer, ch.data.byteOffset, 8));
             else if (ri.r === -38) siginfoCall = false;
-            queueSignal(sig, info, pid);
+            // (its last word: the thread a SIGEV_THREAD_ID timer's signal is for)
+            queueSignal(sig, info, pid, ri.r === 0 ? new Int32Array(ch.data.buffer, ch.data.byteOffset, 32)[31] : 0);
             await drain(ri.sig); // (one that rode on that reply)
           } else {
             queueSignal(sig, info, pid);
