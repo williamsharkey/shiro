@@ -33,6 +33,16 @@ const pageOwn = (): Set<PropertyKey> => {
 };
 if (typeof window !== 'undefined') pageOwn();
 
+/**
+ * Globals a script sets that stay its own (not written through): Go's
+ * wasm_exec (esbuild-wasm's service, @astrojs/compiler) keeps its file system
+ * in `globalThis.fs` (and wasm_exec_node.js sets `globalThis.require`), and two
+ * esbuild services in one tab wrote each other's stdout through the shared one
+ * ("Invalid packet"). Read through globalThis, as Go's runtime does; the bare
+ * `fs` in esbuild's loader reads it so too (source-patches.ts).
+ */
+const PROCESS_LOCAL = new Set<PropertyKey>(['fs', 'require']);
+
 export function createProcessGlobal(own: Record<string, unknown>): any {
   const page = globalThis as any;
   const target: Record<PropertyKey, any> = Object.create(null);
@@ -42,7 +52,7 @@ export function createProcessGlobal(own: Record<string, unknown>): any {
 
   for (const [k, v] of Object.entries(own)) target[k] = v;
   /** Not one of the page's own globals (nor the process's): written through, as scripts' globals always were */
-  const isNew = (k: PropertyKey) => !Object.prototype.hasOwnProperty.call(target, k) && !pageOwn().has(k);
+  const isNew = (k: PropertyKey) => !Object.prototype.hasOwnProperty.call(target, k) && !pageOwn().has(k) && !PROCESS_LOCAL.has(k);
   const through = new Set<PropertyKey>();
 
   const fromPage = (k: PropertyKey) => {
@@ -91,7 +101,15 @@ export function createProcessGlobal(own: Record<string, unknown>): any {
         if (through.has(k)) { through.delete(k); if (!('value' in desc) && !desc.get && !desc.set) desc = { value: page[k as any], ...desc }; }
         return Reflect.defineProperty(t, k, desc);
       }
-      if (through.has(k) || (isNew(k) && !deleted.has(k))) { through.add(k); return Reflect.defineProperty(page, k, desc); }
+      if (through.has(k) || (isNew(k) && !deleted.has(k))) {
+        through.add(k);
+        // On the page every process shares it: it stays redefinable and writable
+        // (@astrojs/compiler defines a read-only `fs`, which esbuild's child then
+        // assigns: each of them its own global in node)
+        const d: PropertyDescriptor = { ...desc, configurable: true };
+        if (!('get' in d) && !('set' in d)) d.writable = true;
+        return Reflect.defineProperty(page, k, d);
+      }
       deleted.delete(k);
       // A partial descriptor (esbuild's {writable, configurable} for crypto) keeps the value it had
       if (!Object.prototype.hasOwnProperty.call(t, k) && !('value' in desc) && !desc.get && !desc.set) {

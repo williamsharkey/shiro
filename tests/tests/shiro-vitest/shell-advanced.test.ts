@@ -637,6 +637,34 @@ describe('Shell Advanced', () => {
   //  pipefail
   // ═══════════════════════════════════════════════════════════════════
 
+  describe('case inside if', () => {
+    it('keeps every item (;; was collapsed to ;, so the case ran nothing)', async () => {
+      expect((await run(shell, 'if true; then case x in a) echo A ;; *) echo hi ;; esac; fi')).output.trim()).toBe('hi');
+      expect((await run(shell, 'y=b\nif true; then\n  case "$y" in\n    a|b)\n      ;;\n    *)\n      echo other\n      ;;\n  esac\n  echo after\nfi')).output.trim()).toBe('after');
+      expect((await run(shell, 'if false; then :\nelse\n  case z in\n    a) echo A ;;\n    *) echo star ;;\n  esac\nfi')).output.trim()).toBe('star');
+    });
+  });
+
+  describe('local in a subshell of a function', () => {
+    it('works in a piped { } group and in ( ) (opencode install script)', async () => {
+      await fs.writeFile('/tmp/loc.sh', 'set -u\nf() {\n  printf "x 5\\ny 7\\n" | {\n    local n=0\n    while read -r a b; do n=$(( n + b )); done\n    echo "n=$n"\n  }\n  ( local m=1; echo "m=$m" )\n}\nf\n');
+      const r = await run(shell, 'bash /tmp/loc.sh');
+      expect(r.output).not.toContain('can only be used');
+      expect(r.output).toContain('n=12');
+      expect(r.output).toContain('m=1');
+      expect(r.exitCode).toBe(0);
+      expect((await run(shell, 'echo hi | { local q=1; }')).output).toContain('can only be used in a function');
+    });
+
+    it('a { } group after `cmd | \\<newline>` is still a group (opencode install script)', async () => {
+      await fs.writeFile('/tmp/cont.sh', 'set -u\nf() {\n    printf "x 5\\n" \\\n        | \\\n    {\n        local n=0\n        while read -r a b; do n=$(( n + b )); done\n        echo "n=$n"\n    }\n}\nf\n');
+      const r = await run(shell, 'bash /tmp/cont.sh');
+      expect(r.output.trim()).toBe('n=5');
+      expect(r.exitCode).toBe(0);
+      expect((await run(shell, 'echo x | \\\n{\n  read v; echo "got $v"\n}')).output.trim()).toBe('got x');
+    });
+  });
+
   describe('set -o pipefail', () => {
     it('without pipefail, pipe exit is last command', async () => {
       const { exitCode } = await run(shell, 'false | true');

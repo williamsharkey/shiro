@@ -3,7 +3,7 @@
  *
  * Extracted from git.ts to keep command implementations focused.
  */
-import git, { TREE, STAGE } from 'isomorphic-git';
+import git, { TREE, STAGE } from './git-cached';
 
 // --- Types ---
 

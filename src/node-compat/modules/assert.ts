@@ -278,7 +278,8 @@ export function createAssertModule(inspect: Inspect = (v) => String(v)): any {
   const strict = build(true);
   assert.strict = strict;
   strict.strict = strict;
-  assert.default = assert;
-  strict.default = strict;
+  // (not enumerable: node's assert has no `default`)
+  Object.defineProperty(assert, 'default', { value: assert, writable: true, configurable: true, enumerable: false });
+  Object.defineProperty(strict, 'default', { value: strict, writable: true, configurable: true, enumerable: false });
   return { assert, strict, isDeepStrictEqual: (a: any, b: any) => isDeepEqual(a, b, true) };
 }

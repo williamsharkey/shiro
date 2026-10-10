@@ -272,6 +272,17 @@ export function getDesktop(): DesktopAPI | null {
   return instance;
 }
 
+/**
+ * Phone layout (`.sd-compact`): windows maximized, no snapping or resizing.
+ * Narrow windows, and phones on their side (by the screen, which the
+ * on-screen keyboard doesn't change, so it doesn't flip the layout).
+ */
+export function compactViewport(): boolean {
+  if (window.innerWidth <= 640) return true;
+  const s = typeof screen === 'object' ? Math.min(screen.width, screen.height) : 0;
+  return s > 0 && s <= 500 && window.innerHeight <= 500;
+}
+
 export class WindowManager implements DesktopAPI {
   readonly version = DESKTOP_API_VERSION;
   /** Element windows live in (positioned over the whole page; work area excludes menu bar and dock). */
@@ -518,7 +529,7 @@ export class WindowManager implements DesktopAPI {
   }
 
   relayout(): void {
-    const compact = window.innerWidth <= 640;
+    const compact = compactViewport();
     if (compact !== this.compact) {
       this.compact = compact;
       this.root.classList.toggle('sd-compact', compact);
@@ -564,8 +575,13 @@ class WindowImpl implements DesktopWindow {
     this.minWidth = opts.minWidth ?? 220;
     this.minHeight = opts.minHeight ?? 120;
     const wa = wm.workArea();
-    const width = Math.round(opts.width ?? Math.min(760, wa.width * 0.62));
-    const height = Math.round(opts.height ?? Math.min(480, wa.height * 0.6));
+    let width = Math.round(opts.width ?? Math.min(760, wa.width * 0.62));
+    let height = Math.round(opts.height ?? Math.min(480, wa.height * 0.6));
+    // On a small screen (a tablet, a narrow browser window) asked-for sizes fit the work area
+    if (!opts.override) {
+      width = Math.max(Math.min(width, wa.width - 12), Math.min(this.minWidth, wa.width));
+      height = Math.max(Math.min(height, wa.height - TITLEBAR_H - 12), Math.min(this.minHeight, wa.height - TITLEBAR_H));
+    }
     const pos = opts.x !== undefined && opts.y !== undefined ? { x: opts.x, y: opts.y } : wm.placement(width, height);
     this.g = { x: Math.round(pos.x), y: Math.round(pos.y), width, height };
 

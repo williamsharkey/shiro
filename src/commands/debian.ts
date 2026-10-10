@@ -191,6 +191,8 @@ export const shiroAptCmd: Command = {
       run: (path, argv) => ctx.shell.fork().executeWithStdin([path, ...argv.slice(1)].map(q).join(' '),
         path === script + '.debian' ? ctx.stdin : '', out, err),
       say: err,
+      // Ctrl-C or a timeout's abort: the shell stopped waiting on this builtin
+      stopped: () => !!(ctx.shell.abortController ?? ctx.shell.inheritedAbort)?.signal.aborted,
     });
   },
   async program(proc, kernel) {

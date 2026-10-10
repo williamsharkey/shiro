@@ -751,6 +751,194 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    `go run` hang). perf-kernel's gowait stress (60 rounds of 8 parallel
    os/exec children, BLINK_FORK_STRESS=1) failed before; it passed 3 of 3
    runs after.
+92. Same-instance fork keeps page lock counts. Fork turns the parent's
+   MAP_SHARED pages into shared host pages. It moved each onto a fresh page
+   with a plain PTE store, dropping the lock count of a thread blocked in
+   the kernel on that page (a futex waiter in sem_wait). Its release then
+   failed `entry & PAGE_LOCKS` in memory.c (Open POSIX fork_21-1,
+   pthread_attr_destroy_1-1, about 1 run in 3). A page of its own is now
+   shared in place, with no copy and no free under a user. Block and
+   reserved pages still move, with a CAS that keeps the count. The child's
+   copies of the PTEs start with no locks; it inherited the parent's and
+   waited on them as it exited. fork_21-1 passes 12/12 and
+   pthread_attr_destroy_1-1 6/6.
+93. unix/conformance's: rt_sigqueueinfo hands its siginfo to the kernel; sched_*
+   take a thread's tid as the caller's own.
+94. FUTEX_WAKE_OP and the priority-inheritance futex ops (LOCK_PI,
+   LOCK_PI2, TRYLOCK_PI, UNLOCK_PI) were EINVAL. glibc aborts on that ("The
+   futex facility returned an unexpected error code") for
+   PTHREAD_PRIO_INHERIT mutexes, which TBB, OpenEXR and Blender use. The
+   word holds the owner's tid; a contended locker sets FUTEX_WAITERS and
+   waits on the word. It takes it with FUTEX_WAITERS when it had to wait,
+   so its unlock comes back to wake the rest. EDEADLK for the owner, EPERM
+   for an unlock by a non-owner, timeouts absolute as on Linux; priority
+   inheritance itself is a no-op. Test: fixtures/x86/futexpi.c (raw ops, 4
+   threads on a PI mutex, a timed lock), identical to native output.
+95. Signals carry their siginfo. A signal from the kernel arrives as a
+   number on a reply. Blink asks the kernel's call 1030 for its siginfo
+   (si_code, sender pid/uid, sigqueue's value, a timer's overrun) before
+   rt_sigreturn: in C for direct channels, in host.mjs for the pool and
+   the loader's channel. It keeps each one until the signal is delivered,
+   when it goes into the SA_SIGINFO frame. Each queued instance of a
+   real-time signal stays pending until all are delivered, in order.
+   Found on the way: EnqueueSignal used `1ul << (sig - 1)`, and long is
+   32 bits in wasm32, so signal 34 (SIGRTMIN) became bit 1, SIGINT. Every
+   real-time signal killed the process with status 130 (the Open POSIX
+   sigqueue tests' 130/160 exits). Test: fixtures/x86/siginfo.c,
+   identical to native output. An older kernel without 1030 gets the
+   number-only frames as before.
+100. Instructions that cross into the next code page are compiled again
+   (patch 41's decoding, which 57 had turned off), when that page can't
+   change either. 57's failure, liblzma's threaded decoder crashing in a
+   forked child in one binary layout, no longer reproduces: 20 of 20 runs
+   decode right. Left to the interpreter, a straddler inside a hot loop
+   made every pass leave compiled code for one instruction and come back.
+   agent-clis' sampled profile of native Claude's startup shows such loops
+   (0x434cffe: 461 k interpreted passes). BLINK_WJIT_STRADDLE=0 gives 57's
+   behaviour. The x86 suite A/B is unchanged ("same" everywhere).
+101. SHIRO_BLINK_MMLOG=3 logs, besides the mappings, each write, pwrite
+   and pwritev to a file (fd > 2): source address, length, offset and the
+   first 16 bytes as Blink gathered them. It shows whether data a file
+   lost (PostgreSQL's zeroed WAL page) left Blink intact.
+102. MAP_HUGETLB is ENOMEM, as on Linux with no huge pages reserved.
+   PostgreSQL's huge_pages=try then maps ordinary pages; Blink used to
+   accept the flag silently. Test: fixtures/x86/hugetlb.c.
+103. SHIRO_BLINK_PROFILE also lists compiled code's calls to Blink's
+   handlers (the instructions not inlined), by count.
+104. rol/ror by a constant are inline: 8-, 32- and 64-bit, registers and
+   memory, with CF/OF as alu.c's Rol/Ror. 16-bit and by-%cl rotates still
+   call.
+105. Hint nops (0F 18–1E, including endbr64 at every function of a CET
+   build) and prefetch are inline as nothing.
+106. SSE2/SSSE3 integer ops with a 66 prefix are inline as wasm SIMD:
+   padd/psub b/w/d/q, pand/pandn/por/pxor, pcmpeq/pcmpgt b/w/d,
+   pminub/pmaxub, punpck{l,h}{bw,wd,dq,qdq}, pshufd, pshufb (selector
+   bytes with the top bit set give 0), palignr up to 16, psrl/psra/psll
+   w/d/q and psrldq/pslldq by immediates (counts past the lane width as
+   on x86), pmovmskb. Memory operands must be 16-byte aligned: otherwise
+   the interpreter runs the instruction and raises the #GP.
+107. movaps/movapd/movdqa with a memory operand are inline, with the same
+   alignment check. OpenSSL's SSSE3 SHA-1 runs 5x faster (3300 → 650 ms
+   for 16 MB); see BENCHMARKS.md "unix/perf-blink 11". Tests:
+   fixtures/x86/rotates.c and ssei.c, identical to native.
+108. comisd/ucomisd/comiss/ucomiss clear AF along with OF and SF, as x86
+   does (Blink left AF alone). Found by fixtures/x86/ssefloat.c: scalar
+   double ops (arithmetic, min/max, the eight cmpsd predicates, sqrt,
+   cvt* to 32/64-bit, roundsd in all modes, movmskpd) over NaN, ±inf, ±0,
+   denormals and integer limits. Now identical to native in the
+   interpreter and in compiled code.
+109. Same-instance fork shares private pages copy-on-write. A writable
+   page of its own becomes a refcounted shared host page (PAGE_GROW), read
+   only, with PAGE_COW and PAGE_COWRW (the mapping's write intent); parent
+   and child map the same page. Pages a thread holds locked in a system
+   call are still copied. Blink writes through a resolved pointer on many
+   paths without checking PAGE_RW. So any address it resolves in a COW
+   page (LookupAddress2: interpreter, system calls, string ops, stack)
+   gives the process its own copy first, or the page itself once nobody
+   else maps it. It copies before dropping the reference and swaps the PTE
+   with a CAS. Only compiled code's inline reads keep sharing: its writes
+   miss its write cache and come back through the interpreter.
+   - mprotect keeps COW pages read-only and records write intent in
+     COWRW.
+   - madvise(DONTNEED) breaks COW first, then zeros.
+   - mremap, /proc/self/maps and IsValidMemory count COWRW as writable.
+   - The JIT doesn't treat a COW page as fixed code.
+   - Blink's own writes (futex words, clear-tid, robust lists, CopyToUser)
+     resolve with LookupAddressWrite.
+   - BLINK_FORK_COW=0 gives the copying fork.
+96–98. unix/conformance's:
+   - 0096: a blocked real-time raise() queues in the kernel;
+     sigprocmask leaves SIGKILL/SIGSTOP out; sigaltstack modes as on
+     Linux.
+   - 0097: mprotect(PROT_WRITE) keeps the page readable.
+   - 0098: writable shared mappings of kernel files are written back
+     before a new mapping reads the file, and at exit.
+110. A same-instance child's signals carry their siginfo too: host.mjs
+   makes call 1030 as the child, and blink_shiro_signal_pid_info queues it
+   on the child's System. Open POSIX sigqueue_1-1 (the child's handler
+   checks si_value) passes. Test: fixtures/x86/siginfochild.c.
+111. memfd_create goes to the kernel's (Blink answered ENOSYS): Firefox's
+   shared memory, Mesa, Wayland and PulseAudio make their buffers with
+   it. Test: fixtures/x86/memfd.c. (Another process mapping the same
+   memfd afresh doesn't see its writes yet; 0112 fixes that.)
+112. Objects shared with other Blink instances (shmobj, the Blink half of
+   docs/research/SHARED_MAPPINGS.md). A MAP_SHARED mapping of a /dev/shm
+   file or a memfd asks the kernel for a shared object (call 1020, kind
+   0x100: remote from the first mapper, so nobody has to publish). Its
+   bytes live in the kernel's SharedArrayBuffer, which the instance's
+   host.mjs thread holds.
+   - Blink maps shadow pages marked PAGE_REMOTE (bit 48). No TLB caches
+     them, the JIT's included: compiled code leaves the instruction to the
+     interpreter. Every access comes through LookupAddress2.
+   - An instruction locks the object (a control word after its bytes) and
+     copies the page in, in one call to the host thread. The thread keeps
+     the lock and the page for the next instructions, a lease of at most
+     0.5 ms, released before any system call or GIL hand-off. Then it
+     writes the pages back and unlocks. Lock-prefixed instructions are
+     atomic across instances. A thread waiting for the lock sleeps on a
+     wake from the host thread (Atomics.waitAsync), and newcomers let
+     waiters go first.
+   - A system call may block, so it locks only around its copies. It
+     writes back what it changed, diffed against what it read.
+   - FUTEX_WAIT/WAKE on a remote word wait and wake on the buffer itself,
+     so a wake crosses instances.
+   - munmap, exit and same-instance fork keep the kernel's mapping counts.
+   - BLINK_SHMOBJ=0 maps such files as private copies, as before.
+
+   Tests:
+   - fixtures/x86/psem.c: sem_open, with an exec'd process posting (was
+     it.fails).
+   - fixtures/x86/shmobj.c: a memfd mapped again by an exec'd process,
+     2×2000 lock xadds plus a PROCESS_SHARED mutex, and 50 semaphore
+     ping-pongs. Counts exact with and without the JIT, 0.8 s for the
+     whole program. The first version, a call per access and no lease,
+     took 24 s.
+   - shmobj.test.ts: the kernel side of kind 0x100, memfd keys and the
+     control page.
+
+   Costs and gaps:
+   - A cross-instance semaphore round trip is ~6 ms (native: 0.08 ms).
+   - read()/write() on a memfd go through the buffer while it's remote
+     (perf-kernel's side). A /dev/shm file's don't yet.
+   - SysV shm between instances still uses a copy per instance.
+113. SHIRO_BLINK_MMLOG=3's write lines name the fd's file, as the kernel's
+   /proc/self/fd link gives it (fds get reused; debian's PostgreSQL WAL
+   hunt needed to know which file a write went to).
+114. unpckhpd took the source's high half for both halves of the result
+   (its low half is the destination's high half). llvmpipe's shader code
+   (Mesa 22, LLVM 15) uses it, so GLSL output was wrong in whole 4-pixel
+   blocks (unix/gui's osmesa-probe: 3 of 5 sampled pixels). It was wrong in
+   the interpreter, and the JIT calls the same handler. Test:
+   fixtures/x86/sse41b.c, the SSE4.1 forms LLVM emits there (pblendvb,
+   ptest+setcc, pinsrd/extractps with memory, cvtsi2ss, movshdup,
+   pminud/pmaxud, all cmpps predicates, unpck*pd, REX registers), against
+   native, with and without the JIT.
+0500. unix/conformance's mlock/munlock/mlockall and mmap argument errors
+   (Open POSIX mlock_8-1, munlock_10-1, mlockall_13-1, mmap_21-1, 23-1,
+   24-2). Numbered from 0500 so the two branches never renumber each
+   other.
+0501. unix/conformance's: a thread's tkill/tgkill reaches its handler as
+   SI_TKILL from its own process (glibc's SIGCANCEL handler checks that),
+   and the signal frame is in Linux's rt_sigframe order (ret, uc, si), as
+   libgcc's fallback unwinder expects. pthread_cancel works.
+0502. unix/conformance's: a CPU clock id that names no process or thread
+   of ours is EINVAL.
+0503. unix/conformance's: tkill/tgkill of signal 0 to the calling thread is
+   0 (pthread_kill(self, 0) read hands[-1]).
+0504. unix/conformance's: setting another user's process's scheduling is
+   EPERM, as kill(pid, 0) says; reading it isn't.
+
+   fork+exit+wait with 16 MiB of dirty heap went from 30 to 7.5 ms, and
+   with 64 MiB from 104 to 12 ms (native: 3.1 ms). Test:
+   fixtures/x86/cowfork.c covers:
+   - heap, brk, .data, mmap and stack views on both sides after either
+     writes;
+   - a signal frame in the child;
+   - mprotect, madvise and mremap after fork;
+   - a grandchild, 8 children, and exec.
+
+   It matches native, and the gowait stress, the xz threaded decode, Open
+   POSIX fork_21-1 and the LTP fork/mm subset are unchanged.
 
 The page compiles blink.wasm once and gives the `WebAssembly.Module` to every
 Blink worker (src/x86-engine/blink.ts `blinkWasmModule`, host.mjs
@@ -812,6 +1000,16 @@ Honest estimate for a ~200 MB static Go CLI that talks TLS to Google APIs:
    estimate from gh, not measured), and hot CPU-bound code at 2–5x native
    instead of ~120x (Go loop 50M: 253 ms vs 107 ms native; mul/div loop
    4–5x).
+   Since then (Blink patches 0085–0111): compiled blocks chain without
+   leaving the JIT, SSE2/SSSE3 integer code, rotates and hint nops are
+   compiled (SHA-1 5 → 25 MB/s), and fork is copy-on-write (64 MiB parent:
+   104 → 12 ms). From before the JIT to now, the x86 suite reads go_cpuloop
+   2282 → 246 ms and Go/glibc peak RSS −50–94% (BENCHMARKS.md, perf-blink
+   13). A larger data point: Claude's native ~200 MB single-file binary
+   (a JavaScript runtime plus its bundle) starts in ~48 s, 87% of it in
+   compiled code. That is far more init code than a Go CLI, so it bounds
+   agy from above rather than replacing the estimate: still 10–15 s first
+   run, 5–8 s later, unmeasured.
    Next levers: the interpreter for cold code (≈1.1 s of `gh`'s 3.3 s in
    Node: Blink's per-instruction dispatch and memory helpers), keeping
    compiled regions across page loads (V8 already reuses them within one

@@ -1,4 +1,4 @@
-import git, { TREE, STAGE } from 'isomorphic-git';
+import git, { TREE, STAGE, withGitCache } from './git-cached';
 // @ts-ignore - isomorphic-git http module
 import http from 'isomorphic-git/http/web';
 import { Command, CommandContext } from './index';
@@ -13,6 +13,8 @@ import {
 import { getShiroOrigin } from '../utils/shiro-origin';
 import { activeProfile } from '../profile';
 import { gitPlumbing } from './git-plumbing';
+import { packageShadows } from '../pkg-manager';
+import { builtinCloneHandles } from './git-clone-route';
 import { splitShortOptions, unknownOption, realGit, PREFER_REAL } from './git-route';
 import { GLOBAL_GITCONFIG, parseGitConfig, formatGitConfig } from './git-config';
 
@@ -21,7 +23,13 @@ import { GLOBAL_GITCONFIG, parseGitConfig, formatGitConfig } from './git-config'
 export const gitCmd: Command = {
   name: 'git',
   description: 'Version control system',
-  async exec(ctx: CommandContext) {
+  // one isomorphic-git cache per command (see git-cached.ts)
+  exec: (ctx: CommandContext) => withGitCache(() => gitMain(ctx)),
+  keepOverPackage: builtinCloneHandles,
+};
+
+
+async function gitMain(ctx: CommandContext): Promise<number> {
     // Global options before the subcommand (git -C /path -c k=v --no-pager subcmd ...)
     const argv = ctx.args, cwd0 = ctx.cwd; // as given, for the real git
     let workDir = ctx.cwd;
@@ -633,15 +641,26 @@ export const gitCmd: Command = {
           const cloneArgs = ctx.args.slice(1);
           let url = '';
           let cloneTarget = '';
-          let cloneDepth = 1;
+          // The full git installed (this is builtinCloneHandles' case): its defaults,
+          // all history, branches and tags; the built-in alone: a shallow clone
+          const asFullGit = packageShadows(ctx.fs).has('git');
+          let cloneDepth: number | undefined = asFullGit ? undefined : 1;
           let cloneBranch: string | undefined;
+          let singleBranch: boolean | undefined;
+          let noTags = false;
+          let remoteName = 'origin';
           for (let i = 0; i < cloneArgs.length; i++) {
             const a = cloneArgs[i];
             if (a === '--depth' && i + 1 < cloneArgs.length) { cloneDepth = parseInt(cloneArgs[++i], 10) || 1; continue; }
             if (a.startsWith('--depth=')) { cloneDepth = parseInt(a.slice(8), 10) || 1; continue; }
             if (a === '--branch' || a === '-b') { cloneBranch = cloneArgs[++i]; continue; }
             if (a.startsWith('--branch=')) { cloneBranch = a.slice(9); continue; }
-            if (a === '--single-branch' || a === '--no-tags' || a === '--quiet' || a === '-q') continue;
+            if (a === '--origin' || a === '-o') { remoteName = cloneArgs[++i] || 'origin'; continue; }
+            if (a.startsWith('--origin=')) { remoteName = a.slice(9) || 'origin'; continue; }
+            if (a === '--single-branch') { singleBranch = true; continue; }
+            if (a === '--no-single-branch') { singleBranch = false; continue; }
+            if (a === '--no-tags') { noTags = true; continue; }
+            if (a === '--quiet' || a === '-q') continue;
             if (a.startsWith('-')) continue;
             if (!url) { url = a; } else if (!cloneTarget) { cloneTarget = a; }
           }
@@ -674,8 +693,11 @@ export const gitCmd: Command = {
               git.clone({
                 fs, http, dir: targetDir, url,
                 corsProxy,
-                singleBranch: true,
-                depth: cloneDepth,
+                remote: remoteName,
+                // as git: --depth implies --single-branch
+                singleBranch: singleBranch ?? (asFullGit ? cloneDepth !== undefined : true),
+                noTags,
+                ...(cloneDepth !== undefined ? { depth: cloneDepth } : {}),
                 ...(cloneBranch ? { ref: cloneBranch } : {}),
                 onProgress: async () => {
                   await new Promise(resolve => setTimeout(resolve, 0));
@@ -688,8 +710,14 @@ export const gitCmd: Command = {
             ]);
           } catch (cloneErr: any) {
             await undo();
-            ctx.stderr += `fatal: ${cloneErr.message || cloneErr}\n`;
             const httpStatus = cloneErr?.data?.statusCode;
+            // The full git is there: it gets a clone the built-in couldn't do (not one refused for credentials)
+            if (asFullGit && httpStatus !== 401 && httpStatus !== 403) {
+              ctx.stderr = `(git: the built-in clone failed (${cloneErr.message || cloneErr}); the full git does it)\n`;
+              const code = await realGit(ctx, argv, cwd0);
+              if (code !== null) return code;
+            }
+            ctx.stderr += `fatal: ${cloneErr.message || cloneErr}\n`;
             if ((httpStatus === 401 || httpStatus === 403 || httpStatus === 404) && /github\.com/.test(url)) {
               ctx.stderr += token
                 ? 'hint: the repository may not exist, or your GitHub sign-in lacks access to it.\n'
@@ -702,6 +730,9 @@ export const gitCmd: Command = {
             await new Promise(resolve => setTimeout(resolve, 0));
             const branch = await git.currentBranch({ fs, dir: targetDir }) || 'main';
             await git.checkout({ fs, dir: targetDir, ref: branch, force: true });
+            // The checked-out branch tracks the remote's, as git clone sets it up
+            await git.setConfig({ fs, dir: targetDir, path: `branch.${branch}.remote`, value: remoteName });
+            await git.setConfig({ fs, dir: targetDir, path: `branch.${branch}.merge`, value: `refs/heads/${branch}` });
           } catch { /* checkout best-effort */ }
 
           ctx.stderr += `done.\n`;
@@ -1091,8 +1122,7 @@ export const gitCmd: Command = {
     }
 
     return 0;
-  },
-};
+}
 
 export { GLOBAL_GITCONFIG, parseGitConfig, formatGitConfig };
 

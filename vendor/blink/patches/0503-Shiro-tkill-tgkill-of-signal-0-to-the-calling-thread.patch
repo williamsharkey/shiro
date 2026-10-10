@@ -1,0 +1,43 @@
+From e265d70293a8bd8565b0467d3447de90e6889897 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 09:26:14 +0000
+Subject: [PATCH] Shiro: tkill/tgkill of signal 0 to the calling thread is 0
+
+pthread_kill(pthread_self(), 0) probes the thread; Blink's tkill to the
+calling thread used signal 0 as a number, shifting by -1 and reading
+hands[-1], and the guest segfaulted (Open POSIX pthread_kill_2-1, 3-1, 8-1).
+
+Exports blink_shiro_tkill0.
+---
+ blink/shiro.inc | 2 ++
+ blink/syscall.c | 1 +
+ 2 files changed, 3 insertions(+)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 8b10af1..881ffb0 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2403,6 +2403,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_memerrs(void) { return 1; }
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_tkillinfo(void) { return 1; }
+ // 0502: CPU clock ids of no process of ours are EINVAL
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_cpuclockids(void) { return 1; }
++// 0503: tkill/tgkill of signal 0 to the calling thread
++EMSCRIPTEN_KEEPALIVE int blink_shiro_tkill0(void) { return 1; }
+ 
+ // the same with the signal's siginfo (the kernel's call 1030, made as `pid`)
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid_info(int pid, int sig, int w0, int w1, int w2,
+diff --git a/blink/syscall.c b/blink/syscall.c
+index d4fecf6..881be68 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -5613,6 +5613,7 @@ static int SysTkill(struct Machine *m, int tid, int sig) {
+   }
+   // trigger signal immediately if possible
+   if (tid == m->tid) {
++    if (!sig) return 0;  // (pthread_kill(pthread_self(), 0): it exists)
+     if (sig == SIGSTOP_LINUX || sig == SIGKILL_LINUX) {
+       return raise(XlatSignal(sig));
+     } else if (~m->sigmask & ((u64)1 << (sig - 1))) {
+-- 
+2.43.0
+

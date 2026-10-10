@@ -11,8 +11,8 @@
  * becomes a blob: URL of the file, or, for a script (a Worker's entry), of
  * that script bundled the same way.
  */
-import * as esbuild from 'esbuild-wasm';
-import { ensureEsbuildInitialized } from '../commands/build';
+import type * as esbuild from 'esbuild-wasm';
+import { withEsbuild } from '../commands/build';
 import { codeMask } from '../commands/jseval/module-transform';
 
 export interface BundleFs {
@@ -37,6 +37,8 @@ export interface BundleOptions {
   builtins?: (name: string) => any;
   /** Extra export conditions, ahead of browser/import/module/default */
   conditions?: string[];
+  /** Each blob: URL made for an asset (to revoke when the bundle is let go) */
+  onAssetUrl?: (url: string) => void;
   /** Edits to a file's source as it is bundled (path → [from, to] pairs) */
   patch?: Record<string, [string, string][]>;
 }
@@ -45,7 +47,6 @@ const dirOf = (p: string) => p.slice(0, p.lastIndexOf('/')) || '/';
 const MIME: Record<string, string> = { wasm: 'application/wasm', js: 'text/javascript', mjs: 'text/javascript', json: 'application/json' };
 
 export async function bundleFromVfs(fs: BundleFs, entry: string, opts: BundleOptions = {}): Promise<string> {
-  await ensureEsbuildInitialized();
   const conditions = [...(opts.conditions ?? []), 'browser', 'import', 'module', 'default'];
   const exists = async (p: string) => { try { await fs.readFile(p); return true; } catch { return false; } };
   const readJson = async (p: string) => { try { return JSON.parse(await fs.readFile(p, 'utf8')); } catch { return null; } };
@@ -116,6 +117,7 @@ export async function bundleFromVfs(fs: BundleFs, entry: string, opts: BundleOpt
     else blob = new Blob([await fs.readFile(path)], { type: MIME[ext] ?? 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
     assetUrls.set(path, url);
+    opts.onAssetUrl?.(url);
     return url;
   };
 
@@ -173,7 +175,7 @@ export async function bundleFromVfs(fs: BundleFs, entry: string, opts: BundleOpt
     },
   };
 
-  const result = await esbuild.build({
+  const result = await withEsbuild((esbuild) => esbuild.build({
     entryPoints: [entry],
     bundle: true,
     write: false,
@@ -181,8 +183,10 @@ export async function bundleFromVfs(fs: BundleFs, entry: string, opts: BundleOpt
     platform: 'browser',
     target: 'es2022',
     logLevel: 'silent',
+    // (not after the trailing `export { … }`: browser-packages.ts runs the bundle as a function from it)
+    legalComments: 'none',
     banner: opts.banner ? { js: opts.banner } : undefined,
     plugins: [plugin],
-  });
+  }));
   return result.outputFiles![0].text;
 }

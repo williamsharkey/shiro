@@ -188,6 +188,12 @@ node bench/ab.mjs origin/unix/integration --quick          # integration vs your
   GC, `performance.measureUserAgentSpecificMemory()` (isolated only), and the
   renderer process RSS from `/proc/<pid>/status` (includes Workers; peaks are
   sampled every 25 ms around a run, so very short programs under-report).
+  Under Playwright, DevTools keeps copies of fetched response bodies in the
+  renderer's buffer partition, which counts in RSS. Fetch-heavy steps
+  (npm, `claude --npm` first run, Vite) record a `*_net` twin: the peak minus
+  that partition's growth, read from a memory-infra dump
+  (`h.bufferPartition()`). The harness's own Network tracking stops after
+  boot (`h.boot({ keepNetwork })`).
 - Results: one JSON per run with environment info and every sample.
   `report.mjs` rewrites the table between the `bench:table` markers in
   `docs/BENCHMARKS.md`; the hotspot list there is hand-written.

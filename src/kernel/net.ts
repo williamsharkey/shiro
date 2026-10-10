@@ -881,10 +881,20 @@ export class KDatagramSocket implements OpenFile {
     }
   }
 
+  /** An IPv4 address given to an IPv6 socket is its IPv4-mapped form (::ffff:a.b.c.d), as in Linux */
+  private mapped(addr: SockAddr): SockAddr {
+    return this.domain === AF_INET6 && addr.family === AF_INET ? { family: AF_INET6, address: `::ffff:${addr.address}`, port: addr.port } : addr;
+  }
+
   connect(addr: SockAddr): number {
+    // glibc's getaddrinfo reuses an IPv6 socket for an IPv4 answer and
+    // asserts the source address getsockname reports is v4-mapped
+    addr = this.mapped(addr);
     this.remote = { ...addr };
     this.soError = 0;
-    // A connected datagram socket has a source address (getsockname)
+    // A connected datagram socket has a source address (getsockname); after
+    // mapped() an IPv4 peer on an IPv6 socket gives a v4-mapped one, as Linux's
+    // ip6_datagram_connect does (Firefox and uv aborted in getaddrinfo without it)
     const src = localAddressFor({ ...addr, family: this.domain });
     if (!this.local) this.autobind(src);
     else if (this.local.address === '::' || this.local.address === '0.0.0.0') this.local = { ...this.local, address: src };
@@ -941,7 +951,7 @@ export class KDatagramSocket implements OpenFile {
   private takeError(): number { const e = this.soError; this.soError = 0; return e; }
 
   async sendto(buf: Uint8Array, _flags: number, to: SockAddr | null): Promise<number> {
-    const dest = to ?? this.remote;
+    const dest = to ? this.mapped(to) : this.remote;
     if (this.closed) return -EBADF;
     if (this.soError && !to) return -this.takeError();
     if (!dest) return -EDESTADDRREQ;

@@ -104,10 +104,23 @@ export class PosixTimers {
     }
   }
 
+  /** Would `sig` be discarded on arrival (unblocked, and ignored by disposition or default)? */
+  private static discarded(proc: Process, sig: number): boolean {
+    if (proc.sigmask.has(sig)) return false;
+    const d = proc.dispositions.get(sig);
+    if (d === 'ignore') return true;
+    if (d !== undefined) return false;
+    const a = A.defaultSignalAction(sig);
+    return a === 'ignore' || (a === 'cont' && proc.state !== 'stopped');
+  }
+
   private fire(proc: Process, tm: Timer): void {
     if (tm.signo) {
       this.settle(proc, tm);
-      if (tm.queued) tm.cur = Math.min(DELAYTIMER_MAX, tm.cur + 1);
+      // A signal that would only be discarded isn't generated, and the last
+      // signal's overruns stay the reported ones (Linux 6.13's ignored timers)
+      if (!tm.queued && PosixTimers.discarded(proc, tm.signo)) tm.cur = 0;
+      else if (tm.queued) tm.cur = Math.min(DELAYTIMER_MAX, tm.cur + 1);
       else {
         tm.queued = true;
         this.deliver(proc, tm.signo, { signo: tm.signo, code: A.SI_TIMER, timerid: tm.id, overrun: 0, value: tm.value });
@@ -199,6 +212,13 @@ export class PosixTimers {
     if (tm.handle) clearTimeout(tm.handle);
     tm.deadline = 0;
     t!.delete(id);
+    // its signal still pending goes with it (Linux frees the timer's sigqueue entry)
+    if (tm.queued && PosixTimers.pending(proc, tm.signo)) {
+      const q = proc.siginfo.get(tm.signo);
+      const left = q?.filter((i) => !(i.code === A.SI_TIMER && i.timerid === id)) ?? [];
+      if (left.length) proc.siginfo.set(tm.signo, left);
+      else proc.dropSignal(tm.signo);
+    }
     return 0;
   }
 }

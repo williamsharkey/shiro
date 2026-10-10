@@ -30,7 +30,7 @@ export interface GuiApp {
   icon?: string;
   /** Paths deleted after unpacking: optional plug-ins whose libraries were left out. */
   remove?: string[];
-  /** [link, target] symlinks a postinst would make (update-alternatives: BLAS, LAPACK). */
+  /** [link, target] symlinks a postinst would make (update-alternatives: BLAS, LAPACK; LibreOffice's registry). */
   links?: [string, string][];
   /** Settings written into the user's home (relative path: contents) before a launch, when not there yet */
   home?: Record<string, string>;
@@ -43,6 +43,8 @@ export interface Overlay { path: string; sha256: string; size: number; when: str
 export interface AppsManifest {
   suite: string; arch: string; mirror: string; snapshot: string;
   overlays?: Overlay[];
+  /** Per font package, its font directories and the files it puts in each (pinned mtimes: pinFontDirs) */
+  fontDirs?: Record<string, Record<string, string[]>>;
   packages: Record<string, DebPackage>;
   apps: Record<string, GuiApp>;
 }
@@ -223,14 +225,37 @@ async function unpack(fs: FileSystem, entries: TarEntry[], ownBins: Set<string>)
  * `dir`, unless all of them are `covered` (packages whose result ships as an
  * overlay: gen-apps.py).
  */
-const TRIGGERS: { dir: string; argv: string[]; covered?: string[] }[] = [
+const TRIGGERS: { dir: string; argv?: string[]; run?: (fs: FileSystem) => Promise<unknown>; covered?: string[] }[] = [
   {
     dir: '/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/',
     argv: ['/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders', '--update-cache'],
     covered: ['libgdk-pixbuf-2.0-0', 'librsvg2-common'],
   },
   { dir: '/usr/share/glib-2.0/schemas/', argv: ['/usr/bin/glib-compile-schemas', '/usr/share/glib-2.0/schemas'] },
+  // gtk-update-icon-cache, written here (icon-cache.ts): without it GTK stats all of hicolor at every start
+  { dir: '/usr/share/icons/hicolor/', run: async (fs) => (await import('./icon-cache')).updateIconCache(fs, '/usr/share/icons/hicolor') },
 ];
+
+/**
+ * Fontconfig's caches (shipped as overlays in /var/cache/fontconfig, made by
+ * Debian's fontconfig: gen-apps.py) hold the mtime of the font directory they
+ * describe, and fontconfig rescans a directory whose mtime differs (~1.9 s of a
+ * GTK app's first start). So a font directory gets this fixed mtime, the one
+ * the caches were made with, when it holds exactly its package's files; with
+ * other files in it (a second package's) it keeps its real mtime and
+ * fontconfig rescans it, as it would without the cache.
+ */
+export const FONT_DIR_MTIME_MS = Date.UTC(2023, 0, 1);
+
+async function pinFontDirs(fs: FileSystem, m: AppsManifest, installed: string[]): Promise<void> {
+  for (const pkg of installed) {
+    for (const [dir, files] of Object.entries(m.fontDirs?.[pkg] ?? {})) {
+      const have = await fs.readdir(dir).catch(() => null);
+      if (!have || have.length !== files.length || !files.every((f) => have.includes(f))) continue;
+      await fs.utimes(dir, FONT_DIR_MTIME_MS, FONT_DIR_MTIME_MS, { atime: 0, mtime: 0 }).catch(() => {});
+    }
+  }
+}
 
 /** The triggers a package's files set off. */
 function triggersOf(pkg: string, entries: TarEntry[]): Set<number> {
@@ -249,8 +274,12 @@ async function runTriggers(fs: FileSystem, kernel: Kernel, which: Set<number>, l
   // independent of each other: each is its own Blink worker
   await Promise.all([...which].map(async (i) => {
     const t = TRIGGERS[i];
-    if (!(await fs.exists(t.argv[0]).catch(() => false))) return;
     const t0 = Date.now();
+    if (t.run) {
+      await t.run(fs).then(() => log(`trigger ${t.dir}: ${Date.now() - t0} ms`), (e) => log(`trigger ${t.dir}: ${(e as Error).message}`));
+      return;
+    }
+    if (!t.argv || !(await fs.exists(t.argv[0]).catch(() => false))) return;
     const status = await runQuiet(kernel, t.argv, {});
     log(`trigger ${t.argv[0].split('/').pop()}: status ${status >> 8} in ${Date.now() - t0} ms`);
   }));
@@ -373,7 +402,9 @@ async function doInstall(fs: FileSystem, kernel: Kernel, name: string, onProgres
   }
   for (const path of app.remove ?? []) await fs.rm(path, { recursive: true }).catch(() => {});
   for (const [link, target] of app.links ?? []) {
-    if (!(await fs.exists(link).catch(() => false))) await fs.symlink(target, link).catch(() => {});
+    if (await fs.exists(link).catch(() => false)) continue;
+    await fs.mkdir(link.slice(0, link.lastIndexOf('/')), { recursive: true }).catch(() => {});
+    await fs.symlink(target, link).catch(() => {});
   }
   for (const [o, blob] of overlays) {
     const { data } = await blob;
@@ -381,6 +412,7 @@ async function doInstall(fs: FileSystem, kernel: Kernel, name: string, onProgres
     await fs.mkdir(o.path.slice(0, o.path.lastIndexOf('/')), { recursive: true }).catch(() => {});
     await fs.writeFile(o.path, data);
   }
+  await pinFontDirs(fs, m, want);
   const tt = Date.now();
   report('triggers');
   await runTriggers(fs, kernel, triggers, log);
@@ -393,12 +425,59 @@ async function doInstall(fs: FileSystem, kernel: Kernel, name: string, onProgres
   return res;
 }
 
-const TEXT_HOOK = '/usr/lib/shiro/libshiro-text-hook.so';
+/** The text hook for a toolkit (scripts/gui/text-hook/): GTK 2/3 through cairo and GDK, Qt 5 Widgets through QPainter */
+const TEXT_HOOKS: Record<string, string> = { gtk2: 'libshiro-text-hook.so', gtk3: 'libshiro-text-hook.so', qt5: 'libshiro-qt-text-hook.so' };
 
 /**
  * DOM-text mode (docs/DOM-RENDERING.md): GTK apps load libshiro-text-hook.so,
  * which tells Xshiro the text they draw (scripts/gui/text-hook/).
  */
+const SESSION_BUS = 'unix:path=/tmp/runtime-user/bus';
+const buses = new WeakMap<Kernel, Promise<string | null>>();
+
+/**
+ * The session bus apps share (Debian's dbus-daemon, the manifest's
+ * `dbus-session`), started with the first app: single-instance checks
+ * (LXImage-Qt), settings and portals look for one. Its address, or null when
+ * it can't run (then apps get the unreachable default and fail fast).
+ */
+function sessionBus(kernel: Kernel, m: AppsManifest): Promise<string | null> {
+  if (!m.apps['dbus-session'] || !kernel.fs) return Promise.resolve(null);
+  let p = buses.get(kernel);
+  if (!p) {
+    p = startSessionBus(kernel, m.apps['dbus-session'].bin).catch(() => null);
+    buses.set(kernel, p);
+    // gone (or never came up): the next launch tries again
+    void p.then((a) => { if (!a) buses.delete(kernel); });
+  }
+  return p;
+}
+
+async function startSessionBus(kernel: Kernel, bin: string): Promise<string | null> {
+  const fs = kernel.fs as FileSystem;
+  if (!(await isAppInstalled(fs, 'dbus-session'))) await installApp(fs, kernel, 'dbus-session');
+  // libdbus needs a machine id
+  if (!(await fs.exists('/etc/machine-id').catch(() => false))) {
+    const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('') + '\n';
+    await fs.writeFile('/etc/machine-id', id).catch(() => {});
+  }
+  await fs.mkdir('/tmp/runtime-user', { recursive: true }).catch(() => {});
+  const sock = SESSION_BUS.slice('unix:path='.length);
+  if (await fs.exists(sock).catch(() => false)) await fs.unlink(sock).catch(() => {});
+  const { BufferFile } = await import('../kernel/fd');
+  const p = kernel.spawn({
+    path: bin, argv: ['dbus-daemon', '--session', '--nofork', '--nopidfile', `--address=${SESSION_BUS}`], cwd: '/',
+    env: appEnv(), fds: { 0: new BufferFile(''), 1: new BufferFile(null), 2: new BufferFile(null) },
+  });
+  let exited = false;
+  void p.wait().then(() => { exited = true; buses.delete(kernel); });
+  for (let t = 0; t < 15000 && !exited; t += 100) {
+    if (await fs.exists(sock).catch(() => false)) return SESSION_BUS;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return null;
+}
+
 async function writeHomeDefaults(kernel: Kernel, files: Record<string, string>): Promise<void> {
   const fs = kernel.fs as FileSystem | undefined;
   if (!fs) return;
@@ -411,21 +490,23 @@ async function writeHomeDefaults(kernel: Kernel, files: Record<string, string>):
 }
 
 async function textHookEnv(kernel: Kernel, app: GuiApp): Promise<Record<string, string>> {
-  if (!app.toolkit.startsWith('gtk') || !kernel.fs) return {};
+  const name = TEXT_HOOKS[app.toolkit];
+  if (!name || !kernel.fs) return {};
   if ((await import('../x11/dom-text')).domTextMode() === 'pixels') return {};
   const fs = kernel.fs as FileSystem;
+  const path = `/usr/lib/shiro/${name}`;
   try {
-    // 12 KB, HTTP-cached; rewritten when it changed
-    const r = await fetch(new URL('gui/lib/libshiro-text-hook.so', baseUrl()).href);
-    if (!r.ok) return (await fs.exists(TEXT_HOOK).catch(() => false)) ? { LD_PRELOAD: TEXT_HOOK } : {};
+    // small, HTTP-cached; rewritten when it changed
+    const r = await fetch(new URL(`gui/lib/${name}`, baseUrl()).href);
+    if (!r.ok) return (await fs.exists(path).catch(() => false)) ? { LD_PRELOAD: path } : {};
     const lib = new Uint8Array(await r.arrayBuffer());
-    const have = await fs.readFile(TEXT_HOOK).catch(() => null) as Uint8Array | null;
+    const have = await fs.readFile(path).catch(() => null) as Uint8Array | null;
     if (!have || have.length !== lib.length || have.some((b, i) => b !== lib[i])) {
       await fs.mkdir('/usr/lib/shiro', { recursive: true }).catch(() => {});
-      await fs.writeFile(TEXT_HOOK, lib, { mode: 0o755 });
+      await fs.writeFile(path, lib, { mode: 0o755 });
     }
   } catch { return {}; }
-  return { LD_PRELOAD: TEXT_HOOK };
+  return { LD_PRELOAD: path };
 }
 
 export interface LaunchedApp { pid: number; exited: Promise<number>; output: () => string }
@@ -440,10 +521,15 @@ export async function launchApp(kernel: Kernel, name: string, args: string[] = [
   const instance = app.bin.split('/').pop()!.toLowerCase().replace(/-\d+(\.\d+)*$/, '');
   const ids = await import('../x11/app-ids');
   if (instance !== name) ids.appIdAliases.set(instance, name);
+  ids.setParentPid((pid) => kernel.procs.get(pid)?.ppid);
   if (app.home) await writeHomeDefaults(kernel, app.home);
+  const bus = await sessionBus(kernel, m);
+  if (bus) env = { DBUS_SESSION_BUS_ADDRESS: bus, ...env };
   const out = new BufferFile(null);
   const p = kernel.spawn({
-    path: app.bin, argv: [app.bin.split('/').pop()!, ...args], cwd: '/home/user',
+    // argv[0]: the name for programs on the PATH, the full path for the others (LibreOffice's
+    // oosplash finds soffice.bin next to argv[0])
+    path: app.bin, argv: [/^\/usr\/(local\/)?s?bin\//.test(app.bin) ? app.bin.split('/').pop()! : app.bin, ...args], cwd: '/home/user',
     env: appEnv({ ...toolkitEnv(app), ...(await textHookEnv(kernel, app)), ...env }), fds: { 0: new BufferFile(''), 1: out, 2: out },
   });
   ids.pidAppIds.set(p.pid, name);

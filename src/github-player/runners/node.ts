@@ -152,15 +152,12 @@ async function tryEsbuildFallback(ctx: RunContext, dir: string): Promise<RunnerR
   log(`\x1b[36mesbuild fallback: bundling ${entryPath.replace(dir + '/', '')}...\x1b[0m`);
 
   try {
-    const { ensureEsbuildInitialized, createVirtualFSPlugin } = await import('../../commands/build');
-
-    await ensureEsbuildInitialized();
+    const { withEsbuild, createVirtualFSPlugin } = await import('../../commands/build');
 
     // Adapt RunContext to CommandContext shape for the plugin
     const adaptedCtx = { fs, cwd: dir } as any;
 
-    const esbuild = await import('esbuild-wasm');
-    const result = await esbuild.build({
+    const result = await withEsbuild((esbuild) => esbuild.build({
       entryPoints: [entryPath],
       bundle: true,
       minify: false,
@@ -170,7 +167,7 @@ async function tryEsbuildFallback(ctx: RunContext, dir: string): Promise<RunnerR
       plugins: [createVirtualFSPlugin(adaptedCtx)],
       logLevel: 'silent',
       define: { 'process.env.NODE_ENV': '"production"' },
-    });
+    }));
 
     if (result.errors.length > 0) {
       log(`\x1b[33mesbuild fallback failed: ${result.errors[0].text}\x1b[0m`);

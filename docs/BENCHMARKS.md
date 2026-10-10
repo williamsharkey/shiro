@@ -277,6 +277,108 @@ untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
 
+### go_nethttp +30%: patch 0053's emulator, not the kernel (unix/bench)
+
+Measured on machine `cfad8fbf4994`, which this session moved to: Xeon
+2.80 GHz, kernel fc-v114. Absolute numbers aren't comparable with
+`e57125c23b92`.
+
+`ab.mjs 1d9582a 6e69776 --suites x86` (7 runs × 5 rounds): `go_nethttp`
+507 → 687 ms, +35% (CI +18…+48%), every round worse. `go_hello` and
+`hello_musl` are unchanged. `ab.mjs 6e69776 7bb12ae`: same (713 → 719 ms),
+so nothing since 6e69776 adds to it.
+
+`bench/engine-swap.sh` rebuilds a tree with Blink's emulator
+(`blink.wasm` + `blink.mjs`) and its Worker glue (`host.mjs`) taken from
+other commits. On the 6e69776 tree:
+
+| emulator | host.mjs | go_nethttp (ms) |
+|---|---|---|
+| 5a4e756 (before 0053) | 6e69776 | 449 |
+| 6e69776 | 5a4e756 | 691 |
+| 5a4e756 | 5a4e756 | 520 |
+
+So the cost is in the emulator, not the kernel, net or host glue. Three
+interleaved rounds, host 6e69776:
+
+| emulator | go_nethttp (ms) |
+|---|---|
+| 5a4e756 | 506 / 518 / 516 |
+| **799a50f (patch 0053)** | **665 / 723 / 691** |
+| 9d1f49f (0054) | 621 / 795 / 697 |
+
+aa07d36 (the page compiles blink.wasm once) removed 0053's recompile cost,
+which is why `go_hello` recovered. What remains is in 0053's emulator change
+itself. Its sliced nanosleep/clock_nanosleep/pause fits: Go's sysmon and
+netpoller sleep and wake constantly in net/http, and much less in a hello
+world. Reported to unix/perf-blink.
+
+### Harness: what `peak_rss` includes (DevTools response-body copies)
+
+perf-fs-shell noticed that under Playwright, DevTools keeps copies of
+response bodies in the renderer's PartitionAlloc buffer partition, and that
+counts in renderer RSS. Measured with a memory-infra dump
+(`h.bufferPartition()`), machine `e57125c23b92`:
+
+- The harness's own CDP session had `Network.enable` on for the whole
+  page (it counts boot requests and bytes). It now disables it right after
+  boot (`keepNetwork` keeps it). On its own this changed the npm/Vite peaks
+  by under 15 MiB.
+- Playwright's own Network/Fetch sessions (request events, the net-cache
+  routing) stay attached, and they can't be turned off. With them, the
+  buffer partition grows 3.8 → 29 MiB over an `npm install` with
+  typescript, and → 64 MiB after a first `claude --npm`.
+- Fetch-heavy steps now also record a `_net` twin: the peak minus the
+  buffer partition's growth over the step.
+
+| peak (MiB above pre-run) | raw | net | buffer growth |
+|---|---:|---:|---:|
+| `workload.peak_rss.claude_npm_first` | 414 | 385 | ~28 |
+| `workflow.peak_rss.vite_npm_i` | 187 | 139 | ~48 |
+| `workflow.peak_rss.vite_dev` | 332 | 332 | 0 |
+| `workload.peak_rss.ffmpeg_first` | 108 | 108 | 0 |
+| `workflow.peak_rss.go_run_first` | 488 | 488 | 0 |
+| `workflow.peak_rss.apt_update` | 656 | 656 | 0 |
+| `workflow.peak_rss.apt_install_hello` | 714 | 714 | 0 |
+
+So the inflation is real for npm (tens of MiB here, more in bigger
+installs) and absent for apt. apt fetches through the page's mirror route
+on the app origin, and Playwright doesn't intercept that. The apt and go
+peaks are the page's own memory. A/B deltas were never affected, because
+both sides carry the same overhead. Read the `_net` value for what a user's
+tab would use.
+
+### Integration 073944d → 6e69776: pipe throughput, bisected (unix/bench)
+
+The hourly compare A/B-confirmed isolated `kernel.pipe_throughput` 667 →
+555 MB/s, but with a wide interval. Re-running it in quick mode (8 rounds)
+didn't confirm it: +30% worse with a CI of −14…+75%, 7 of 8 rounds worse.
+Quick mode's 16 MiB samples span 240–1730 MB/s within one run. At 64 MiB ×
+15 samples the builds separate cleanly: 073944d 1596/1640 MB/s, 6e69776
+959/827 MB/s.
+
+Bisect of the merges at that size (median / p25):
+
+| commit | median / p25 (MB/s) |
+|---|---|
+| d120c5a | 1553 / 1413 |
+| 75115f9 | 1513 / 1326 |
+| **8265250** (perf-fs-shell merge) | **1046 / 572** |
+| be1123c | 1452 / 1303 |
+| **403bddc** | **1231 / 865** |
+
+`ab.mjs be1123c 403bddc` (10 runs × 5 rounds) confirms 1567 → 837 MB/s,
++39% worse, CI +23…+63%, all 5 rounds worse. 403bddc's hot-guest spin
+(`HOT_SPIN_MS` 0.25 ms, was 30 µs) has the page wait on one guest while the
+other side of the pipe goes unserved. Reported to unix/perf-fs-shell.
+
+The hourly run also found `workload.peak_rss.ffmpeg_warm` with "no samples
+on one side". That was another A/B filter gap: blocks gated on a group name
+(`workload.ffmpeg`) also record metrics outside it (`workload.peak_rss.*`).
+`h.wantsAny()` fixes that in the workloads and workflows suites (0dc160b).
+compare.mjs also no longer treats MiB moves under 1 MiB as candidates;
+0.06 → 0.46 MiB is below what 25 ms RSS sampling resolves.
+
 ### Integration b63f9d9 → 073944d: boot requests, and what wasn't real (unix/bench)
 
 **Boot requests, confirmed by the hourly compare.** Cold and warm boots go
@@ -724,6 +826,94 @@ proc/s within one run); two further 15-run passes on the new code gave
 medians 1240 and 1215 proc/s, base 1200. One of those passes stalled at
 ≈10 proc/s for its last 11 samples and did not recur in two more; worth
 watching if it shows up on other branches.
+
+### unix/perf-blink 13 — the branch end to end
+
+`node bench/ab.mjs cc8539ed --suites x86 --only 'x86\.blink\.' --rounds 2`,
+from before the wasm JIT (cc8539ed) to Blink patch 0111 (b2834b1c):
+
+| metric (isolated) | before | after | shift | verdict |
+|---|---:|---:|---:|---|
+| x86.blink.go_cpuloop_5m | 2282 ms | 246 ms | -88.9% | improved |
+| x86.blink.go_hello | 267 ms | 248 ms | -9.4% | same |
+| x86.blink.hello_musl | 146 ms | 122 ms | -15.1% | same |
+| x86.blink.hello_glibc | 160 ms | 151 ms | -3.9% | same |
+| x86.blink.go_nethttp | 540 ms | 721 ms | +30.3% | regressed (see below) |
+| x86.blink.peak_rss.go_hello | 14.1 MiB | 6.0 MiB | -59.5% | improved |
+| x86.blink.peak_rss.go_nethttp | 36.3 MiB | 16.7 MiB | -51.9% | improved |
+| x86.blink.peak_rss.hello_glibc | 18.3 MiB | 1.0 MiB | -94.3% | improved |
+| x86.blink.peak_rss.hello_musl | 15.0 MiB | 10.2 MiB | -54.2% | improved |
+| x86.blink.vim_defaults | — | 1803 ms | | new |
+| x86.blink.vim_startup | — | 4079 ms | | new |
+
+go_nethttp's regression is not in Blink. ab.mjs builds each side's whole tree,
+kernel included. On today's tree, with only `public/engines/blink` swapped
+(`TABCOMPUTER_BLINK_ASSETS`, 6–8 runs each):
+
+| go_nethttp, today's kernel and page | median |
+|---|---:|
+| cc8539ed's blink.wasm + host.mjs | 662 ms |
+| cc8539ed's blink.wasm + today's host.mjs | 788 ms |
+| today's blink.wasm, shared Module (default), 4 alternated rounds | 645–668 ms |
+| today's blink.wasm, per-worker compile, same rounds | 647–738 ms |
+
+- Single runs of the same assets spread 620–880 ms. A bisect of host.mjs
+  with the old wasm pointed at aa07d367 (shared Module, entry 8), but
+  alternated rounds with today's wasm show no cost from it.
+- Bisect builds of the patch series at four points from 0051 onwards all
+  measure 750–800 ms, the same as the head.
+- So most of the ~180 ms comes from changes elsewhere in the tree between
+  cc8539ed and b2834b1c (kernel, merged branches). In the head's profile
+  the main thread waits ~120 ms in futexes and ~95 ms in other syscalls,
+  against ~210 ms running guest code.
+- gh_version: the fixture wasn't available in this container.
+
+### unix/perf-blink 12 — fork is copy-on-write
+
+Blink patch 0109. A same-instance fork used to copy every private page of
+the parent twice: into a snapshot, then into the child's pages. Now
+parent and child share them read-only, and a page is copied only when
+either side touches it through Blink (compiled code's reads keep
+sharing). Fork then exec, the common case, copies almost nothing.
+
+| fork+exit+wait (forkb, Node, 3 runs each) | 0108 | 0109 | native |
+|---|---|---|---|
+| 0 MiB dirty heap | 6.0–7.3 ms | 5.1–6.1 ms | 0.18 ms |
+| 16 MiB | 29.7–31.5 ms | 6.8–7.8 ms | — |
+| 64 MiB | 104–110 ms | 11.2–12.6 ms | 3.1 ms |
+
+`BLINK_FORK_COW=0` restores the copying fork.
+
+### unix/perf-blink 11 — hashing and SSE code stays compiled
+
+Blink patches 0103–0107. perf-fs-shell found that a git clone (axios, 29 MB
+pack) takes 88 s, nearly all of it git's own CPU in Blink: index-pack
+inflating objects and hashing them. A static stand-in, ipb (2000 8 KiB
+zlib objects inflated, then SHA-1'd with OpenSSL's SSSE3 code), shows
+where compiled code left for Blink's handlers. The profiler now lists
+those calls (0103):
+
+| handler calls in compiled code | before |
+|---|---|
+| rol/ror by a constant (OpBsuwiImm) | 42.6 M |
+| endbr64 / hint nops (OpHintNopEv) | 25.0 M |
+| psrld/pslld by an immediate (Op172) | 9.3 M |
+| paddd, movdqa store, pcmpeqb, pmovmskb, punpcklqdq, pshufd, por | 4–6 M each |
+
+All are now inline (0104–0107). Rotates set CF/OF as alu.c does. Hint
+nops, prefetch and endbr64 are nothing. SSE2/SSSE3 integer ops run as wasm
+SIMD. movdqa/movaps memory forms check alignment and exit to the
+interpreter's #GP.
+
+| ipb (Node, same container) | before | after | native |
+|---|---|---|---|
+| SHA-1 of 16 MB | 3300 ms (5 MB/s) | 610–680 ms (25 MB/s) | 21 ms |
+| inflate 16 MB | 740 ms | 680 ms (same) | 63 ms |
+
+The x86 suite A/B is unchanged ("same" everywhere: none of it hashes much).
+Correctness: fixtures/x86/rotates.c and ssei.c (51 SSE cases, register and
+memory forms, shift counts past the lane width, glibc's string functions,
+misaligned movdqa faulting) match native and the interpreter.
 
 ### unix/perf-blink 10 — compiled blocks chain without the Actor loop
 
@@ -1570,8 +1760,23 @@ The coordinator's `ab.mjs a5e66fb 7382bdc` showed `kernel.epoll_wakeup`
   are in the write-behind cache:
   - creating an empty file, truncating an existing one, and EEXIST/ELOOP;
   - unlinking a file that no fd has open and that isn't a socket or fifo.
-  Anything else still takes the async path. Not yet measured end to end;
-  compat-tools' harness is the one that shows it.
+  Anything else still takes the async path. compat-tools measured it in
+  Chromium (node.worker fs_200, per-call time inside the guest around
+  ch.call, three runs on a warm pooled worker), on unix/compat-tools merged
+  with integration. That build also has perf-fs-shell's sync close, rename,
+  mkdir and rmdir and its longer channel spin, so the rows are the combined
+  effect:
+
+  | syscall | before | run 1 | run 2 | run 3 |
+  |---|---|---|---|---|
+  | openat O_WRONLY\|O_CREAT\|O_TRUNC ×202 | ~75 µs | 47 | 20 | 25 µs |
+  | unlinkat ×200 | ~25 µs | 23 | 9 | 19 µs |
+  | close ×202 | ~20 µs | 23 | 13 | 17 µs |
+  | newfstatat ×602 | 15–30 µs | 24 | 19 | 10 µs |
+
+  Create is about 3× faster and unlink 1.5–2×. Whole script:
+  200 → 110 → 110 → 83 ms. A warm sync call is now 10–25 µs round trip,
+  mostly the channel itself.
 
 ### unix/perf-fs-shell 7 — 1d9582a → bb39a38 regressions: shell-stdio's per-command pass; ab.mjs decides on rounds
 
@@ -2027,8 +2232,8 @@ typescript@5`: 9,400 files and 98 MB in node_modules.
   - 101 MiB of ArrayBuffers, the FileSystem cache holding the files;
   - a 51 MiB JS heap, ~45 MiB of it npm's metadata cache (the abbreviated
     package documents of ~300 packages, kept for an hour);
-  - ~170 MiB not attributable, which stays after `rm -rf`: allocator slack
-    from the install.
+  - ~170 MiB not attributable, which stays after `rm -rf`. Entry 16 found
+    it is DevTools' copy of response bodies under Playwright, not Shiro.
 
   npm now trims its metadata cache to the most recently used 16 MB when the
   last npm command finishes. After the install the JS heap is 24 MiB and
@@ -2057,6 +2262,54 @@ version of the npm change: 112 metrics the same; `node.worker.fs_200` −10%.
 <!-- bench:table:begin -->
 Generated by `npm run bench` from `bench/results/2026-10-08-69296a9.json` on 2026-10-08 at 69296a9 (unix/bench).
 Environment: 4× Intel(R) Xeon(R) Processor @ 2.10GHz, 15.7 GiB, Linux 6.18.44-fc-v80 x64, Node v22.22.0, Chromium 141.0.7390.37 headless. 5 runs per metric unless *n* says otherwise; full mode, 445 s total.
+
+### unix/perf-fs-shell 16 — the RSS left after rm -rf, and built-in vs full git clone
+
+**The ~170 MiB that stays after `npm i` + `rm -rf` is DevTools, not Shiro.**
+Entry 15 called it allocator slack. It isn't. Chrome's memory-infra dump
+puts it in PartitionAlloc's `buffer` partition as live objects. It is not
+wasm (no instances alive afterwards) and not ArrayBuffers (backing stores
+are 16 MiB, mostly the FileSystem cache). The cause is the DevTools network
+agent's response-body buffer. Playwright enables `Network` on every page,
+and the renderer then keeps a copy of each response body, up to ~190 MiB.
+
+| 20 × `fetch()` + `arrayBuffer()` of a 6 MB file, after GC | buffer partition, live |
+|---|---:|
+| Playwright context with the bench's request interception | 314 MiB (incl. fulfilled copies) |
+| Playwright context, no interception | 156 MiB (60 fetches or 12 MB files: plateau at 187 MiB) |
+| plain CDP, no `Network.enable` | 3.4 MiB (= before) |
+| plain CDP after `Network.enable` | 156 MiB |
+
+A user's tab doesn't keep these bodies. Without them, what's left after
+`rm -rf` is ~40 MiB: a JS heap that grew 4.5 → 21 MiB, 16 MiB of FileSystem
+cache, and a few MiB of slack. Nothing here needs freeing. Bench
+`peak_rss` numbers for fetch-heavy workloads (npm, apt) include up to
+~190 MiB of this buffer. It is the same before and after a change, so A/B
+comparisons still hold, but the absolute numbers are too high.
+
+**git clone: built-in (isomorphic-git) vs the full git package**
+(`bench/git-clone-compare.mjs`). Same axios repo (494 files, 2,222 commits
+on the default branch, 28 MiB pack), served locally. The built-in git uses
+smart HTTP, the full git uses git:// over the relay.
+
+| | built-in | full git (Blink) | |
+|---|---:|---:|---|
+| `git clone --depth 1` | 1.5 s, +55–65 MiB | 6.0–7.2 s, +120–265 MiB | 4× |
+| `git clone` (full history) | **12.4 s**, +212–258 MiB | **95.5–96.6 s**, +184–278 MiB | 7.7× |
+| `git log --oneline` (2,222 commits) | 64 s | 2.4 s | |
+| `git status` | 0.1 s | 0.7 s | |
+
+- The built-in `git clone` defaults to `--depth 1` and a single branch.
+  Real git fetches all branches and tags, which here is 2,345 commits
+  instead of 2,222.
+- **Handoff works.** The full git package runs on a repo the built-in git
+  cloned: `status` (3.6 s the first time, while it refreshes the index),
+  `fsck` (clean), `log` and `commit`, for both shallow and full clones.
+- Routing `git clone` of http(s) URLs to the built-in git while the full
+  package is installed would cut a full clone from ~96 s to ~12 s. That
+  routing is compat-tools' call, so it hasn't been changed here. The other
+  direction matters too: history walks (`log`) belong to the full git,
+  which is 27× faster at them.
 
 ### Cross-origin isolated (SharedArrayBuffer, Blink, Worker processes)
 
@@ -2319,3 +2572,108 @@ Environment: 4× Intel(R) Xeon(R) Processor @ 2.10GHz, 15.7 GiB, Linux 6.18.44-f
 | `hygiene.panes10.total_heap_growth` | 5.928 | 5.928 | MiB | 1 | JS heap growth over 50 pane open/close cycles |
 
 <!-- bench:table:end -->
+
+### unix/perf-fs-shell 17 — built-in git: one object cache per command
+
+The built-in `git log` over axios's 2,222 commits took 64 s (full git:
+2.4 s). isomorphic-git takes an optional `cache`. Shiro never passed one,
+so every object read parsed the pack's `.idx` and read the whole 28 MiB
+`.pack` again. `src/commands/git-cached.ts` wraps isomorphic-git and gives
+every call one shared cache while a git command runs, dropping it when the
+last one finishes. Packs are named by content and new ones are found by
+listing `objects/pack` on each read, so the cache can't go stale. A test
+counts the `.pack` reads of `git log` on a packed repo: 12 before, 1 after.
+
+| `bench/git-clone-compare.mjs`, axios | before | after | full git |
+|---|---:|---:|---:|
+| built-in `git log --oneline` (2,222 commits) | 64.0 s | **0.5 s** | 2.4 s |
+| built-in `git clone` (full history) | 12.4 s | 12.7 s | 95.5 s |
+
+A/B (`--suites boot,shell,workloads --rounds 3 --runs 3`): 48 same, no
+regressions.
+
+### unix/perf-fs-shell 18 — second visit with a big home directory
+
+Reopen on a persistent on-disk profile (scratch probe; three reopens per
+step, median; the profile grows step by step):
+
+| home directory | IndexedDB on disk | keys | first prompt | first command | IndexedDB reads before the prompt |
+|---|---:|---:|---:|---:|---|
+| fresh | 0.1 MiB | 160 | 239 ms | 18 ms | 1 `getAllKeys` + 25 `get`, no file contents |
+| + vite app (`npm i`) | 19 MiB | 1,099 | 230 ms | 16 ms | same |
+| + `npm i -g typescript eslint@8` | 42 MiB | 3,228 | 238 ms | 16 ms | same |
+| + `debian install` | 55 MiB | 6,876 | 289 ms | 299 ms | same |
+| + 1 GB in 40 files | 1,055 MiB | 6,917 | 230 ms | 290 ms | same |
+| + 100,000 small files, before | 1,062 MiB | 107,918 | **568–648 ms** | 103–117 ms | same |
+| + 100,000 small files, after | | | **233 ms** | 19 ms (461 ms if run at once) | 32 `get` |
+
+Restore is lazy: boot reads a handful of paths and never reads file
+contents, so data size doesn't matter (1 GB: 230 ms). Two costs grew with
+the home directory:
+
+- **The key index**, every path in the store, which `readdir` and negative
+  lookups use. The first read at boot started loading it, and the prompt
+  waited behind it: ~250 ms per 100k keys. main.ts now holds it until the
+  terminal has started (`FileSystem.holdKeyIndex` / `releaseKeyIndex`, 5 s
+  at most). `readdir` still loads it at once. A command typed within the
+  first ~250 ms waits for it; one typed a second later doesn't.
+- **Debian mode ran bash's builtins as x86 programs.** `true`, `false`,
+  `echo` and `printf` became `/usr/bin` files after `debian install`, at
+  130–200 ms each instead of 1 ms (`command true` too). That is the 290 ms
+  "first command" above, and it hit every `echo` in every script. The
+  shell now keeps bash's builtins; `/usr/bin/echo` still runs the file.
+
+No go layer was available here (`.toolchain-build/layers` isn't built), so
+the go step is missing; its placeholders behave like the Debian rootfs.
+
+A/B against 7ed34ed1 (`--suites boot,shell,workloads,kernel --rounds 3
+--runs 3`): 61 same, 2 changed by <1% (exact values), no regressions.
+
+### unix/perf-fs-shell 19 — idle file content leaves memory; git clone stays the built-in's
+
+**Content cache.** `FileSystem.cache` kept every file's bytes for good:
+after `apt-get update` 164 MiB, 139 MiB of it three apt files that apt only
+reads on update. Files of 64 KiB or more are now tracked by last use. A
+file unused for 30 s, committed to IndexedDB and not open in the kernel
+loses its whole cache entry, as on a fresh boot: files over 8 MiB at once,
+others oldest first beyond 64 MiB. Reads load it from IndexedDB again.
+Only idle files go: evicting what a running apt reads again raised its
+install peak before (entry 13).
+
+| scratch probe, renderer RSS above the pre-run level | before | after |
+|---|---:|---:|
+| `apt-get update`: peak | +656 MiB | +677 MiB |
+| `apt-get update`: 35 s later | +245 MiB | **+165 MiB** |
+| `apt-get install hello`: peak | +955 MiB | +894 MiB |
+| `apt-get install hello`: 35 s later | +246 MiB | **+78 MiB** |
+| FileSystem cache, 35 s after the install | 178 MiB | **4 MiB** |
+
+A/B dd5d335f → e8279027:
+- `workflows --only apt`, 3 rounds: 6 same, `workflow.apt.hello_run` −14%.
+- `workloads,workloads-slow,workflows --only npm`, 2 rounds: no regression over 10%.
+  - Flagged, weak evidence (n=2, pooled p 0.33–0.67): `workflow.peak_rss.vite_npm_i` +6.9% (net of DevTools copies +5.0%) and `workload.claude_npm.first` +7.7%.
+  - Re-checked with 5 rounds (`--suites workloads --only claude_npm --rounds 5 --runs 2`): all 10 claude_npm metrics are the same, so the +7.7% was noise. That workload runs a few seconds after boot, so no file in it is idle for 30 s.
+- `workflow.vite.npm_i` −3.1%.
+
+The streaming write path (big files written in chunks without a
+whole-file buffer) is not done yet.
+
+**git clone with the full git installed** (asked by compat-tools, the git
+owner). `git clone` of an http(s) URL is now the built-in's, with the full
+git's defaults: all history unless `--depth`, every branch as `origin/*`
+with `origin/HEAD`, tags, and the branch tracking its remote. This applies
+only with `--depth`, `-b`, `--single-branch`, `--no-tags`, `-q`, `-o` and a
+directory. Anything else, and a clone the built-in fails at for reasons
+other than credentials, goes to the full git. `Command.keepOverPackage`
+lets a builtin keep particular arguments while a package provides the
+command; git's lazy stub carries it.
+
+| `bench/git-clone-compare.mjs ROUTE=1`, axios, full git installed | time | peak RSS |
+|---|---:|---:|
+| `git clone http://…/axios.git` before (the full git) | 92.8 s | +310 MiB |
+| `git clone http://…/axios.git` after (the built-in) | **13.6 s** | +239 MiB |
+| then the full git: `status` (1st, index refresh) / (2nd) | 2.7 s / 0.9 s | |
+| `log` (2,222 commits) / `fetch origin` / `fsck` | 3.1 s / 2.3 s / 84.7 s | |
+
+Boot A/B baba09d0 → HEAD (`--suites boot`, 2 rounds): 23 same, the bundle
+1 KiB larger.
