@@ -35,9 +35,12 @@ export function installNodeWorkerBoot(kernel: Kernel): void {
   if (installed.has(kernel)) return;
   installed.add(kernel);
   kernel.execDirect.push((name, proc) => name === 'node' && nodeWorkerMode(proc.env));
-  kernel.addLoader(async (path, proc, k) => {
+  kernel.addLoader((path, proc, k) => {
+    // (the first loader of every spawn: a bare name other than node is no node program,
+    // known without loading host.ts or awaiting anything)
+    if (!path.includes('/') && path !== 'node') return null;
     if (!nodeWorkerMode(proc.env)) return null;
-    return (await import('./host')).nodeLoader(path, proc, k);
+    return import('./host').then((h) => h.nodeLoader(path, proc, k));
   });
 }
 
