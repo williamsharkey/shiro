@@ -1,5 +1,5 @@
 /**
- * Networking for node as a kernel guest (TABCOMPUTER_NODE_WORKER=1): the
+ * Networking for node as a kernel guest (by default; TABCOMPUTER_NODE_WORKER=0 opts out): the
  * page's net stack and virtual-server table live in the page, so in the
  * guest's Worker both are rebuilt over socket syscalls.
  *
