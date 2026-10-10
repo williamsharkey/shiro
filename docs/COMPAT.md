@@ -313,6 +313,23 @@ Shell and platform fixes these needed (all with tests in the same file):
   Not yet: node output into a pipe or file comes when the process exits
   (only the terminal streams), so `npm run dev > log &` shows nothing while
   it runs.
+- Next.js 16 (in progress): `npx create-next-app` works in the page. `next
+  build` in the page stops where it compiles SWC's wasm (Chromium refuses a
+  synchronous `WebAssembly.Module` over 8 MB on the main thread), so Next
+  goes through worker mode (`TABCOMPUTER_NODE_WORKER=1`), where the module
+  compiles; `NEXT_TEST_WASM_DIR` pointing at an installed
+  `@next/swc-wasm-nodejs` avoids Next's own download (the test container's
+  relay can't fetch it). Remaining, on the worker side: jest-worker forks
+  children and talks over `child.send` (fork IPC; worked around with
+  `experimental: { webpackBuildWorker: false, workerThreads: false, cpus: 1 }`),
+  then "Maximum call stack size exceeded" in `resolve` during "Creating an
+  optimized production build". What Next's CommonJS needed in the page,
+  all general: `require.extensions` / `Module._extensions`, a directory
+  `require` using its package.json `main`, `stream/web`,
+  `process.prependOnceListener`, `fs.opendir` / `opendirSync` /
+  `promises.opendir`, a process-local `process.chdir` (the shell's cwd comes
+  back when the script exits), `npm config get/set/delete/list`, and
+  `__dirname` text inside template literals left alone.
 - Node: a script's timers and intervals end with it. An interval left by a
   script that called `process.exit()` kept firing in the page, and its
   `setTimeout`s became the next script's timers, so that script never went

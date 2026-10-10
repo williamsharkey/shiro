@@ -271,6 +271,16 @@ export async function executeNodeScript(
         case 'node:stream': return createStreamModule(getBuiltinModule('events'));
         case 'stream/promises':
         case 'node:stream/promises': return getBuiltinModule('stream').promises;
+        // The WHATWG streams node has as stream/web are the page's (Next's edge runtime)
+        case 'stream/web':
+        case 'node:stream/web': {
+          const g = globalThis as any;
+          const names = ['ReadableStream', 'ReadableStreamDefaultReader', 'ReadableStreamBYOBReader', 'ReadableStreamBYOBRequest',
+            'ReadableByteStreamController', 'ReadableStreamDefaultController', 'TransformStream', 'TransformStreamDefaultController',
+            'WritableStream', 'WritableStreamDefaultWriter', 'WritableStreamDefaultController', 'ByteLengthQueuingStrategy',
+            'CountQueuingStrategy', 'TextEncoderStream', 'TextDecoderStream', 'CompressionStream', 'DecompressionStream'];
+          return Object.fromEntries(names.filter((n) => g[n]).map((n) => [n, g[n]]));
+        }
         case 'stream/consumers':
         case 'node:stream/consumers': return getBuiltinModule('stream').consumers;
         case 'crypto':
@@ -935,6 +945,7 @@ export async function executeNodeScript(
     }
     restoreGlobals(true);
     runExitHooks();
+    _st.restoreCwd?.();
 
     return _st.exitCode;
   } catch (e: any) {
@@ -947,6 +958,7 @@ export async function executeNodeScript(
     }
     restoreGlobals(true);
     runExitHooks();
+    _st.restoreCwd?.();
     const msg = e.message || String(e);
     console.error('[node] Script error:', e);
     ctx.stderr += `Error: ${msg}\n`;

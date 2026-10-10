@@ -52,6 +52,8 @@ export interface NodeEnv {
  * Used during the incremental migration — factories receive this as a parameter.
  */
 export interface SharedState {
+  /** Put the shell's cwd back when the script ends (process.chdir is the process's own) */
+  restoreCwd?: () => void;
   exitCode: number;
   exitCalled: boolean;
   /** process.exit() ran its 'exit' listeners: in Node nothing runs after it,

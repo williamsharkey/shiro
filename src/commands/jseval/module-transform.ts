@@ -1211,19 +1211,25 @@ export function transformESModules(src: string): string {
   // Handles: const __filename = fileURLToPath(import.meta.url);
   //          const __dirname = dirname(__filename);
   //          const Buffer = require('buffer').Buffer;
-  src = src.replace(/(?:const|let|var)\s+__filename\s*=\s*[^;]+;?/g, '/* __filename provided */');
-  src = src.replace(/(?:const|let|var)\s+__dirname\s*=\s*[^;]+;?/g, '/* __dirname provided */');
-  // Handle: const Buffer = require('buffer').Buffer; or var Buffer = ...
-  // Use [^;,]+ to stop at comma (multi-line declarations) or semicolon
-  src = src.replace(/(?:const|let|var)\s+Buffer\s*=\s*[^;,]+;/g, '/* Buffer provided */');
-  // Handle multi-line: var Buffer = ...,\n    OtherVar = ...; -> var OtherVar = ...;
-  src = src.replace(/(const|let|var)\s+Buffer\s*=\s*[^,]+,\s*/g, '$1 ');
-  // Handle: const { Buffer } = require('buffer'); (destructuring)
-  src = src.replace(/(?:const|let|var)\s*\{\s*Buffer\s*\}\s*=\s*[^;]+;/g, '/* Buffer provided */');
-  // Handle: const { Buffer, ... } = require('buffer'); (Buffer in destructuring with others)
-  src = src.replace(/(\{\s*)Buffer(\s*,)/g, '$1/* Buffer */$2');
-  src = src.replace(/(,\s*)Buffer(\s*\})/g, '$1/* Buffer */$2');
-  src = src.replace(/(,\s*)Buffer(\s*,)/g, '$1/* Buffer */$2');
+  // (in code only, and within one statement: a template that carries such a line
+  // as text, as Next's build/utils.js does, ran on to a `;` far past it)
+  {
+    const cm: MaskedSource = { src, mask: codeMask(src) };
+    replaceInCode(cm, /(?:const|let|var)\s+__filename\s*=\s*[^;\n]+;?/g, '/* __filename provided */');
+    replaceInCode(cm, /(?:const|let|var)\s+__dirname\s*=\s*[^;\n]+;?/g, '/* __dirname provided */');
+    // Handle: const Buffer = require('buffer').Buffer; or var Buffer = ...
+    // Use [^;,]+ to stop at comma (multi-line declarations) or semicolon
+    replaceInCode(cm, /(?:const|let|var)\s+Buffer\s*=\s*[^;,]+;/g, '/* Buffer provided */');
+    // Handle multi-line: var Buffer = ...,\n    OtherVar = ...; -> var OtherVar = ...;
+    replaceInCode(cm, /(const|let|var)\s+Buffer\s*=\s*[^,]+,\s*/g, '$1 ');
+    // Handle: const { Buffer } = require('buffer'); (destructuring)
+    replaceInCode(cm, /(?:const|let|var)\s*\{\s*Buffer\s*\}\s*=\s*[^;]+;/g, '/* Buffer provided */');
+    // Handle: const { Buffer, ... } = require('buffer'); (Buffer in destructuring with others)
+    replaceInCode(cm, /(\{\s*)Buffer(\s*,)/g, '$1/* Buffer */$2');
+    replaceInCode(cm, /(,\s*)Buffer(\s*\})/g, '$1/* Buffer */$2');
+    replaceInCode(cm, /(,\s*)Buffer(\s*,)/g, '$1/* Buffer */$2');
+    src = cm.src;
+  }
 
   // Note: We removed aggressive catch-all transforms for import/export
   // as they were corrupting URLs in strings (//example.com) and other code.

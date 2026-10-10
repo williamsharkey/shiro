@@ -835,6 +835,25 @@ c.unref(); c.stdin.write('x'); console.log('parent done')`)).toBe('parent done\n
     expect(r.out).toBe('1 0\n');
   }, 60_000);
 
+  it("process.chdir is the process's own: its fs follows it, the shell that ran it doesn't move", async () => {
+    await fs.mkdir('/home/user/m/sub', { recursive: true });
+    await fs.writeFile('/home/user/m/sub/here.txt', 'in sub');
+    const r = await sh(shell, `cd /home/user/m && node -e "process.chdir('sub'); console.log(process.cwd(), require('fs').readFileSync('here.txt', 'utf8'))"; pwd`);
+    expect(r.out).toBe('/home/user/m/sub in sub\n/home/user/m\n');
+  }, 60_000);
+
+  it('fs.opendir: a Dir to read, close and `for await` (Next.js lists its pages so)', async () => {
+    await fs.mkdir('/home/user/m/od/sub', { recursive: true });
+    await fs.writeFile('/home/user/m/od/a.txt', 'a');
+    expect(await node(`const fs = require('fs');
+(async () => {
+  const names = [];
+  for await (const e of await require('fs/promises').opendir('od')) names.push(e.name + (e.isDirectory() ? '/' : '') + ':' + e.parentPath.endsWith('/od'));
+  const d = fs.opendirSync('od'); const first = d.readSync(); d.closeSync();
+  fs.opendir('od', (err, dir) => dir.read((e2, ent) => { console.log(names.sort().join(), !!first, !!ent); dir.close(); }));
+})();`)).toBe('a.txt:true,sub/:true true true\n');
+  }, 60_000);
+
   it('path follows Node (relative paths stay relative)', async () => {
     expect(await node(`const p = require('path');
 console.log(JSON.stringify([p.dirname('a'), p.dirname('/a'), p.dirname('a/b/'), p.join('a', '../b', './c'), p.join(''), p.normalize('./x/../y/'),
@@ -1195,6 +1214,11 @@ describe('node: real npm packages', () => {
     const r = await sh(shell, 'cd /home/user/app && npm init -y > /dev/null && npm install commander@12.1.0 chalk@4.1.2 dayjs@1.11.13 uuid@10.0.0 mocha@10.8.2 typescript@5.6.3 prettier@3.3.3');
     expect(r.exitCode).toBe(0);
   }, 300_000);
+
+  it('npm config get/set/delete, from ~/.npmrc and npm\'s defaults (Next.js asks for the registry)', async () => {
+    const r = await sh(shell, 'cd /home/user && npm config get registry && npm config set fund false && npm config get fund && npm get cache && npm config delete fund && npm config get fund');
+    expect(r.out).toBe('https://registry.npmjs.org/\nfalse\n/home/user/.npm\nundefined\n');
+  });
 
   it('npm install in a directory without package.json starts one, as npm does', async () => {
     const r = await sh(shell, 'mkdir -p /home/user/nopkg && cd /home/user/nopkg && npm install dayjs@1.11.13 > /dev/null; echo "e=$?"; cat package.json; node -e "console.log(typeof require(\'dayjs\'))"; npm install; echo "f=$?"');
@@ -1815,6 +1839,13 @@ describe('live bindings for code-split chunks: an import named like a member key
     expect(out).toContain('import(id) { return id; }');
     expect(out).toContain('import (a, b) {}');
     expect(out).toContain('__dynamic_import("./x.js")');
+  });
+
+  it("`const __dirname = …` as template text is left alone (Next's build/utils.js generates such a file)", () => {
+    const src = 'const code = isEsm ? `import module from "node:module"\nconst __dirname = fileURLToPath(new URL(".", import.meta.url))\n` : `x`;\nfoo(code);\nmodule.exports = { code };\n';
+    const out = transformESModules(src);
+    expect(out).toContain('const __dirname = fileURLToPath(new URL(".", import.meta.url))\n`');
+    expect(() => new Function(out)).not.toThrow();
   });
 
   it("a `/*` inside a template or string isn't a comment (tsconfck's `**/*` hid the exports after it)", () => {
