@@ -91,6 +91,8 @@ function queueSignal(sig, info, pid) {
   const m = blinkModule;
   if (info && info[0] === sig && !pid && m?._blink_shiro_signal_info) {
     m._blink_shiro_signal_info(sig, ...info);
+  } else if (info && info[0] === sig && pid && m?._blink_shiro_signal_pid_info) {
+    m._blink_shiro_signal_pid_info(pid, sig, ...info);
   } else if (pid) {
     m?._blink_shiro_signal_pid?.(pid, sig);
   } else {
@@ -641,7 +643,7 @@ async function run(msg) {
           // which have none, run on ours)
           const pid = as && hosted.has(as) ? as : 0;
           let info = null;
-          if (siginfoCall && !pid && blinkModule?._blink_shiro_signal_info) {
+          if (siginfoCall && blinkModule?.[pid ? '_blink_shiro_signal_pid_info' : '_blink_shiro_signal_info']) {
             const ri = await issue(ch, SYS_shiro_siginfo, [sig], as);
             if (ri.r === 0) info = Array.from(new Int32Array(ch.data.buffer, ch.data.byteOffset, 8));
             else if (ri.r === -38) siginfoCall = false;

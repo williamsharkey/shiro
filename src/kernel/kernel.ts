@@ -18,6 +18,7 @@ import { klog, KmsgFile, LOG_ERR, LOG_INFO, SYSLOG_ACTION_READ_ALL, SYSLOG_ACTIO
 import { processTable, type ShiroProcess } from '../process-table';
 import { packageShadows, pkgOwnShadows, packageArgsForPath, PKG_BIN_DIR } from '../pkg-manager';
 import * as A from './abi';
+import { elfInterpreter } from '../elf-interp';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
   RegularFile, DirFile, abortableWait, openInode, openInodeSync, isInodeOpen, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
@@ -170,6 +171,19 @@ function shellQuote(s: string): string {
  */
 function statFor(proc: Process, st: A.KStat): A.KStat {
   return st.uid === 1000 && proc.uid !== 1000 ? { ...st, uid: proc.uid, gid: proc.gid } : st;
+}
+
+/**
+ * open(2)'s permission check on an existing file, which is the caller's own
+ * (see statFor): its owner bits must allow the access mode, unless the
+ * caller is root (Open POSIX shm_open_32-1, 34-1: a 0 or 0400 file reopened
+ * O_RDWR is EACCES).
+ */
+function ownerDenies(proc: Process, mode: number | undefined, flags: number): boolean {
+  if (proc.uid === 0 || mode === undefined) return false;
+  const acc = flags & A.O_ACCMODE;
+  const need = (acc === A.O_WRONLY ? 0 : 4) | (acc === A.O_RDONLY && !(flags & A.O_TRUNC) ? 0 : 2);
+  return ((mode >> 6) & need) !== need;
 }
 
 export class Kernel {
@@ -632,8 +646,18 @@ export class Kernel {
     proc.markExited(status);
     this.logTrap(proc, status);
     const parent = this.procs.get(proc.ppid);
-    if (parent && parent.pid !== 1) this.deliver(parent, A.SIGCHLD);
+    if (parent && parent.pid !== 1) {
+      const killed = A.WIFSIGNALED(status);
+      this.deliver(parent, A.SIGCHLD, {
+        signo: A.SIGCHLD, code: !killed ? A.CLD_EXITED : status & 0x80 ? A.CLD_DUMPED : A.CLD_KILLED,
+        pid: proc.pid, uid: proc.ruid ?? proc.uid, status: killed ? A.WTERMSIG(status) : A.WEXITSTATUS(status),
+      });
+    }
     if (proc.ppid === 1) this.scheduleInitReap(proc);
+    // A parent ignoring SIGCHLD or with SA_NOCLDWAIT leaves no zombie: the
+    // child is reaped now, and a wait for it ends in ECHILD (Linux)
+    else if (parent && (parent.dispositions.get(A.SIGCHLD) === 'ignore' ||
+             ((parent.sigactions.get(A.SIGCHLD)?.flags ?? 0) & A.SA_NOCLDWAIT))) this.procs.delete(proc.pid);
     this.notify();
   }
 
@@ -725,7 +749,8 @@ export class Kernel {
         this.stateWaiters.add(onState);
         signal?.addEventListener('abort', onAbort, { once: true });
       });
-      if (!woke) return { pid: -A.EINTR, status: 0 };
+      // (no children left, as when SA_NOCLDWAIT reaped the last: ECHILD before EINTR, as Linux's do_wait)
+      if (!woke) return { pid: this.children(caller, pid).length ? -A.EINTR : -A.ECHILD, status: 0 };
     }
   }
 
@@ -764,8 +789,11 @@ export class Kernel {
   deliver(proc: Process, sig: number, info: A.SigInfo = { signo: sig, code: A.SI_KERNEL }): void {
     if (proc.state === 'zombie' || proc.exiting || proc.pid === 1) return;
     if (sig === A.SIGKILL) { void this.exit(proc, A.W_TERMSIG(A.SIGKILL)); return; }
-    if (sig === A.SIGSTOP) { proc.markStopped(sig); this.notify(); return; }
-    if (sig === A.SIGCONT) { proc.markContinued(); this.notify(); }
+    if (sig === A.SIGSTOP) { this.stopProcess(proc, sig); return; }
+    if (sig === A.SIGCONT && proc.state === 'stopped') {
+      proc.markContinued(); this.notify();
+      if (!proc.signalHook) this.notifyParentOfStop(proc, 0);
+    }
     if (proc.signalHook) {
       // (job control routes it: signals.ts queues what it carries when it goes pending)
       proc.data.sigInFlight = info;
@@ -790,9 +818,26 @@ export class Kernel {
     }
     switch (A.defaultSignalAction(sig)) {
       case 'term': void this.exit(proc, A.W_TERMSIG(sig)); break;
-      case 'stop': proc.markStopped(sig); this.notify(); break;
+      case 'stop': this.stopProcess(proc, sig); break;
       default: break;
     }
+  }
+
+  private stopProcess(proc: Process, sig: number): void {
+    const was = proc.state;
+    proc.markStopped(sig);
+    this.notify();
+    // (job control's targets have it say so: JobControl.noteStopped)
+    if (was === 'running' && !proc.signalHook) this.notifyParentOfStop(proc, sig);
+  }
+
+  /** SIGCHLD to the parent for a stop (sig) or a continue (0), unless it set SA_NOCLDSTOP */
+  private notifyParentOfStop(proc: Process, sig: number): void {
+    const parent = this.procs.get(proc.ppid);
+    if (!parent || parent.pid === 1 || ((parent.sigactions.get(A.SIGCHLD)?.flags ?? 0) & A.SA_NOCLDSTOP)) return;
+    this.deliver(parent, A.SIGCHLD, {
+      signo: A.SIGCHLD, code: sig ? A.CLD_STOPPED : A.CLD_CONTINUED, pid: proc.pid, uid: proc.ruid ?? proc.uid, status: sig || A.SIGCONT,
+    });
   }
 
   /**
@@ -955,6 +1000,7 @@ export class Kernel {
           return new DirFile(fs, await fs.realpath(p), statusFlags);
         }
         if (mustBeDir) return -A.ENOTDIR;
+        if (ownerDenies(proc, st.mode, flags)) return -A.EACCES;
         if (st.isFIFO?.()) return await this.openFifo(proc, await fs.realpath(target), flags);
       }
       const real = await fs.realpath(target);
@@ -1065,6 +1111,7 @@ export class Kernel {
       if ((flags & A.O_CREAT) && (flags & A.O_EXCL)) return -A.EEXIST;
       if (own.node.type !== 'file' || own.node.lazy || own.node.special) return undefined;
       if (flags & A.O_DIRECTORY) return -A.ENOTDIR;
+      if (ownerDenies(proc, own.node.mode, flags)) return -A.EACCES;
       const file = new RegularFile(openInodeSync(fs, own.path, own.node), statusFlags);
       if ((flags & A.O_TRUNC) && canWrite(flags)) file.truncateSync(0);
       return file;
@@ -1636,7 +1683,14 @@ export class Kernel {
     proc.syscalls++;
     // While in a syscall the process counts as sleeping (S in /proc/PID/stat)
     if (proc.inSyscall++ === 0) proc.syscallSince = t0;
-    const done = () => { proc.inSyscall--; proc.kernelMs += Date.now() - t0; };
+    const call = { nr, args };
+    proc.calls.push(call);
+    const done = () => {
+      proc.inSyscall--;
+      proc.kernelMs += Date.now() - t0;
+      const i = proc.calls.indexOf(call);
+      if (i >= 0) proc.calls.splice(i, 1);
+    };
     // The caller awaits the call itself: the bookkeeping adds no await hop to it
     const p = this.syscallImpl(proc, nr, args, data);
     p.then(done, done);
@@ -1915,10 +1969,22 @@ export class Kernel {
           if (!instance) return -A.ENOSYS;
           const len = (args[2] >>> 0) + (args[3] >>> 0) * 0x100000000;
           let key: string, size = len;
-          let initial: (() => Promise<Uint8Array>) | undefined;
-          let writeBack: ((b: Uint8Array) => Promise<void>) | undefined;
-          if (args[1] === 0) {
-            const f = proc.fds.get(args[0]);
+          let initial: (() => Uint8Array | Promise<Uint8Array>) | undefined;
+          let writeBack: ((b: Uint8Array) => void | Promise<void>) | undefined;
+          let onRemote: ((sab: SharedArrayBuffer) => void) | undefined;
+          const kind = args[1] & ~A.SHMOBJ_EAGER;
+          if (kind & ~0xff) return -A.EINVAL;
+          const f = kind === 0 ? proc.fds.get(args[0]) : undefined;
+          if (kind === 0 && f instanceof MemFile) {
+            // A memfd (Firefox's font list, passed over SCM_RIGHTS): keyed by
+            // the description; read/write go through the buffer while remote
+            const mf = f;
+            key = mf.shareKey;
+            size = Math.max(len, mf.statSync().size);
+            initial = () => mf.bytes();
+            onRemote = (sab) => mf.attachShared(sab);
+            writeBack = (b) => mf.detachShared(b);
+          } else if (kind === 0) {
             if (!f) return -A.EBADF;
             const path = f.path;
             if (f.kind !== 'file' || !path || !isShareablePath(path) || !this.fs) return -A.EINVAL;
@@ -1926,13 +1992,13 @@ export class Kernel {
             key = `file:${inodeNumber(fs, path)}`;
             initial = async () => { const b = await fs.readFile(path); return typeof b === 'string' ? new TextEncoder().encode(b) : b; };
             writeBack = async (b) => { if (await fs.exists(path)) await fs.writeFile(path, b); };
-          } else if (args[1] === 1) {
+          } else if (kind === 1) {
             const seg = this.shm.list().find((x) => x.id === args[0]);
             if (!seg) return -A.EINVAL;
             key = `shm:${seg.id}`;
             size = seg.size;
           } else return -A.EINVAL;
-          const r = await this.shmobj.map(instance, key, size, initial, writeBack);
+          const r = await this.shmobj.map(instance, key, size, initial, writeBack, { eager: !!(args[1] & A.SHMOBJ_EAGER), onRemote });
           if (typeof r === 'number') return r;
           if (data.length >= 4) new DataView(data.buffer, data.byteOffset, 4).setInt32(0, r.remote ? 1 : 0, true);
           return r.id;
@@ -2146,19 +2212,28 @@ export class Kernel {
           const ms = args[0] | 0;
           const end = ms >= 0 ? Date.now() + ms : Infinity;
           let got: number;
-          while (!(got = next())) {
-            const left = end - Date.now();
-            if (left <= 0) return -A.EAGAIN;
-            const wakes = new Set<() => void>();
-            const off = pendingSignalListeners(proc).add(() => { for (const w of [...wakes]) w(); });
-            const timer = end === Infinity ? undefined : setTimeout(() => { for (const w of [...wakes]) w(); }, left);
-            const ok = await abortableWait(wakes, sig);
-            off();
-            if (timer !== undefined) clearTimeout(timer);
-            if (!ok) return -A.EINTR;
+          // While it waits, the set's signals are the wait's even when not
+          // blocked (Linux's real_blocked): they're held, not handled. The
+          // caller's mask comes back after, delivering any others that came.
+          const unblocked = [...want].filter((s) => !proc.sigmask.has(s));
+          if (unblocked.length) for (const s of unblocked) proc.sigmask.add(s);
+          try {
+            while (!(got = next())) {
+              const left = end - Date.now();
+              if (left <= 0) return -A.EAGAIN;
+              const wakes = new Set<() => void>();
+              const off = pendingSignalListeners(proc).add(() => { for (const w of [...wakes]) w(); });
+              const timer = end === Infinity ? undefined : setTimeout(() => { for (const w of [...wakes]) w(); }, left);
+              const ok = await abortableWait(wakes, sig);
+              off();
+              if (timer !== undefined) clearTimeout(timer);
+              if (!ok) return -A.EINTR;
+            }
+            // one instance (a real-time signal may have more queued), with what it carries
+            A.encodeSiginfo(proc.takeSiginfo(got, proc.deferredSignals), data);
+          } finally {
+            if (unblocked.length) { const m = new Set(proc.sigmask); for (const s of unblocked) m.delete(s); this.setSigmask(proc, m); }
           }
-          // one instance (a real-time signal may have more queued), with what it carries
-          A.encodeSiginfo(proc.takeSiginfo(got, proc.deferredSignals), data);
           return got;
         }
         case A.SYS_rt_sigsuspend: {
@@ -2878,11 +2953,16 @@ export class Kernel {
       if (i > 0) env[String(kv).slice(0, i)] = String(kv).slice(i + 1);
     }
     let head: Uint8Array = new Uint8Array(0);
+    let interp: string | null = null;
     if (!builtin) try {
       const raw = await this.fs!.readFile(path);
       head = typeof raw === 'string' ? enc.encode(raw.slice(0, 4)) : raw.subarray(0, 4);
+      if (typeof raw !== 'string') interp = elfInterpreter(raw);
     } catch { /* unreadable: let the loaders decide */ }
     const isElf = head.length === 4 && head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46;
+    // A dynamic executable whose loader isn't there is ENOENT, as on Linux
+    // (bash: "cannot execute: required file not found")
+    if (interp && typeof (await this.statPath(proc, interp)) === 'number') return -A.ENOENT;
     const probe = new Process({ pid: -1, ppid: proc.pid, path, argv, env, cwd: proc.cwd });
     const embryo = !!proc.data.embryo;
     // A package command with its own arguments (zcat = gzip -dc) can't be

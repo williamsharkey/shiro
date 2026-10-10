@@ -497,6 +497,19 @@ describe('kernel processes', () => {
     expect(await cat('/proc/self/cmdline')).toBe('prog\0-x\0a b\0');
     expect(await cat('/proc/self/comm')).toBe('prog\n');
     expect(await cat('/proc/self/status')).toMatch(new RegExp(`^Name:\\tprog\n[^]*Pid:\\t${proc.pid}\n[^]*Uid:\\t1000`));
+    // syscall: what a hung process is blocked in (a read of an empty pipe), else running
+    expect(await cat(`/proc/${proc.pid}/syscall`)).toBe('running\n');
+    expect(await kernel.syscall(proc, A.SYS_pipe2, [0], data)).toBe(0);
+    const [prd, pwr] = [new DataView(data.buffer).getInt32(0, true), new DataView(data.buffer).getInt32(4, true)];
+    const blocked = kernel.syscall(proc, A.SYS_read, [prd, 16], new Uint8Array(16));
+    await new Promise((r) => setTimeout(r, 5));
+    expect(await cat(`/proc/${proc.pid}/syscall`)).toBe(`${A.SYS_read} 0x${prd.toString(16)} 0x10 0x0 0x0 0x0 0x0 0x0 0x0\n`);
+    expect(await cat(`/proc/${proc.pid}/wchan`)).toBe('do_syscall_64');
+    data.set([1], 0);
+    expect(await kernel.syscall(proc, A.SYS_write, [pwr, 1], data)).toBe(1);
+    expect(await blocked).toBe(1);
+    expect(await cat(`/proc/${proc.pid}/syscall`)).toBe('running\n');
+    expect(await cat(`/proc/${proc.pid}/wchan`)).toBe('0');
     const pst = await kernel.statPath(proc, `/proc/${proc.pid}`);
     expect(typeof pst !== 'number' && (pst.mode & A.S_IFMT)).toBe(A.S_IFDIR);
     const lst = await kernel.statPath(proc, '/proc/self', false);

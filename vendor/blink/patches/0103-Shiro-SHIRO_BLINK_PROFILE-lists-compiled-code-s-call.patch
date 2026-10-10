@@ -1,0 +1,75 @@
+From 1f55bace8eebf4edff64d5a6c6bc55621cf09090 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 05:50:49 +0000
+Subject: [PATCH 103/111] Shiro: SHIRO_BLINK_PROFILE lists compiled code's
+ calls to Blink's handlers
+
+---
+ blink/shiro.inc |  4 ++++
+ blink/wjit.c    | 21 ++++++++++++++++++++-
+ 2 files changed, 24 insertions(+), 1 deletion(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 52ba163..ae75a0c 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -1235,6 +1235,10 @@ static int ShiroProfDumpMore(char *b, int n, int cap, double now) {
+   n += snprintf(b + n, cap - n, "interpreted because: %ld not at a branch target, %ld first visit, %ld below the"
+                                  " compile threshold, %ld compile failed before, %ld compile failed now\n",
+                 g_shiro_prof_seq, g_wj_miss[0], g_wj_miss[1], g_wj_miss[2], g_wj_miss[3]);
++  {
++    int WjProfText(char *, int, int);
++    n = WjProfText(b, n, cap);
++  }
+   qsort(idx, SHIRO_PROF_HOT, sizeof(idx[0]), ShiroProfByTime);
+   n += snprintf(b + n, cap - n, "\nwhere the time goes (samples at a compiled block's entry or an interpreted instruction)\n"
+                                  "address               samples  in jit  interpreted\n");
+diff --git a/blink/wjit.c b/blink/wjit.c
+index e9da11d..766023c 100644
+--- a/blink/wjit.c
++++ b/blink/wjit.c
+@@ -17,6 +17,7 @@
+ │ PERFORMANCE OF THIS SOFTWARE.                                                │
+ ╚─────────────────────────────────────────────────────────────────────────────*/
+ #include "blink/gil.h"
++#include "blink/debug.h"
+ #include "blink/wjit.h"
+ 
+ #ifdef __EMSCRIPTEN__
+@@ -2674,7 +2675,7 @@ static void Pop64(struct Cg *g, struct Ins *in) {
+ static void CallOp(struct Cg *g, struct Ins *in) {
+   i64 next = in->pc + in->len;
+   if (g->stat) ++g_wj_callops[Mopcode(in->rde) & 0x3ff];
+-  if (g_wj_debug > 1) {
++  if (g_wj_debug > 1 || g_shiro_prof) {  // (SHIRO_BLINK_PROFILE lists them)
+     i64 *c = &g_wj_dyncalls[Mopcode(in->rde) & 0x3ff];
+     I32(g, (i32)(uintptr_t)c);
+     I32(g, (i32)(uintptr_t)c);
+@@ -3420,6 +3421,24 @@ static void Stats(void) {
+   }
+ }
+ 
++// SHIRO_BLINK_PROFILE: the instructions compiled code hands to Blink's
++// handlers most often (each such call leaves the compiled block's registers)
++int WjProfText(char *b, int n, int cap) {
++  int i, j, best, done[24];
++  n += snprintf(b + n, cap - n, "\ncompiled code's calls to Blink's handlers (not inlined)\nopcode          calls\n");
++  for (j = 0; j < 24 && cap - n > 100; ++j) {
++    for (best = -1, i = 0; i < 0x400; ++i) {
++      int k, seen = 0;
++      for (k = 0; k < j; ++k) seen |= done[k] == i;
++      if (!seen && g_wj_dyncalls[i] > 0 && (best < 0 || g_wj_dyncalls[i] > g_wj_dyncalls[best])) best = i;
++    }
++    if (best < 0) break;
++    done[j] = best;
++    n += snprintf(b + n, cap - n, "%-16s %10lld\n", DescribeMopcode(best), (long long)g_wj_dyncalls[best]);
++  }
++  return n;
++}
++
+ // compiles the region around `pc` and registers each of its blocks;
+ // returns the entry for `pc`
+ static int Compile(struct Machine *m, i64 pc) {
+-- 
+2.43.0
+

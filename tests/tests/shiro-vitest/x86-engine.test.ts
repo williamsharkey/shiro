@@ -48,6 +48,14 @@ const haveGoV2 = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', goV2Bi
 const haveHttp = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', httpBin, 'nethttp.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const tcpBin = join(out, 'tcpecho');
 const haveTcp = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', tcpBin, 'tcpecho.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
+const gorunBin = join(out, 'gorun');
+const haveGorun = haveHttp && tryBuild(goExe, ['build', '-ldflags=-s', '-o', gorunBin, 'gorun.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
+const execerrBin = join(out, 'execerr');
+const haveExecerr = tryBuild('musl-gcc', ['-static', '-O1', '-o', execerrBin, 'execerr.c']);
+const dynBin = join(out, 'hello-dyn');
+const haveDyn = tryBuild('gcc', ['-O1', '-o', dynBin, 'hello.c']);
+const gowaitBin = join(out, 'gowait');
+const haveGowait = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', gowaitBin, 'gowait.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const ttyBin = join(out, 'tty');
 const haveTty = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', ttyBin, 'tty.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const haveGlibc = tryBuild('gcc', ['-static', '-Os', '-o', glibcBin, 'hello.c']);
@@ -128,6 +136,18 @@ const siginfoBin = join(out, 'siginfo');
 const haveSiginfo = tryBuild('gcc', ['-static', '-O1', '-o', siginfoBin, 'siginfo.c']);
 const hugetlbBin = join(out, 'hugetlb');
 const haveHugetlb = tryBuild('gcc', ['-static', '-O1', '-o', hugetlbBin, 'hugetlb.c']);
+const rotatesBin = join(out, 'rotates');
+const haveRotates = tryBuild('gcc', ['-static', '-O1', '-o', rotatesBin, 'rotates.c']);
+const sseiBin = join(out, 'ssei');
+const haveSsei = tryBuild('gcc', ['-static', '-O1', '-mssse3', '-o', sseiBin, 'ssei.c']);
+const ssefloatBin = join(out, 'ssefloat');
+const haveSsefloat = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', ssefloatBin, 'ssefloat.c', '-lm']);
+const cowforkBin = join(out, 'cowfork');
+const haveCowfork = tryBuild('gcc', ['-static', '-O1', '-o', cowforkBin, 'cowfork.c']);
+const siginfochildBin = join(out, 'siginfochild');
+const haveSiginfochild = tryBuild('gcc', ['-static', '-O1', '-o', siginfochildBin, 'siginfochild.c']);
+const memfdBin = join(out, 'memfd');
+const haveMemfd = tryBuild('gcc', ['-static', '-O1', '-o', memfdBin, 'memfd.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -192,6 +212,18 @@ const haveTimers = blinkHasTimers && tryBuild('gcc', ['-static', '-O1', '-w', '-
 const sigmodesBin = join(out, 'sigmodes');
 const blinkHasSigmodes = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_sigmodes');
 const haveSigmodes = blinkHasSigmodes && tryBuild('gcc', ['-static', '-O1', '-w', '-o', sigmodesBin, 'sigmodes.c']);
+// Blink 0097/0098: write-only shared pages, and shared kernel-file maps written back before a new map and at exit
+const sharedmapsBin = join(out, 'sharedmaps');
+const blinkHasSharedmaps = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_sharedmaps');
+const haveSharedmaps = blinkHasSharedmaps && tryBuild('gcc', ['-static', '-O1', '-w', '-o', sharedmapsBin, 'sharedmaps.c']);
+// Blink 0099: mlock/munlock/mlockall and mmap errors as Linux's
+const memerrsBin = join(out, 'memerrs');
+const blinkHasMemerrs = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_memerrs');
+const haveMemerrs = blinkHasMemerrs && tryBuild('gcc', ['-static', '-O1', '-w', '-o', memerrsBin, 'memerrs.c']);
+// Blink 0501: a thread's tkill is SI_TKILL from this process, and the signal frame is Linux's (pthread_cancel)
+const cancelBin = join(out, 'cancel');
+const blinkHasTkillinfo = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_tkillinfo');
+const haveCancel = blinkHasTkillinfo && tryBuild('gcc', ['-static', '-O1', '-w', '-o', cancelBin, 'cancel.c', '-lpthread']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -561,6 +593,56 @@ describe.skipIf(!haveTcp)('Blink engine: real TCP through the kernel relay', () 
 });
 
 
+// A glibc program before `debian install`: no /lib64/ld-linux-x86-64.so.2.
+// Linux's execve fails with ENOENT and bash says "required file not found";
+// here the shell adds how to get glibc, instead of a silent 127.
+describe.skipIf(!haveDyn || !haveExecerr)('Blink engine: dynamic executable without its loader', () => {
+  it('the shell prints bash\'s message and a hint, exit 127', async () => {
+    const { shell } = await setup(readFileSync(dynBin));
+    const r = await run(shell, './prog');
+    expect(r.output).toContain('tabcomputer: ./prog: cannot execute: required file not found');
+    expect(r.output).toContain('(this program needs glibc: run `debian install`)');
+    expect(r.exitCode).toBe(127);
+  });
+
+  it('execve fails with ENOENT', async () => {
+    const { fs, shell } = await setup(readFileSync(execerrBin));
+    await fs.writeFile('/home/user/work/dyn', readFileSync(dynBin), { mode: 0o755 });
+    const r = await run(shell, './prog ./dyn');
+    expect(r.output).toContain('execv: errno 2 (ENOENT)');
+    expect(r.exitCode).toBe(1);
+  }, 60_000);
+});
+
+// cmd/go's build loop: parallel children that exit close together, each
+// waited for by os/exec in its own goroutine. Under load a SIGURG (Go's
+// preemption signal) for the forking thread can arrive while Blink runs the
+// vfork child on it; the child then dies with "signal received during fork"
+// and the parent hangs with its other children unreaped (toolchains' `go run`
+// hang). BLINK_FORK_STRESS=1 runs the stress (about half its runs hit it).
+describe.skipIf(!haveGowait)('Blink engine: parallel fork/exec/wait (Go os/exec)', () => {
+  const runGowait = async (args: string, ms: number) => {
+    const { shell } = await setup(readFileSync(gowaitBin));
+    let out = '';
+    const r = await Promise.race([
+      shell.execute(`./prog ${args}`, (s) => { out += s; }, (s) => { out += s; }),
+      new Promise((res) => setTimeout(() => res('timeout'), ms)),
+    ]);
+    return { r, out: out.replace(/\r\n/g, '\n') };
+  };
+  it('rounds of 4 children, every exit status collected', async () => {
+    const { r, out } = await runGowait('4 4', 60_000);
+    expect(out).toBe('done 4 4\n');
+    expect(r).toBe(0);
+  }, 90_000);
+  it.skipIf(!process.env.BLINK_FORK_STRESS)('stress: 60 rounds of 8', async () => {
+    const { r, out } = await runGowait('60 8', 200_000);
+    expect(out).not.toContain('signal received during fork');
+    expect(out).toBe('done 60 8\n');
+    expect(r).toBe(0);
+  }, 240_000);
+});
+
 describe.skipIf(!haveTty)('Blink engine: interactive program on a kernel pty', () => {
   it('sees a tty, its size, raw keys without echo, SIGWINCH and Ctrl-C', async () => {
     const { fs } = await setup(readFileSync(ttyBin));
@@ -636,6 +718,31 @@ describe.skipIf(!haveTty)('Blink engine: interactive program on a kernel pty', (
     expect(await done).toEqual({ type: 'exited', status: 0 });
   }, 120_000);
 
+  // `go run srv.go` with stdout on the terminal (toolchains bench): cmd/go
+  // runs the binary as a child sharing the tty; the child's net/http uses
+  // epoll on loopback sockets. With the terminal's description left
+  // non-blocking, Go's runtime puts stdout in its edge-triggered netpoller too.
+  it.skipIf(!haveGorun).each(['', 'nonblock'])('a go-run-like parent, its net/http child writing to the shared tty (%s)', async (mode) => {
+    const { fs } = await setup(readFileSync(gorunBin));
+    await fs.writeFile('/home/user/work/nethttp', readFileSync(httpBin), { mode: 0o755 });
+    const { Kernel } = await import('@shiro/kernel/kernel');
+    const { TtySession, attachKernelTty } = await import('@shiro/kernel/pty');
+    const { JobControl } = await import('@shiro/kernel/signals');
+    const { blinkRunner } = await import('@shiro/x86-engine/blink');
+    const kernel = new Kernel({ fs, registerWithProcessTable: false });
+    const jc = new JobControl();
+    attachKernelTty(kernel, jc);
+    const tty = new TtySession({ jc });
+    let screen = '';
+    tty.pty.onOutput((b: Uint8Array) => { screen += new TextDecoder().decode(b); });
+    const p = tty.spawnJob(kernel, {
+      path: '/home/user/work/prog', argv: ['prog', '/home/user/work/nethttp'], cwd: '/tmp',
+      env: mode ? { GORUN_NONBLOCK: '1' } : {}, run: blinkRunner('/home/user/work/prog'),
+    });
+    expect(await tty.foreground({ pgid: p.pgid })).toEqual({ type: 'exited', status: 0 });
+    expect(screen).toBe('pong /0\r\npong /1\r\npong /2\r\npong /3\r\n');
+  }, 120_000);
+
   it('Ctrl-C ends a C program blocked reading the tty (no handler)', async () => {
     const { fs } = await setup(readFileSync(join(FIX, 'hello-musl')));
     const { Kernel } = await import('@shiro/kernel/kernel');
@@ -708,6 +815,24 @@ it.skipIf(!haveSigmodes)('raise of a blocked real-time signal queues each instan
   const { shell } = await setup(readFileSync(sigmodesBin));
   const r = await run(shell, './prog');
   expect(r.output.replace(/\r\n/g, '\n')).toBe('rt 1 1 pending 1 signo 1 third -1 EAGAIN\nmask 0 kill 0 stop 0 usr1 1\nboth -1 EINVAL\ndisable 0 sp 1 size 0 flags 2\n');
+}, 60_000);
+
+it.skipIf(!haveSharedmaps)('MAP_SHARED /dev/shm mappings: write-only pages, a second mapping and a child\'s exit see the bytes (Open POSIX shm_open)', async () => {
+  const { shell } = await setup(readFileSync(sharedmapsBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('second qwerty\nchild from child\n');
+}, 60_000);
+
+it.skipIf(!haveMemerrs)('mlock, munlock, mlockall and mmap refuse bad arguments with Linux\'s errors (Open POSIX)', async () => {
+  const { shell } = await setup(readFileSync(memerrsBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('mlock far ENOMEM mine ok\nmunlock far ENOMEM mine ok\nmlockall 0 EINVAL onfault EINVAL current ok\nmmap flags ~0 EINVAL pipe ENODEV huge ENOMEM\n');
+}, 60_000);
+
+it.skipIf(!haveCancel)('pthread_cancel, deferred and asynchronous, runs the cleanup handlers; a thread\'s tkill is SI_TKILL from this process (Open POSIX)', async () => {
+  const { shell } = await setup(readFileSync(cancelBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('deferred cleaned 1 canceled 1\nasync cleaned 11 canceled 1\ntkill code -6 self 1 frame 1\n');
 }, 60_000);
 
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
@@ -995,6 +1120,48 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const { shell } = await setup(readFileSync(sysvmsgBin));
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe("msgget ok\nsend 0 0\nqnum 2\nrcv type 2: 6 2 world\nrcv any: 6 1 hello\nrcv empty nowait: -1 No message of desired type\nchild got 5 7 late\nrmid 0\nsend after rmid -1 Invalid argument\n");
+  }, 60_000);
+
+  // Firefox, Mesa, Wayland and PulseAudio make shared memory with memfd_create (0111)
+  it.skipIf(!haveMemfd)('memfd_create: read/write, MAP_SHARED, CLOEXEC, /proc/self/fd name', async () => {
+    const { shell } = await setup(readFileSync(memfdBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe("write 11 trunc 0 read 11 'hello memfd' map 'hello' cloexec 1 name ok\n");
+  }, 60_000);
+
+  // Open POSIX sigqueue_1-1: a same-instance child's handler gets the queued value (0110)
+  it.skipIf(!haveSiginfochild)('a forked child\'s SA_SIGINFO handler gets sigqueue\'s value (standard and real-time)', async () => {
+    const { shell } = await setup(readFileSync(siginfochildBin));
+    const r = await run(shell, './prog 0; ./prog 1');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('sig 10: child exit 12\nsig 34: child exit 13\n');
+  }, 60_000);
+
+  // Blink 0109: fork shares private pages copy-on-write; each side keeps its own view
+  it.skipIf(!haveCowfork)('fork copy-on-write: heap, brk, .data, mmap, stack views stay apart; mprotect/madvise/mremap/signals after fork', async () => {
+    const { shell } = await setup(readFileSync(cowforkBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('child view y, parent view 1, children 1, after 1, exec 0\n');
+  }, 60_000);
+
+  // scalar SSE double ops over NaN/inf/zeros/denormals/limits; comisd/ucomisd clear AF (Blink left it)
+  it.skipIf(!haveSsefloat)('scalar SSE double ops on special values: results, comisd/ucomisd flags, conversions as native', async () => {
+    const { shell } = await setup(readFileSync(ssefloatBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('arith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\narith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\narith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\n');
+  }, 60_000);
+
+  // compiled rol/ror by constants (SHA-1, hashes): values and flags as native (OF masked where undefined)
+  it.skipIf(!haveRotates)('rol/ror by constants in compiled code: values and CF/OF/ZF/SF as native', async () => {
+    const { shell } = await setup(readFileSync(rotatesBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('264f883ef48b6082 8b442bf2ddfdc970 14896776f64e11fa a59f6813927c4b87 8f67ccf91bd7d2c7\n28812440d3ea14ea 6374e9275901902a 987e01781fe71d73 52f8b67ac299aa7f\n7e64dbe8e066cf2a 54783cbf17eb4ce7 5dace5e6b81b1638 e2e5855b7ecb3df6\nmem 74cca3ae32bd6133\n');
+  }, 60_000);
+
+  // SSE2/SSSE3 integer ops compiled to wasm SIMD (OpenSSL SHA-1, glibc string functions), misaligned movdqa is #GP
+  it.skipIf(!haveSsei)('SSE2/SSSE3 integer ops in compiled code (wasm SIMD) match native, aligned forms fault when misaligned', async () => {
+    const { shell } = await setup(readFileSync(sseiBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('misaligned faults 200\nmoves 5022a87e047adf0a\n00 7ee345218afcb239\n01 a391afcb2fab11d7\n02 96a4eae743305de5\n03 4f1fdbab20276a60\n04 2dd5c5e6b7d3e4c1\n05 1ea1f24828c932b8\n06 7252ee31cd46eac9\n07 a7d2613e2dbb0e13\n08 a8113f5bdd1f72c3\n09 07148d3151ffb9b6\n10 524e60ed9625a69b\n11 cf7ff38f3eef12f3\n12 7e7f27c94b126a65\n13 cb3818cf16c8e140\n14 cb3818cf16c8e140\n15 8e0e6be8bc8c6a2d\n16 4bcc7f190e24bd97\n17 1203fb1b726bbd12\n18 ab189b3fd9f24c9e\n19 950527b9d4f0dabc\n20 78c257c240f6f10d\n21 cf1ade267c265c1d\n22 c973936bed53b154\n23 aea16f40d5405a05\n24 eaf4afc255a34129\n25 17685060ffef0b34\n26 65d590d7ead5f7cf\n27 fd54d777ca69c642\n28 c00277b74ad06d8a\n29 5641aadecea618a1\n30 e3c2aed0e370a373\n31 2b57dc7aff029b1d\n32 d0aadbb892e4986b\n33 ec7115c07c008552\n34 3cb357330446786f\n35 92d70ae93be3a4a1\n36 0000000000000000\n37 1e890edd978855e7\n38 c7a0d592de6396ef\n39 f6cb7bac6e55409e\n40 0000000000000000\n41 9ce8b41d4b876de3\n42 25b1756106f5daf1\n43 8000000000000000\n44 0000000000000000\n45 e572344fc39ee05a\n46 c598c655170411b1\n47 c01044d0040f6876\n48 0000000000000000\n49 0000000000000000\n50 014a2157c3be93e2\nstrings 52edaac7a097348e\nall 6691258bf5fa7cfc\n');
   }, 60_000);
 
   // PostgreSQL's huge_pages=try maps MAP_HUGETLB first and falls back on ENOMEM

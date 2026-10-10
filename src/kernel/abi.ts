@@ -202,6 +202,8 @@ export const SYS_shiro_shmdt = 1014;
 export const SYS_shiro_shmobj_map = 1020;
 export const SYS_shiro_shmobj_unmap = 1021;
 export const SYS_shiro_shmobj_published = 1022;
+/** shiro_shmobj_map kind flag: remote from the first map (no publish round) */
+export const SHMOBJ_EAGER = 0x100;
 export const SYS_shmget = 29;
 export const SYS_shmat = 30;
 export const SYS_shmctl = 31;
@@ -440,6 +442,12 @@ export const SI_QUEUE = -1;
 export const SI_TIMER = -2;
 export const SI_MESGQ = -3;
 export const SI_TKILL = -6;
+/** si_code of SIGCHLD: what happened to the child */
+export const CLD_EXITED = 1;
+export const CLD_KILLED = 2;
+export const CLD_DUMPED = 3;
+export const CLD_STOPPED = 5;
+export const CLD_CONTINUED = 6;
 /** What a signal carries (struct siginfo's fields that apply to it) */
 export interface SigInfo {
   signo: number;
@@ -472,7 +480,10 @@ export function encodeSiginfo(info: SigInfo, out: Uint8Array): void {
 /** The fields of a struct siginfo in `data` */
 export function decodeSiginfo(data: Uint8Array): SigInfo {
   const dv = new DataView(data.buffer, data.byteOffset, SIGINFO_SIZE);
-  return { signo: dv.getInt32(0, true), code: dv.getInt32(8, true), pid: dv.getInt32(16, true), uid: dv.getUint32(20, true), value: dv.getBigInt64(24, true) };
+  const signo = dv.getInt32(0, true);
+  const info: SigInfo = { signo, code: dv.getInt32(8, true), pid: dv.getInt32(16, true), uid: dv.getUint32(20, true), value: dv.getBigInt64(24, true) };
+  if (signo === SIGCHLD) info.status = dv.getInt32(24, true); // (SIGCHLD's si_status is where si_value is for others)
+  return info;
 }
 /** The siginfo of the signal a guest handler was last given (SYS_shiro_siginfo 1030: signo → struct siginfo) */
 export const SYS_shiro_siginfo = 1030;

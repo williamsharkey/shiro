@@ -131,28 +131,8 @@ export async function preloadEnvironment(
     } catch {}
   }
 
-  // Create essential directories
-  try { await ctx.fs.mkdir(homeDir + '/.claude', { recursive: true }); } catch {}
-  try { await ctx.fs.mkdir(homeDir + '/.claude/projects', { recursive: true }); } catch {}
-  try { await ctx.fs.mkdir(homeDir + '/.claude/statsig', { recursive: true }); } catch {}
-  try { await ctx.fs.mkdir(homeDir + '/.config', { recursive: true }); } catch {}
-
+  await claudeBootstrap(ctx, homeDir, scriptPath);
   const isClaudeCodeScript = scriptPath?.includes('claude-code');
-  try {
-    await ensureClaudeBootstrap(ctx.fs, {
-      homeDir,
-      projectPath: ctx.cwd,
-      theme: isClaudeCodeScript ? DEFAULT_CLAUDE_THEME : undefined,
-      completeOnboarding: Boolean(isClaudeCodeScript),
-      trustProject: Boolean(isClaudeCodeScript),
-      completeProjectOnboarding: Boolean(isClaudeCodeScript),
-      acceptBypassPermissions: Boolean(isClaudeCodeScript),
-      defaultTui: isClaudeCodeScript ? 'fullscreen' : undefined,
-    });
-  } catch {}
-  try { await ctx.fs.stat(homeDir + '/.claude/statsig/cache.json'); } catch {
-    try { await ctx.fs.writeFile(homeDir + '/.claude/statsig/cache.json', '{}'); } catch {}
-  }
 
   // Pre-load files from common locations
   const preloadDirs = [ctx.cwd];
@@ -293,5 +273,35 @@ export async function preloadEnvironment(
       }
     }
     await preloadDir(ctx, fileCache, fileMtimes, projectRoot, 0, 10);
+  }
+}
+
+/**
+ * Claude Code's directories and config before it starts (onboarding done,
+ * the project trusted, the theme): the page's node does it in preload, a
+ * kernel guest (which preloads nothing) on its own
+ */
+export async function claudeBootstrap(ctx: CommandContext, homeDir: string, scriptPath: string): Promise<void> {
+  // Create essential directories
+  try { await ctx.fs.mkdir(homeDir + '/.claude', { recursive: true }); } catch {}
+  try { await ctx.fs.mkdir(homeDir + '/.claude/projects', { recursive: true }); } catch {}
+  try { await ctx.fs.mkdir(homeDir + '/.claude/statsig', { recursive: true }); } catch {}
+  try { await ctx.fs.mkdir(homeDir + '/.config', { recursive: true }); } catch {}
+
+  const isClaudeCodeScript = scriptPath?.includes('claude-code');
+  try {
+    await ensureClaudeBootstrap(ctx.fs, {
+      homeDir,
+      projectPath: ctx.cwd,
+      theme: isClaudeCodeScript ? DEFAULT_CLAUDE_THEME : undefined,
+      completeOnboarding: Boolean(isClaudeCodeScript),
+      trustProject: Boolean(isClaudeCodeScript),
+      completeProjectOnboarding: Boolean(isClaudeCodeScript),
+      acceptBypassPermissions: Boolean(isClaudeCodeScript),
+      defaultTui: isClaudeCodeScript ? 'fullscreen' : undefined,
+    });
+  } catch {}
+  try { await ctx.fs.stat(homeDir + '/.claude/statsig/cache.json'); } catch {
+    try { await ctx.fs.writeFile(homeDir + '/.claude/statsig/cache.json', '{}'); } catch {}
   }
 }

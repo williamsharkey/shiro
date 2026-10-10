@@ -126,6 +126,14 @@ Remote mode is per object, chosen at map time:
   what was mapped and stored). While an object is remote, `read`/`write`
   syscalls on that file go to the SAB too, so a mapping and `write()` stay
   coherent.
+- Also shareable: a memfd (Firefox passes its font list as one over
+  SCM_RIGHTS). It is keyed by its description. While remote, its
+  read/write/pread/pwrite go through the buffer, and the last unmap copies
+  the bytes back.
+- Eager mapping (`kind | 0x100`, what Blink passes for now): remote from
+  the first map, so no publish round. A holder parked in a blocking call
+  (Firefox's parent waiting on its IPC socket) can't reach a safe point to
+  publish. The price is the slow path for a single instance too.
 - New calls: 1020 map, 1021 unmap, 1022 published (1023 spare). perf-blink
   agreed these on 2026-10-10; Blink keeps its own calls to 1015–1019.
   - `shiro_shmobj_map(fd|shmid, kind, len)`. Result: 0 for a fast mapping,
