@@ -742,6 +742,8 @@ async function run(msg) {
     // a thread in a kernel call has a signal to take (Blink patches 0065,
     // 0507): the page interrupts the process's blocking calls
     kick() { post({ type: 'blink-kick' }); },
+    // a compiled-code module (wjit.c) for the page's cache (src/x86-engine/blink.ts)
+    keepWasm(d) { post({ type: 'blink-wjmod', module: d.shiroWjModule, key: d.key, size: d.size }); },
     get data() { return data; },
     poll: (kfd, events, timeoutMs = 0) => pollFd(kfd, events, timeoutMs),
     watch(kfd, node) { watched.set(kfd, node); post({ type: 'blink-watch', fd: kfd }); },

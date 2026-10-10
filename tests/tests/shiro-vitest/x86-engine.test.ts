@@ -1317,6 +1317,18 @@ describe('Blink engine: CPU and syscall fixes', () => {
     expect(r.output.replace(/\r\n/g, '\n')).toBe('arith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\narith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\narith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\n');
   }, 60_000);
 
+  // wjit's modules go to the page (0124), which keeps them so V8's cache
+  // serves the next process running the same code
+  it.skipIf(!haveRounding)('compiled code\'s modules reach the page\'s cache, and the same program compiles to the same keys', async () => {
+    const { keptCompiledModules } = await import('@shiro/x86-engine/blink');
+    const { shell } = await setup(readFileSync(roundingBin));
+    await run(shell, './prog > /dev/null');
+    const once = keptCompiledModules();
+    expect(once.count).toBeGreaterThan(0);
+    await run(shell, './prog > /dev/null');
+    expect(keptCompiledModules().count).toBe(once.count); // (same bytes: the same keys)
+  }, 120_000);
+
   // a signal that comes while the guest is between kernel calls wakes the
   // epoll_wait it goes into next (0123 and the page's pending kick): the
   // rawepoll SIGWINCH flake, made likely

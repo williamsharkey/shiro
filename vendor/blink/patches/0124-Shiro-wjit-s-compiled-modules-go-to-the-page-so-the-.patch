@@ -1,0 +1,84 @@
+From ddb3d3abd000eaa87f93e81b6fea0094858012d3 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 19:16:03 +0000
+Subject: [PATCH] Shiro: wjit's compiled modules go to the page, so the next
+ process gets them from V8's cache
+
+V8 caches a WebAssembly.Module by its bytes while one is alive, and wjit
+generates the same bytes for the same guest code in every process. Each
+Blink process is its own worker, though, so its modules died with it and
+the next run of the same program compiled them all again (vim's startup:
+~318 modules, 81-95 ms of WebAssembly.Module). A thread now posts each
+module it compiles to its host, which hands it to the page to keep
+(src/x86-engine/blink.ts). In Chromium a module the page keeps makes a
+worker's compile of the same bytes ~8x cheaper (0.011 vs 0.084 ms).
+
+SHIRO_BLINK_PROFILE also says how much of the JIT time is
+WebAssembly.Module and instantiation on the thread that dumps it.
+---
+ blink/shiro.inc |  5 +++++
+ blink/wjit.c    | 24 +++++++++++++++++++++++-
+ 2 files changed, 28 insertions(+), 1 deletion(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index cd0741d..ae74539 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -1374,6 +1374,11 @@ static void ShiroProfDump(struct Machine *m, const char *why) {
+   n += snprintf(b + n, cap - n, "pid %d (%s) wall %.0f ms: jit %.0f ms in %ld compiles, syscalls %.0f ms, rest (running guest code) %.0f ms\n",
+                 m->system->pid, why, now - g_shiro_prof_t0, g_shiro_prof_jit, g_shiro_prof_jitn, sys,
+                 now - g_shiro_prof_t0 - g_shiro_prof_jit - sys);
++  {
++    double WjStat(int);
++    n += snprintf(b + n, cap - n, "jit on this thread: %.0f modules, WebAssembly.Module %.1f ms, instantiate %.1f ms (the rest: discovery and code generation)\n",
++                  WjStat(2), WjStat(0), WjStat(1));
++  }
+   n += snprintf(b + n, cap - n, "syscall      count   total ms     max ms\n");
+   for (i = 0; i < 40 && g_shiro_prof_sys[order[i]].n; ++i) {
+     k = order[i];
+diff --git a/blink/wjit.c b/blink/wjit.c
+index 67f9c03..1685605 100644
+--- a/blink/wjit.c
++++ b/blink/wjit.c
+@@ -112,8 +112,20 @@ EM_JS(int, wj_install,
+   var inst;
+   try {
+     var t0 = performance.now();
+-    var mod = new WebAssembly.Module(HEAPU8.slice(p, p + n));
++    var bytes = HEAPU8.slice(p, p + n);
++    var mod = new WebAssembly.Module(bytes);
+     var t1 = performance.now();
++    // The page keeps compiled modules (src/x86-engine/blink.ts): V8 caches
++    // a module by its bytes while one is alive, so the next process that
++    // compiles the same code (the same program again, a library's) takes it
++    // ready-made rather than compiling it again
++    if (ENVIRONMENT_IS_PTHREAD) {
++      try {
++        var h = 2166136261;
++        for (var q = 0; q < n; q += 7) h = Math.imul(h ^ bytes[q], 16777619);
++        postMessage({ shiroWjModule: mod, key: (h >>> 0).toString(36) + '.' + n, size: n });
++      } catch (e) {}
++    }
+     inst = new WebAssembly.Instance(mod, {e : env});
+     st.c += t1 - t0;
+     st.i += performance.now() - t1;
+@@ -150,6 +162,16 @@ EM_JS(void, wj_stats, (void), {
+   if (st) err('wjit: ' + st.n + ' modules, compile ' + st.c.toFixed(1) + ' ms, instantiate ' + st.i.toFixed(1) + ' ms');
+ });
+ 
++// SHIRO_BLINK_PROFILE: this thread's WebAssembly.Module compile (0) and
++// instantiate (1) milliseconds, and its module count (2)
++EM_JS(double, wj_stat, (int which), {
++  var st = Module['wjStats'];
++  return st ? (which == 0 ? st.c : which == 1 ? st.i : st.n) : 0;
++});
++double WjStat(int which) {
++  return wj_stat(which);
++}
++
+ // drops every function this worker installed (new thread, or an epoch flip)
+ EM_JS(void, wj_release_all, (void), {
+   var all = Module['wjAll'] || [];
+-- 
+2.43.0
+

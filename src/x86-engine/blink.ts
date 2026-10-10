@@ -201,6 +201,38 @@ export function blinkRunner(path: string, restore?: ArrayBuffer): Runner {
 }
 
 /**
+ * Blink's compiled code (its wasm JIT) as WebAssembly.Modules, kept for the
+ * page: V8 caches a module by its bytes while one is alive, and Blink
+ * generates the same bytes for the same code, so the next process running
+ * the same program (or library code it shares) gets its modules without
+ * compiling them. A Blink process is its own worker, so without this its
+ * modules die with it. Least recently compiled go first past
+ * WJ_KEEP_BYTES of module bytes (TABCOMPUTER_BLINK_WJ_KEEP=0: none). In
+ * Chromium a module costs ~5.7x its bytes in renderer memory (its compiled
+ * code): vim's startup leaves 320 modules, 2.4 MiB of bytes, +13.6 MiB RSS,
+ * and its next start takes 0.81 s instead of 1.24 s (docs/BENCHMARKS.md).
+ */
+const WJ_KEEP_BYTES = 6 << 20;
+const keptModules = new Map<string, { module: unknown; size: number }>();
+let keptBytes = 0;
+/** (tests) how many compiled modules the page keeps, and their bytes */
+export function keptCompiledModules(): { count: number; bytes: number } {
+  return { count: keptModules.size, bytes: keptBytes };
+}
+function keepCompiledModule(key: unknown, module: unknown, size: number): void {
+  if (typeof key !== 'string' || !module || size <= 0 || size > WJ_KEEP_BYTES / 4) return;
+  const old = keptModules.get(key);
+  if (old) { keptModules.delete(key); keptBytes -= old.size; }
+  keptModules.set(key, { module, size });
+  keptBytes += size;
+  for (const [k, v] of keptModules) {
+    if (keptBytes <= WJ_KEEP_BYTES) break;
+    keptModules.delete(k);
+    keptBytes -= v.size;
+  }
+}
+
+/**
  * Serve one request on a pool channel (blink-sys from host.mjs). `as` names
  * the process the call is for: the guest's vfork child runs on this
  * worker's thread until it execs (Blink patch 0011), 0 = the guest itself.
@@ -380,6 +412,8 @@ export function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: 
         direct.push(ch);
         void ch.watch();
       }
+    } else if (m?.type === 'blink-wjmod') {
+      if (proc.env?.TABCOMPUTER_BLINK_WJ_KEEP !== '0') keepCompiledModule(m.key, m.module, m.size | 0);
     } else if (m?.type === 'blink-kick') {
       // A guest thread is in a kernel call with a signal to take (it came
       // between the call's start and the kernel's interrupt, or another

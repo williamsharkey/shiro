@@ -157,8 +157,19 @@ var ShiroKernelLibrary = {
   shiro_pool_init__postset: `
     if (!ENVIRONMENT_IS_PTHREAD) {
       var shiroGetNewWorker = PThread.getNewWorker;
+      // compiled-code modules a thread posts (wjit.c): to the page, which
+      // keeps them (every thread's Worker comes through here, the pool's too)
+      var shiroKeep = function (d) {
+        var K = Module['shiroKernel'];
+        if (d && d.shiroWjModule && K && K.keepWasm) K.keepWasm(d);
+      };
       PThread.getNewWorker = function () {
         var worker = shiroGetNewWorker.call(PThread);
+        if (worker && !worker.shiroKeep) {
+          worker.shiroKeep = true;
+          if (worker.addEventListener) worker.addEventListener('message', function (e) { shiroKeep(e.data); });
+          else if (worker.on) worker.on('message', shiroKeep);  // (Node's worker_threads)
+        }
         if (PThread.unusedWorkers.length == 0) {
           setTimeout(function () {
             if (PThread.unusedWorkers.length == 0) PThread.loadWasmModuleToWorker(PThread.allocateUnusedWorker());
