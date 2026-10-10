@@ -19,7 +19,7 @@ import { createInterface } from 'node:readline';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { XServer, type XWindow } from '../../src/x11/server';
-import { installGLX } from '../../src/gl/glx-ext';
+import { installGLX } from '../../src/x11/glx';
 import { composeTop } from '../../src/x11/compose';
 import { installRender } from '../../src/x11/render';
 import { drawIntoWindow } from '../../src/gl/present';
