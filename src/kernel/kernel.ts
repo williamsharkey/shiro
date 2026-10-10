@@ -309,6 +309,7 @@ export class Kernel {
   /** Stop listing this kernel's processes in the page process table (tests). */
   dispose(): void {
     this.detachTable?.();
+    this.procfs.dispose();
     this.detachWriteBack?.();
     this.detachWriteBack = undefined;
     this.detachContentPin?.();
@@ -654,8 +655,10 @@ export class Kernel {
     this.sem.exited(proc);
     for (const child of this.procs.values()) {
       if (child.ppid === proc.pid) {
+        // An orphan: init reaps it as soon as it is a zombie, as Linux's does
         child.ppid = 1;
-        if (child.state === 'zombie') this.scheduleInitReap(child);
+        child.data.orphaned = true;
+        if (child.state === 'zombie') this.procs.delete(child.pid);
       }
     }
     proc.markExited(status);
@@ -668,7 +671,11 @@ export class Kernel {
         pid: proc.pid, uid: proc.ruid ?? proc.uid, status: killed ? A.WTERMSIG(status) : A.WEXITSTATUS(status),
       });
     }
-    if (proc.ppid === 1) this.scheduleInitReap(proc);
+    if (proc.ppid === 1) {
+      // A child the page spawned directly (ppid 1) waits for its runner's waitpid
+      if (proc.data.orphaned) this.procs.delete(proc.pid);
+      else this.scheduleInitReap(proc);
+    }
     // A parent ignoring SIGCHLD or with SA_NOCLDWAIT leaves no zombie: the
     // child is reaped now, and a wait for it ends in ECHILD (Linux)
     else if (parent && (parent.dispositions.get(A.SIGCHLD) === 'ignore' ||
@@ -1299,6 +1306,15 @@ export class Kernel {
       try { return await f.stat(); } finally { if (f !== proc.ctty) await f.close(); }
     }
     if (p === '/proc' || p.startsWith('/proc/')) {
+      // /proc/PID/fd/N followed is the open file itself (a pipe is a FIFO, a socket a socket), as on Linux
+      const fdm = follow ? /^\/proc\/(\d+|self|thread-self)\/fd\/(\d+)$/.exec(p) : null;
+      if (fdm) {
+        const owner = /^\d+$/.test(fdm[1]) ? this.procs.get(Number(fdm[1])) : proc;
+        if (owner) {
+          const f = owner.fds.get(Number(fdm[2]));
+          return f ? await f.stat() : -A.ENOENT;
+        }
+      }
       const pst = this.procfs.stat(proc, p, follow);
       if (pst !== undefined) return pst;
       const link = follow ? this.procfs.linkTarget(proc, p) : undefined;
@@ -1567,7 +1583,7 @@ export class Kernel {
     shell.env = { ...proc.env, PWD: proc.cwd, 0: proc.argv[0] ?? proc.path };
     shell.localVars = new Set(['0']); // $0 is not exported
     // $$, $PPID and $BASHPID are the process's
-    shell.shellPid = shell.bashPid = proc.pid;
+    shell.shellPid = shell.bashPid = shell.kernelPid = proc.pid;
     shell.parentPid = proc.ppid;
     shell.uid = proc.uid;
     // Its fds are the process's (KernelStdio, adoptFds), not whatever exec did in the page's shell
@@ -1575,7 +1591,13 @@ export class Kernel {
     shell.fileDescriptors = new Map();
     // A new process: only the page shell's `export -f` functions come along
     shell.dropUnexportedFunctions();
-    proc.onTerminate(() => shell.abortController?.abort());
+    // Its own abort, which its end fires. Not the page shell's: killing a
+    // program's `sh -c` child would abort the page's foreground job, whose
+    // abort SIGINTs that program's whole group (codex's "turn interrupted")
+    const abort = new AbortController();
+    shell.abortController = null;
+    shell.inheritedAbort = abort;
+    proc.onTerminate(() => abort.abort());
     return shell;
   }
 
@@ -2603,9 +2625,9 @@ export class Kernel {
           const v = new DataView(data.buffer, data.byteOffset, A.SYSINFO_SIZE);
           data.fill(0, 0, A.SYSINFO_SIZE);
           const mem = memoryInfo();
-          const load = BigInt(Math.round(this.procfs.running() * 65536));
+          const loads = this.procfs.loadavg();
           v.setBigInt64(0, BigInt(Math.floor((Date.now() - bootMs) / 1000)), true); // uptime
-          for (let i = 0; i < 3; i++) v.setBigUint64(8 + i * 8, load, true); // loads[3], 1<<16 fixed point
+          for (let i = 0; i < 3; i++) v.setBigUint64(8 + i * 8, BigInt(Math.round(loads[i] * 65536)), true); // loads[3], 1<<16 fixed point
           v.setBigUint64(32, BigInt(mem.total), true); // totalram
           v.setBigUint64(40, BigInt(mem.free), true); // freeram
           v.setUint16(80, Math.min(0xffff, this.procs.size), true); // procs

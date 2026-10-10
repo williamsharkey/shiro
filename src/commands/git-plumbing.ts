@@ -965,8 +965,11 @@ export async function gitPlumbing(ctx: CommandContext, fs: Fs, dir: string, work
       if (!remote) pats.unshift('refs/heads/');
       if (fmt) {
         const sorted = args.find((a) => a.startsWith('--sort='));
-        return gitPlumbing({ ...ctx, args: ['for-each-ref', `--format=${fmt}`, ...(sorted ? [sorted] : []), ...pats] } as CommandContext, fs, dir, workDir)
-          .then((code) => code);
+        // (ctx itself, not a copy: copying reads ctx.stdin, which for a kernel
+        // process waits for the end of its stdin, execLazyStdin)
+        const saved = ctx.args;
+        ctx.args = ['for-each-ref', `--format=${fmt}`, ...(sorted ? [sorted] : []), ...pats];
+        try { return await gitPlumbing(ctx, fs, dir, workDir); } finally { ctx.args = saved; }
       }
       const head = await currentBranch(fs, dir);
       const refs = (await allRefs(fs, dir)).filter((r) => pats.some((p) => r.ref.startsWith(p)));

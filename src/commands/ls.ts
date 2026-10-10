@@ -369,8 +369,9 @@ export const ls: Command = {
 
     const listDir = async (label: string, abs: string, showLabel: boolean, first: boolean) => {
       let names: string[];
+      const real = await fs.realpath(abs).catch(() => abs);
       try {
-        names = await fs.readdir(await fs.realpath(abs).catch(() => abs));
+        names = await fs.readdir(real);
       } catch {
         ctx.stderr += `ls: cannot open directory '${label}': Permission denied\n`;
         status = 2;
@@ -382,8 +383,10 @@ export const ls: Command = {
       const items: Item[] = [];
       for (const n of names) {
         if (!visible(n)) continue;
-        const childAbs = n === '.' ? abs : n === '..' ? (abs.slice(0, abs.lastIndexOf('/')) || '/') : abs === '/' ? `/${n}` : `${abs}/${n}`;
-        const it = await mkItem(n, childAbs, deref === 'all');
+        // . and .. are the directory and its parent, never links: /proc/self/fd's .. is /proc/PID
+        const dot = n === '.' || n === '..';
+        const childAbs = n === '.' ? real : n === '..' ? (real.slice(0, real.lastIndexOf('/')) || '/') : abs === '/' ? `/${n}` : `${abs}/${n}`;
+        const it = await mkItem(n, childAbs, dot || deref === 'all');
         if (it) items.push(it);
       }
       sortItems(items);
