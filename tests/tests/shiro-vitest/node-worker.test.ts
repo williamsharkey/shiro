@@ -190,6 +190,93 @@ srv.listen(18491, () => {
     expect(err).toBe('');
   }, 60_000);
 
+  it('worker_threads: each Worker is a thread of the process, running in parallel', async () => {
+    const r = await sh(`node /tmp/nt/main.js < /dev/null`, async (fs) => {
+      await fs.mkdir('/tmp/nt', { recursive: true });
+      await fs.writeFile('/tmp/nt/w.js', `const { parentPort, workerData, isMainThread, threadId } = require('worker_threads');
+const fs = require('fs');
+parentPort.on('message', (m) => {
+  if (m.cmd === 'sum') parentPort.postMessage({ sum: m.n.reduce((a, b) => a + b, 0), data: workerData.tag, isMainThread, same: threadId === workerData.id });
+  if (m.cmd === 'wake') { const a = new Int32Array(m.sab); Atomics.store(a, 0, 42); Atomics.notify(a, 0); }
+  if (m.cmd === 'file') { fs.writeFileSync('/tmp/nt/from-thread', 'hi'); parentPort.postMessage('wrote'); }
+  if (m.cmd === 'bye') process.exit(7);
+});
+`);
+      await fs.writeFile('/tmp/nt/main.js', `const { Worker, isMainThread } = require('worker_threads');
+const fs = require('fs');
+const w = new Worker('/tmp/nt/w.js', { workerData: { tag: 't1', id: 0 } });
+const replies = [];
+w.on('online', () => replies.push('online'));
+w.on('message', (m) => {
+  replies.push(m);
+  if (m.sum !== undefined) {
+    // the main thread blocks; only a worker running in parallel can wake it
+    const sab = new SharedArrayBuffer(4), a = new Int32Array(sab);
+    w.postMessage({ cmd: 'wake', sab });
+    const r = Atomics.wait(a, 0, 0, 5000);
+    replies.push(r + ' ' + Atomics.load(a, 0));
+    w.postMessage({ cmd: 'file' });
+  } else if (m === 'wrote') {
+    replies.push(fs.readFileSync('/tmp/nt/from-thread', 'utf8'));
+    w.postMessage({ cmd: 'bye' });
+  }
+});
+w.on('exit', (code) => {
+  console.log(isMainThread, JSON.stringify(replies.map((x) => typeof x === 'object' ? { ...x, same: undefined } : x)), code);
+  new Worker('throw new Error("bad thread")', { eval: true }).on('error', (e) => console.log('error:', /bad thread/.test(e.message))).on('exit', (c) => console.log('exit', c));
+});
+w.postMessage({ cmd: 'sum', n: [1, 2, 3] });
+`);
+    });
+    expect(r.err).toBe('');
+    expect(r.out).toBe('true ["online",{"sum":6,"data":"t1","isMainThread":false},"ok 42","wrote","hi"] 7\nerror: true\nexit 1\n');
+  }, 60_000);
+
+  it('worker_threads: a message posted at once waits for the listener; the main thread can block on the worker', async () => {
+    const r = await sh(`node /tmp/nt2/m.js < /dev/null`, async (fs) => {
+      await fs.mkdir('/tmp/nt2', { recursive: true });
+      // the listener comes after a slow require: the message waits for it
+      await fs.writeFile('/tmp/nt2/w.js', `const { parentPort } = require('worker_threads');
+const t0 = Date.now(); while (Date.now() - t0 < 100) {}
+parentPort.on('message', (m) => { const a = new Int32Array(m.sab); Atomics.store(a, 0, 42); Atomics.notify(a, 0); });
+`);
+      await fs.writeFile('/tmp/nt2/m.js', `const { Worker } = require('worker_threads');
+const w = new Worker('/tmp/nt2/w.js');
+const sab = new SharedArrayBuffer(4), a = new Int32Array(sab);
+w.postMessage({ sab });
+console.log(Atomics.wait(a, 0, 0, 10000), Atomics.load(a, 0));
+w.terminate();
+`);
+    });
+    expect(r.err).toBe('');
+    expect(r.out).toBe('ok 42\n');
+  }, 60_000);
+
+  it("a guest's server-sent events stream to the page as they are written", async () => {
+    const { iframeServer } = await import('@shiro/iframe-server');
+    const { shell, fs } = await createTestShell();
+    await fs.writeFile('/tmp/nh-sse.js', `require('http').createServer((req, res) => {
+  res.writeHead(200, { 'content-type': 'text/event-stream' });
+  let n = 0;
+  const t = setInterval(() => { res.write('data: ' + (++n) + '\\n\\n'); if (n === 3) { clearInterval(t); res.end(); setTimeout(() => process.exit(0), 50); } }, 150);
+}).listen(18494);`);
+    const run = shell.execute('export TABCOMPUTER_NODE_WORKER=1; node /tmp/nh-sse.js < /dev/null', () => {}, () => {});
+    const t0 = Date.now();
+    while (!iframeServer.isPortInUse(18494) && Date.now() - t0 < 20_000) await new Promise((r) => setTimeout(r, 20));
+    const start = Date.now();
+    const res = await iframeServer.fetch(18494, '/events');
+    expect(res.headers?.['content-type']).toBe('text/event-stream');
+    expect(res.body).toBeInstanceOf(ReadableStream);
+    const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+    const first = await reader.read();
+    const firstAt = Date.now() - start;
+    let all = new TextDecoder().decode(first.value);
+    for (;;) { const { value, done } = await reader.read(); if (done) break; all += new TextDecoder().decode(value); }
+    expect(firstAt).toBeLessThan(Date.now() - start - 150); // the first event came well before the end
+    expect(all).toBe('data: 1\n\ndata: 2\n\ndata: 3\n\n');
+    expect(await run).toBe(0);
+  }, 60_000);
+
   it('stdin from a pipe; async exec', async () => {
     const r = await sh(`printf 'a\\nb\\n' | node -e '
       let t = ""; process.stdin.on("data", (d) => t += d).on("end", () => {

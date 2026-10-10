@@ -130,6 +130,7 @@ Layer rows are medians of 2 samples; apt rows are 1 sample.
 | `classic` | `gfortran h.f90 && ./hf` | 0.9 s | 9.2 s | **10.5 s** | not measured |
 | `node` | `/usr/bin/node -e` | 6.8 s | 17.0 s | **24.3 s** | not measured |
 | `java` | `javac Hello.java && java Hello` | 0.5 s | see below | — | not measured |
+| `go` | `go run hello.go` | 6.3 s | 41.4 s | **48.2 s** | ~35 min to compile std, before the link step failed (COMPAT.md) |
 
 - First use is the programs' own start-up in Blink plus fetching their
   chunks. Warm runs are 15–20 % faster (gcc 5.9 s, python 4.5 s, pdflatex
@@ -139,6 +140,11 @@ Layer rows are medians of 2 samples; apt rows are 1 sample.
   storage after the first use is 26–107 MiB; apt's python3 set left 412 MiB.
 - The apt `c` run overlapped with other browser checks on the machine for
   part of its hour. Even so, it was still unpacking when it timed out.
+- `go` (measured 2026-10-10 on the same machine, 2 samples): the standard
+  library comes precompiled in the build cache, so `go run` compiles only
+  `main`. The second `go run hello.go` takes 18.5 s. Then `go build` plus
+  running a net/http server and client over loopback takes 73.5 s (+553 MiB
+  peak). Browser storage at the end is 140 MiB.
 - `java`: at this run the JVM aborted at start (HotSpot fell back to the
   legacy vsyscall `getcpu` page; Blink had no getcpu). With Blink patch 0067
   it runs: in the Node test shell, `java -version` took 15.6 s and `javac
@@ -708,6 +714,25 @@ proc/s within one run); two further 15-run passes on the new code gave
 medians 1240 and 1215 proc/s, base 1200. One of those passes stalled at
 ≈10 proc/s for its last 11 samples and did not recur in two more; worth
 watching if it shows up on other branches.
+
+### unix/perf-blink 10 — compiled blocks chain without the Actor loop
+
+Blink patch 0085. In native Claude Code's startup (agent-clis' profile,
+patch 0074), the main thread spent ~50 s of 78 s in compiled code running
+12.7 M blocks: JSC's LLInt ends every bytecode with an indirect jump, and
+each one left the compiled code for Actor's loop. Now WjExecute goes
+straight to the next compiled block (up to 64 in a row). A computed-goto
+loop with one block per op, in Node:
+
+| | ns per op |
+|---|---:|
+| native | 2 |
+| interpreter only (BLINK_WJIT=0) | 660 |
+| wasm JIT before | 131 (2 runs: 153, 131) |
+| wasm JIT after | 92 (3 runs: 154 first, 94, 91) |
+
+`node bench/ab.mjs HEAD --suites x86 --only 'x86\.blink\.' --rounds 3`:
+every metric "same" (the suite's programs don't dispatch indirectly much).
 
 ### unix/perf-blink 9 — shared pages in a hash table
 
@@ -1907,6 +1932,67 @@ Left:
   IndexedDB schema change).
 - **.debs at the peak:** dropping a .deb's cached content once dpkg has
   unpacked it (the debian session's suggestion).
+
+### unix/perf-fs-shell 14 — node in a Worker: synchronous close write-back, the hot-guest spin, path ops
+
+compat-tools' node-in-a-Worker guest (`TABCOMPUTER_NODE_WORKER=1`) does its
+fs through kernel syscalls. On top of perf-kernel's 98715c1 (synchronous
+O_CREAT/O_TRUNC open and unlink):
+
+- **close** of a written file always took the async path: closeInodeSync
+  wrote nothing back, so that was 200 async closes per fs_200 round.
+  `Inode.flushSync` now puts the data into the FileSystem's cached node
+  (`FileSystem.writeCachedSync`) when there is no write backlog, and close
+  completes in syscallSync.
+- **rename, mkdir, rmdir** (`unlinkat` with `AT_REMOVEDIR`) of cached paths
+  in syscallSync (`FileSystem.renameNow`, `createDirNow`, `rmdirNow`). Open
+  files, directory renames, sockets and FIFOs take the async path.
+- **"Slower after the guest ran JS"** is the channel. The page spun 30 µs
+  for a hot guest's next request and counted a guest hot only within 60 µs
+  of a reply. A guest that ran more JS than that was served through
+  `Atomics.waitAsync`, and waking an idle page that way took longer the
+  longer it had idled. Measured from the guest, one `fstatSync` (one
+  syscall) after a busy gap:
+
+  | gap before the call | before | `HOT_SPIN_MS` 0.25, `HOT_GAP_MS` 0.3 |
+  |---|---:|---:|
+  | 0.05–0.1 ms | 30–35 µs | 10 µs |
+  | 1 ms | 105–110 µs | unchanged |
+  | 5 ms | 165–205 µs | unchanged |
+
+  The page spins at most 0.25 ms after each served call (bounded by
+  SLICE_MS).
+
+`bench/ab.mjs origin/unix/integration HEAD --suites node --rounds 3`. This
+includes perf-kernel's open/unlink paths, which integration doesn't have yet.
+
+| metric | before | after | |
+|---|---:|---:|---|
+| `node.worker.fs_200` | 190.7 ms | 148.0 ms | −19.2% |
+| `node.fs_200` (in page) | 110.0 ms | 109.2 ms | same |
+| `node.worker.exec_sync_10` | 143.0 ms | 127.3 ms | same (−9%) |
+| `npm.install_small.first` | 87.1 ms | 64.0 ms | −26.6% |
+
+Worker / in-page for fs_200 is 1.36× (target 1.3×). In a 10-round loop of
+the fs_200 body, the file work alone is ~23 ms per round in the worker
+against 3.9 ms in the page: about 1,400 syscalls per round at ~14 µs each.
+The rest is round trips per operation (3 `newfstatat` + open/write/close +
+open/read/close per file). Fewer of those is guest-side work, offered to
+compat-tools.
+
+Quick suite (`--rounds 3`):
+- 93 metrics the same;
+- `x86.blink.go_nethttp` −10.8%, `net.relay_connect.first` −18%;
+- boot +9 KiB, with perf-kernel's merged code.
+
+Debian A/B of the spin change alone (`--suites debian --rounds 3 --runs 2`):
+all the same; `first_bash` +0.7%, `first_dpkg_list` +1.1%.
+
+Tests: `kernel-core.test.ts`:
+- mkdir/rename/rmdir through syscallSync;
+- a dirty close completes synchronously, and its data is stored after
+  `sync()`;
+- with a backlog, close falls back to the async path.
 
 ## Results
 

@@ -201,10 +201,16 @@ setting wins. Without that, `go` would find tabcomputer's `cc` (a WASM-only
 compiler) on PATH, turn cgo on for `net` and fail. With it, `go build`
 and `go run` hit the cache and compile only the user's packages.
 `go env -u CGO_ENABLED` turns cgo back on, for example with the `c` set
-installed; the cgo packages then compile once. Go deletes cache entries unused for 5 days, judged by mtime, and
-the layer's times are the snapshot's. The layer's `trim.txt` therefore holds
-a last-trim time of 2100, so Go never trims that cache (`go clean -cache`
-empties it).
+installed; the cgo packages then compile once.
+
+Go deletes cache entries whose mtime is more than 5 days old (once a day,
+recorded in `trim.txt`), and it ignores a `trim.txt` dated in the future.
+The layer's times are the snapshot's, so the first `go` command used to trim
+every shipped entry, and the next build compiled std again under Blink. The
+cache entries are therefore dated 2100 (a `touch` in the set's `prepare`).
+build-layers.sh clamps times after the snapshot, except ones beyond 2096, so
+those stay. Go never trims or re-touches them. `go clean -cache` empties the
+cache.
 
 Chunks are the base rootfs's format (gzip, named by the sha256 of their
 bytes). Each package gets its own chunks, so a package two sets share (gcc-14

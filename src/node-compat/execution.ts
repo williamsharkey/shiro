@@ -8,11 +8,11 @@ import { createActivity } from './activity';
 import type { CommandContext } from '../commands/index';
 import { iframeServer } from '../iframe-server';
 import { sha256sync, sha1sync, fnvHash } from '../commands/jseval/crypto';
-import { ProcessExitError, formatArg } from '../commands/jseval/utils';
+import { ProcessExitError } from '../commands/jseval/utils';
 import { transformESModules, transformTS, transformJSX } from '../commands/jseval/module-transform';
 import type { SharedState } from './types';
 import { createFakeBuffer } from './buffer';
-import { createFakeConsole } from './console';
+import { createFakeConsole, formatLog } from './console';
 import { createFakeProcess } from './process';
 import { createFileCache } from './file-cache';
 import { preloadEnvironment } from './preload';
@@ -34,6 +34,7 @@ import { createStreamModule } from './modules/stream';
 import { createCryptoModule } from './modules/crypto';
 import { createProcessGlobal, createProcessFunction } from './process-global';
 import { loadBrowserPackages } from './browser-packages';
+import { patchPackageSource } from './source-patches';
 import { createHttpModule, createHttpsModule, createHttp2Module } from './modules/http';
 import { createNetModule, createTlsModule } from './modules/net-tls';
 import { createMiscModule } from './modules/misc';
@@ -161,19 +162,26 @@ export async function executeNodeScript(
     // Deferred exit: resolves when process.exit is called from async code
     const deferredExitPromise = new Promise<number>((resolve) => { _st.deferredExitResolve = resolve; });
 
-    // A kernel guest without a terminal: output goes to fds 1 and 2 as it is produced
-    // (a pipe's reader, like an agent running an npm script, sees it now, not at exit)
+    // Without a terminal, output goes on as it is produced where something takes it
+    // (a pipe's reader, like an agent running an npm script, sees it now, not at exit):
+    // a spawned child's pipes (ctx.stdoutBytes), the shell's fds as a kernel process
+    // (ctx.streamStdout), or a kernel guest's fds 1 and 2
     const writeOut = nodeGuestOf(ctx)?.writeOut;
-    if (writeOut && !ctx.terminal) {
-      const stream = (buf: string[], fd: 1 | 2, mark: () => void) => {
+    if (!ctx.terminal) {
+      const enc = new TextEncoder();
+      const writerFor = (bytes: ((b: Uint8Array) => void) | undefined, text: ((s: string) => void) | undefined, fd: 1 | 2) =>
+        bytes ? (s: string) => bytes(enc.encode(s)) : text ?? (writeOut ? (s: string) => writeOut(fd, s) : undefined);
+      const stream = (buf: string[], write: ((s: string) => void) | undefined, keep: boolean, mark: () => void) => {
+        if (!write) return;
         buf.push = (...items: string[]) => {
           mark();
-          for (const it of items) writeOut(fd, it);
-          return Array.prototype.push.apply(buf, items);
+          for (const it of items) write(it);
+          // (a child's pipe keeps nothing: esbuild's service writes for as long as it runs)
+          return keep ? Array.prototype.push.apply(buf, items) : buf.length;
         };
       };
-      stream(stdoutBuf, 1, () => { _st.streamedToTerminal = true; });
-      stream(stderrBuf, 2, () => { _st.streamedStderr = true; });
+      stream(stdoutBuf, writerFor(ctx.stdoutBytes, ctx.streamStdout, 1), !ctx.stdoutBytes, () => { _st.streamedToTerminal = true; });
+      stream(stderrBuf, writerFor(ctx.stderrBytes, ctx.streamStderr, 2), !ctx.stderrBytes, () => { _st.streamedStderr = true; });
     }
 
     // Console and process
@@ -203,9 +211,39 @@ export async function executeNodeScript(
     function getBuiltinModule(name: string): any | null {
       const cacheKey = name.startsWith('node:') ? name.slice(5) : name;
       if (_builtinCache.has(cacheKey)) return _builtinCache.get(cacheKey);
-      const mod = _getBuiltinModuleImpl(name);
+      let mod = _getBuiltinModuleImpl(name);
+      // A worker_threads thread (a guest of its own): its parentPort talks to the Worker in the parent
+      if (mod && cacheKey === 'worker_threads' && guest?.thread) mod = threadSide(mod, guest.thread);
       if (mod !== null) _builtinCache.set(cacheKey, mod);
       return mod;
+    }
+    /** What keeps this script running for worker_threads: ref'd Workers it started, or (a thread) a parentPort listened to */
+    const liveWorkers = new Set<any>();
+    let parentPortAlive = () => false;
+    const threadsAlive = () => liveWorkers.size > 0 || parentPortAlive();
+    function threadSide(mainWT: any, t: NonNullable<typeof guest>['thread'] & object): any {
+      const parentPort: any = mainWT._makeEmitter({});
+      let refd = true, closed = false;
+      parentPort.postMessage = (v: any) => { if (!closed) t.post(v); };
+      parentPort.start = () => {};
+      parentPort.close = () => { closed = true; parentPort.emit('close'); };
+      parentPort.ref = () => { refd = true; return parentPort; };
+      parentPort.unref = () => { refd = false; return parentPort; };
+      // As a MessagePort: messages wait until something listens for them, then come a tick later
+      const queued: unknown[] = [];
+      let flushing = false;
+      const flush = () => {
+        if (flushing || closed || !parentPort.listenerCount('message') || !queued.length) return;
+        flushing = true;
+        _baseST(() => { flushing = false; while (queued.length && parentPort.listenerCount('message') && !closed) parentPort.emit('message', queued.shift()); }, 0);
+      };
+      for (const k of ['on', 'addListener', 'once', 'prependListener']) {
+        const orig = parentPort[k];
+        if (typeof orig === 'function') parentPort[k] = (ev: string, fn: any) => { const r = orig(ev, fn); if (ev === 'message') flush(); return r; };
+      }
+      t.onMessage((v) => { queued.push(v); flush(); });
+      parentPortAlive = () => !closed && refd && parentPort.listenerCount('message') > 0;
+      return { ...mainWT, isMainThread: false, parentPort, workerData: t.workerData, threadId: t.threadId };
     }
     function _getBuiltinModuleImpl(name: string): any | null {
       switch (name) {
@@ -213,7 +251,7 @@ export async function executeNodeScript(
         case 'node:path': return createPathModule(ctx);
         case 'fs':
         case 'node:fs': {
-          const fsMod = createFsModule({ ctx, fileCache, fileMtimes, pendingPromises, tickSyncOps, FakeBuffer, getBuiltinModule, homeDir, trackAsync, atExit });
+          const fsMod = createFsModule({ ctx, fileCache, fileMtimes, pendingPromises, tickSyncOps, FakeBuffer, getBuiltinModule, homeDir, trackAsync, atExit, getProcess: () => fakeProcess });
           fsMod.promises = trackModule(fsMod.promises);
           return fsMod;
         }
@@ -280,6 +318,31 @@ export async function executeNodeScript(
      */
     let evalWorkers = 0;
     function startWorker(filename: string, options: any, worker: any): void {
+      if (guest?.startThread) {
+        // A kernel guest: the worker is a thread of this process, running in parallel
+        const target = options?.eval ? String(filename)
+          : filename.startsWith('file://') ? decodeURIComponent(new URL(filename).pathname) : ctx.fs.resolvePath(String(filename), ctx.cwd);
+        const env = options?.env && typeof options.env === 'object' ? Object.fromEntries(Object.entries(options.env).map(([k, v]) => [k, String(v)])) : undefined;
+        const h = guest.startThread(target, { threadId: worker.threadId, eval: !!options?.eval, workerData: options?.workerData, argv: options?.argv?.map(String), env }, {
+          online: () => worker.emit('online'),
+          message: (v) => { if (!worker._exited) worker.emit('message', v); },
+          error: (e) => {
+            const err = Object.assign(new Error(e.message), { stack: e.stack ?? e.message });
+            if (worker.listenerCount('error')) worker.emit('error', err);
+            else stderrBuf.push(e.message + '\n');
+          },
+          exit: (code) => {
+            liveWorkers.delete(worker);
+            if (!worker._exited) { worker._exited = true; worker.emit('exit', code); }
+          },
+        });
+        liveWorkers.add(worker);
+        worker._toWorker = (v: any) => h.post(v);
+        worker._terminate = () => { liveWorkers.delete(worker); h.terminate(); };
+        worker.ref = () => { if (!worker._exited) liveWorkers.add(worker); return worker; };
+        worker.unref = () => { liveWorkers.delete(worker); return worker; };
+        return;
+      }
       // { eval: true }: the "filename" is the worker's code, run as a CommonJS module from here
       let file: string;
       if (options?.eval) {
@@ -323,9 +386,14 @@ export async function executeNodeScript(
       });
     }
 
+    // A script that reads piped stdin synchronously (fs.readFileSync(0), '/dev/stdin',
+    // fs.readSync(0)) can't wait for a live stream: load it before the script runs
+    if (!ctx.stdinStream && /readFileSync\(\s*(?:0\s*[,)]|['"]\/dev\/stdin['"])|readSync\(\s*0\s*,/.test(code)) {
+      await fakeProcess.stdin?.__fd0?.fill();
+    }
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
     // Transform TypeScript/JSX/ESM syntax for execution
-    let transformedCode = isClaudeCodeScript(scriptPath) ? patchClaudeCodeSource(code) : code;
+    let transformedCode = isClaudeCodeScript(scriptPath) ? patchClaudeCodeSource(code) : patchPackageSource(scriptPath, code);
     if (scriptPath && (scriptPath.endsWith('.ts') || scriptPath.endsWith('.tsx'))) {
       transformedCode = transformTS(transformedCode);
     }
@@ -613,7 +681,7 @@ export async function executeNodeScript(
     const _intervalIds = new Set<any>();
     const _refdIntervals = new Set<any>(); // a guest's ref'd intervals: activity, as in node
     // (and its open sockets and servers)
-    const intervalsAlive = () => _refdIntervals.size > 0 || !!guest?.busy?.();
+    const intervalsAlive = () => _refdIntervals.size > 0 || !!guest?.busy?.() || threadsAlive();
     if (code.length <= 500000) {
       const settle = () => { if (_activeTimers <= 0 && _timersResolve) { _timersResolve(); _timersResolve = null; _timersDone = null; } };
       globalThis.setTimeout = _st.installedSetTimeout = function(fn: any, ms?: number, ...args: any[]) {
@@ -855,7 +923,7 @@ export async function executeNodeScript(
     }
 
     if (printResult && !_st.exitCalled) {
-      ctx.stdout += formatArg(result) + '\n';
+      ctx.stdout += formatLog([result]) + '\n';
     }
 
     // Clean up

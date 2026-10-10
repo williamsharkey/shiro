@@ -252,6 +252,59 @@ describe('kernel syscalls found by LTP', () => {
     for (const f of [fd, ep]) await call(A.SYS_close, [f]);
   });
 
+  it('Open POSIX mq_*: POSIX message queues by priority, full/empty, timeouts, attributes, notify', async () => {
+    const attr = (maxmsg: number, msgsize: number) => {
+      const b = new Uint8Array(32); const v = new DataView(b.buffer);
+      v.setBigInt64(8, BigInt(maxmsg), true); v.setBigInt64(16, BigInt(msgsize), true);
+      return b;
+    };
+    const open = (name: string, oflag: number, a?: Uint8Array) => {
+      const d = new Uint8Array(512); d.set(enc.encode(name)); if (a) d.set(a, name.length);
+      return kernel.syscall(proc, A.SYS_mq_open, [name.length, oflag, 0o600, a ? 1 : 0], d);
+    };
+    const send = (fd: number, text: string, prio: number) => kernel.syscall(proc, A.SYS_mq_timedsend, [fd, text.length, prio, 0], enc.encode(text));
+    const recv = async (fd: number, len = 64, ts?: [number, number]) => {
+      const d = new Uint8Array(8 + len);
+      if (ts) { const v = new DataView(d.buffer); v.setBigInt64(0, BigInt(ts[0]), true); v.setBigInt64(8, BigInt(ts[1]), true); }
+      const n = await kernel.syscall(proc, A.SYS_mq_timedreceive, [fd, len, ts ? 1 : 0], d);
+      return n < 0 ? n : `${new DataView(d.buffer).getUint32(0, true)}:${new TextDecoder().decode(d.subarray(8, 8 + n))}`;
+    };
+    const fd = await open('q1', A.O_RDWR | A.O_CREAT | A.O_NONBLOCK, attr(3, 64));
+    expect(fd).toBeGreaterThanOrEqual(0);
+    expect(await open('q1', A.O_RDWR | A.O_CREAT | A.O_EXCL)).toBe(-A.EEXIST);
+    expect(await open('nope', A.O_RDONLY)).toBe(-A.ENOENT);
+    expect(await open('big', A.O_RDWR | A.O_CREAT, attr(11, 64))).toBe(-A.EINVAL); // past msg_max, unprivileged
+    expect(await send(fd, 'low', 1)).toBe(0);
+    expect(await send(fd, 'high', 9)).toBe(0);
+    expect(await send(fd, 'low2', 1)).toBe(0);
+    expect(await send(fd, 'full', 1)).toBe(-A.EAGAIN);
+    expect(await send(fd, 'x'.repeat(65), 1)).toBe(-A.EMSGSIZE);
+    expect(await recv(fd, 8)).toBe(-A.EMSGSIZE); // the buffer must hold mq_msgsize
+    expect([await recv(fd), await recv(fd), await recv(fd)]).toEqual(['9:high', '1:low', '1:low2']);
+    expect(await recv(fd)).toBe(-A.EAGAIN);
+    // attributes: clear O_NONBLOCK, then a receive times out at its absolute deadline
+    const ga = new Uint8Array(32);
+    expect(await kernel.syscall(proc, A.SYS_mq_getsetattr, [fd, 1], ga)).toBe(0);
+    expect(Number(new DataView(ga.buffer).getBigInt64(8, true))).toBe(3);
+    const t = Date.now() + 50;
+    expect(await recv(fd, 64, [Math.floor(t / 1000), (t % 1000) * 1e6])).toBe(-A.ETIMEDOUT);
+    // mq_notify: a message to the empty queue sends the signal, once
+    const sev = new Uint8Array(16); new DataView(sev.buffer).setInt32(8, A.SIGUSR1, true);
+    expect(await kernel.syscall(proc, A.SYS_mq_notify, [fd, 1], sev)).toBe(0);
+    expect(await kernel.syscall(proc, A.SYS_mq_notify, [fd, 1], sev)).toBe(-A.EBUSY);
+    const got: number[] = [];
+    const old = kernel.deliver.bind(kernel);
+    kernel.deliver = (p, sig) => { if (p === proc) got.push(sig); else old(p, sig); };
+    expect(await send(fd, 'ping', 0)).toBe(0);
+    kernel.deliver = old;
+    expect(got).toEqual([A.SIGUSR1]);
+    const un = enc.encode('q1');
+    expect(await kernel.syscall(proc, A.SYS_mq_unlink, [2], un)).toBe(0);
+    expect(await kernel.syscall(proc, A.SYS_mq_unlink, [2], un)).toBe(-A.ENOENT);
+    expect(await recv(fd)).toBe('0:ping'); // still open after the unlink
+    await call(A.SYS_close, [fd]);
+  });
+
   it('connect03: connecting to an AF_UNIX socket file takes write permission on it', async () => {
     const stack = new NetStack();
     stack.configure({ relayUrl: null, tokenUrl: null, dohUrl: null, portHost: null });
