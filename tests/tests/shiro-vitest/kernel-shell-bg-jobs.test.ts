@@ -9,7 +9,7 @@ import { createTestShell } from './helpers';
 import { installNodeWorker } from './node-worker-setup';
 import { Process } from '@shiro/kernel/process';
 import { BufferFile } from '@shiro/kernel/fd';
-import { O_RDONLY } from '@shiro/kernel/abi';
+import { O_RDONLY, WNOHANG, ECHILD } from '@shiro/kernel/abi';
 import { SinkFile } from '@shiro/wasi/stdio';
 import { kernelForContext } from '@shiro/wasi/run-command';
 import type { CommandContext } from '@shiro/commands/index';
@@ -20,6 +20,11 @@ afterAll(() => cleanup?.());
 
 /** `sh -c SCRIPT` as a kernel process with node in worker mode; its output */
 async function shC(script: string): Promise<string> {
+  return (await shCK(script)).out;
+}
+
+/** shC, also giving the kernel */
+async function shCK(script: string): Promise<{ out: string; kernel: ReturnType<typeof kernelForContext> }> {
   const { shell, fs } = await createTestShell();
   const kernel = kernelForContext({ fs, shell } as unknown as CommandContext);
   await fs.mkdir('/tmp/bgk', { recursive: true });
@@ -32,7 +37,7 @@ async function shC(script: string): Promise<string> {
     0: new BufferFile('', O_RDONLY), 1: new SinkFile((t) => { out += t; }), 2: new SinkFile((t) => { out += t; }),
   } });
   await p.wait();
-  return out;
+  return { out, kernel };
 }
 
 describe('background jobs of a kernel sh', () => {
@@ -52,5 +57,23 @@ describe('background jobs of a kernel sh', () => {
   it('a foreground kernel command leaves no zombie under the shell', async () => {
     const out = await shC('node -e "console.log(process.pid)" > fg; read -r p < fg; test -e /proc/$p && grep ^State /proc/$p/status || echo reaped');
     expect(out).toBe('reaped\n');
+  }, 60_000);
+
+  it('a child its shell reaped is not reported again to init (no double reap)', async () => {
+    const { out, kernel } = await shCK('node -e "setTimeout(() => process.exit(3), 100)" & p=$!; wait $p; echo "$p $?"');
+    const [pid, st] = out.trim().split(' ').map(Number);
+    expect(st).toBe(3);
+    expect(kernel.procs.has(pid)).toBe(false);
+    expect((await kernel.waitpid(pid, WNOHANG, kernel.init)).pid).toBe(-ECHILD);
+    expect((await kernel.waitpid(-1, WNOHANG, kernel.init)).pid).not.toBe(pid);
+  }, 60_000);
+
+  it('a child whose shell exits first is reaped once, by init', async () => {
+    const { out, kernel } = await shCK('node -e "setTimeout(() => process.exit(0), 300)" > /dev/null 2>&1 & echo $!');
+    const pid = Number(out.trim());
+    const t0 = Date.now();
+    while (kernel.procs.has(pid) && Date.now() - t0 < 10_000) await new Promise((r) => setTimeout(r, 50));
+    expect(kernel.procs.has(pid)).toBe(false);
+    expect((await kernel.waitpid(pid, WNOHANG, kernel.init)).pid).toBe(-ECHILD);
   }, 60_000);
 });
