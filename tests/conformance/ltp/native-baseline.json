@@ -47,6 +47,14 @@
   "passed": 8,
   "skipped": 1
  },
+ "brk01": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "brk02": {
+  "passed": 2,
+  "skipped": 0
+ },
  "chdir02": {
   "passed": 1,
   "skipped": 0
@@ -111,6 +119,10 @@
   "passed": 1,
   "skipped": 0
  },
+ "close_range02": {
+  "passed": 11,
+  "skipped": 0
+ },
  "close01": {
   "passed": 3,
   "skipped": 0
@@ -124,6 +136,10 @@
   "skipped": 0
  },
  "connect03": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "copy_file_range03": {
   "passed": 2,
   "skipped": 0
  },
@@ -251,6 +267,30 @@
   "passed": 1,
   "skipped": 0
  },
+ "epoll_pwait01": {
+  "passed": 4,
+  "skipped": 0
+ },
+ "epoll_pwait02": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "epoll_pwait03": {
+  "passed": 14,
+  "skipped": 0
+ },
+ "epoll_pwait04": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "epoll_pwait05": {
+  "passed": 3,
+  "skipped": 0
+ },
+ "epoll_pwait06": {
+  "passed": 2,
+  "skipped": 10
+ },
  "epoll_wait01": {
   "passed": 3,
   "skipped": 0
@@ -311,11 +351,51 @@
   "passed": 1,
   "skipped": 0
  },
+ "eventfd01": {
+  "passed": 4,
+  "skipped": 0
+ },
+ "eventfd02": {
+  "passed": 5,
+  "skipped": 0
+ },
+ "eventfd03": {
+  "passed": 3,
+  "skipped": 0
+ },
+ "eventfd04": {
+  "passed": 3,
+  "skipped": 0
+ },
+ "eventfd05": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "eventfd2_01": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "eventfd2_02": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "eventfd2_03": {
+  "passed": 2,
+  "skipped": 0
+ },
  "execve01": {
   "passed": 1,
   "skipped": 0
  },
  "execve06": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "exit_group01": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "exit02": {
   "passed": 1,
   "skipped": 0
  },
@@ -325,6 +405,14 @@
  },
  "faccessat02": {
   "passed": 2,
+  "skipped": 0
+ },
+ "fallocate02": {
+  "passed": 8,
+  "skipped": 0
+ },
+ "fallocate03": {
+  "passed": 8,
   "skipped": 0
  },
  "fchdir01": {
@@ -337,6 +425,14 @@
  },
  "fchmod01": {
   "passed": 8,
+  "skipped": 0
+ },
+ "fchmodat01": {
+  "passed": 6,
+  "skipped": 0
+ },
+ "fchmodat02": {
+  "passed": 6,
   "skipped": 0
  },
  "fcntl02": {
@@ -483,6 +579,26 @@
   "passed": 3,
   "skipped": 0
  },
+ "flock01": {
+  "passed": 3,
+  "skipped": 0
+ },
+ "flock02": {
+  "passed": 4,
+  "skipped": 0
+ },
+ "flock03": {
+  "passed": 3,
+  "skipped": 0
+ },
+ "flock04": {
+  "passed": 6,
+  "skipped": 0
+ },
+ "flock06": {
+  "passed": 4,
+  "skipped": 0
+ },
  "fork_procs": {
   "passed": 1,
   "skipped": 0
@@ -533,6 +649,22 @@
  },
  "fstat03_64": {
   "passed": 2,
+  "skipped": 0
+ },
+ "fstatfs02": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "fstatfs02_64": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "fsync02": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "fsync03": {
+  "passed": 5,
   "skipped": 0
  },
  "ftruncate01": {
@@ -623,6 +755,14 @@
   "passed": 3,
   "skipped": 0
  },
+ "getcpu01": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "getcpu02": {
+  "passed": 2,
+  "skipped": 0
+ },
  "getcwd01": {
   "passed": 5,
   "skipped": 0
@@ -639,6 +779,38 @@
   "passed": 1,
   "skipped": 0
  },
+ "geteuid01": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "geteuid02": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "getgid03": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "getitimer01": {
+  "passed": 30,
+  "skipped": 0
+ },
+ "getitimer02": {
+  "passed": 3,
+  "skipped": 0
+ },
+ "getpeername01": {
+  "passed": 7,
+  "skipped": 0
+ },
+ "getpgid01": {
+  "passed": 8,
+  "skipped": 0
+ },
+ "getpgid02": {
+  "passed": 2,
+  "skipped": 0
+ },
  "getpid01": {
   "passed": 100,
   "skipped": 0
@@ -650,6 +822,26 @@
  "getppid02": {
   "passed": 2,
   "skipped": 0
+ },
+ "getrandom01": {
+  "passed": 4,
+  "skipped": 0
+ },
+ "getrandom02": {
+  "passed": 4,
+  "skipped": 0
+ },
+ "getrandom03": {
+  "passed": 9,
+  "skipped": 0
+ },
+ "getrandom04": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "getrandom05": {
+  "passed": 3,
+  "skipped": 1
  },
  "getrlimit01": {
   "passed": 16,
@@ -663,12 +855,132 @@
   "passed": 16,
   "skipped": 0
  },
+ "getrusage01": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "getrusage02": {
+  "passed": 3,
+  "skipped": 1
+ },
+ "getsockname01": {
+  "passed": 6,
+  "skipped": 0
+ },
+ "getsockopt01": {
+  "passed": 9,
+  "skipped": 0
+ },
+ "getsockopt02": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "gettid01": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "gettid02": {
+  "passed": 11,
+  "skipped": 0
+ },
  "gettimeofday01": {
   "passed": 3,
   "skipped": 0
  },
  "gettimeofday02": {
   "passed": 1,
+  "skipped": 0
+ },
+ "getuid01": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "getuid03": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "inotify01": {
+  "passed": 7,
+  "skipped": 0
+ },
+ "inotify02": {
+  "passed": 9,
+  "skipped": 0
+ },
+ "inotify04": {
+  "passed": 5,
+  "skipped": 0
+ },
+ "inotify05": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "inotify09": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "inotify10": {
+  "passed": 10,
+  "skipped": 0
+ },
+ "inotify11": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "inotify12": {
+  "passed": 9,
+  "skipped": 0
+ },
+ "ioctl_ns02": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "ioctl_ns03": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "ioctl_ns04": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "ioctl_ns07": {
+  "passed": 4,
+  "skipped": 0
+ },
+ "ioctl_pidfd01": {
+  "passed": 19,
+  "skipped": 5
+ },
+ "ioctl_pidfd02": {
+  "passed": 10,
+  "skipped": 0
+ },
+ "ioctl_pidfd03": {
+  "passed": 3,
+  "skipped": 0
+ },
+ "ioctl_pidfd04": {
+  "passed": 5,
+  "skipped": 0
+ },
+ "ioctl_pidfd05": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "ioctl_pidfd06": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "ioctl01": {
+  "passed": 9,
+  "skipped": 0
+ },
+ "ioctl07": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "ioctl10": {
+  "passed": 17,
   "skipped": 0
  },
  "kill03": {
@@ -725,6 +1037,178 @@
  },
  "lstat02_64": {
   "passed": 6,
+  "skipped": 0
+ },
+ "madvise03": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "madvise05": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "madvise10": {
+  "passed": 12,
+  "skipped": 0
+ },
+ "memfd_create01": {
+  "passed": 157,
+  "skipped": 0
+ },
+ "memfd_create02": {
+  "passed": 14,
+  "skipped": 0
+ },
+ "memfd_create04": {
+  "passed": 9,
+  "skipped": 0
+ },
+ "mincore02": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "mincore03": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "mincore04": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "mknod06": {
+  "passed": 6,
+  "skipped": 0
+ },
+ "mlock03": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "mlock04": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "mlock05": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "mmap01": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "mmap02": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "mmap03": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "mmap04": {
+  "passed": 14,
+  "skipped": 0
+ },
+ "mmap05": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "mmap06": {
+  "passed": 8,
+  "skipped": 0
+ },
+ "mmap08": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "mmap09": {
+  "passed": 3,
+  "skipped": 0
+ },
+ "mmap12": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "mmap13": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "mmap15": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "mmap17": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "mmap18": {
+  "passed": 4,
+  "skipped": 0
+ },
+ "mmap19": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "mmap20": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "mmap21": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "mmap23": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "mmap24": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "mprotect05": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "mremap01": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "mremap02": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "mremap03": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "mremap04": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "mremap05": {
+  "passed": 3,
+  "skipped": 0
+ },
+ "mremap06": {
+  "passed": 3,
+  "skipped": 0
+ },
+ "mremap07": {
+  "passed": 3,
+  "skipped": 0
+ },
+ "mremap08": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "mremap09": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "munmap01": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "munmap03": {
+  "passed": 3,
   "skipped": 0
  },
  "nanosleep01": {
@@ -859,6 +1343,34 @@
   "passed": 20,
   "skipped": 0
  },
+ "prctl01": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "prctl02": {
+  "passed": 18,
+  "skipped": 0
+ },
+ "prctl03": {
+  "passed": 6,
+  "skipped": 0
+ },
+ "prctl05": {
+  "passed": 8,
+  "skipped": 0
+ },
+ "prctl08": {
+  "passed": 14,
+  "skipped": 0
+ },
+ "prctl09": {
+  "passed": 7,
+  "skipped": 0
+ },
+ "prctl10": {
+  "passed": 5,
+  "skipped": 0
+ },
  "pread01": {
   "passed": 1,
   "skipped": 0
@@ -873,6 +1385,38 @@
  },
  "pread02_64": {
   "passed": 3,
+  "skipped": 0
+ },
+ "preadv01": {
+  "passed": 3,
+  "skipped": 0
+ },
+ "preadv01_64": {
+  "passed": 3,
+  "skipped": 0
+ },
+ "preadv02": {
+  "passed": 8,
+  "skipped": 0
+ },
+ "preadv02_64": {
+  "passed": 8,
+  "skipped": 0
+ },
+ "preadv201": {
+  "passed": 6,
+  "skipped": 0
+ },
+ "preadv201_64": {
+  "passed": 6,
+  "skipped": 0
+ },
+ "preadv202": {
+  "passed": 8,
+  "skipped": 0
+ },
+ "preadv202_64": {
+  "passed": 8,
   "skipped": 0
  },
  "pselect01": {
@@ -931,6 +1475,38 @@
   "passed": 1,
   "skipped": 0
  },
+ "pwritev01": {
+  "passed": 3,
+  "skipped": 0
+ },
+ "pwritev01_64": {
+  "passed": 3,
+  "skipped": 0
+ },
+ "pwritev02": {
+  "passed": 7,
+  "skipped": 0
+ },
+ "pwritev02_64": {
+  "passed": 7,
+  "skipped": 0
+ },
+ "pwritev201": {
+  "passed": 6,
+  "skipped": 0
+ },
+ "pwritev201_64": {
+  "passed": 6,
+  "skipped": 0
+ },
+ "pwritev202": {
+  "passed": 7,
+  "skipped": 0
+ },
+ "pwritev202_64": {
+  "passed": 7,
+  "skipped": 0
+ },
  "read01": {
   "passed": 1,
   "skipped": 0
@@ -947,6 +1523,18 @@
   "passed": 1,
   "skipped": 0
  },
+ "readahead01": {
+  "passed": 17,
+  "skipped": 5
+ },
+ "readlinkat01": {
+  "passed": 12,
+  "skipped": 0
+ },
+ "readlinkat02": {
+  "passed": 6,
+  "skipped": 0
+ },
  "readv01": {
   "passed": 10,
   "skipped": 0
@@ -955,8 +1543,36 @@
   "passed": 5,
   "skipped": 0
  },
+ "recvmsg01": {
+  "passed": 10,
+  "skipped": 0
+ },
  "rmdir01": {
   "passed": 1,
+  "skipped": 0
+ },
+ "rt_sigqueueinfo01": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "rt_sigqueueinfo02": {
+  "passed": 3,
+  "skipped": 0
+ },
+ "rt_sigtimedwait01": {
+  "passed": 19,
+  "skipped": 0
+ },
+ "sbrk01": {
+  "passed": 3,
+  "skipped": 0
+ },
+ "sbrk02": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "sched_getaffinity01": {
+  "passed": 4,
   "skipped": 0
  },
  "select01": {
@@ -1039,11 +1655,75 @@
   "passed": 2,
   "skipped": 0
  },
+ "sendmsg03": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "sendto03": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "set_tid_address01": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "setitimer01": {
+  "passed": 18,
+  "skipped": 0
+ },
+ "setitimer02": {
+  "passed": 3,
+  "skipped": 0
+ },
+ "setpgid01": {
+  "passed": 7,
+  "skipped": 0
+ },
+ "setpgid02": {
+  "passed": 3,
+  "skipped": 0
+ },
+ "setpgid03": {
+  "passed": 3,
+  "skipped": 0
+ },
  "setrlimit05": {
   "passed": 1,
   "skipped": 0
  },
  "setrlimit06": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "setsockopt01": {
+  "passed": 8,
+  "skipped": 0
+ },
+ "setsockopt05": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "setsockopt07": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "setsockopt08": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "setsockopt09": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "shutdown01": {
+  "passed": 6,
+  "skipped": 0
+ },
+ "shutdown02": {
+  "passed": 4,
+  "skipped": 0
+ },
+ "sigaltstack02": {
   "passed": 2,
   "skipped": 0
  },
@@ -1075,6 +1755,22 @@
   "passed": 3,
   "skipped": 0
  },
+ "sigpending02": {
+  "passed": 4,
+  "skipped": 1
+ },
+ "sigsuspend01": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "sigsuspend02": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "sigwait01": {
+  "passed": 3,
+  "skipped": 0
+ },
  "socket01": {
   "passed": 9,
   "skipped": 0
@@ -1091,12 +1787,60 @@
   "passed": 4,
   "skipped": 0
  },
+ "splice01": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "splice02": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "splice03": {
+  "passed": 7,
+  "skipped": 0
+ },
+ "splice04": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "splice05": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "splice07": {
+  "passed": 388,
+  "skipped": 105
+ },
+ "splice08": {
+  "passed": 36,
+  "skipped": 0
+ },
+ "splice09": {
+  "passed": 2,
+  "skipped": 0
+ },
  "stat02": {
   "passed": 2,
   "skipped": 0
  },
  "stat02_64": {
   "passed": 2,
+  "skipped": 0
+ },
+ "statfs02": {
+  "passed": 6,
+  "skipped": 0
+ },
+ "statfs02_64": {
+  "passed": 6,
+  "skipped": 0
+ },
+ "statx02": {
+  "passed": 5,
+  "skipped": 0
+ },
+ "statx03": {
+  "passed": 7,
   "skipped": 0
  },
  "symlink02": {
@@ -1107,7 +1851,91 @@
   "passed": 2,
   "skipped": 0
  },
+ "sync_file_range01": {
+  "passed": 5,
+  "skipped": 0
+ },
+ "sysinfo01": {
+  "passed": 9,
+  "skipped": 0
+ },
+ "sysinfo02": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "tee01": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "tee02": {
+  "passed": 3,
+  "skipped": 0
+ },
+ "tgkill01": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "tgkill02": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "tgkill03": {
+  "passed": 6,
+  "skipped": 0
+ },
  "time01": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "timer_create02": {
+  "passed": 5,
+  "skipped": 0
+ },
+ "timer_create03": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "timer_settime03": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "timerfd_create01": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "timerfd_gettime01": {
+  "passed": 3,
+  "skipped": 0
+ },
+ "timerfd_settime01": {
+  "passed": 4,
+  "skipped": 0
+ },
+ "timerfd_settime02": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "timerfd01": {
+  "passed": 12,
+  "skipped": 0
+ },
+ "timerfd02": {
+  "passed": 6,
+  "skipped": 0
+ },
+ "times01": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "times03": {
+  "passed": 12,
+  "skipped": 0
+ },
+ "tkill01": {
+  "passed": 2,
+  "skipped": 0
+ },
+ "tkill02": {
   "passed": 2,
   "skipped": 0
  },
@@ -1147,12 +1975,32 @@
   "passed": 7,
   "skipped": 0
  },
+ "utime07": {
+  "passed": 5,
+  "skipped": 0
+ },
  "vfork01": {
   "passed": 8,
   "skipped": 0
  },
  "vfork02": {
   "passed": 1,
+  "skipped": 0
+ },
+ "vmsplice01": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "vmsplice02": {
+  "passed": 3,
+  "skipped": 0
+ },
+ "vmsplice03": {
+  "passed": 1,
+  "skipped": 0
+ },
+ "vmsplice04": {
+  "passed": 2,
   "skipped": 0
  },
  "wait401": {

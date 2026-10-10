@@ -377,9 +377,9 @@ export function setProcSelf(fn: () => number | undefined): void {
 }
 const PROC_PID_RE = /^\/proc\/(\d+|self|thread-self)(?:\/(.*))?$/;
 const PROC_PID_FILES = ['cmdline', 'comm', 'cwd', 'environ', 'exe', 'fd', 'io', 'limits', 'mounts', 'root', 'stat', 'statm', 'status', 'syscall', 'task', 'wchan'];
-type ProcPidNode = { dir: string[] } | { text: string } | { link: string };
+type ProcPidNode = { dir: string[] } | { text: string } | { bytes: Uint8Array } | { link: string };
 /** Top-level /proc files the kernel generates from its process table (ProcInfoSource.node) */
-const SYSTEM_NAMES = ['stat', 'loadavg', 'uptime', 'vmstat', 'sysvipc'];
+const SYSTEM_NAMES = ['stat', 'loadavg', 'uptime', 'vmstat', 'sysvipc', 'config.gz'];
 
 /** /proc virtual provider — dynamic system info from Shiro */
 class ProcProvider implements VirtualFSProvider {
@@ -515,6 +515,7 @@ class ProcProvider implements VirtualFSProvider {
     if (node && 'dir' in node) return null;
     const gen = this.entries[path];
     if (!gen && !node) return null;
+    if (node && 'bytes' in node) return encoding === 'utf8' ? new TextDecoder().decode(node.bytes) : node.bytes;
     const content = node && 'text' in node ? node.text : gen!();
     return encoding === 'utf8' ? content : new TextEncoder().encode(content);
   }
@@ -532,7 +533,8 @@ class ProcProvider implements VirtualFSProvider {
       return null; // the FileSystem follows it to a real path
     }
     if ('dir' in node) return makeStat({ path, type: 'dir', content: null, mode: 0o555, mtime: Date.now(), ctime: this.startTime, size: 0 });
-    return makeStat({ path, type: 'file', content: new TextEncoder().encode(node.text), mode: 0o444, mtime: Date.now(), ctime: this.startTime, size: node.text.length });
+    const content = 'bytes' in node ? node.bytes : new TextEncoder().encode(node.text);
+    return makeStat({ path, type: 'file', content, mode: 0o444, mtime: Date.now(), ctime: this.startTime, size: content.length });
   }
 
   stat(path: string, follow = true): StatResult | null {
@@ -1755,10 +1757,14 @@ export class FileSystem {
    * `existing` (AT_SYMLINK_FOLLOW); otherwise the symlink itself gets the name.
    */
   async link(existing: string, newPath: string, options?: { follow?: boolean }): Promise<void> {
+    // /proc, /dev and the like are other filesystems
+    if (this.virtualProviders.some((vp) => vp.handles(existing) || vp.handles(newPath))) {
+      throw fsError('EXDEV', `EXDEV: cross-device link, link '${existing}' -> '${newPath}'`);
+    }
     const src = await this._canon(existing, !!options?.follow);
     newPath = await this._canon(newPath, false);
     let node = await this._get(src);
-    if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, link '${existing}'`);
+    if (!node) throw await this._missing(src, 'link');
     if (node.type === 'dir') throw fsError('EPERM', `EPERM: operation not permitted, link '${existing}'`);
     if (await this._get(newPath)) throw fsError('EEXIST', `EEXIST: file already exists, link '${newPath}'`);
     const parentPath = newPath.substring(0, newPath.lastIndexOf('/')) || '/';
@@ -1829,6 +1835,16 @@ export class FileSystem {
 
   private _linksChanged(): void {
     for (const fn of this._linkListeners) { try { fn(); } catch {} }
+  }
+
+  /** The error for a canonical path that doesn't exist: ENOTDIR when a component on the way is not a directory. */
+  private async _missing(path: string, op: string): Promise<Error> {
+    for (let i = path.indexOf('/', 1); i > 0; i = path.indexOf('/', i + 1)) {
+      const n = await this._get(path.slice(0, i));
+      if (!n) break;
+      if (n.type !== 'dir') return fsError('ENOTDIR', `ENOTDIR: not a directory, ${op} '${path}'`);
+    }
+    return fsError('ENOENT', `ENOENT: no such file or directory, ${op} '${path}'`);
   }
 
   /** Inode number of the linked file at canonical `path` (cached), if it has links. */
@@ -2780,7 +2796,7 @@ export class FileSystem {
     }
     path = await this._canon(path, false);
     const node = await this._get(path);
-    if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, readlink '${path}'`);
+    if (!node) throw await this._missing(path, 'readlink');
     if (node.type !== 'symlink') throw fsError('EINVAL', `EINVAL: not a symlink '${path}'`);
     return node.symlinkTarget || new TextDecoder().decode(node.content!);
   }

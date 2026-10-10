@@ -7,7 +7,9 @@ import { createTestShell, run } from './helpers';
 
 // Hard links (FileSystem.link): one file, several names. Data in an inode
 // record ("\u0001i/<ino>"), names as stubs, the name map at "\u0001links".
-describe('hard links', () => {
+// Generous timeouts: these run many IndexedDB transactions and kernel writes,
+// slow under a full parallel suite run (5 s, the default, was hit once)
+describe('hard links', { timeout: 60_000 }, () => {
   const saved = { min: FileSystem.BLOB_MIN, block: FileSystem.BLOCK };
   beforeEach(() => { FileSystem.BLOB_MIN = 8 << 10; FileSystem.BLOCK = 1 << 10; });
   afterEach(() => { FileSystem.BLOB_MIN = saved.min; FileSystem.BLOCK = saved.block; });
@@ -187,6 +189,9 @@ describe('hard links', () => {
     await expect(fs.link('/tmp/hl6/dir', '/tmp/hl6/d2')).rejects.toMatchObject({ code: 'EPERM' });
     await expect(fs.link('/tmp/hl6/none', '/tmp/hl6/n2')).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(fs.link('/tmp/hl6/t', '/tmp/hl6/nodir/x')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.link('/proc/cpuinfo', '/tmp/hl6/cpu')).rejects.toMatchObject({ code: 'EXDEV' }); // another filesystem
+    await expect(fs.link('/tmp/hl6/t/x', '/tmp/hl6/tx')).rejects.toMatchObject({ code: 'ENOTDIR' });
+    await expect(fs.readlink('/tmp/hl6/t/x')).rejects.toMatchObject({ code: 'ENOTDIR' }); // LTP readlinkat02
     checkStore(await stored(fs));
     expect(await (await fresh()).readlink('/tmp/hl6/s2')).toBe('t');
   });
@@ -258,9 +263,15 @@ describe('hard links', () => {
       await unlinkInode(fs, '/tmp/hlk1/a');
       await fs.unlink('/tmp/hlk1/a');
       await fa.pwrite(enc('!'), 5); // still the file, now named b only
+      expect((await fa.stat()).nlink).toBe(1);
+      await unlinkInode(fs, '/tmp/hlk1/b');
+      await fs.unlink('/tmp/hlk1/b');
+      expect((await fa.stat()).nlink).toBe(0); // no names left: fstat says so, the data stays
+      const left = new Uint8Array(6);
+      expect(await fb.pread(left, 0)).toBe(6);
+      expect(new TextDecoder().decode(left)).toBe('Start!');
       await fa.close(); await fb.close();
-      expect(await text(fs, '/tmp/hlk1/b')).toBe('Start!');
-      expect(await fs.exists('/tmp/hlk1/a')).toBe(false);
+      expect(await fs.exists('/tmp/hlk1/b')).toBe(false);
       checkStore(await stored(fs));
     });
 

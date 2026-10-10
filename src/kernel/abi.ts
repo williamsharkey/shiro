@@ -379,6 +379,9 @@ export const F_OFD_SETLKW = 38;
 export const FLOCK_SIZE = 32;
 export const F_SETPIPE_SZ = 1031;
 export const F_GETPIPE_SZ = 1032;
+/** fcntl leases (F_RDLCK/F_WRLCK/F_UNLCK as the argument) */
+export const F_SETLEASE = 1024;
+export const F_GETLEASE = 1025;
 export const F_ADD_SEALS = 1033;
 export const F_GET_SEALS = 1034;
 export const F_SEAL_SEAL = 1;

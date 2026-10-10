@@ -29,7 +29,7 @@ const PAGE = 4096;
 
 type Node =
   | { type: 'dir'; list: () => string[] }
-  | { type: 'file'; text: () => string }
+  | { type: 'file'; text: () => string | Uint8Array }
   | { type: 'link'; target: () => string };
 
 /** A directory under /proc; getdents reads its generated entries. */
@@ -60,9 +60,13 @@ class ProcFile implements OpenFile {
   private data: Uint8Array | null = null;
   private pos = 0;
   private listeners = new ReadyListeners();
-  constructor(public path: string, public flags: number, private text: () => string) {}
+  constructor(public path: string, public flags: number, private text: () => string | Uint8Array) {}
+  private content(): Uint8Array {
+    const t = this.text();
+    return typeof t === 'string' ? new TextEncoder().encode(t) : t;
+  }
   private snapshot(): Uint8Array {
-    this.data ??= new TextEncoder().encode(this.text());
+    this.data ??= this.content();
     return this.data;
   }
   async read(buf: Uint8Array): Promise<number> {
@@ -73,7 +77,7 @@ class ProcFile implements OpenFile {
     return n;
   }
   async pread(buf: Uint8Array, off: number): Promise<number> {
-    const d = off === 0 ? (this.data = new TextEncoder().encode(this.text())) : this.snapshot();
+    const d = off === 0 ? (this.data = this.content()) : this.snapshot();
     const n = Math.max(0, Math.min(buf.length, d.length - off));
     buf.set(d.subarray(off, off + n));
     return n;
@@ -192,6 +196,7 @@ export class ProcFs {
       case 'stat': return { type: 'file', text: () => this.statText() };
       case 'vmstat': return { type: 'file', text: () => VMSTAT_KEYS.map((k) => `${k} 0`).join('\n') + '\n' };
       case 'loadavg': return { type: 'file', text: () => this.loadavgText() };
+      case 'config.gz': return { type: 'file', text: () => gzipStored(new TextEncoder().encode(KCONFIG)) };
       case 'uptime': return { type: 'file', text: () => {
         const up = (Date.now() - bootMs) / 1000;
         const idle = Math.max(0, up * this.ncpu() - this.live().reduce((s, p) => s + ProcFs.cpuMs(p) / 1000, 0));
@@ -373,14 +378,16 @@ export class ProcFs {
    * in-page commands (the shell's cat, ls, grep) read the same /proc/PID as
    * programs. undefined when it isn't ours.
    */
-  fsNode(path: string): { dir: string[] } | { text: string } | { link: string } | undefined {
+  fsNode(path: string): { dir: string[] } | { text: string } | { bytes: Uint8Array } | { link: string } | undefined {
     if (path === '/proc') return undefined; // (the FileSystem lists /proc itself)
     const head = path.slice(6).split('/')[0];
     const p = /^\d+$/.test(head) ? this.kernel.procs.get(Number(head)) : this.kernel.init;
     if (!p || head === 'self' || head === 'thread-self') return undefined;
     const n = this.node(p, path);
     if (!n) return undefined;
-    return n.type === 'dir' ? { dir: n.list() } : n.type === 'file' ? { text: n.text() } : { link: n.target() };
+    if (n.type !== 'file') return n.type === 'dir' ? { dir: n.list() } : { link: n.target() };
+    const t = n.text();
+    return typeof t === 'string' ? { text: t } : { bytes: t };
   }
 
   // ── what the kernel calls ──
@@ -497,4 +504,48 @@ export function fdTarget(f: OpenFile): string {
     case 'epoll': return 'anon_inode:[eventpoll]';
     default: return 'anon_inode:[shiro]';
   }
+}
+
+/**
+ * /proc/config.gz: the kernel's build options as this kernel has them (what
+ * it implements =y, what it doesn't "is not set"), for programs that check
+ * (LTP's needs_kconfigs).
+ */
+const KCONFIG = [
+  '# Linux/x86_64 kernel configuration (tabcomputer)',
+  'CONFIG_64BIT=y', 'CONFIG_X86_64=y', 'CONFIG_SMP=y', 'CONFIG_MMU=y', 'CONFIG_HZ=100',
+  'CONFIG_MULTIUSER=y', 'CONFIG_SYSVIPC=y', 'CONFIG_POSIX_MQUEUE=y', 'CONFIG_POSIX_TIMERS=y', 'CONFIG_FUTEX=y',
+  'CONFIG_EPOLL=y', 'CONFIG_SIGNALFD=y', 'CONFIG_TIMERFD=y', 'CONFIG_EVENTFD=y', 'CONFIG_SHMEM=y', 'CONFIG_MEMFD_CREATE=y',
+  'CONFIG_FILE_LOCKING=y', 'CONFIG_PROC_FS=y', 'CONFIG_TMPFS=y', 'CONFIG_UNIX=y', 'CONFIG_NET=y', 'CONFIG_INET=y', 'CONFIG_IPV6=y',
+  'CONFIG_UNIX98_PTYS=y', 'CONFIG_IKCONFIG=y', 'CONFIG_IKCONFIG_PROC=y',
+  '# CONFIG_AIO is not set', '# CONFIG_IO_URING is not set', '# CONFIG_INOTIFY_USER is not set', '# CONFIG_FANOTIFY is not set',
+  '# CONFIG_USERFAULTFD is not set', '# CONFIG_NAMESPACES is not set', '# CONFIG_USER_NS is not set', '# CONFIG_NET_NS is not set',
+  '# CONFIG_PID_NS is not set', '# CONFIG_UTS_NS is not set', '# CONFIG_IPC_NS is not set', '# CONFIG_CGROUPS is not set',
+  '# CONFIG_SECCOMP is not set', '# CONFIG_BPF_SYSCALL is not set', '# CONFIG_PERF_EVENTS is not set', '# CONFIG_KCMP is not set',
+  '# CONFIG_CHECKPOINT_RESTORE is not set', '# CONFIG_SWAP is not set', '# CONFIG_QUOTA is not set', '# CONFIG_MODULES is not set',
+].join('\n') + '\n';
+
+/** `data` as a gzip file of stored (uncompressed) deflate blocks */
+function gzipStored(data: Uint8Array): Uint8Array {
+  let crc = ~0;
+  for (const b of data) {
+    crc ^= b;
+    for (let k = 0; k < 8; k++) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+  }
+  crc = ~crc >>> 0;
+  const blocks = Math.max(1, Math.ceil(data.length / 65535));
+  const out = new Uint8Array(10 + data.length + blocks * 5 + 8);
+  out.set([0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3]);
+  let o = 10;
+  for (let i = 0; i < blocks; i++) {
+    const part = data.subarray(i * 65535, (i + 1) * 65535);
+    out[o++] = i === blocks - 1 ? 1 : 0;
+    out[o++] = part.length & 0xff; out[o++] = part.length >> 8;
+    out[o++] = ~part.length & 0xff; out[o++] = (~part.length >> 8) & 0xff;
+    out.set(part, o); o += part.length;
+  }
+  const dv = new DataView(out.buffer);
+  dv.setUint32(o, crc, true);
+  dv.setUint32(o + 4, data.length, true);
+  return out;
 }

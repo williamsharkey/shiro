@@ -71,6 +71,8 @@ const shmobjBin = join(out, 'shmobj');
 const haveShmobj = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', shmobjBin, 'shmobj.c']);
 const shmoddBin = join(out, 'shmodd');
 const haveShmodd = tryBuild('gcc', ['-static', '-O1', '-o', shmoddBin, 'shmodd.c']);
+const fdreopenBin = join(out, 'fdreopen');
+const haveFdreopen = tryBuild('gcc', ['-static', '-O1', '-o', fdreopenBin, 'fdreopen.c']);
 const statpathBin = join(out, 'statpath');
 const haveStatpath = tryBuild('gcc', ['-static', '-O1', '-o', statpathBin, 'statpath.c']);
 const execenvBin = join(out, 'execenv');
@@ -1536,6 +1538,13 @@ describe('Blink engine: CPU and syscall fixes', () => {
       "anon after fork 'c' munmap rounded 0\nshm after close 'qwerty' mapped 'qwerty'\ndone\nrc 0\n";
     expect(r.output.replace(/\r\n/g, '\n')).toBe(ok + ok);
   }, 120_000);
+
+  // open() of /proc/self/fd/N reopens what the fd refers to (LTP splice07, bash's <(…))
+  it.skipIf(!haveFdreopen)('opening /proc/self/fd/N and /dev/fd/N: a pipe\'s other end, a file at its own offset, a memfd', async () => {
+    const { shell } = await setup(readFileSync(fdreopenBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('pipe pipe\nfile file offset 4\nmemfd memfd ro-write refused\n');
+  }, 60_000);
 
   // Path lookup errors (LTP lstat02), as uid 1000
   it.skipIf(!haveStatpath)('stat and lstat: EACCES, ENOENT for "", ENAMETOOLONG, ENOTDIR, ELOOP past 40 links', async () => {
