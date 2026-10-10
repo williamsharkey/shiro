@@ -172,6 +172,19 @@ function statFor(proc: Process, st: A.KStat): A.KStat {
   return st.uid === 1000 && proc.uid !== 1000 ? { ...st, uid: proc.uid, gid: proc.gid } : st;
 }
 
+/**
+ * open(2)'s permission check on an existing file, which is the caller's own
+ * (see statFor): its owner bits must allow the access mode, unless the
+ * caller is root (Open POSIX shm_open_32-1, 34-1: a 0 or 0400 file reopened
+ * O_RDWR is EACCES).
+ */
+function ownerDenies(proc: Process, mode: number | undefined, flags: number): boolean {
+  if (proc.uid === 0 || mode === undefined) return false;
+  const acc = flags & A.O_ACCMODE;
+  const need = (acc === A.O_WRONLY ? 0 : 4) | (acc === A.O_RDONLY && !(flags & A.O_TRUNC) ? 0 : 2);
+  return ((mode >> 6) & need) !== need;
+}
+
 export class Kernel {
   fs?: FileSystem;
   /** Paths of AF_UNIX socket files (net.ts bind); they stat as sockets. */
@@ -981,6 +994,7 @@ export class Kernel {
           return new DirFile(fs, await fs.realpath(p), statusFlags);
         }
         if (mustBeDir) return -A.ENOTDIR;
+        if (ownerDenies(proc, st.mode, flags)) return -A.EACCES;
         if (st.isFIFO?.()) return await this.openFifo(proc, await fs.realpath(target), flags);
       }
       const real = await fs.realpath(target);
@@ -1091,6 +1105,7 @@ export class Kernel {
       if ((flags & A.O_CREAT) && (flags & A.O_EXCL)) return -A.EEXIST;
       if (own.node.type !== 'file' || own.node.lazy || own.node.special) return undefined;
       if (flags & A.O_DIRECTORY) return -A.ENOTDIR;
+      if (ownerDenies(proc, own.node.mode, flags)) return -A.EACCES;
       const file = new RegularFile(openInodeSync(fs, own.path, own.node), statusFlags);
       if ((flags & A.O_TRUNC) && canWrite(flags)) file.truncateSync(0);
       return file;

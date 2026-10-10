@@ -480,6 +480,32 @@ describe('kernel syscalls found by LTP', () => {
     }
   });
 
+  it('Open POSIX shm_open_32-1/34-1: a file whose owner bits deny the access is EACCES to open (not to root)', async () => {
+    const z = new Uint8Array(8);
+    const op = (p: Process, path: string, flags: number, mode = 0) =>
+      kernel.syscall(p, A.SYS_openat, [A.AT_FDCWD, L(path), flags, mode], enc.encode(path));
+    const name = '/dev/shm/perm_' + Date.now();
+    let fd = await op(proc, name, A.O_RDWR | A.O_CREAT, 0);
+    expect(fd).toBeGreaterThanOrEqual(0); // creating it is allowed whatever its mode
+    await kernel.syscall(proc, A.SYS_close, [fd], z);
+    expect(await op(proc, name, A.O_RDWR)).toBe(-A.EACCES);
+    expect(await op(proc, name, A.O_RDONLY)).toBe(-A.EACCES);
+    await fs.chmod(name, 0o400);
+    fd = await op(proc, name, A.O_RDONLY);
+    expect(fd).toBeGreaterThanOrEqual(0);
+    await kernel.syscall(proc, A.SYS_close, [fd], z);
+    expect(await op(proc, name, A.O_RDWR | A.O_TRUNC)).toBe(-A.EACCES);
+    expect(await op(proc, name, A.O_WRONLY)).toBe(-A.EACCES);
+    // root opens it anyway
+    const root = kernel.vfork(proc);
+    root.uid = 0; root.ruid = 0; root.suid = 0;
+    fd = await op(root, name, A.O_RDWR);
+    expect(fd).toBeGreaterThanOrEqual(0);
+    kernel.kill(root.pid, A.SIGKILL);
+    await kernel.syscall(proc, A.SYS_wait4, [root.pid, 0], z);
+    await fs.unlink(name);
+  });
+
   it('Open POSIX sigqueue_3-1/12-1, LTP kill05: signalling another user\'s process (or init) is EPERM', async () => {
     const t = kernel.vfork(proc), other = kernel.vfork(proc);
     other.uid = 0; other.ruid = 0; other.suid = 0;
