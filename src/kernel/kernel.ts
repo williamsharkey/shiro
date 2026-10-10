@@ -28,6 +28,7 @@ import type { PtyFile } from './pty';
 import { LockTable, F_RDLCK, F_WRLCK, F_UNLCK } from './locks';
 import { Process } from './process';
 import { SysvShm } from './sysvshm';
+import { SysvSem } from './sysvsem';
 import { EpollFile, waitReady } from './epoll';
 import { SignalFile, notifySignalPending } from './signalfd';
 import { EventFile, TimerFile } from './fd';
@@ -187,6 +188,8 @@ export class Kernel {
   readonly procfs = new ProcFs(this);
   /** System V shared memory segments (the engine maps them). */
   readonly shm = new SysvShm();
+  /** SysV semaphore sets (semget, semop, semctl) */
+  readonly sem = new SysvSem();
   /** fcntl record locks (F_SETLK, F_OFD_SETLK) */
   readonly locks = new LockTable();
   private detachTable?: () => void;
@@ -577,6 +580,7 @@ export class Kernel {
     await proc.fds.closeAll();
     this.locks.release(proc.pid);
     this.shm.detachAll(proc);
+    this.sem.exited(proc);
     for (const child of this.procs.values()) {
       if (child.ppid === proc.pid) {
         child.ppid = 1;
@@ -1628,6 +1632,15 @@ export class Kernel {
         case A.SYS_shmctl: return this.shm.shmctl(proc, args[0], args[1], data);
         case A.SYS_shiro_shmat: return this.shm.attach(proc, args[0], args[1], data);
         case A.SYS_shiro_shmdt: return this.shm.detach(proc, args[0]);
+        case A.SYS_semget: return this.sem.semget(proc, args[0], args[1], args[2]);
+        case A.SYS_semop: return await this.sem.semop(proc, args[0], args[1], data, -1, sig);
+        case A.SYS_semtimedop: {
+          // (semid, nsops, hasTimeout, tv_sec, tv_nsec): no timeout is semop
+          if (!args[2]) return await this.sem.semop(proc, args[0], args[1], data, -1, sig);
+          if (args[3] < 0 || args[4] < 0 || args[4] >= 1e9) return -A.EINVAL;
+          return await this.sem.semop(proc, args[0], args[1], data, args[3] * 1000 + Math.floor(args[4] / 1e6), sig);
+        }
+        case A.SYS_semctl: return this.sem.semctl(proc, args[0], args[1], args[2], args[3], data);
         case A.SYS_setuid: case A.SYS_setgid: case A.SYS_setreuid: case A.SYS_setregid:
         case A.SYS_setresuid: case A.SYS_setresgid: case A.SYS_getresuid: case A.SYS_getresgid:
         case A.SYS_getgroups: case A.SYS_setgroups: case A.SYS_setfsuid: case A.SYS_setfsgid:
@@ -2444,6 +2457,7 @@ export class Kernel {
     child.gid = parent.gid;
     copyCredentials(parent, child);
     this.shm.forked(parent, child);
+    this.sem.forked(parent, child);
     child.data.embryo = true;
     child.data.forkParent = parent.pid; // startForkChild: the parent may have exited (and the child been reparented) by then
     this.procs.set(pid, child);

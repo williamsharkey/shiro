@@ -78,7 +78,7 @@ after mapping its first window until Blink patch 0029 (SSE compares wrote
 wrong masks / NaN results, which cairo/pixman loops on); it was reported to
 perf-blink with the gui-probe repro and fixed there.
 
-Status per app also in [COMPAT.md](COMPAT.md#linux-gui-apps-unixgui).
+Status per app also in [COMPAT.md](COMPAT.md#linux-gui-apps-unixgui); 29 popular apps scored (install, first window, rendering, input, text layer) in [GUI_SCORE.md](GUI_SCORE.md) (`npm run gui-score`).
 
 ### Heavier apps: Inkscape, NetSurf, Dillo
 
