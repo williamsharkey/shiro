@@ -82,3 +82,21 @@ describe('node:wasi', () => {
     expect(out.replace(/\r\n/g, '\n')).toBe(`${nodeWorkerMode(shell.env) ? 'function' : 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM'}\ntrue\n`);
   }, 30_000);
 });
+
+describe('a package that runs as its browser build', () => {
+  it("one that fails to load says so when required, not what its node files need (rolldown's: node:wasi)", async () => {
+    const { shell, fs } = await createTestShell();
+    await fs.mkdir('/home/user/bp/node_modules/rolldown/dist', { recursive: true });
+    await fs.writeFile('/home/user/bp/node_modules/rolldown/package.json', JSON.stringify({ name: '@rolldown/browser', version: '1.0.0', exports: { '.': './dist/index.mjs', './parseAst': './dist/parse.mjs' } }));
+    await fs.writeFile('/home/user/bp/node_modules/rolldown/dist/index.mjs', 'export const = ;\n');
+    await fs.writeFile('/home/user/bp/node_modules/rolldown/dist/parse.mjs', "require('node:wasi'); export const parseAst = 1;\n");
+    await fs.writeFile('/home/user/bp/t.mjs', "for (const s of ['rolldown', 'rolldown/parseAst']) await import(s).then(() => console.log('loaded', s), (e) => console.log(e.message));\n");
+    let out = '';
+    await shell.execute('cd /home/user/bp && node t.mjs < /dev/null', (s) => { out += s; }, (s) => { out += s; });
+    out = out.replace(/\r\n/g, '\n');
+    expect(out).toContain('node: loading a browser build failed: ');
+    expect(out).toContain("Cannot load 'rolldown': rolldown runs here as its browser build (@rolldown/browser), which failed to load: ");
+    expect(out).toContain("Cannot load 'rolldown/parseAst': rolldown runs here as its browser build (@rolldown/browser), which failed to load: ");
+    expect(out).not.toContain('node:wasi');
+  }, 60_000);
+});

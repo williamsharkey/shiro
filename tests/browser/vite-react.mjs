@@ -117,19 +117,10 @@ const browser = await chromium.launch({ executablePath: exe, args: ['--no-sandbo
 const context = await browser.newContext({ viewport: { width: 1400, height: 900 }, ignoreHTTPSErrors: !!proxy });
 const page = await context.newPage();
 globalThis.__page = page;
-// Behind a proxy (the cloud containers, where unpkg.com is refused): the page's
-// esbuild.wasm (src/commands/build.ts) from the repo's own esbuild-wasm, same version
-if (proxy) {
-  const { readFileSync, existsSync } = await import('node:fs');
-  const dir = new URL('../../node_modules/esbuild-wasm/', import.meta.url);
-  if (existsSync(new URL('esbuild.wasm', dir))) {
-    const { version } = JSON.parse(readFileSync(new URL('package.json', dir), 'utf8'));
-    await context.route(`https://unpkg.com/esbuild-wasm@${version}/esbuild.wasm`, (r) => r.fulfill({
-      status: 200, contentType: 'application/wasm', headers: { 'access-control-allow-origin': '*', 'cross-origin-resource-policy': 'cross-origin' },
-      body: readFileSync(new URL('esbuild.wasm', dir)),
-    }));
-  }
-}
+// The page's esbuild.wasm (src/commands/build.ts) comes from tabcomputer's own origin:
+// a request for it to a CDN fails the run (unpkg.com is refused in the cloud containers)
+const cdnRequests = [];
+await context.route(/^https:\/\/(unpkg\.com|cdn\.jsdelivr\.net)\/esbuild-wasm/, (r) => { cdnRequests.push(r.request().url()); return r.abort(); });
 const errors = [];
 page.on('pageerror', (e) => errors.push(e.message + (process.env.VERBOSE ? ' @ ' + (e.stack || '').split('\n').slice(1, 6).join(' | ') : '')));
 const consoleErrors = [];
@@ -222,6 +213,7 @@ try {
   }
   if (process.env.HEAPSNAP_AFTER_BUILD) await heapSnapshot(page, process.env.HEAPSNAP_AFTER_BUILD);
   if (errors.length) throw new Error(`page errors: ${errors.join('; ')}`);
+  if (cdnRequests.length) throw new Error(`esbuild.wasm requested from a CDN: ${cdnRequests.join(', ')}`);
 } catch (e) {
   failed = true;
   console.log(`FAIL ${String(e.message).replace(/\n/g, '\n  ')}`);

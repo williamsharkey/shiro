@@ -226,7 +226,12 @@ Shell and platform fixes these needed (all with tests in the same file):
   and connections, as node does, and drops its module and file caches; one
   that goes idle while serving keeps them (its servers still run its code).
   The page's esbuild (bundling browser packages, `build`, `reload`) stops
-  after 60 s without a build and starts again on the next. What it took:
+  after 60 s without a build and starts again on the next. Its esbuild.wasm
+  is the bundled esbuild-wasm's, served from tabcomputer's own origin (it
+  came from unpkg.com, so a blocked or slow CDN broke vite). If a browser
+  build fails to load, importing the package says so and why
+  (`ERR_BROWSER_BUILD`) instead of failing on what its node files need. What
+  it took:
   - Rolldown runs as its browser build. `npm install` puts `@rolldown/browser`
     where `rolldown` goes (same API and versions); a process that imports it
     gets it bundled from the VFS with the page's esbuild

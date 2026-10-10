@@ -476,6 +476,8 @@ export async function executeNodeScript(
     try {
       for (const [spec, ns] of await loadBrowserPackages(ctx.fs, entryDirname, getBuiltinModule, fakeProcess, trackAsync, atExit)) browserModules.set(spec, ns);
     } catch (e: any) {
+      // (the packages that loaded, and the failed one's marker: requiring it says why)
+      for (const [spec, ns] of (e?.partial as Map<string, any> | undefined) ?? []) browserModules.set(spec, ns);
       console.warn('[node] browser build:', e);
       const err = e?.errors?.[0];
       const at = err?.location ? ` (${err.location.file}:${err.location.line}: ${String(err.location.lineText).trim().slice(0, 160)})` : '';
