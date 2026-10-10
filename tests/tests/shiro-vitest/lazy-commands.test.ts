@@ -668,8 +668,11 @@ describe('Lazy-Loaded Commands', () => {
         args: ['-e', 'print("hello")'],
         fs, cwd: '/home/user', env: {}, stdin: '', stdout: '', stderr: '', shell,
       };
-      const code = await luaCmd.exec(ctx);
-      // CDN load will fail in test env
+      // Simulate being offline: the package mirror is unreachable
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = (async () => { throw new TypeError('fetch failed (offline in this test)'); }) as typeof fetch;
+      let code: number;
+      try { code = await luaCmd.exec(ctx); } finally { globalThis.fetch = realFetch; }
       expect(code).toBe(1);
       expect(ctx.stderr).toContain('lua');
     });

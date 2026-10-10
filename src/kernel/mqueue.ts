@@ -40,7 +40,7 @@ const SIGEV_THREAD = 2;
 
 interface Message { prio: number; data: Uint8Array }
 
-interface Notify { pid: number; file: MqFile; signo: number }
+interface Notify { pid: number; uid: number; file: MqFile; signo: number; value: bigint }
 
 class Queue {
   msgs: Message[] = [];
@@ -91,7 +91,7 @@ export class MqFile implements OpenFile {
 export class MessageQueues {
   private names = new Map<string, Queue>();
 
-  constructor(private deliver: (pid: number, sig: number) => void) {}
+  constructor(private deliver: (pid: number, sig: number, info: A.SigInfo) => void) {}
 
   private static access(proc: Process, q: Queue, acc: number): boolean {
     if (proc.uid === 0) return true;
@@ -173,7 +173,7 @@ export class MessageQueues {
     return sec * 1000 + nsec / 1e6;
   }
 
-  async send(f: MqFile, msg: Uint8Array, prio: number, ts: DataView | null, signal?: AbortSignal): Promise<number> {
+  async send(sender: Process, f: MqFile, msg: Uint8Array, prio: number, ts: DataView | null, signal?: AbortSignal): Promise<number> {
     const q = f.q;
     if ((f.flags & A.O_ACCMODE) === A.O_RDONLY) return -A.EBADF;
     if (prio >>> 0 >= MQ_PRIO_MAX) return -A.EINVAL;
@@ -195,7 +195,7 @@ export class MessageQueues {
     if (wasEmpty && q.notify && q.receiving === 0) {
       const n = q.notify;
       q.notify = null;
-      if (n.signo) this.deliver(n.pid, n.signo);
+      if (n.signo) this.deliver(n.pid, n.signo, { signo: n.signo, code: A.SI_MESGQ, pid: sender.pid, uid: sender.uid, value: n.value });
     }
     q.wake(A.POLLIN);
     return 0;
@@ -233,7 +233,7 @@ export class MessageQueues {
     if (how === SIGEV_SIGNAL && (signo < 0 || signo > 64)) return -A.EINVAL; // (0 is valid: nothing is sent)
     if (q.notify) return -A.EBUSY; // one registration per queue (the same process again too)
     // (SIGEV_THREAD would need glibc's netlink helper: registered, never sent)
-    q.notify = { pid: proc.pid, file: f, signo: how === SIGEV_SIGNAL ? signo : 0 };
+    q.notify = { pid: proc.pid, uid: proc.uid, file: f, signo: how === SIGEV_SIGNAL ? signo : 0, value: sev.getBigInt64(0, true) };
     return 0;
   }
 

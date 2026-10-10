@@ -108,4 +108,9 @@ export async function run(h) {
     const r = await timed(h, 'claude --npm --version > /tmp/node.out 2>&1', h.quick ? 2 : n, /\d+\.\d+\.\d+/);
     h.sample('claude.version', r.ms, 'ms', { notes: `\`claude --npm --version\` (the npm build: loads its cli.js bundle); first run ${Math.round(r.first)} ms` });
   });
+
+  if (!h.quick) await h.try('claude.worker.version', 'ms', async () => {
+    const r = await timed(h, 'TABCOMPUTER_NODE_WORKER=1 claude --npm --version > /tmp/node.out 2>&1', n, /\d+\.\d+\.\d+/);
+    h.sample('claude.worker.version', r.ms, 'ms', { notes: `\`claude --npm --version\` with node as a kernel guest in a Worker; first run ${Math.round(r.first)} ms` });
+  });
 }

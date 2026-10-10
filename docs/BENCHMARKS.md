@@ -1999,6 +1999,54 @@ Tests: `kernel-core.test.ts`:
   `sync()`;
 - with a backlog, close falls back to the async path.
 
+### unix/perf-fs-shell 15 — real projects: npm i of a big tree, rm -rf node_modules, git clone
+
+Profiled in Chromium (scratch probe; npm registry from the bench cache).
+The project is `npm i vite@5 react@18 react-dom@18 @vitejs/plugin-react@4
+tailwindcss@3 postcss autoprefixer eslint@8 eslint-plugin-react
+typescript@5`: 9,400 files and 98 MB in node_modules.
+
+| step | command | durable (IndexedDB committed) | peak RSS | notes |
+|---|---:|---:|---:|---|
+| `npm i` | 4.3–4.6 s | 6.9–7.2 s | +423–485 MiB | 10,507 entries in 10–11 transactions, 5.3–5.6 s of commits |
+| `rm -rf node_modules`, before | 0.0 s | **37.8 s** | | 10,496 single-key deletes |
+| `rm -rf node_modules`, after | 0.0 s | **0.6 s** | | one range delete |
+| `git clone git://…/axios.git` (494 files, 2,222 commits) | 87–89 s | at once | +237–260 MiB | main thread 95% idle: git's CPU in Blink (sent to perf-blink) |
+
+- **rm -r** now deletes a directory's contents from IndexedDB as one key
+  range (`RANGE` entries in the write-behind batch, ordered before writes
+  that re-create paths under it). Reads and the key index treat the range
+  as gone until it commits. In a fresh store, 10,000 keys took 3.7 s one by
+  one and 0.33 s as a range.
+- **Memory after `npm i` + GC.** RSS +322 MiB was:
+  - 101 MiB of ArrayBuffers, the FileSystem cache holding the files;
+  - a 51 MiB JS heap, ~45 MiB of it npm's metadata cache (the abbreviated
+    package documents of ~300 packages, kept for an hour);
+  - ~170 MiB not attributable, which stays after `rm -rf`: allocator slack
+    from the install.
+
+  npm now trims its metadata cache to the most recently used 16 MB when the
+  last npm command finishes. After the install the JS heap is 24 MiB and
+  RSS +292 MiB. Clearing the cache entirely made repeat installs refetch:
+  `npm.install_small` went 26 → 58 ms, hence the 16 MB kept.
+- **New bench cases** (workloads-slow): `workload.npm.install_big`
+  (+ `.durable`), `workload.peak_rss.npm_install_big` and
+  `workload.npm.rm_node_modules.durable`. A mid-size git clone takes ~90 s
+  and needs a network fetch for its repo, so it isn't added.
+
+A/B (`--suites workloads-slow --only npm --rounds 2 --runs 2`):
+
+| metric | before | after | |
+|---|---:|---:|---|
+| `workload.npm.rm_node_modules.durable` | 37.6 s | 0.56 s | −98.5% |
+| `workload.npm.install_big.durable` | 7.64 s | 7.31 s | −4.3% |
+| `workload.npm.install_big` | 4.62 s | 4.52 s | same |
+| `workload.peak_rss.npm_install_big` | 491 MiB | 496 MiB | same |
+
+Quick suite, npm and workflow metrics (`--rounds 3`): all the same,
+`npm.install_small` 23.4 → 23.9 ms. The whole quick suite with the first
+version of the npm change: 112 metrics the same; `node.worker.fs_200` −10%.
+
 ## Results
 
 <!-- bench:table:begin -->

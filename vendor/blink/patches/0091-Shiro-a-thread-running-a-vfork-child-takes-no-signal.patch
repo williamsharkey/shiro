@@ -1,0 +1,69 @@
+From 60e8aba1e5a5f9ce4020407e65136c56694094c2 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 03:37:41 +0000
+Subject: [PATCH 91/91] Shiro: a thread running a vfork child takes no signals
+ until the child execs or exits
+
+---
+ blink/machine.h | 1 +
+ blink/shiro.inc | 9 +++++++++
+ blink/signal.c  | 4 ++--
+ 3 files changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/blink/machine.h b/blink/machine.h
+index c62c678..3d8676e 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -672,6 +672,7 @@ void OpRetf(P);
+ void OpRetIw(P);
+ void OpSsePclmulqdq(P);
+ extern bool g_shiro_trace;
++bool ShiroInVfork(void);
+ extern bool g_shiro_prof;
+ void ShiroProfStep(struct Machine *, u64, bool, bool);
+ int ShiroProfWj(struct Machine *);
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 4a49e9a..8bccd08 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -1729,6 +1729,15 @@ static i64 ShiroVfork(struct Machine *m, i64 stack, bool copystack) {
+ 
+ // The vfork child exec'd or exited: become the parent again; fork returns
+ // the child's pid.
++// A thread running a vfork child takes no signals: on Linux the parent is
++// suspended in vfork, so what is sent to it stays pending until the child
++// execs or exits (ShiroVforkReturn sets attention). Delivering one ran the
++// parent's handler in the child: Go's SIGURG made its runtime throw
++// "signal received during fork" and wedged the parent
++bool ShiroInVfork(void) {
++  return !!t_vfork;
++}
++
+ static i64 ShiroVforkReturn(struct Machine *m) {
+   struct ShiroVfork *v = t_vfork;
+   i64 pid = v->pid;
+diff --git a/blink/signal.c b/blink/signal.c
+index 18343ec..00ec5e4 100644
+--- a/blink/signal.c
++++ b/blink/signal.c
+@@ -270,7 +270,7 @@ static int ConsumeSignalImpl(struct Machine *m, int *delivered, bool *restart) {
+ 
+ int ConsumeSignal(struct Machine *m, int *delivered, bool *restart) {
+   int rc;
+-  if (m->metal) return 0;
++  if (m->metal || ShiroInVfork()) return 0;
+   LOCK(&m->system->sig_lock);
+   rc = ConsumeSignalImpl(m, delivered, restart);
+   UNLOCK(&m->system->sig_lock);
+@@ -295,7 +295,7 @@ void CheckForSignals(struct Machine *m) {
+     FlushSmcQueue(m);
+     m->selfmodifying = false;
+ #endif
+-  } else if (m->signals & ~m->sigmask) {
++  } else if ((m->signals & ~m->sigmask) && !ShiroInVfork()) {
+     if ((sig = ConsumeSignal(m, 0, 0))) {
+       TerminateSignal(m, sig, 0);
+     }
+-- 
+2.43.0
+
