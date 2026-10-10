@@ -333,17 +333,31 @@ Shell and platform fixes these needed (all with tests in the same file):
   goes through worker mode (`TABCOMPUTER_NODE_WORKER=1`), where the module
   compiles; `NEXT_TEST_WASM_DIR` pointing at an installed
   `@next/swc-wasm-nodejs` avoids Next's own download (the test container's
-  relay can't fetch it). Remaining, on the worker side: jest-worker forks
-  children and talks over `child.send` (fork IPC; worked around with
-  `experimental: { webpackBuildWorker: false, workerThreads: false, cpus: 1 }`),
-  then "Maximum call stack size exceeded" in `resolve` during "Creating an
-  optimized production build". What Next's CommonJS needed in the page,
-  all general: `require.extensions` / `Module._extensions`, a directory
-  `require` using its package.json `main`, `stream/web`,
-  `process.prependOnceListener`, `fs.opendir` / `opendirSync` /
-  `promises.opendir`, a process-local `process.chdir` (the shell's cwd comes
-  back when the script exits), `npm config get/set/delete/list`, and
-  `__dirname` text inside template literals left alone.
+  relay can't fetch it). With `experimental: { webpackBuildWorker: false,
+  workerThreads: true, cpus: 1 }` (jest-worker's child processes need fork
+  IPC, `child.send`, in a guest), `next build --webpack` compiles ("Compiled
+  successfully", Google fonts fetched) and collects page data in a worker
+  thread; prerendering stops at "Expected workStore to be initialized":
+  AsyncLocalStorage doesn't carry its store across `await` yet. What it took,
+  all general:
+  - builtins: `require.extensions` / `Module._extensions`, a directory
+    `require` using its package.json `main`, `stream/web`,
+    `process.prependOnceListener`, `fs.opendir` / `opendirSync` /
+    `promises.opendir`, a process-local `process.chdir`, `npm config`;
+  - `path`, `assert`, `events` and `stream` have no enumerable `default`
+    (node has none): @vercel/nft copies path's keys into a mock, took the
+    real module as its `default` and replaced `path.resolve` with a function
+    that called itself ("Maximum call stack size exceeded");
+  - Buffer has every fixed- and variable-width read/write (webpack's cache
+    serializer: `writeUInt32LE`, `writeDoubleLE`, `writeBigInt64LE`...);
+  - `require.resolve` finds any existing file (`app/favicon.ico`);
+  - `querystring` as node's: repeated keys are arrays both ways, `+` is a
+    space (Next's loaders pass `pageExtensions` that way);
+  - `vm.runInThisContext` gives the last expression's value (webpack's
+    `executeModule` takes the function it evaluates to), and a vm context
+    is its script's `globalThis` (Next's client-reference manifests);
+  - `AsyncLocalStorage.snapshot()` / `bind()`, `AsyncResource.bind`;
+  - `__dirname` text inside template literals left alone.
 - npm: an optional platform package for linux-x64 (glibc) is installed when it
   ships an executable, which Blink runs: `npm i -g @openai/codex` gets
   `@openai/codex-linux-x64`, `opencode-ai` gets `opencode-linux-x64` (and
