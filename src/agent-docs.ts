@@ -59,6 +59,18 @@ export const KNOWN_ISSUES: { issue: string; workaround?: string }[] = [
     workaround: 'Wrap a command that may read stdin as `{ cmd; } </dev/null`; a group\'s redirect works.',
   },
   {
+    issue: '`node -e CODE` and `node file.js` can hang in the tab even with stdin closed (tabcomputer#13), so in-tab `vitest` and `esbuild` runs are unreliable.',
+    workaround: 'Run node under `timeout N` with stdin closed (`{ timeout 30 node file.js; } </dev/null`) so a hang ends; test changes to the source in a checkout outside the tab.',
+  },
+  {
+    issue: 'Process odds and ends (tabcomputer#14): `/proc/self/fd/N` may not name the real target, `tmux new -d` (a detached session) is not supported by the built-in tmux, `$!` after backgrounding a builtin has no `/proc` entry, and an exited child of init stays a zombie in `ps` for up to 30 seconds.',
+    workaround: 'Use `[ -t N ]` to ask whether an fd is a terminal rather than reading the link; for a detached job use `nohup cmd >log 2>&1 &`; stop a background builtin with `jobs -l` and `kill PID` from the shell that started it; ignore `Z` lines in `ps`.',
+  },
+  {
+    issue: '`js-eval` runs the code a second time when it throws, and it cannot run statements, only an expression (tabcomputer#17).',
+    workaround: 'Pass one expression: wrap statements in an async IIFE, `js-eval "(async () => { ...; return x; })()"`, and make any patch idempotent (check before you change), since a throw runs it twice.',
+  },
+  {
     issue: "Images can't be pasted into Claude Code: `xclip` and `xsel` here are text only.",
     workaround: 'Save the image to a file and give its path.',
   },
