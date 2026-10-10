@@ -58,7 +58,8 @@ describe.skipIf(!haveRootfs)('Debian rootfs', () => {
     expect((await run(shell, 'type -a env 2>&1; command -v env')).exitCode).toBe(0);
     let r = await run(shell, 'tabcomputer-alternatives --set env tabcomputer');
     expect(r.output).toContain("/usr/bin/env: now tabcomputer's");
-    expect(await fs.exists('/usr/bin/env')).toBe(false);
+    // A builtin shim stands at the path, so PATH searches with stat() find env
+    expect(String(await fs.readFile('/usr/bin/env', 'utf8'))).toMatch(/^#!\/usr\/libexec\/tabcomputer\/builtin\n/);
     expect((await fs.lstat('/usr/bin/env.debian')).isFile()).toBe(true);
     expect((await run(shell, 'dpkg-divert --list /usr/bin/env')).output).toContain('local diversion of /usr/bin/env to /usr/bin/env.debian');
     r = await run(shell, 'tabcomputer-alternatives --set env debian');
@@ -84,6 +85,31 @@ describe.skipIf(!haveRootfs)('Debian rootfs', () => {
     await fs.unlink('/usr/bin/curl');
     await fs.unlink('/usr/bin/curl-8');
   });
+
+  it("a script under Debian's bash finds overlaid programs and builtins Debian doesn't ship (curl … | bash installers)", async () => {
+    // grep and sed are tabcomputer's (diverted to *.debian); curl and git aren't Debian packages here.
+    // bash stats each PATH entry, so each needs a file: a builtin shim the kernel runs as the builtin
+    const script = [
+      'set -e',
+      'for p in grep sed sort curl git; do command -v "$p" >/dev/null || { echo "missing $p"; exit 1; }; done',
+      'echo "alpha beta" | grep -o beta | sed s/b/B/',
+      'curl --version | head -n 1 | grep -c curl',
+      'type -P grep curl',
+    ].join('\n');
+    await fs.writeFile('/tmp/installer.sh', script + '\n');
+    const r = await run(shell, '/usr/bin/bash /tmp/installer.sh');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('Beta\n1\n/usr/bin/grep\n/usr/bin/curl\n');
+    expect(r.exitCode).toBe(0);
+    // The shims don't count as Debian programs: Shiro's shell still runs the builtins directly
+    expect((await run(shell, 'type grep curl')).output).not.toMatch(/\/usr\/bin/);
+    expect(await fs.exists('/usr/bin/grep.debian')).toBe(true);
+    // Switching grep back to Debian's replaces the shim with Debian's file, and back again
+    expect((await run(shell, 'tabcomputer-alternatives --set grep debian')).exitCode).toBe(0);
+    expect(await fs.exists('/usr/bin/grep.debian')).toBe(false);
+    expect((await fs.readFile('/usr/bin/grep') as Uint8Array).slice(0, 4)).toEqual(new Uint8Array([0x7f, 0x45, 0x4c, 0x46]));
+    expect((await run(shell, 'tabcomputer-alternatives --auto grep')).exitCode).toBe(0);
+    expect(String(await fs.readFile('/usr/bin/grep', 'utf8'))).toMatch(/^#!\/usr\/libexec\/tabcomputer\/builtin\n/);
+  }, 180000);
 
   it("Debian's util-linux dmesg reads the kernel log through /dev/kmsg", async () => {
     const { klog, LOG_WARNING } = await import('@shiro/kernel/klog');
