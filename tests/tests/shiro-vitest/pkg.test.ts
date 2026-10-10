@@ -10,7 +10,7 @@ import type { Shell } from '@shiro/shell';
 import type { FileSystem } from '@shiro/filesystem';
 import {
   parseIndex, builtinIndex, resolveDeps, installPackages, removePackage, readStatus,
-  packageStatus, findEntry, missingFeatures, type PkgIndex, type PkgEntry,
+  packageStatus, findEntry, missingFeatures, preinstallPackages, type PkgIndex, type PkgEntry,
 } from '@shiro/pkg-manager';
 import { parseWebc, webcCommands, decodeCbor } from '@shiro/webc';
 import { extractWasmFromWebc, findPackage, downloadPackage } from '@shiro/wasi-packages';
@@ -411,6 +411,42 @@ describe('pkg install / remove', () => {
     expect((await sh(shell, 'apt list')).out).toContain('coreutils');
     expect((await sh(shell, 'pkg info nope')).exitCode).toBe(1);
     expect((await sh(shell, 'pkg update')).exitCode).toBe(0);
+  });
+
+  it("replaces Debian mode's builtin shim at /usr/bin/CMD, not other files", async () => {
+    const { builtinShim } = await import('@shiro/debian/overlay');
+    await addTestPackage('hello', 'hello from a package\n');
+    await fs.mkdir('/usr/bin', { recursive: true });
+    await fs.writeFile('/usr/bin/hello', builtinShim('hello'), { mode: 0o755 });
+    expect((await sh(shell, 'pkg install hello')).exitCode).toBe(0);
+    expect(await fs.readlink('/usr/bin/hello')).toBe('/usr/lib/pkg/hello/bin/hello.wasm');
+    await removePackage(fs, 'hello');
+    await fs.writeFile('/usr/bin/hello', '#!/bin/sh\necho mine\n', { mode: 0o755 });
+    expect((await sh(shell, 'pkg install hello')).out).toContain('not replacing /usr/bin/hello');
+    expect(await fs.readFile('/usr/bin/hello', 'utf8')).toBe('#!/bin/sh\necho mine\n');
+    await removePackage(fs, 'hello');
+    await fs.unlink('/usr/bin/hello');
+  });
+
+  it('preinstalls the CA bundle at the paths OpenSSL and rustls-native-certs probe, once', async () => {
+    // codex (OpenSSL via openssl-probe, and rustls-native-certs) failed its
+    // TLS handshakes when nothing had installed ca-certificates
+    expect(await preinstallPackages(fs, ['ca-certificates', 'no-such-package'])).toEqual(['ca-certificates']);
+    for (const path of ['/etc/ssl/certs/ca-certificates.crt', '/etc/ssl/cert.pem']) {
+      const pem = await fs.readFile(path, 'utf8') as string;
+      expect(pem).toContain('-----BEGIN CERTIFICATE-----');
+      expect(pem.match(/BEGIN CERTIFICATE/g)!.length).toBeGreaterThan(100);
+    }
+    expect(await preinstallPackages(fs, ['ca-certificates'])).toEqual([]);
+  });
+
+  it("doesn't preinstall over a bundle something else provides", async () => {
+    await removePackage(fs, 'ca-certificates');
+    await fs.mkdir('/etc/ssl/certs', { recursive: true });
+    await fs.writeFile('/etc/ssl/certs/ca-certificates.crt', 'from update-ca-certificates\n');
+    await fs.writeFile('/etc/ssl/cert.pem', 'from update-ca-certificates\n');
+    expect(await preinstallPackages(fs, ['ca-certificates'])).toEqual([]);
+    expect(await readStatus(fs)).not.toHaveProperty('ca-certificates');
   });
 });
 

@@ -11,7 +11,8 @@
   "brand": null,
   "banner": "hud",
   "preinstall": [
-    "claude-code"
+    "claude-code",
+    "ca-certificates"
   ],
   "shims": {
     "claude": "npm",
