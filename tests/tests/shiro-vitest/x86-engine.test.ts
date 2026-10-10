@@ -253,6 +253,10 @@ const haveOthercpuclock = blinkHasOthercpuclock && tryBuild('gcc', ['-static', '
 const threadintrBin = join(out, 'threadintr');
 const blinkHasThreadintr = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_threadintr');
 const haveThreadintr = blinkHasThreadintr && tryBuild('gcc', ['-static', '-O1', '-w', '-o', threadintrBin, 'threadintr.c', '-lpthread', '-lrt']);
+// Blink 0508: a page of a file mapping past the file's end is SIGBUS
+const sigbusBin = join(out, 'sigbus');
+const blinkHasSigbus = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_sigbus');
+const haveSigbus = blinkHasSigbus && tryBuild('gcc', ['-static', '-O1', '-w', '-o', sigbusBin, 'sigbus.c', '-lrt']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -898,6 +902,14 @@ it.skipIf(!haveThreadintr)('pthread_kill of a thread blocked in read, mq_timedse
   const { shell } = await setup(readFileSync(threadintrBin));
   const r = await run(shell, './prog');
   expect(r.output.replace(/\r\n/g, '\n')).toBe('read EINTR handled 1\nmq_timedsend EINTR handled 1\nnanosleep EINTR handled 1\nprocess signal blocked by main reached a thread\n');
+}, 60_000);
+
+it.skipIf(!haveSigbus)('a page of a shared file mapping past the end of a file or /dev/shm object is SIGBUS, until the file grows over it; writes within the file go back (Open POSIX mmap_11-2, mmap_11-3)', async () => {
+  const { shell } = await setup(readFileSync(sigbusBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe(
+    'file SIGBUS code 2 at page 1\nfile SIGBUS on read\nfile grown: 0 122\nfile wrote back a\n' +
+    'shm SIGBUS code 2 at page 1\nshm SIGBUS on read\nshm grown: 0 0\n');
 }, 60_000);
 
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
