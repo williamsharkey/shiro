@@ -21,7 +21,9 @@
  *                               buffer comes by message before the reply), 0 fast.
  *                               kind 0: fd of a /dev/shm (or /run/shm) file
  *                               or a memfd, 1: a SysV shmid; | 0x100: remote
- *                               from the first map (no publish round).
+ *                               from the first map (no publish round). The
+ *                               buffer is the bytes rounded up to pages, then
+ *                               a page of control words (CONTROL_BYTES).
  *   shiro_shmobj_unmap     1021 (id)                             → 0
  *   shiro_shmobj_published 1022 (id)                             → 0
  */
@@ -58,6 +60,14 @@ export interface MapOptions {
   eager?: boolean;
   onRemote?: SharedObject['onRemote'];
 }
+
+/**
+ * A buffer holds the object's bytes rounded up to whole pages, then one page
+ * of control words that Blink uses (word 0: the object's lock, 1: threads
+ * waiting for it; vendor/blink/shiro-kernel.js).
+ */
+export const CONTROL_BYTES = 4096;
+export const objectBytes = (size: number): number => Math.ceil(size / 4096) * 4096;
 
 /** Paths whose files are shareable objects (POSIX shm and named semaphores live there). */
 export function isShareablePath(path: string): boolean {
@@ -96,7 +106,8 @@ export class SharedObjects {
     if (!o.sab) {
       // The second instance (or an eager first map): one buffer, seeded from
       // the file; the fast holders, if any, publish into it
-      const sab = new SharedArrayBuffer(o.size);
+      // (then a page of control words: Blink's lock for the object)
+      const sab = new SharedArrayBuffer(objectBytes(o.size) + CONTROL_BYTES);
       if (initial) {
         const bytes = await initial();
         new Uint8Array(sab).set(bytes.subarray(0, o.size));
@@ -158,7 +169,7 @@ export class SharedObjects {
   private async drop(o: SharedObject): Promise<void> {
     this.byKey.delete(o.key);
     this.byId.delete(o.id);
-    if (o.sab && o.writeBack) await o.writeBack(new Uint8Array(o.sab).slice());
+    if (o.sab && o.writeBack) await o.writeBack(new Uint8Array(o.sab, 0, o.size).slice());
   }
 
   /** The live buffer of a remote object (read/write syscalls on its file go here), or null. */

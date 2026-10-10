@@ -67,6 +67,8 @@ const mtchildBin = join(out, 'mtchild');
 const haveMtchild = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', mtchildBin, 'mtchild.c']);
 const psemBin = join(out, 'psem');
 const havePsem = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', psemBin, 'psem.c']);
+const shmobjBin = join(out, 'shmobj');
+const haveShmobj = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', shmobjBin, 'shmobj.c']);
 const fsidentBin = join(out, 'fsident');
 const haveFsident = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', fsidentBin, 'fsident.c']);
 // musl's libc (native Claude Code's) resolves paths and stats files its own way
@@ -1270,10 +1272,10 @@ describe('Blink engine: CPU and syscall fixes', () => {
     }
   }, 60_000);
 
-  // The acceptance test of docs/research/SHARED_MAPPINGS.md: within a process
-  // and across fork today; an exec'd process's sem_post needs the Blink half
-  // (remote pages). it.fails until then: flip it to `it` when it lands.
-  it.skipIf(!havePsem).fails('POSIX named semaphores across exec (sem_open, /dev/shm)', async () => {
+  // The acceptance test of docs/research/SHARED_MAPPINGS.md: within a process,
+  // across fork, and with a process it exec'd (another Blink instance: the
+  // semaphore's page is remote, Blink 0112)
+  it.skipIf(!havePsem)('POSIX named semaphores across exec (sem_open, /dev/shm)', async () => {
     const { shell } = await setup(readFileSync(psemBin));
     const r = await run(shell, './prog');
     const out = r.output.replace(/\r\n/g, '\n');
@@ -1281,6 +1283,15 @@ describe('Blink engine: CPU and syscall fixes', () => {
     expect(out).toContain('after fork child post 1\n');
     expect(out).toContain("exec'd process post seen: yes\n");
   }, 60_000);
+
+  // Firefox's font list: a memfd passed to a process it exec'd, mapped there
+  // afresh; lock-prefixed adds, a process-shared mutex and semaphores (0112)
+  it.skipIf(!haveShmobj)('a memfd mapped MAP_SHARED by an exec\'d process: atomics, mutex, semaphores across instances', async () => {
+    const { shell } = await setup(readFileSync(shmobjBin));
+    const r = await run(shell, './prog 2>/dev/null; BLINK_WJIT=0 ./prog 2>/dev/null');
+    const ok = 'child sees "written by the parent"\npongs 50 atomic 4000 locked 4000 text "written by the child" exit 0\n';
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(ok + ok);
+  }, 120_000);
 
   it.skipIf(!haveStatnull)('the stat family with a NULL buffer is EFAULT once the file is found', async () => {
     const { shell } = await setup(readFileSync(statnullBin));
