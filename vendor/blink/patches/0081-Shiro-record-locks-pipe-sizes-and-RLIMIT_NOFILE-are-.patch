@@ -1,0 +1,190 @@
+From 634503a589b8337f30f5a1bac3dabf92eb202cc7 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 01:01:21 +0000
+Subject: [PATCH 81/81] Shiro: record locks, pipe sizes and RLIMIT_NOFILE are
+ the kernel's; EFAULT for read-only buffers; fd checks
+
+Conformance (LTP syscalls):
+- fcntl record locks (F_GETLK, F_SETLK(W), F_OFD_*) go to the kernel,
+  which keeps them per file across processes (until now every lock was
+  granted and F_GETLK said unlocked) (fcntl13/14/15/34).
+- F_SETPIPE_SZ / F_GETPIPE_SZ resize and read the kernel's pipe instead
+  of answering 65536 (fcntl30/37, pipe2_04, epoll_wait06).
+- getrlimit/setrlimit/prlimit64 of RLIMIT_NOFILE are the kernel's (its fd
+  table enforces the limit: soft 1024, hard 1048576); a kernel without
+  prlimit64 leaves them to Blink (dup06, dup205, pipe06/07/15, creat05).
+- A system call's output to a read-only page is EFAULT, as on Linux
+  (CopyToUserWrite checks PAGE_RW; the loader keeps CopyToUser)
+  (epoll_wait03, sendfile04, clock_nanosleep01).
+- epoll_ctl ADD/MOD with a NULL event is EFAULT (epoll_ctl02).
+- ioctl with an unknown request, mmap, and f*xattr on a bad or O_PATH fd
+  are EBADF; mmap of a write-only fd, or a writable shared mapping of a
+  read-only one, is EACCES (open13, mmap).
+- sendfile checks its fds before moving data (EBADF for an unreadable in
+  or unwritable out, EINVAL for an O_APPEND out or a negative offset) and
+  that the offset can be written back (sendfile03/04/05).
+---
+ blink/memory.c  | 12 +++++++++
+ blink/shiro.inc | 69 +++++++++++++++++++++++++++++++++++++++----------
+ 2 files changed, 67 insertions(+), 14 deletions(-)
+
+diff --git a/blink/memory.c b/blink/memory.c
+index c95e3d6..26b42eb 100644
+--- a/blink/memory.c
++++ b/blink/memory.c
+@@ -406,6 +406,18 @@ int CopyToUser(struct Machine *m, i64 dst, void *src, u64 n) {
+ }
+ 
+ int CopyToUserWrite(struct Machine *m, i64 addr, void *src, u64 n) {
++  // a system call's output needs pages the guest may write: a read-only
++  // page is EFAULT, as on Linux (the loader and signal frames, which may
++  // write anywhere, use CopyToUser)
++  if (!m->metal) {
++    i64 v;
++    u64 k;
++    for (v = addr, k = n; k;) {
++      u64 c = MIN(k, 4096 - (v & 4095));
++      if (!LookupAddress2(m, v, PAGE_U | PAGE_RW, PAGE_U | PAGE_RW)) return -1;
++      v += c, k -= c;
++    }
++  }
+   if (CopyToUser(m, addr, src, n) == -1) return -1;
+   SetWriteAddr(m, addr, n);
+   return 0;
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 53c5e19..7892bd9 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -787,7 +787,9 @@ static i64 ShiroIoctl(struct Machine *m, int fd, u64 req, i64 arg) {
+       return 0;
+     case 0x5432:                                          // TCGETS2: not supported
+     default:
+-      return -ENOTTY_LINUX;
++      // a bad or O_PATH fd is EBADF before the request is looked at (Linux)
++      r = KS(m, 72, A12(fd, 3, 0));                       // F_GETFL
++      return r < 0 || (r & 010000000) ? -EBADF_LINUX : -ENOTTY_LINUX;
+   }
+   if (in && CopyFromUserRead(m, buf, arg, in) == -1) return -EFAULT_LINUX;
+   r = ShiroCall(m, 16, A12(fd, (int)req, value ? 4 : MAX(in, out)), buf,
+@@ -802,20 +804,20 @@ static i64 ShiroFcntl(struct Machine *m, int fd, int cmd, i64 arg) {
+   switch (cmd) {
+     case 0: case 1: case 2: case 3: case 4: case 1030:
+       return KS(m, 72, A12(fd, cmd, (int)arg));
+-    case 5: case 36: {  // F_GETLK, F_OFD_GETLK: nobody else holds a lock
+-      u8 *fl;
+-      i64 r = KS(m, 72, A12(fd, 1, 0));
+-      if (r < 0) return r;
+-      if (!(fl = (u8 *)SchlepRW(m, arg, 32))) return -EFAULT_LINUX;
+-      Write16(fl, 2);  // F_UNLCK
+-      return 0;
++    case 5: case 6: case 7: case 36: case 37: case 38: {
++      // record locks (F_GETLK, F_SETLK(W), F_OFD_*) are the kernel's, so
++      // processes see each other's; struct flock is 32 bytes either way
++      u8 fl[32];
++      i64 r;
++      if (CopyFromUserRead(m, fl, arg, 32) == -1) return -EFAULT_LINUX;
++      r = ShiroCall(m, 72, A12(fd, cmd, 0), fl, 32, 32, true, cmd == 7 || cmd == 38);
++      if (r == 0 && (cmd == 5 || cmd == 36) && CopyToUserWrite(m, arg, fl, 32) == -1) return -EFAULT_LINUX;
++      return r;
+     }
+-    case 6: case 7: case 37: case 38:  // F_SETLK(W), F_OFD_SETLK(W): granted
+-      return KS(m, 72, A12(fd, 1, 0)) < 0 ? -EBADF_LINUX : 0;
+     case 8: case 9: case 10: case 11: case 15: case 16:  // owner/sig
+       return 0;
+-    case 1031: case 1032:  // F_SETPIPE_SZ / F_GETPIPE_SZ
+-      return 65536;
++    case 1031: case 1032:  // F_SETPIPE_SZ / F_GETPIPE_SZ: the kernel's pipes
++      return KS(m, 72, A12(fd, cmd, (int)arg));
+     case 1033: case 1034:  // F_ADD_SEALS / F_GET_SEALS
+       return -EINVAL_LINUX;
+     default:
+@@ -2173,6 +2175,10 @@ static void ShiroDropKid(struct System *s) {
+   UNLOCK(&g_shiro_kids_lock);
+ }
+ 
++// Which conformance patches this engine has (tests skip what it lacks): 1 =
++// 0081 (record locks, pipe sizes and RLIMIT_NOFILE from the kernel, EFAULT)
++EMSCRIPTEN_KEEPALIVE int blink_shiro_conformance(void) { return 1; }
++
+ // the kernel signalled hosted child `pid` (host.mjs routes by pid)
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid(int pid, int sig) {
+   int i;
+@@ -2444,6 +2450,11 @@ static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
+   i64 addr, fsize, o, r;
+   bool shared = (flags & 3) == 1 || (flags & 3) == 3;
+   if (off < 0 || (off & 4095)) return -EINVAL_LINUX;
++  // as Linux: an O_PATH fd is EBADF; a mapping needs the fd readable, and a
++  // writable shared one needs it open for writing too (EACCES)
++  if ((r = KS(m, 72, A12(fd, 3, 0))) < 0) return r;  // F_GETFL
++  if (r & 010000000) return -EBADF_LINUX;
++  if ((r & 3) == 1 || (shared && (prot & 2) && (r & 3) != 2)) return -EACCES_LINUX;
+   if ((r = ShiroStatAt(m, fd, 0, 0, 0x1000, st)) < 0) return r;
+   if ((Read32(st + 24) & 0170000) == 0040000) return -ENODEV_LINUX;
+   fsize = Read64(st + 48);
+@@ -2747,6 +2758,20 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+         }
+       }
+       break;
++    case 0x061: case 0x0A0: case 0x12E: {                             // getrlimit, setrlimit, prlimit64
++      // RLIMIT_NOFILE is the kernel's (its fd table enforces it); a kernel
++      // without prlimit64 leaves it, and the other limits, to Blink
++      int pid = nr == 0x12E ? (int)a : 0, res = nr == 0x12E ? (int)b : (int)a;
++      i64 nw = nr == 0x12E ? (i64)c : nr == 0x0A0 ? (i64)b : 0;
++      i64 old = nr == 0x12E ? (i64)d : nr == 0x061 ? (i64)b : 0;
++      u8 lim[16];
++      if (res != 7) return false;
++      if (nw && CopyFromUserRead(m, lim, nw, 16) == -1) { r = -EFAULT_LINUX; break; }
++      r = ShiroCall(m, 302, A12(pid, 7, nw ? 1 : 0), lim, nw ? 16 : 0, 16, false, false);
++      if (r == -ENOSYS_LINUX || r == -EINVAL_LINUX && !nw) return false;
++      if (r >= 0 && old && CopyToUserWrite(m, old, lim, 16) == -1) r = -EFAULT_LINUX;
++      break;
++    }
+     case 0x07F: {                                                     // rt_sigpending
+       // the kernel holds the signals the guest blocked (ShiroSyncMask), so
+       // they are pending there; Blink's own pending ones count too
+@@ -2973,7 +2998,8 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+     case 0x0E9: {                                                     // epoll_ctl
+       u8 ev[12];
+       memset(ev, 0, sizeof(ev));
+-      if (d && CopyFromUserRead(m, ev, d, 12) == -1) { r = -EFAULT_LINUX; break; }
++      // ADD and MOD read the event (NULL is EFAULT); DEL ignores it
++      if (b != 2 && (!d || CopyFromUserRead(m, ev, d, 12) == -1)) { r = -EFAULT_LINUX; break; }
+       r = KS(m, 233, A12(a, b, c, Read32(ev), Read32(ev + 4), Read32(ev + 8)));
+       break;
+     }
+@@ -3012,9 +3038,18 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       u8 *buf;
+       i64 off = -1, done = 0, n;
+       u8 offb[8];
+-      if (c) {  // an offset to read at (else the file position)
++      i64 fin, fout;
++      // as Linux, before any data moves: in_fd readable, out_fd writable
++      // (else EBADF; O_PATH fds count as neither), an O_APPEND out_fd EINVAL
++      fin = KS(m, 72, A12(b, 3, 0)), fout = KS(m, 72, A12(a, 3, 0));  // F_GETFL
++      if (fin < 0 || (fin & 010000000) || (fin & 3) == 1 ||
++          fout < 0 || (fout & 010000000) || (fout & 3) == 0) { r = -EBADF_LINUX; break; }
++      if (fout & 02000) { r = -EINVAL_LINUX; break; }
++      if (c) {  // an offset to read at (else the file position), written back after
+         if (CopyFromUserRead(m, offb, c, 8) == -1) { r = -EFAULT_LINUX; break; }
++        if (CopyToUserWrite(m, c, offb, 8) == -1) { r = -EFAULT_LINUX; break; }
+         off = Read64(offb);
++        if (off < 0) { r = -EINVAL_LINUX; break; }
+       }
+       buf = (u8 *)ShiroAlloc(m, g_shiro_chunk);
+       r = 0;
+@@ -3193,6 +3228,12 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       }
+       break;
+     }
++    case 0x0BE: case 0x0C1: case 0x0C4: case 0x0C7:                  // f{set,get,list,remove}xattr
++      // a bad or O_PATH fd is EBADF; otherwise Blink's answer (no xattrs)
++      r = KS(m, 72, A12(a, 3, 0));                                    // F_GETFL
++      if (r >= 0 && !(r & 010000000)) return false;
++      r = -EBADF_LINUX;
++      break;
+     case 0x009:                                                       // mmap
+       if ((d & 0x20) || (i64)e < 0) return false;
+       r = ShiroMmapFile(m, a, b, c, d, e, f);  // SysMmap/SysMprotect take mmap_lock
+-- 
+2.43.0
+

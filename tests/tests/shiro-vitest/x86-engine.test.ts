@@ -145,6 +145,11 @@ const haveFuzz = tryBuild('gcc', ['-static', '-O1', '-o', fuzzBin, 'jitfuzz.c'])
 const signalfdBin = join(out, 'signalfd');
 const blinkForwardsSignalfd = readdirSync(resolve(__dirname, '../../../vendor/blink/patches')).some((f) => /signalfd/i.test(f));
 const haveSignalfd = blinkForwardsSignalfd && tryBuild('gcc', ['-static', '-O1', '-o', signalfdBin, 'signalfd.c']);
+// LTP conformance (Blink 0080/0081): errnos, clocks, personality, and locks/pipe sizes/RLIMIT_NOFILE from the kernel
+const ltpErrnosBin = join(out, 'ltp-errnos');
+// (the built engine, not the patch file: perf-blink folds the patches in and rebuilds; 0081 exports blink_shiro_conformance)
+const blinkHasLtpErrnos = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_conformance');
+const haveLtpErrnos = blinkHasLtpErrnos && tryBuild('gcc', ['-static', '-O1', '-w', '-o', ltpErrnosBin, 'ltp-errnos.c']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -620,6 +625,13 @@ it.skipIf(!haveSignalfd)('signalfd reads blocked signals; poll sees it readable'
   const { shell } = await setup(readFileSync(signalfdBin));
   const r = await run(shell, './prog');
   expect(r.output.replace(/\r\n/g, '\n')).toBe('empty 1 poll 1 read 256 signo 10 23 pid-ok 1 again-empty 1\n');
+}, 60_000);
+
+// LTP getrlimit02, writev01, fcntl30/37, epoll_wait03, waitid02, clock_gettime04, uname04, vfork02, fcntl14/15
+it.skipIf(!haveLtpErrnos)('errnos Linux gives; record locks, pipe sizes and RLIMIT_NOFILE are the kernel\'s', async () => {
+  const { shell } = await setup(readFileSync(ltpErrnosBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toContain('rlimit-bad 1 nofile 1024/1048576 writev-len 1 pipe-sz 1 read-ro 1 waitid-opts 1 clocks 1 uname26 1 1 pending 1 locks 3\n');
 }, 60_000);
 
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
