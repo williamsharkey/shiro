@@ -273,7 +273,7 @@ describe('SharedObjects: a memfd passed between instances', () => {
     expect(m1.remote).toBe(1);
     expect(inbox[ia].map((m) => m.type)).toEqual(['blink-shmobj']);
     const sab = (inbox[ia][0] as { sab: SharedArrayBuffer }).sab;
-    expect(sab.byteLength).toBe(4096);
+    expect(sab.byteLength).toBe(4096 + 4096); // the bytes, then the control page
     expect(new TextDecoder().decode(new Uint8Array(sab, 0, 5))).toBe('hello');
     expect(await map(b, fb, 4096)).toEqual({ id: m1.id, remote: 1 });
     expect((inbox[ib][0] as { sab: SharedArrayBuffer }).sab).toBe(sab);
