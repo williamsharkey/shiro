@@ -33,6 +33,7 @@ import { SysvSem } from './sysvsem';
 import { SysvMsg } from './sysvmsg';
 import { MessageQueues, MqFile } from './mqueue';
 import { PosixTimers } from './posixtimers';
+import { splice, tee, vmsplice, copyFileRange, type Moved } from './splice';
 import { CONTROL_BYTES, SharedObjects, isShareablePath, type ShmObjMessage } from './shmobj';
 import { EpollFile, waitReady } from './epoll';
 import { SignalFile, notifySignalPending, pendingSignalListeners } from './signalfd';
@@ -240,6 +241,8 @@ export class Kernel {
   }
   /** fcntl record locks (F_SETLK, F_OFD_SETLK) */
   readonly locks = new LockTable();
+  /** flock(2) locks: whole-file, an open file description's, apart from fcntl's (as on Linux) */
+  readonly flocks = new LockTable();
   private detachTable?: () => void;
   /** How long an unreaped child of init stays a zombie before it is reaped automatically. */
   initReapDelayMs = 30_000;
@@ -651,8 +654,11 @@ export class Kernel {
   /** Terminate `proc` with a wait status: close its fds, reparent its children, notify its parent. */
   async exit(proc: Process, status: number): Promise<void> {
     if (proc.pid === 1 || !proc.beginExit()) return;
+    const files = new Set(proc.fds.entries().map(([, f]) => f));
     await proc.fds.closeAll();
     this.locks.release(proc.pid);
+    // the descriptions it held last: their OFD and flock locks go
+    for (const f of files) if (refCount(f) === 0) { this.locks.release(f); this.flocks.release(f); }
     this.shm.detachAll(proc);
     this.sem.exited(proc);
     for (const child of this.procs.values()) {
@@ -2397,6 +2403,44 @@ export class Kernel {
         }
         case A.SYS_fcntl:
           return this.fcntl(proc, args[0], args[1], args[2], data);
+        case A.SYS_splice:
+        case A.SYS_copy_file_range: {
+          // offsets as i64 in data (in and out), when args[1] / args[3] say there are
+          const dv = new DataView(data.buffer, data.byteOffset, 16);
+          const offIn = args[1] ? Number(dv.getBigInt64(0, true)) : null;
+          const offOut = args[3] ? Number(dv.getBigInt64(8, true)) : null;
+          const r: Moved | number = nr === A.SYS_splice
+            ? await splice(file(args[0]), offIn, file(args[2]), offOut, args[4] >>> 0, args[5], sig)
+            : await copyFileRange(file(args[0]), offIn, file(args[2]), offOut, args[4] >>> 0, args[5]);
+          if (typeof r === 'number') {
+            if (r === -A.EPIPE) this.deliver(proc, A.SIGPIPE);
+            return r;
+          }
+          if (r.offIn !== null) dv.setBigInt64(0, BigInt(r.offIn), true);
+          if (r.offOut !== null) dv.setBigInt64(8, BigInt(r.offOut), true);
+          return r.n;
+        }
+        case A.SYS_vmsplice: {
+          const r = await vmsplice(file(args[0]), data.subarray(0, Math.min(args[1] >>> 0, data.length)), args[2], sig);
+          if (r === -A.EPIPE) this.deliver(proc, A.SIGPIPE);
+          return r;
+        }
+        case A.SYS_tee: {
+          const r = await tee(file(args[0]), file(args[1]), args[2] >>> 0, args[3], sig);
+          if (r === -A.EPIPE) this.deliver(proc, A.SIGPIPE);
+          return r;
+        }
+        case A.SYS_flock: {
+          // whole-file locks of the open file description: shared or
+          // exclusive, waiting unless LOCK_NB (EWOULDBLOCK), interrupted by a
+          // signal (EINTR); converting replaces the description's own lock
+          const f = file(args[0]);
+          if (!f) return -A.EBADF;
+          const op = args[1] & ~A.LOCK_NB;
+          if (op !== A.LOCK_SH && op !== A.LOCK_EX && op !== A.LOCK_UN) return -A.EINVAL;
+          const type = op === A.LOCK_SH ? F_RDLCK : op === A.LOCK_EX ? F_WRLCK : F_UNLCK;
+          return this.flocks.set(f.path ?? `anon:${fileKey(f)}`, f, -1, type, 0, Infinity, !(args[1] & A.LOCK_NB), proc.syscallSignal);
+        }
         case A.SYS_fsync: { // (and fdatasync: Blink sends both here)
           const f = file(args[0]);
           if (!f) return -A.EBADF;
@@ -2816,7 +2860,7 @@ export class Kernel {
   /** Closing any fd for a file drops the process's POSIX locks on it; the last close of a description, its OFD locks */
   private releaseLocks(proc: Process, f: OpenFile): void {
     if (f.path) this.locks.release(proc.pid, f.path);
-    if (refCount(f) === 0) this.locks.release(f);
+    if (refCount(f) === 0) { this.locks.release(f); this.flocks.release(f); }
   }
 
   /** fcntl record locks; `data` holds the struct flock (l_type, l_whence, l_start, l_len, l_pid) */

@@ -151,6 +151,35 @@ export class Pipe {
     return done;
   }
 
+  /** tee(): copy up to out.length buffered bytes without taking them */
+  peek(out: Uint8Array): number {
+    const n = Math.min(out.length, this.count);
+    const first = Math.min(n, this.capacity - this.head);
+    out.set(this.buf.subarray(this.head, this.head + first));
+    if (n > first) out.set(this.buf.subarray(0, n - first), first);
+    return n;
+  }
+
+  /** splice/tee: wait until there is data (true), EOF (false), or -EAGAIN/-EINTR */
+  async waitData(nonblock: boolean, signal?: AbortSignal): Promise<boolean | number> {
+    for (;;) {
+      if (this.count > 0) return true;
+      if (this.writers === 0) return false;
+      if (nonblock) return -EAGAIN;
+      if (!(await abortableWait(this.readWaiters, signal))) return -EINTR;
+    }
+  }
+
+  /** splice/tee: wait until there is room: 0, or -EPIPE/-EAGAIN/-EINTR */
+  async waitSpace(nonblock: boolean, signal?: AbortSignal): Promise<number> {
+    for (;;) {
+      if (this.readers === 0) return -EPIPE;
+      if (this.space > 0) return 0;
+      if (nonblock) return -EAGAIN;
+      if (!(await abortableWait(this.writeWaiters, signal))) return -EINTR;
+    }
+  }
+
   /** An end was opened: wake opens waiting for it. */
   noteOpen() {
     for (const w of [...this.openWaiters]) w();
