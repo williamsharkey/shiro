@@ -77,6 +77,14 @@ describe('page command — served app interaction', () => {
       expect(r.exitCode).toBe(1);
       expect(r.output).toContain('Usage:');
     });
+
+    it('--help lists every action and exits 0', async () => {
+      for (const flag of ['--help', '-h', 'help']) {
+        const r = await run(shell, `page ${flag}`);
+        expect(r.exitCode).toBe(0);
+        for (const a of ['click', 'input', 'text', 'html', 'attr', 'eval', 'title', 'wait']) expect(r.output).toMatch(new RegExp(`^\\s+${a}\\b`, 'm'));
+      }
+    });
   });
 
   describe('single iframe — auto-detect', () => {

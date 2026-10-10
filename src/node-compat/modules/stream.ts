@@ -7,7 +7,9 @@ import { createEventsModule } from './events';
  * finished; a working subset of Node's semantics (fast-glob, through2,
  * split2 and the like are built on them).
  */
-export function createStreamModule(events: any = createEventsModule()): any {
+export function createStreamModule(events: any = createEventsModule(), BufferImpl?: any): any {
+  // The process's Buffer (the page has none of its own): strings and Uint8Arrays become Buffers in streams
+  const BufferCtor = () => BufferImpl ?? (globalThis as any)['Buffer'];
   const streamModule: any = {};
   const EventEmitter = events.EventEmitter;
   const tick = (fn: (...a: any[]) => void, ...args: any[]) => queueMicrotask(() => fn(...args));
@@ -29,6 +31,12 @@ export function createStreamModule(events: any = createEventsModule()): any {
   streamModule.Stream = Stream;
 
   // ── Readable ─────────────────────────────────────────────────────────
+  /** A Uint8Array chunk as a Buffer over the same bytes (node streams hand on Buffers) */
+  const asBufferView = (c: any) => {
+    const B = BufferCtor();
+    if (!(c instanceof Uint8Array) || typeof B?.from !== 'function' || c instanceof B) return c;
+    return B.from(c.buffer, c.byteOffset, c.byteLength);
+  };
   const Readable = function(this: any, opts: any = {}) { if (!(this instanceof Readable)) return new Readable(opts);
     Stream.call(this, opts);
     const objectMode = !!(opts.objectMode || opts.readableObjectMode);
@@ -72,9 +80,10 @@ export function createStreamModule(events: any = createEventsModule()): any {
       return false;
     }
     if (st.ended) { this.destroy(Object.assign(new Error('stream.push() after EOF'), { code: 'ERR_STREAM_PUSH_AFTER_EOF' })); return false; }
-    if (!st.objectMode && typeof chunk === 'string' && encoding && encoding !== st.encoding && typeof (globalThis as any).Buffer?.from === 'function') {
-      chunk = (globalThis as any).Buffer.from(chunk, encoding);
+    if (!st.objectMode && typeof chunk === 'string' && encoding && encoding !== st.encoding && typeof BufferCtor()?.from === 'function') {
+      chunk = BufferCtor().from(chunk, encoding);
     }
+    else if (!st.objectMode) chunk = asBufferView(chunk);
     chunk = decode(st, chunk);
     if (!st.objectMode && chunk.length === 0) return st.length < st.highWaterMark;
     st.buffer.push(chunk);
@@ -160,7 +169,7 @@ export function createStreamModule(events: any = createEventsModule()): any {
   const joinChunks = (chunks: any[]) => {
     if (chunks.length === 1) return chunks[0];
     if (chunks.every(c => typeof c === 'string')) return chunks.join('');
-    const B = (globalThis as any).Buffer;
+    const B = BufferCtor();
     if (B?.concat) return B.concat(chunks.map(c => typeof c === 'string' ? B.from(c) : c));
     const total = chunks.reduce((n, c) => n + c.length, 0);
     const out = new Uint8Array(total);
@@ -329,10 +338,11 @@ export function createStreamModule(events: any = createEventsModule()): any {
     }
     if (chunk === null) throw Object.assign(new TypeError('May not write null values to stream'), { code: 'ERR_STREAM_NULL_VALUES' });
     encoding = encoding || st.defaultEncoding;
-    if (!st.objectMode && typeof chunk === 'string' && st.decodeStrings && typeof (globalThis as any).Buffer?.from === 'function') {
-      chunk = (globalThis as any).Buffer.from(chunk, encoding);
+    if (!st.objectMode && typeof chunk === 'string' && st.decodeStrings && typeof BufferCtor()?.from === 'function') {
+      chunk = BufferCtor().from(chunk, encoding);
       encoding = 'buffer';
     }
+    else if (!st.objectMode) chunk = asBufferView(chunk);
     const item = { chunk, encoding, cb };
     st.length += chunkLength(chunk, st.objectMode);
     const ok = st.length < st.highWaterMark;
@@ -406,6 +416,68 @@ export function createStreamModule(events: any = createEventsModule()): any {
     return src;
   };
   streamModule.Duplex = Duplex;
+
+  // ── Web streams ↔ node streams (Readable.fromWeb: Next's prerender) ──
+  const bytes = (c: any) => (typeof c === 'string' ? new TextEncoder().encode(c) : c);
+  Readable.fromWeb = (rs: ReadableStream, opts: any = {}) => {
+    const reader = rs.getReader();
+    let reading = false;
+    return new Readable({
+      ...opts,
+      read(this: any) {
+        if (reading) return;
+        reading = true;
+        reader.read().then(({ done, value }) => {
+          reading = false;
+          if (done) this.push(null); else if (this.push(value)) this._read();
+        }, (e: any) => { reading = false; this.destroy(e); });
+      },
+      destroy(err: any, cb: Function) { reader.cancel(err ?? undefined).then(() => cb(err), () => cb(err)); },
+    });
+  };
+  Readable.toWeb = (r: any) => {
+    const objectMode = !!r._readableState?.objectMode;
+    return new ReadableStream({
+      start(controller) {
+        r.on('data', (c: any) => { controller.enqueue(objectMode ? c : bytes(c)); if ((controller.desiredSize ?? 1) <= 0) r.pause(); });
+        r.on('end', () => { try { controller.close(); } catch { /* cancelled */ } });
+        r.on('error', (e: any) => controller.error(e));
+        r.pause();
+      },
+      pull() { r.resume(); },
+      cancel(reason) { r.destroy(reason); },
+    }, objectMode ? { highWaterMark: 16 } : new ByteLengthQueuingStrategy({ highWaterMark: 16384 }));
+  };
+  Writable.fromWeb = (ws: WritableStream, opts: any = {}) => {
+    const writer = ws.getWriter();
+    return new Writable({
+      ...opts,
+      write(chunk: any, _enc: any, cb: Function) { writer.write(chunk).then(() => cb(), (e: any) => cb(e)); },
+      final(cb: Function) { writer.close().then(() => cb(), (e: any) => cb(e)); },
+      destroy(err: any, cb: Function) { writer.abort(err ?? undefined).then(() => cb(err), () => cb(err)); },
+    });
+  };
+  Writable.toWeb = (w: any) => new WritableStream({
+    write(chunk) { return new Promise<void>((res, rej) => { w.write(chunk, (e: any) => (e ? rej(e) : res())); }); },
+    close() { return new Promise<void>((res) => { w.end(() => res()); }); },
+    abort(reason) { w.destroy(reason); },
+  });
+  Duplex.fromWeb = (pair: { readable: ReadableStream; writable: WritableStream }, opts: any = {}) => {
+    const r = Readable.fromWeb(pair.readable, opts);
+    const w = Writable.fromWeb(pair.writable, opts);
+    const d = new Duplex({
+      ...opts,
+      read() { r.resume(); },
+      write(chunk: any, enc: any, cb: Function) { w.write(chunk, enc, cb); },
+      final(cb: Function) { w.end(cb); },
+    });
+    r.on('data', (c: any) => { if (!d.push(c)) r.pause(); });
+    r.on('end', () => d.push(null));
+    r.on('error', (e: any) => d.destroy(e));
+    r.pause();
+    return d;
+  };
+  Duplex.toWeb = (d: any) => ({ readable: Readable.toWeb(d), writable: Writable.toWeb(d) });
 
   const Transform = function(this: any, opts: any = {}) { if (!(this instanceof Transform)) return new Transform(opts);
     Duplex.call(this, opts);

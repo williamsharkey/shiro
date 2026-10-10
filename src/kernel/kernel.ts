@@ -13,7 +13,7 @@ import type { Shell } from '../shell';
 import type { Command, CommandContext } from '../commands/index';
 import { KernelStdio, execLazyStdin } from '../shell-stdio';
 import { parseShellArgs } from '../shell-args';
-import { ProcFs, bootMs, fdTarget } from './procfs';
+import { ProcFs, bootMs, fdTarget, syscallText, wchanText } from './procfs';
 import { klog, KmsgFile, LOG_ERR, LOG_INFO, SYSLOG_ACTION_READ_ALL, SYSLOG_ACTION_SIZE_BUFFER, SYSLOG_ACTION_SIZE_UNREAD } from './klog';
 import { processTable, type ShiroProcess } from '../process-table';
 import { packageShadows, pkgOwnShadows, packageArgsForPath, PKG_BIN_DIR } from '../pkg-manager';
@@ -271,9 +271,12 @@ export class Kernel {
           cwd: p.cwd, environ: p.env, exe: typeof p.data.exe === 'string' ? p.data.exe : p.path,
           fds: p.fds.entries().map(([fd, f]) => [fd, fdTarget(f)] as [number, string]),
           startMs: p.startTime, uid: p.uid, gid: p.gid,
+          syscall: syscallText(p), wchan: wchanText(p),
         };
       },
       list: () => [...this.procs.keys()],
+      // the rest of /proc/PID (syscall, wchan, task/ …) and /proc/stat as programs see them
+      node: (path) => this.procfs.fsNode(path),
     });
     this.registerDevice('/dev/null', (_p, f) => new DevNull(f));
     this.registerDevice('/dev/zero', (_p, f) => new DevZero(f));
@@ -780,6 +783,12 @@ export class Kernel {
     targets = targets.filter(p => this.maySignal(sender, p, sig));
     if (targets.length === 0) return -A.EPERM;
     if (sig === 0) return 0;
+    // Group signals are rare and hard to trace afterwards (a program killpg'ing
+    // its own foreground job): say who sent what to whom
+    if (pid <= 0 && sender !== this.init) {
+      const to = pid === 0 ? `its own process group ${sender.pgid}` : pid === -1 ? 'every process' : `process group ${-pid}`;
+      klog.logRatelimited(LOG_INFO, `signal: ${sender.comm}[${sender.pid}] sent ${sigName(sig)} to ${to} (${targets.length} process${targets.length === 1 ? '' : 'es'})`);
+    }
     for (const p of targets) this.deliver(p, sig, { signo: sig, code: A.SI_USER, pid: sender.pid, uid: sender.uid });
     return 0;
   }
@@ -830,7 +839,9 @@ export class Kernel {
     }
     switch (A.defaultSignalAction(sig)) {
       case 'term': void this.exit(proc, A.W_TERMSIG(sig)); break;
-      case 'stop': this.stopProcess(proc, sig); break;
+      case 'stop':
+        klog.logRatelimited(LOG_INFO, `signal: ${proc.comm}[${proc.pid}] stopped by ${sigName(sig)}`);
+        this.stopProcess(proc, sig); break;
       default: break;
     }
   }
@@ -3185,4 +3196,11 @@ function setCredentials(proc: Process, nr: number, args: ArrayLike<number>, data
     case A.SYS_setfsgid: return g.e;
   }
   return -A.ENOSYS;
+}
+
+const SIG_NAMES = ['', 'HUP', 'INT', 'QUIT', 'ILL', 'TRAP', 'ABRT', 'BUS', 'FPE', 'KILL', 'USR1', 'SEGV', 'USR2', 'PIPE', 'ALRM', 'TERM',
+  'STKFLT', 'CHLD', 'CONT', 'STOP', 'TSTP', 'TTIN', 'TTOU', 'URG', 'XCPU', 'XFSZ', 'VTALRM', 'PROF', 'WINCH', 'IO', 'PWR', 'SYS'];
+/** SIGINT, SIGRTMIN+3, … for log lines */
+function sigName(sig: number): string {
+  return SIG_NAMES[sig] ? `SIG${SIG_NAMES[sig]}` : sig >= 32 ? `SIGRTMIN+${sig - 32}` : `signal ${sig}`;
 }

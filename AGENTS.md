@@ -106,7 +106,7 @@ export const myCmd: Command = {
 ## Agent Context Inside The Tab
 
 - Every boot seeds `~/AGENTS.md` for agents on the machine (`src/agent-docs.ts`): what the machine is, what works and what doesn't, `doctor`, where the source lives (not checked out), and this boot's context (an injected `seed` boot says to start with `hc outer`). `~/CLAUDE.md` is `@AGENTS.md`, so Claude Code imports it directly.
-- Seeding never overwrites a file the user edited: `/var/lib/tabcomputer/seeded.json` holds the hash of what was written, and older installs are recognized by the exact texts earlier builds seeded. The retired `~/NEO.md` and `~/.shiro-context.json` are removed the same way. Keep the text accurate when behavior changes; it is what an agent here believes about the machine.
+- Seeding never overwrites a file the user edited: `/var/lib/tabcomputer/seeded.json` holds the hash of what was written, and older installs are recognized by the exact texts earlier builds seeded. The retired `~/NEO.md` and `~/.shiro-context.json` are removed the same way. Keep the text accurate when behavior changes; it is what an agent here believes about the machine. `KNOWN_ISSUES` mirrors the open issues on github.com/williamsharkey/tabcomputer that an agent has to work around: add an entry with its workaround when such an issue is filed, and delete it in the change that fixes it. The in-tab text also tells agents to run `gh issue list -R williamsharkey/tabcomputer` first.
 
 ## Claude Code In tabcomputer
 
@@ -173,6 +173,7 @@ export const myCmd: Command = {
 
 - `pkg` / `apt` / `apt-get` (`src/commands/pkg.ts`, `src/pkg-manager.ts`) install prebuilt WASM programs from `src/pkg-index.json`: sha256-checked downloads into `/usr/lib/pkg/<name>/`, symlinks in `/usr/bin`, state in `/var/lib/pkg/status.json`. Details, the index format and the package status table are in [docs/PACKAGES.md](docs/PACKAGES.md).
 - The shell runs anything resolving into `/usr/lib/pkg/` through `runPackageBinary`: a kernel process via `runWasiProgram` when the page can block, else the in-page `WasiRT` (always for `wasi_unstable` programs). An installed package's command wins over a builtin of the same name unless its bin entry says `"shadow": false` (coreutils applets, every WASIX command); `builtin NAME` reaches the builtin.
+- Installed packages keep their build until `pkg upgrade`: `pkg outdated` (`apt list --upgradable`), `pkg upgrade --dry-run`, `installed X, index Y` in `pkg list`/`available`, and doctor's `packages` line show drift. An index entry's `broken` lists installed versions that boot upgrades in the background (`upgradeBrokenPackages`). Tests: `pkg-outdated.test.ts`.
 - Packages built here come from `scripts/pkgbuild/<name>.sh` (wasi-sdk, pinned sources) and live in `public/pkg/`; registry packages are Wasmer WebC containers read by `src/webc.ts`.
 - x86-64 packages (`abi: x86_64-linux`, recipes in `scripts/pkgbuild/x86/`) are static musl builds run in Blink; [docs/COMPAT.md](docs/COMPAT.md) is the scoreboard of popular tools (less, vim, ...) with a smoke test each in `compat-tools.test.ts`.
 - Packages that need kernel features (`needs`: wasix, processes, threads, sockets, ...) stay gated until the WASM process mode (`src/wasi/host.ts`) or `globalThis.__tabcomputerKernel.features` provides them.
