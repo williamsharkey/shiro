@@ -20,6 +20,7 @@ Blink engine.
 | node, npm, npx | builtin | works (commander, mocha, tsc 5, prettier); `node` alone is the REPL on a terminal (`let`/`const` persist, `...` continuation lines, `await`, .help/.exit, ^C/^D as node) and reads its program from a pipe; on a terminal process.stdin reads the pty as the foreground job (cooked lines with echo and ^D, `setRawMode` sets its termios, ^C is SIGINT) |
 | pnpm 9 | `npm install pnpm` | works (add, store, symlinks, run, exec, bins) |
 | yarn 1 | `npm install yarn` | works (add, lockfile, run, bins, offline) |
+| Next.js 16 (App Router, webpack) | `npx create-next-app`, then `next build` / `next start` with `TABCOMPUTER_NODE_WORKER=1` | builds (static pages prerendered) and serves; see "Next.js 16" below |
 | ruby, gem, rake | `pkg install ruby` (ruby.wasm 3.4.1) | works (no sockets) |
 | perl | `pkg install perl` (x86-64 in Blink) | works |
 | lua | `pkg install lua` | works |
@@ -327,23 +328,57 @@ Shell and platform fixes these needed (all with tests in the same file):
   Not yet: node output into a pipe or file comes when the process exits
   (only the terminal streams), so `npm run dev > log &` shows nothing while
   it runs.
-- Next.js 16 (in progress): `npx create-next-app` works in the page. `next
-  build` in the page stops where it compiles SWC's wasm (Chromium refuses a
-  synchronous `WebAssembly.Module` over 8 MB on the main thread), so Next
-  goes through worker mode (`TABCOMPUTER_NODE_WORKER=1`), where the module
-  compiles; `NEXT_TEST_WASM_DIR` pointing at an installed
-  `@next/swc-wasm-nodejs` avoids Next's own download (the test container's
-  relay can't fetch it). Remaining, on the worker side: jest-worker forks
-  children and talks over `child.send` (fork IPC; worked around with
-  `experimental: { webpackBuildWorker: false, workerThreads: false, cpus: 1 }`),
-  then "Maximum call stack size exceeded" in `resolve` during "Creating an
-  optimized production build". What Next's CommonJS needed in the page,
-  all general: `require.extensions` / `Module._extensions`, a directory
-  `require` using its package.json `main`, `stream/web`,
-  `process.prependOnceListener`, `fs.opendir` / `opendirSync` /
-  `promises.opendir`, a process-local `process.chdir` (the shell's cwd comes
-  back when the script exits), `npm config get/set/delete/list`, and
-  `__dirname` text inside template literals left alone.
+- Next.js 16 (`create-next-app`, App Router, webpack): `next build` and
+  `next start` work in worker mode (`TABCOMPUTER_NODE_WORKER=1`).
+  - The build takes 54 s: compile 14 s, then page data and the static pages
+    in a worker thread. It writes `/` and `/_not-found` as static HTML and
+    RSC.
+  - `next start` serves the page, its CSS and JS chunks, the favicon, and
+    a 404 for an unknown path; the page renders in 75 ms.
+  - In the page, `next build` stops where it compiles SWC's wasm (Chromium
+    refuses a synchronous `WebAssembly.Module` over 8 MB on the main thread).
+  - Set `NEXT_TEST_WASM_DIR` to an installed `@next/swc-wasm-nodejs`: the
+    test container's relay can't fetch Next's own download.
+  - next.config needs `experimental: { webpackBuildWorker: false,
+    workerThreads: true, cpus: 1 }`: jest-worker's child processes would
+    need fork IPC (`child.send`) in a guest.
+  - Node output into a file comes when the process exits, so `next start >
+    log &` shows its log only then.
+
+  What it took, all general:
+  - AsyncLocalStorage carries its store across `await`, timers, `then`,
+    `nextTick` and `queueMicrotask` (src/node-compat/async-context.ts). The
+    page has no async hooks, so once a process makes an AsyncLocalStorage:
+    - each `await X` in the code it loads becomes
+      `__shiroAls.r(__shiroAls.c(), await X)`, so the frame before the await
+      is the frame after it;
+    - queued callbacks run in the frame they were queued from.
+    Next's work and request stores, and React's, live there. Concurrent
+    runs stay apart; an await on a string, template or regex literal, a
+    function or a class is left as it is.
+  - `stream`: `Readable.fromWeb`/`toWeb`, `Writable.fromWeb`/`toWeb` and
+    `Duplex.fromWeb`/`toWeb`. Uint8Array chunks become Buffers, with the
+    process's own Buffer: the page has none.
+  - `http.ServerResponse` has `_implicitHeader()`, `_header` and
+    `_headerSent` (the `compression` middleware in Next's server).
+  - builtins: `require.extensions` / `Module._extensions`, a directory
+    `require` using its package.json `main`, `stream/web`,
+    `process.prependOnceListener`, `fs.opendir` / `opendirSync` /
+    `promises.opendir`, a process-local `process.chdir`, `npm config`;
+  - `path`, `assert`, `events` and `stream` have no enumerable `default`
+    (node has none): @vercel/nft copies path's keys into a mock, took the
+    real module as its `default` and replaced `path.resolve` with a function
+    that called itself ("Maximum call stack size exceeded");
+  - Buffer has every fixed- and variable-width read/write (webpack's cache
+    serializer: `writeUInt32LE`, `writeDoubleLE`, `writeBigInt64LE`...);
+  - `require.resolve` finds any existing file (`app/favicon.ico`);
+  - `querystring` as node's: repeated keys are arrays both ways, `+` is a
+    space (Next's loaders pass `pageExtensions` that way);
+  - `vm.runInThisContext` gives the last expression's value (webpack's
+    `executeModule` takes the function it evaluates to), and a vm context
+    is its script's `globalThis` (Next's client-reference manifests);
+  - `AsyncLocalStorage.snapshot()` / `bind()`, `AsyncResource.bind`;
+  - `__dirname` text inside template literals left alone.
 - npm: an optional platform package for linux-x64 (glibc) is installed when it
   ships an executable, which Blink runs: `npm i -g @openai/codex` gets
   `@openai/codex-linux-x64`, `opencode-ai` gets `opencode-linux-x64` (and
@@ -898,7 +933,7 @@ vendor's API proves the network path).
 
 ### On tabcomputer.com, 2026-10-10
 
-Re-checked on the live site (deploys 073944d…f86aded; Gemini and codex-npm on a local 102fc13 build) in headless Chromium,
+Re-checked on the live site (deploys 073944d…ed8a01c; Gemini on a local 102fc13 build) in headless Chromium,
 a fresh page per tool, with dummy keys. Times are wall time on that page.
 A real tool call (Bash `ls`, a file write) needs a model to ask for it, so it
 was not possible with dummy keys. Sign-in was checked up to the point where a
@@ -908,11 +943,11 @@ real account takes over (the sign-in page opens and the CLI waits for the code).
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Claude Code, native (default) | 2.1.296 | `claude install` 140 s | 3 s | 52 s | `-p`: "Invalid API key", ~100 s | `claude login` → `claude auth login`: the sign-in page opens in a tab (or an Open card), then "Paste code here" | Startup is ~48–52 s offline, mostly compiled guest code (perf-blink's profiles). With `TABCOMPUTER_NODE_WORKER=1`: same. |
 | Claude Code, `--npm` | 2.1.112 (reports 2.1.280) | installed at boot | 5–7 s | 14 s | `-p`: "Invalid API key", 4 s | `claude --npm login` → the in-session `/login` (URL, paste prompt) | 2.1.112's `auth login` has no paste prompt and could never finish here; fixed (ad91c0e). With `TABCOMPUTER_NODE_WORKER=1` it works but shows the first-run screens. |
-| OpenAI Codex | 0.162.1 | GitHub release tarball with the real curl (`pkg install curl`): 65 s; `npm i -g @openai/codex` 7–8 s on f86aded (the `linux-x64` package now installs) | 4.7 s (tarball), 12 s (npm launcher) | — | tarball `exec`: 401 on `wss://` and `https://api.openai.com`, ~50 s. npm launcher `exec`: no output for 15 min | not tried (ChatGPT sign-in) | Through npm, `codex --version` used to freeze the terminal (fixed in 102fc13, below). `exec` through the npm launcher still waits: the native child it spawns has no terminal on stdin, so it waits for stdin to end. One of three tarball runs hung in the HTTPS fallback until Ctrl-C. |
+| OpenAI Codex | 0.162.1 | GitHub release tarball with the real curl (`pkg install curl`): 65 s; `npm i -g @openai/codex` 8–11 s (the `linux-x64` package installs since f86aded) | 4.7 s (tarball), 12 s (npm launcher) | — | `exec`: 401 on `wss://` then `https://api.openai.com`, ~40–50 s (tarball and, on ed8a01c, the npm launcher) | not tried (ChatGPT sign-in) | After the 401s, `exec` can hang in the HTTPS fallback until Ctrl-C (the npm launcher on ed8a01c; one of three tarball runs). Through npm, the terminal used to freeze after `codex --version` (fixed in 102fc13), and `exec` used to wait on stdin (compat-tools' stdio-inherit fix). |
 | Grok Build (xAI) | 1.0.50 | `x.ai/cli/install.sh` after `pkg install curl`: 118 s | 2.4 s | — | `-p`: 400 "Incorrect API key", 25 s (148 s on 2026-10-09) | not tried | The builtin `curl` can't fetch the binary (browser fetch); the real curl goes through the relay. |
 | Gemini CLI | 0.63.0 | `npm i -g` 2–6 s | 12 s, plus a harmless proper-lockfile "Lock is already released" trace | — | `-p` reaches `/api/gemini/` (400) and exits 1 in 41 s, but on a terminal it prints "An unexpected critical error occurred:[object Object]" rather than the API's message | not tried | On b2571fb `-p` froze the terminal: it printed, then called `process.exit()` from a timer, which cancelled xterm's pending write (fixed in 102fc13). `--version` also prints a bogus "critical error: process.exit(0)" after the prompt (Gemini catches the throw our `process.exit` uses to stop the script). |
 | Antigravity (`agy`) | 1.3.3 | `antigravity.google/cli/install.sh` 22 s (`set -euo pipefail` fixed in d505335) | 19 s after `debian install` | — | — | not tried (Google sign-in) | A glibc binary: without `debian install` (no `ld-linux-x86-64.so.2`) it exits 127 with no message. After `debian install`, `curl … \| bash` runs Debian's bash, which can't find tabcomputer's `grep` and `curl` (the overlay leaves `/usr/bin/grep` absent), so install agy first. |
-| opencode | 1.18.35 | `npm i -g` 25 s on f86aded; `opencode.ai/install` stopped at "length: unbound variable" (`local` in a piped `{ }` group of a function; fixed in fa6b68a) | npm build: exits 127 with no message (glibc binary; the musl one is skipped) | — | — | — | Re-check `opencode.ai/install` once fa6b68a is live. |
+| opencode | 1.18.35 | `opencode.ai/install` (real curl): 40.5 s on ed8a01c; `npm i -g` 25 s | 160 s after `debian install` (a glibc build, `opencode-linux-x64-baseline`); without it: "cannot execute: required file not found (this program needs glibc: run `debian install`)" | — | — | — | The install script needed two shell fixes: `local` in a piped `{ }` group of a function (fa6b68a), and a `{ }` group after `cmd \| \<newline>` (f17cef32). |
 | aider | 0.86.2 | `debian install`, `pkg install curl`, `aider.chat/install.sh` (uv, Python 3.12): 609 s | 362 s | — | `--message`: litellm `AuthenticationError` "Incorrect API key", 776 s | not tried | Works end to end since the v4-mapped UDP fix (0a5e7e5); very slow (CPython under Blink). |
 
 ### First pass (2026-10-09)

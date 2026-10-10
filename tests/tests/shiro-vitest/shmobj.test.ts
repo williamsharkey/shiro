@@ -152,6 +152,45 @@ describe('SharedObjects through the kernel (SYS_shiro_shmobj_*)', () => {
     const c = kernel.spawn({ path: 'p', cwd: '/tmp', uid: 1000, run: () => new Promise<number>(() => {}) });
     expect(await kernel.syscall(c, A.SYS_shiro_shmobj_map, [shmid, 1, 0, 0], new Uint8Array(8))).toBe(-A.ENOSYS);
   });
+
+  it('kind | 0x100 (Blink\'s way): remote from the first mapping; a memfd is one object however its fd travels', async () => {
+    const { fs } = await createTestShell();
+    const kernel = new Kernel({ fs, registerWithProcessTable: false });
+    const inbox: Record<number, ShmObjMessage[]> = { };
+    const inst = () => { const id = kernel.registerEngineInstance((m) => (inbox[id] ??= []).push(m)); return id; };
+    const ia = inst(), ib = inst();
+    const spawn = (i: number) => {
+      const p = kernel.spawn({ path: 'p', cwd: '/tmp', uid: 1000, run: () => new Promise<number>(() => {}) });
+      p.data.engineInstance = i;
+      return p;
+    };
+    const a = spawn(ia), b = spawn(ib);
+    const map = async (p: typeof a, fd: number, len: number) => {
+      const d = new Uint8Array(8);
+      const id = await kernel.syscall(p, A.SYS_shiro_shmobj_map, [fd, 0x100, len, 0], d);
+      return { id, remote: new DataView(d.buffer).getInt32(0, true) };
+    };
+    const name = new TextEncoder().encode('fonts');
+    const fd = await kernel.syscall(a, A.SYS_memfd_create, [name.length, 0], name);
+    expect(await kernel.syscall(a, A.SYS_write, [fd, 5], new TextEncoder().encode('hello'))).toBe(5);
+    // the first mapper is remote at once: no publish round to wait for
+    const m1 = await map(a, fd, 4096);
+    expect(m1.remote).toBe(1);
+    expect(inbox[ia].map((m) => m.type)).toEqual(['blink-shmobj']);
+    const sab = (inbox[ia][0] as { sab: SharedArrayBuffer }).sab;
+    expect(sab.byteLength).toBe(8192); // the bytes, then a page of control words
+    expect(new TextDecoder().decode(new Uint8Array(sab, 0, 5))).toBe('hello'); // seeded from the memfd
+    // the same file in another process (SCM_RIGHTS or exec give it the same open file)
+    const fb = b.fds.alloc(a.fds.get(fd)!, 0, false);
+    expect(await map(b, fb, 4096)).toEqual({ id: m1.id, remote: 1 });
+    expect((inbox[ib][0] as { sab: SharedArrayBuffer }).sab).toBe(sab);
+    new Uint8Array(sab).set(new TextEncoder().encode('HELLO'));
+    await kernel.engineInstanceGone(ia);
+    await kernel.engineInstanceGone(ib);
+    const back = new Uint8Array(5);
+    expect(await kernel.syscall(a, A.SYS_pread64, [fd, 5, 0, 0], back)).toBe(5);
+    expect(new TextDecoder().decode(back)).toBe('HELLO'); // written back to the memfd
+  });
 });
 
 describe('SharedObjects: a memfd passed between instances', () => {
@@ -184,7 +223,7 @@ describe('SharedObjects: a memfd passed between instances', () => {
     expect(m1.remote).toBe(1);
     expect(inbox[ia].map((m) => m.type)).toEqual(['blink-shmobj']);
     const sab = (inbox[ia][0] as { sab: SharedArrayBuffer }).sab;
-    expect(sab.byteLength).toBe(4096);
+    expect(sab.byteLength).toBe(4096 + 4096); // the bytes (whole pages), then the control page
     expect(new TextDecoder().decode(new Uint8Array(sab, 0, 5))).toBe('hello');
     expect(await map(b, fb, 4096)).toEqual({ id: m1.id, remote: 1 });
     expect((inbox[ib][0] as { sab: SharedArrayBuffer }).sab).toBe(sab);
