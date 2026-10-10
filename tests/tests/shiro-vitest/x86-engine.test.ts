@@ -222,6 +222,10 @@ const haveCpuclockids = blinkHasCpuclockids && tryBuild('gcc', ['-static', '-O1'
 const tkill0Bin = join(out, 'tkill0');
 const blinkHasTkill0 = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_tkill0');
 const haveTkill0 = blinkHasTkill0 && tryBuild('gcc', ['-static', '-O1', '-w', '-o', tkill0Bin, 'tkill0.c', '-lpthread']);
+// Blink 0504: setting another user's process's scheduling is EPERM
+const schedpermBin = join(out, 'schedperm');
+const blinkHasSchedperm = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_schedperm');
+const haveSchedperm = blinkHasSchedperm && tryBuild('gcc', ['-static', '-O1', '-w', '-o', schedpermBin, 'schedperm.c']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -768,6 +772,12 @@ it.skipIf(!haveTkill0)('pthread_kill(self, 0) and tgkill/tkill of signal 0 probe
   const { shell } = await setup(readFileSync(tkill0Bin));
   const r = await run(shell, './prog');
   expect(r.output.replace(/\r\n/g, '\n')).toBe('pthread_kill 0 tgkill 0 tkill 0\n');
+}, 60_000);
+
+it.skipIf(!haveSchedperm)('sched_setparam of another user\'s process (init) is EPERM; reading it is allowed (Open POSIX sched_setparam_26-1)', async () => {
+  const { shell } = await setup(readFileSync(schedpermBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('get ok getscheduler ok set EPERM setscheduler EPERM self ok\n');
 }, 60_000);
 
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
