@@ -106,7 +106,7 @@ normal `npm run test:shiro` keeps them fixed.
 - Each test runs through Shiro's shell in its own temp directory, under the
   Blink engine. It passes when it exits 0 (`PTS_PASS`); other statuses are
   reported by name (FAIL, UNRESOLVED, UNSUPPORTED, UNTESTED). A test gets
-  30 s; leftover processes are killed.
+  20x its native time (8 to 30 s); leftover processes are killed.
 - Only tests that pass natively on the build host as uid 1000 are scored
   (`openposix/native-baseline.json`, from
   `scripts/conformance/openposix-native-baseline.mjs`).

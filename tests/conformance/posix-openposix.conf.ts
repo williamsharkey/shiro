@@ -20,7 +20,8 @@ import { createTestShell } from '../tests/shiro-vitest/helpers';
 const CONF = resolve(__dirname, 'openposix');
 const BIN = resolve(__dirname, '.cache/openposix-bin');
 const RESULTS = resolve(__dirname, 'results');
-const TEST_TIMEOUT = 30_000;
+/** A test gets 20x its native time, between 8 s and 30 s (most take milliseconds; a hang shouldn't cost 30 s) */
+const timeoutFor = (name: string) => Math.min(30_000, Math.max(8_000, 20 * ((baseline[name] as { ms?: number } | undefined)?.ms ?? 1500)));
 const baseline: Record<string, unknown> = existsSync(join(CONF, 'native-baseline.json'))
   ? JSON.parse(readFileSync(join(CONF, 'native-baseline.json'), 'utf8')) : {};
 const hangs: string[] = existsSync(join(CONF, 'hangs.json')) ? JSON.parse(readFileSync(join(CONF, 'hangs.json'), 'utf8')) : [];
@@ -72,7 +73,8 @@ async function runAll(): Promise<Record<string, AreaResult>> {
     const run = shell.execute(`/openposix/bin/${name}`, (s) => { out += s; }, (s) => { out += s; }, false, undefined, true)
       .then((c) => { status = c; }, (e) => { out += `\n[harness] ${e?.message ?? e}`; status = -1; });
     const start = Date.now();
-    while (status === undefined && Date.now() - start < TEST_TIMEOUT) await new Promise((r) => setTimeout(r, 50));
+    const limit = timeoutFor(name);
+    while (status === undefined && Date.now() - start < limit) await new Promise((r) => setTimeout(r, 50));
     void run;
     const k = getKernel();
     for (const p of [...k.procs.values()]) {
