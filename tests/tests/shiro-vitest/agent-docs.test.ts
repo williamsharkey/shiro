@@ -54,7 +54,7 @@ describe('agent docs', () => {
     for (const k of KNOWN_ISSUES) expect(md).toContain(k.issue);
   });
 
-  it("the js-eval workaround in Known issues runs statements once (tabcomputer#17)", async () => {
+  it("js-eval runs an async IIFE's statements once (tabcomputer#17)", async () => {
     (globalThis as any).__agentDocsRuns = 0;
     const { output, exitCode } = await run(shell,
       `js-eval '(async () => { globalThis.__agentDocsRuns++; const x = 6 * 7; return x; })()'`);

@@ -1,16 +1,18 @@
-// GL in the page (docs/research/GL.md): glxgears through Blink, libGLX_tabcomputer,
-// glshiro and WebGL2, into an Xshiro window on the desktop. Prints glxgears' FPS,
-// glshiro's frame and command rates, and checks the window shows gears; then stops
-// animation frames (what a hidden tab does) and checks the app stops rendering.
+// GL apps in the page (docs/research/GL.md): glxgears or Neverball through Blink,
+// libGLX_tabcomputer, glshiro and WebGL2, into an Xshiro window on the desktop.
+// Prints the app's frame rate and glshiro's command rate and checks the window's
+// pixels; then stops animation frames (what a hidden tab does) and checks the app
+// stops rendering.
 //
 //   npm run build && PORT=5299 STATIC_DIR=$PWD/dist node server.mjs &
-//   GL_PROBE_ROOT=DIR node tests/browser/gl-glxgears.mjs [URL] [--seconds N] [--json FILE]
+//   GL_PROBE_ROOT=DIR node tests/browser/gl-apps.mjs [URL] [--app glxgears|neverball] [--seconds N] [--json FILE]
 //
-// GL_PROBE_ROOT is an x86-64 rootfs with mesa-utils' glxgears and libglvnd
-// (libGL.so.1, libGLX.so.0, libGLdispatch.so.0) and their libraries, without
-// Mesa's vendor library: see tests/tests/shiro-vitest/gl-guest.test.ts. The page
-// gets libGLX_tabcomputer itself (src/gl/setup.ts). Chromium runs WebGL2 on
-// SwiftShader here, so the FPS is a CPU renderer's. Exits 1 on failure.
+// GL_PROBE_ROOT is an x86-64 rootfs with the app (mesa-utils' glxgears, or
+// neverball and its data), libglvnd (libGL.so.1, libGLX.so.0,
+// libGLdispatch.so.0) and their libraries, without Mesa's vendor library: see
+// tests/tests/shiro-vitest/gl-guest.test.ts. The page gets libGLX_tabcomputer
+// itself (src/gl/setup.ts). Chromium runs WebGL2 on SwiftShader here, so the
+// rates are a CPU renderer's. Exits 1 on failure.
 import { createRequire } from 'node:module';
 import { readdirSync, lstatSync, readFileSync, readlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -21,7 +23,18 @@ for (const m of ['playwright', 'playwright-core', '/opt/node-tools/node_modules/
 const args = process.argv.slice(2);
 const opt = (name) => { const i = args.indexOf(name); return i < 0 ? undefined : args.splice(i, 2)[1]; };
 const seconds = Number(opt('--seconds') ?? 12);
+const APPS = {
+  glxgears: { cmd: '/usr/bin/glxgears.x86_64-linux-gnu', title: /gears/i, gears: true, files: {} },
+  neverball: {
+    cmd: 'HOME=/tmp/nb SDL_AUDIODRIVER=dummy /usr/games/neverball', title: /neverball/i, gears: false,
+    files: { '/tmp/nb/.neverball/neverballrc': 'fullscreen 0\nwidth 640\nheight 480\n' },
+  },
+};
+const appName = opt('--app') ?? 'glxgears';
+const app = APPS[appName];
+if (!app) { console.error(`no app ${appName}: ${Object.keys(APPS).join(', ')}`); process.exit(2); }
 const jsonOut = opt('--json');
+const profileSeconds = Number(opt('--profile') ?? 0); // also: the page's busiest functions over N seconds
 const url = args[0] ?? 'http://localhost:5299/';
 const root = process.env.GL_PROBE_ROOT;
 if (!root) { console.error('GL_PROBE_ROOT is not set'); process.exit(2); }
@@ -66,24 +79,26 @@ try {
       }
     }, files.slice(i, i + 40));
   }
-  await page.evaluate(async () => {
+  await page.evaluate(async (files) => {
     const fs = window.__tabcomputer.fs;
+    for (const [p, text] of Object.entries(files)) { await fs.mkdir(p.slice(0, p.lastIndexOf('/')), { recursive: true }); await fs.writeFile(p, text); }
     await fs.mkdir('/lib64', { recursive: true }).catch(() => {});
     if (!(await fs.exists('/lib64/ld-linux-x86-64.so.2'))) await fs.writeFile('/lib64/ld-linux-x86-64.so.2', await fs.readFile('/usr/lib64/ld-linux-x86-64.so.2'), { mode: 0o755 });
-  });
+  }, app.files);
   console.log(`rootfs: ${files.length} files in ${Date.now() - t0} ms`);
 
-  // glxgears from a shell, in the background; its output collects in the page
+  // the app from a shell, in the background; its output collects in the page
   await page.evaluate((cmd) => {
     window.__glOut = '';
     const s = window.__tabcomputer.shell.fork();
     s.cwd = '/';
     window.__glDone = s.execute(cmd, (x) => { window.__glOut += x; }, (x) => { window.__glOut += x; });
-  }, process.env.GL_CMD ?? '/usr/bin/glxgears.x86_64-linux-gnu');
+  }, process.env.GL_CMD ?? app.cmd);
   const tStart = Date.now();
-  await page.waitForFunction(() => window.__tabcomputer.desktop.windows().some((w) => /gears/i.test(w.title) && w.surface) || /Error/.test(window.__glOut), null, { timeout: 180_000 });
+  const title = app.title.source;
+  await page.waitForFunction((t) => window.__tabcomputer.desktop.windows().some((w) => new RegExp(t, 'i').test(w.title) && w.surface) || /Error/.test(window.__glOut), title, { timeout: 300_000 });
   result.windowMs = Date.now() - tStart;
-  console.log(`glxgears window after ${result.windowMs} ms`);
+  console.log(`${appName} window after ${result.windowMs} ms`);
   check(await page.evaluate(() => window.__tabcomputer.gl()?.clients.size === 1), 'glshiro has one GL client');
   const stats = () => page.evaluate(() => { const c = [...window.__tabcomputer.gl().clients][0]; return { frames: c?.frames() ?? 0, commands: c?.commands() ?? 0, t: performance.now() }; });
   await page.waitForTimeout(2000);
@@ -94,28 +109,52 @@ try {
   result.fps = (b.frames - a.frames) / dt;
   result.commandsPerSecond = (b.commands - a.commands) / dt;
   const out = await page.evaluate(() => window.__glOut);
-  result.glxgears = [...out.matchAll(/= ([\d.]+) FPS/g)].map((m) => Number(m[1]));
-  console.log(`glshiro: ${result.fps.toFixed(1)} frames/s, ${Math.round(result.commandsPerSecond)} commands/s; glxgears says ${result.glxgears.join(', ') || '(nothing yet)'} FPS`);
+  result.appSays = [...out.matchAll(/= ([\d.]+) FPS/g)].map((m) => Number(m[1]));
+  console.log(`glshiro: ${result.fps.toFixed(1)} frames/s, ${Math.round(result.commandsPerSecond)} commands/s${result.appSays.length ? `; ${appName} says ${result.appSays.join(', ')} FPS` : ''}`);
   check(result.fps > 5, 'frames keep coming');
+  if (profileSeconds) {
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Profiler.enable');
+    await cdp.send('Profiler.setSamplingInterval', { interval: 200 });
+    await cdp.send('Profiler.start');
+    await page.waitForTimeout(profileSeconds * 1000);
+    const { profile } = await cdp.send('Profiler.stop');
+    const self = new Map();
+    const dt = profile.timeDeltas;
+    const byId = new Map(profile.nodes.map((n) => [n.id, n]));
+    profile.samples.forEach((id, i) => {
+      const n = byId.get(id);
+      const f = n.callFrame;
+      const key = `${f.functionName || '(anonymous)'} ${f.url.split('/').pop()}:${f.lineNumber + 1}`;
+      self.set(key, (self.get(key) ?? 0) + (dt[i] ?? 0));
+    });
+    const total = [...self.values()].reduce((a, b) => a + b, 0);
+    result.profile = [...self].sort((a, b) => b[1] - a[1]).slice(0, 25).map(([k, us]) => [k, +(100 * us / total).toFixed(1)]);
+    console.log(`main thread over ${profileSeconds} s (self time %):\n${result.profile.map(([k, p]) => `  ${p}%  ${k}`).join('\n')}`);
+  }
 
-  // the window shows the three gears: red, green and blue pixels
-  const colors = await page.evaluate(() => {
-    const w = window.__tabcomputer.desktop.windows().find((w) => /gears/i.test(w.title) && w.surface);
+  // glxgears: red, green and blue gears on black; any app: more than a few colors
+  const colors = await page.evaluate((t) => {
+    const w = window.__tabcomputer.desktop.windows().find((w) => new RegExp(t, 'i').test(w.title) && w.surface);
     const c = w.surface.canvas;
     const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
     const n = { red: 0, green: 0, blue: 0 };
+    const distinct = new Set();
     for (let i = 0; i < d.length; i += 4) {
       const [r, g, b] = [d[i], d[i + 1], d[i + 2]];
+      if (distinct.size < 1000) distinct.add((r << 16) | (g << 8) | b);
       if (r > 100 && g < 60 && b < 60) n.red++; else if (g > 100 && r < 60 && b < 60) n.green++; else if (b > 100 && r < 60 && g < 60) n.blue++;
     }
     // glxgears clears to black: the frame covers the whole window
     const at = (x, y) => Array.from(c.getContext('2d').getImageData(x, y, 1, 1).data.slice(0, 3));
-    return { ...n, size: [c.width, c.height], corners: [at(1, 1), at(c.width - 2, 1), at(1, c.height - 2), at(c.width - 2, c.height - 2)] };
-  });
+    return { ...n, colors: distinct.size, size: [c.width, c.height], corners: [at(1, 1), at(c.width - 2, 1), at(1, c.height - 2), at(c.width - 2, c.height - 2)] };
+  }, title);
   console.log(`window pixels: ${JSON.stringify(colors)}`);
-  check(colors.corners.every((p) => p.every((v) => v < 30)), 'the frame fills the window');
-  check(colors.red > 100 && colors.green > 100 && colors.blue > 100, 'the window shows red, green and blue gears');
-  await page.screenshot({ path: process.env.GL_SHOT ?? '/tmp/gl-glxgears.png' });
+  if (app.gears) {
+    check(colors.corners.every((p) => p.every((v) => v < 30)), 'the frame fills the window');
+    check(colors.red > 100 && colors.green > 100 && colors.blue > 100, 'the window shows red, green and blue gears');
+  } else check(colors.colors > 50, 'the window shows a rendered scene');
+  await page.screenshot({ path: process.env.GL_SHOT ?? `/tmp/gl-${appName}.png` });
 
   // no animation frames (a hidden tab): the app stops at its swap within a few frames
   // like a hidden tab: callbacks wait, and run once frames come back
@@ -140,7 +179,7 @@ try {
   if (errors.length) console.log(`page errors: ${errors.slice(0, 5).join(' | ')}`);
   const out = await page.evaluate(() => window.__glOut).catch(() => '');
   if (failed) {
-    console.log(`glxgears output:\n${out}`);
+    console.log(`${appName} output:\n${out}`);
     const diag = await page.evaluate(async () => ({
       glx: window.__shiroX ? window.__shiroX.server.extensions.has('GLX') : 'no X session',
       vendorLibrary: await window.__tabcomputer.fs.exists('/usr/lib/x86_64-linux-gnu/libGLX_tabcomputer.so.0'),

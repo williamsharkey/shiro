@@ -1,0 +1,435 @@
+From 368dbfb1d2f3fe67791ea93490fa6e80218e3d04 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 13:08:39 +0000
+Subject: [PATCH] Shiro: SSE arithmetic follows MXCSR's rounding mode
+ (fesetround)
+
+The host (wasm) rounds to nearest only, so under FE_UPWARD, FE_DOWNWARD or
+FE_TOWARDZERO every SSE add, subtract, multiply, divide and square root
+(ss, sd, ps, pd) and cvtsd2ss/cvtpd2ps gave the nearest result. CGAL checks
+this at startup ("Wrong rounding: did you forget -frounding-math?") and
+aborted: OpenSCAD, and anything else using its interval arithmetic.
+
+With MXCSR.RC not nearest, the nearest result is corrected by one step when
+its exact error (TwoSum for add and subtract, an fma remainder for the rest,
+taken on operands scaled by 2^200 when the result is tiny) says the true
+value lies on the other side; floats are computed in double. Overflow gives
+the largest finite value where the mode rounds toward zero, and an exact
+zero sum is -0 rounding down. Compiled code rounds to nearest, so it doesn't
+run while the mode is directed: ldmxcsr and fxrstor raise attention to
+leave it, and WjExecute declines. Round to nearest costs one test per op.
+x87 is unchanged (its long double is a double here).
+---
+ blink/cvt.c      |  11 ++-
+ blink/fpu.h      |   2 +
+ blink/machine.c  |   8 ++
+ blink/ssefloat.c | 227 ++++++++++++++++++++++++++++++++++++++++++++++-
+ blink/wjit.c     |   3 +
+ 5 files changed, 244 insertions(+), 7 deletions(-)
+
+diff --git a/blink/cvt.c b/blink/cvt.c
+index 759f77c..f30330a 100644
+--- a/blink/cvt.c
++++ b/blink/cvt.c
+@@ -277,8 +277,13 @@ static void OpVpsWpdCvtpd2ps(P) {
+   p = GetModrmRegisterXmmPointerRead16(A);
+   d[0].i = Read64(p + 0);
+   d[1].i = Read64(p + 8);
+-  f[0].f = d[0].f;
+-  f[1].f = d[1].f;
++  if ((m->mxcsr & kMxcsrRc)) {  // directed rounding (ssefloat.c)
++    f[0].f = SseRoundToFloat(d[0].f, 0, (m->mxcsr & kMxcsrRc) >> 13);
++    f[1].f = SseRoundToFloat(d[1].f, 0, (m->mxcsr & kMxcsrRc) >> 13);
++  } else {
++    f[0].f = d[0].f;
++    f[1].f = d[1].f;
++  }
+   Put32(XmmRexrReg(m, rde) + 0, f[0].i);
+   Put32(XmmRexrReg(m, rde) + 4, f[1].i);
+ }
+@@ -287,7 +292,7 @@ static void OpVssWsdCvtsd2ss(P) {
+   union FloatPun f;
+   union DoublePun d;
+   d.i = Read64(GetModrmRegisterXmmPointerRead8(A));
+-  f.f = d.f;
++  f.f = (m->mxcsr & kMxcsrRc) ? SseRoundToFloat(d.f, 0, (m->mxcsr & kMxcsrRc) >> 13) : d.f;
+   Put32(XmmRexrReg(m, rde), f.i);
+ }
+ 
+diff --git a/blink/fpu.h b/blink/fpu.h
+index cdaacfc..3a3ed1c 100644
+--- a/blink/fpu.h
++++ b/blink/fpu.h
+@@ -45,6 +45,8 @@
+ #define kMxcsrUm  0x0800 /* underflow mask */
+ #define kMxcsrPm  0x1000 /* precision mask */
+ #define kMxcsrRc  0x6000 /* rounding control */
++
++float SseRoundToFloat(double, int, int);  // ssefloat.c: directed rounding
+ #define kMxcsrFtz 0x8000 /* flush to zero */
+ 
+ #define FpuSt(m, i) ((m)->fpu.st + (((i) + ((m->fpu.sw & kFpuSwSp) >> 11)) & 7))
+diff --git a/blink/machine.c b/blink/machine.c
+index 049d032..0764fb1 100644
+--- a/blink/machine.c
++++ b/blink/machine.c
+@@ -1285,6 +1285,12 @@ static void OpFxsave(P) {
+   SetWriteAddr(m, v, 416);
+ }
+ 
++// compiled code rounds to nearest only (wjit.c): a directed rounding mode
++// makes it leave after this instruction, and not come back while it lasts
++static void NoteMxcsr(struct Machine *m) {
++  if (m->mxcsr & kMxcsrRc) atomic_store_explicit(&m->attention, true, memory_order_release);
++}
++
+ static void OpFxrstor(P) {
+   i64 v;
+   u8 buf[32];
+@@ -1303,6 +1309,7 @@ static void OpFxrstor(P) {
+   m->fpu.ip = Load32(buf + 8);
+ #endif
+   m->mxcsr = Load32(buf + 24);
++  NoteMxcsr(m);
+ }
+ 
+ static void OpXsave(P) {
+@@ -1310,6 +1317,7 @@ static void OpXsave(P) {
+ 
+ static void OpLdmxcsr(P) {
+   m->mxcsr = Load32(ComputeReserveAddressRead4(A));
++  NoteMxcsr(m);
+ }
+ 
+ static void OpStmxcsr(P) {
+diff --git a/blink/ssefloat.c b/blink/ssefloat.c
+index 115f159..d6aae17 100644
+--- a/blink/ssefloat.c
++++ b/blink/ssefloat.c
+@@ -16,6 +16,7 @@
+ │ TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR             │
+ │ PERFORMANCE OF THIS SOFTWARE.                                                │
+ ╚─────────────────────────────────────────────────────────────────────────────*/
++#include <float.h>
+ #include <math.h>
+ #include <string.h>
+ 
+@@ -30,6 +31,9 @@
+ #include "blink/stats.h"
+ #include "blink/tsan.h"
+ 
++static double SqrtRd(double);
++static float SqrtRs(float);
++
+ static void pshufw(i16 b[4], const i16 a[4], int m) {
+   i16 t[4];
+   t[0] = a[(m & 0003) >> 0];
+@@ -253,6 +257,7 @@ void OpMovmskpsd(P) {
+ }
+ 
+ void OpSqrtpsd(P) {
++  int rc = m->mxcsr & kMxcsrRc;
+   IGNORE_RACES_START();
+   switch (Rep(rde) | Osz(rde)) {
+     case 0: {
+@@ -264,7 +269,7 @@ void OpSqrtpsd(P) {
+       u[1].i = Read32(p + 1 * 4);
+       u[2].i = Read32(p + 2 * 4);
+       u[3].i = Read32(p + 3 * 4);
+-      for (i = 0; i < 4; ++i) u[i].f = sqrtf(u[i].f);
++      for (i = 0; i < 4; ++i) u[i].f = rc ? SqrtRs(u[i].f) : sqrtf(u[i].f);
+       p = XmmRexrReg(m, rde);
+       Write32(p + 0 * 4, u[0].i);
+       Write32(p + 1 * 4, u[1].i);
+@@ -279,7 +284,7 @@ void OpSqrtpsd(P) {
+       p = GetModrmRegisterXmmPointerRead16(A);
+       u[0].i = Read64(p + 0 * 8);  // (doubles: 64 bits each, not 32)
+       u[1].i = Read64(p + 1 * 8);
+-      for (i = 0; i < 2; ++i) u[i].f = sqrt(u[i].f);
++      for (i = 0; i < 2; ++i) u[i].f = rc ? SqrtRd(u[i].f) : sqrt(u[i].f);
+       p = XmmRexrReg(m, rde);
+       Write64(p + 0 * 8, u[0].i);
+       Write64(p + 1 * 8, u[1].i);
+@@ -288,14 +293,14 @@ void OpSqrtpsd(P) {
+     case 2: {
+       union DoublePun u;
+       u.i = Read64(GetModrmRegisterXmmPointerRead8(A));
+-      u.f = sqrt(u.f);
++      u.f = rc ? SqrtRd(u.f) : sqrt(u.f);
+       Write64(XmmRexrReg(m, rde), u.i);
+       break;
+     }
+     case 3: {
+       union FloatPun u;
+       u.i = Read32(GetModrmRegisterXmmPointerRead4(A));
+-      u.f = sqrtf(u.f);
++      u.f = rc ? SqrtRs(u.f) : sqrtf(u.f);
+       Write32(XmmRexrReg(m, rde), u.i);
+       break;
+     }
+@@ -445,6 +450,204 @@ void OpComissVsWs(P) {
+   IGNORE_RACES_END();
+ }
+ 
++
++// Directed rounding (MXCSR.RC other than round-to-nearest: fesetround, as
++// CGAL's interval arithmetic checks at startup). The host (wasm) only rounds
++// to nearest, so the nearest result is corrected by one step when the exact
++// error says the true value lies on the other side: TwoSum for add and
++// subtract, an fma remainder for multiply, divide and square root. Floats
++// are computed in double, whose own error decides only when the double
++// result is a float exactly.
++
++static inline int Sign(double x) {
++  return (x > 0) - (x < 0);
++}
++
++// the mode's result for nearest result `r` whose true value is above it
++// (dir > 0), below it (dir < 0) or exactly it
++static double RoundDirD(double r, int dir, int rc) {
++  if (!dir || isnan(r)) return r;
++  switch (rc) {
++    case 1:  // down
++      return dir < 0 ? nextafter(r, -INFINITY) : r;
++    case 2:  // up
++      return dir > 0 ? nextafter(r, INFINITY) : r;
++    default:  // toward zero (a zero stays, with its sign)
++      return r && (dir > 0) == (r < 0) ? nextafter(r, 0.) : r;
++  }
++}
++
++static float RoundDirF(float r, int dir, int rc) {
++  if (!dir || isnan(r)) return r;
++  switch (rc) {
++    case 1:
++      return dir < 0 ? nextafterf(r, -INFINITY) : r;
++    case 2:
++      return dir > 0 ? nextafterf(r, INFINITY) : r;
++    default:
++      return r && (dir > 0) == (r < 0) ? nextafterf(r, 0.f) : r;
++  }
++}
++
++// an overflow past the largest finite value: infinity only rounding away from zero
++static double OverflowD(double r, int rc) {
++  if (rc == 3 || (rc == 1 && r > 0) || (rc == 2 && r < 0)) return copysign(DBL_MAX, r);
++  return r;
++}
++
++static float OverflowF(float r, int rc) {
++  if (rc == 3 || (rc == 1 && r > 0) || (rc == 2 && r < 0)) return copysignf(FLT_MAX, r);
++  return r;
++}
++
++static inline int Rc(void) {
++  return (g_machine->mxcsr & kMxcsrRc) >> 13;
++}
++
++// a double `d` (with the sign of its own error `e`) as a float in mode `rc`
++float SseRoundToFloat(double d, int e, int rc) {
++  float f = d;
++  if (isinf(f) && !isinf(d) && !isnan(d)) return OverflowF(f, rc);
++  return RoundDirF(f, (double)f != d ? Sign(d - (double)f) : e, rc);
++}
++
++static double AddRd(double a, double b) {
++  int rc = Rc();
++  double s = a + b, bb;
++  if (isinf(s) && !isinf(a) && !isinf(b)) return OverflowD(s, rc);
++  if (s == 0) {  // x + -x, +0 + -0: -0 rounding down
++    return rc == 1 && (a != 0 || signbit(a) || signbit(b)) ? -0. : s;
++  }
++  bb = s - a;
++  return RoundDirD(s, Sign((a - (s - bb)) + (b - bb)), rc);
++}
++
++static double SubRd(double a, double b) {
++  return AddRd(a, -b);
++}
++
++// The error terms are exact unless they fall below the normal range (a tiny
++// or subnormal result, or zero after underflow): then they're taken on
++// operands scaled by 2^200 (exactly), where they don't.
++#define kScale 0x1p200
++#define kTiny  0x1p-800
++
++static int MulErr(double a, double b, double p) {
++  if (fabs(p) >= kTiny) return Sign(fma(a, b, -p));
++  if (!a || !b) return 0;
++  if (!p) return Sign(a) * Sign(b);  // (too small even scaled)
++  if (fabs(a) > fabs(b)) return Sign(fma(a, b * kScale, -p * kScale));  // (the smaller one)
++  return Sign(fma(a * kScale, b, -p * kScale));
++}
++
++static int DivErr(double a, double b, double q) {  // sign of a/b - q
++  if (fabs(q) >= kTiny && fabs(a) >= kTiny) return Sign(fma(-q, b, a)) * Sign(b);
++  if (!a) return 0;
++  if (fabs(a) < 0x1p800) {
++    if (fabs(b) < 1) return Sign(fma(-q, b * kScale, a * kScale)) * Sign(b);
++    return Sign(fma(-q * kScale, b, a * kScale)) * Sign(b);
++  }
++  return Sign(fma(-q, b * (1 / kScale), a * (1 / kScale))) * Sign(b);  // (huge a, huger b)
++}
++
++static int SqrtErr(double a, double s) {
++  if (a >= kTiny) return Sign(fma(-s, s, a));
++  return Sign(fma(-s * 0x1p100, s * 0x1p100, a * kScale));
++}
++
++static double MulRd(double a, double b) {
++  int rc = Rc();
++  double p = a * b;
++  if (isinf(p) && !isinf(a) && !isinf(b)) return OverflowD(p, rc);
++  if (!isfinite(p)) return p;
++  return RoundDirD(p, MulErr(a, b, p), rc);
++}
++
++static double DivRd(double a, double b) {
++  int rc = Rc();
++  double q = a / b;
++  if (isinf(q) && !isinf(a) && b != 0) return OverflowD(q, rc);
++  if (!isfinite(q) || isinf(b)) return q;
++  return RoundDirD(q, DivErr(a, b, q), rc);
++}
++
++static double SqrtRd(double a) {
++  double s = sqrt(a);
++  if (!isfinite(s) || s == 0) return s;
++  return RoundDirD(s, SqrtErr(a, s), Rc());
++}
++
++static float AddRs(float x, float y) {
++  int rc = Rc();
++  double a = x, b = y, s = a + b, bb;
++  if (s == 0) return rc == 1 && (x != 0 || signbit(x) || signbit(y)) ? -0.f : (float)s;
++  bb = s - a;
++  return SseRoundToFloat(s, Sign((a - (s - bb)) + (b - bb)), rc);
++}
++
++static float SubRs(float x, float y) {
++  return AddRs(x, -y);
++}
++
++static float MulRs(float x, float y) {
++  return SseRoundToFloat((double)x * y, 0, Rc());  // (exact in double)
++}
++
++static float DivRs(float x, float y) {
++  double a = x, b = y, q = a / b;
++  if (!isfinite(q) || isinf(b)) return q;
++  return SseRoundToFloat(q, DivErr(a, b, q), Rc());
++}
++
++static float SqrtRs(float x) {
++  double a = x, s = sqrt(a);
++  if (!isfinite(s) || s == 0) return s;
++  return SseRoundToFloat(s, SqrtErr(a, s), Rc());
++}
++
++// OpPsd for a rounding mode other than nearest: every form through fs/fd
++static void OpPsdRound(P, float fs(float x, float y), double fd(double x, double y)) {
++  IGNORE_RACES_START();
++  if (Rep(rde) == 2) {
++    union DoublePun x, y;
++    y.i = Read64(GetModrmRegisterXmmPointerRead8(A));
++    x.i = Read64(XmmRexrReg(m, rde));
++    x.f = fd(x.f, y.f);
++    Write64(XmmRexrReg(m, rde), x.i);
++  } else if (Rep(rde) == 3) {
++    union FloatPun x, y;
++    y.i = Read32(GetModrmRegisterXmmPointerRead4(A));
++    x.i = Read32(XmmRexrReg(m, rde));
++    x.f = fs(x.f, y.f);
++    Write32(XmmRexrReg(m, rde), x.i);
++  } else if (Osz(rde)) {
++    int i;
++    u8 *p, *q;
++    union DoublePun x, y;
++    p = GetModrmRegisterXmmPointerRead16(A);
++    q = XmmRexrReg(m, rde);
++    for (i = 0; i < 2; ++i) {
++      y.i = Read64(p + i * 8);
++      x.i = Read64(q + i * 8);
++      x.f = fd(x.f, y.f);
++      Write64(q + i * 8, x.i);
++    }
++  } else {
++    int i;
++    u8 *p, *q;
++    union FloatPun x, y;
++    p = GetModrmRegisterXmmPointerRead16(A);
++    q = XmmRexrReg(m, rde);
++    for (i = 0; i < 4; ++i) {
++      y.i = Read32(p + i * 4);
++      x.i = Read32(q + i * 4);
++      x.f = fs(x.f, y.f);
++      Write32(q + i * 4, x.i);
++    }
++  }
++  IGNORE_RACES_END();
++}
++
+ static void OpPsd(P, float fs(float x, float y), double fd(double x, double y),
+                   void s1(u8 *, struct Machine *, long),
+                   void d1(u8 *, struct Machine *, long)) {
+@@ -522,6 +725,10 @@ static inline double Addd(double x, double y) {
+ }
+ 
+ void OpAddpsd(P) {
++  if ((m->mxcsr & kMxcsrRc)) {
++    OpPsdRound(A, AddRs, AddRd);
++    return;
++  }
+   OpPsd(A, Adds, Addd, OpPsdAdds1, OpPsdAddd1);
+ }
+ 
+@@ -534,6 +741,10 @@ static inline double Subd(double x, double y) {
+ }
+ 
+ void OpSubpsd(P) {
++  if ((m->mxcsr & kMxcsrRc)) {
++    OpPsdRound(A, SubRs, SubRd);
++    return;
++  }
+   OpPsd(A, Subs, Subd, OpPsdSubs1, OpPsdSubd1);
+ }
+ 
+@@ -546,6 +757,10 @@ static inline double Muld(double x, double y) {
+ }
+ 
+ void OpMulpsd(P) {
++  if ((m->mxcsr & kMxcsrRc)) {
++    OpPsdRound(A, MulRs, MulRd);
++    return;
++  }
+   OpPsd(A, Muls, Muld, OpPsdMuls1, OpPsdMuld1);
+ }
+ 
+@@ -558,6 +773,10 @@ static inline double Divd(double x, double y) {
+ }
+ 
+ void OpDivpsd(P) {
++  if ((m->mxcsr & kMxcsrRc)) {
++    OpPsdRound(A, DivRs, DivRd);
++    return;
++  }
+   OpPsd(A, Divs, Divd, OpPsdDivs1, OpPsdDivd1);
+ }
+ 
+diff --git a/blink/wjit.c b/blink/wjit.c
+index 101a011..67f9c03 100644
+--- a/blink/wjit.c
++++ b/blink/wjit.c
+@@ -4174,6 +4174,9 @@ int WjExecute(struct Machine *m) {
+   struct WjEnt *e;
+   if (!g_wj_enabled) return 0;
+   if (m->nrlocks) ShiroRemoteEnd(m);  // (a shared object's lease runs out)
++  // compiled code rounds to nearest: a directed rounding mode (MXCSR.RC,
++  // fesetround) runs interpreted, which follows it (ssefloat.c)
++  if (m->mxcsr & 0x6000) return 0;
+   epoch = atomic_load_explicit(&g_wj_epoch, memory_order_acquire);
+   if (UNLIKELY(!t_ready || t_epoch != epoch)) {
+     Clear();
+-- 
+2.43.0
+

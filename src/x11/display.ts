@@ -95,7 +95,7 @@ async function serveClient(sock: KSocket, display: number, kernel: Kernel): Prom
   const { getXSession } = await import('./session');
   const { server } = await getXSession(display);
   // GL apps (docs/research/GL.md): GLX and libGLX_tabcomputer when the page has WebGL2
-  await (await import('../gl/setup')).prepareGL(kernel, server);
+  await (await import('../gl/setup')).prepareGL(kernel);
   let chain: Promise<unknown> = Promise.resolve();
   let closed = false;
   const client = server.connect({
