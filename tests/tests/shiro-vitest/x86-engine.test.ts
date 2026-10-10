@@ -150,6 +150,8 @@ const sse41bBin = join(out, 'sse41b');
 const haveSse41b = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', sse41bBin, 'sse41b.c']);
 const ssefloatBin = join(out, 'ssefloat');
 const haveSsefloat = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', ssefloatBin, 'ssefloat.c', '-lm']);
+const roundingBin = join(out, 'rounding');
+const haveRounding = tryBuild('gcc', ['-static', '-O1', '-frounding-math', '-o', roundingBin, 'rounding.c', '-lm']);
 const cowforkBin = join(out, 'cowfork');
 const haveCowfork = tryBuild('gcc', ['-static', '-O1', '-o', cowforkBin, 'cowfork.c']);
 const siginfochildBin = join(out, 'siginfochild');
@@ -1219,6 +1221,23 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe('arith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\narith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\narith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\n');
   }, 60_000);
+
+  // fesetround's directed modes (MXCSR.RC), as CGAL checks at startup:
+  // SSE add/sub/mul/div/sqrt and conversions as native, compiled and not (0119)
+  it.skipIf(!haveRounding)('SSE arithmetic follows MXCSR rounding (FE_UPWARD, FE_DOWNWARD, FE_TOWARDZERO) as native', async () => {
+    const { shell } = await setup(readFileSync(roundingBin));
+    const r = await run(shell, './prog; BLINK_WJIT=0 ./prog');
+    const ok =
+      'near add 3ff0000000000000 sub 3ff0000000000000 nsub bff0000000000000 mul 3ff0000000000000 div 3fd5555555555555 ndiv bfd5555555555555 sqrt 3ff6a09e667f3bcd cvt 43b0000000000000 fadd 3f800000 fdiv 3eaaaaab fcvt 3eaaaaab rint 2 pd 3fd5555555555555 bfd5555555555555\n' +
+      'up add 3ff0000000000001 sub 3ff0000000000000 nsub bff0000000000000 mul 3ff0000000000001 div 3fd5555555555556 ndiv bfd5555555555555 sqrt 3ff6a09e667f3bcd cvt 43b0000000000001 fadd 3f800001 fdiv 3eaaaaab fcvt 3eaaaaab rint 3 pd 3fd5555555555556 bfd5555555555555\n' +
+      'down add 3ff0000000000000 sub 3fefffffffffffff nsub bff0000000000001 mul 3fefffffffffffff div 3fd5555555555555 ndiv bfd5555555555556 sqrt 3ff6a09e667f3bcc cvt 43b0000000000000 fadd 3f800000 fdiv 3eaaaaaa fcvt 3eaaaaaa rint 2 pd 3fd5555555555555 bfd5555555555556\n' +
+      'zero add 3ff0000000000000 sub 3fefffffffffffff nsub bff0000000000000 mul 3fefffffffffffff div 3fd5555555555555 ndiv bfd5555555555555 sqrt 3ff6a09e667f3bcc cvt 43b0000000000000 fadd 3f800000 fdiv 3eaaaaaa fcvt 3eaaaaaa rint 2 pd 3fd5555555555555 bfd5555555555555\n' +
+      'near hash 6287a25af9cb224d\n' +
+      'up hash d0ec0b5e73e6adc1\n' +
+      'down hash cd2fd56d81e8f50f\n' +
+      'zero hash 7706c01324077d65\n';
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(ok + ok);
+  }, 120_000);
 
   // compiled rol/ror by constants (SHA-1, hashes): values and flags as native (OF masked where undefined)
   it.skipIf(!haveRotates)('rol/ror by constants in compiled code: values and CF/OF/ZF/SF as native', async () => {
