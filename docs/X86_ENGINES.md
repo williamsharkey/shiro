@@ -800,6 +800,9 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    and pwritev to a file (fd > 2): source address, length, offset and the
    first 16 bytes as Blink gathered them. It shows whether data a file
    lost (PostgreSQL's zeroed WAL page) left Blink intact.
+102. MAP_HUGETLB is ENOMEM, as on Linux with no huge pages reserved.
+   PostgreSQL's huge_pages=try then maps ordinary pages; Blink used to
+   accept the flag silently. Test: fixtures/x86/hugetlb.c.
 
 The page compiles blink.wasm once and gives the `WebAssembly.Module` to every
 Blink worker (src/x86-engine/blink.ts `blinkWasmModule`, host.mjs
