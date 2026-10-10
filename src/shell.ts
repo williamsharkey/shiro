@@ -270,6 +270,41 @@ export function inPageJobForPid(pid: number): BackgroundJob | undefined {
   return inPageJobs.get(pid);
 }
 
+/** bash's ${x@Q}: '…' ('\\'' for a quote), or $'…' when the value has control characters */
+export function quoteReusable(v: string): string {
+  if (!/[\x00-\x1f\x7f]/.test(v)) return `'${v.replace(/'/g, "'\\''")}'`;
+  const named: Record<string, string> = { '\n': 'n', '\t': 't', '\r': 'r', '\x07': 'a', '\b': 'b', '\x1b': 'E', '\f': 'f', '\v': 'v', '\\': '\\', "'": "'" };
+  let out = "$'";
+  for (const ch of v) {
+    if (named[ch]) out += '\\' + named[ch];
+    else if (/[\x00-\x1f\x7f]/.test(ch)) out += '\\' + ch.charCodeAt(0).toString(8).padStart(3, '0');
+    else out += ch;
+  }
+  return out + "'";
+}
+
+/** A value in double quotes, as declare -p and ${a[@]@K} write it */
+function dquote(v: string): string {
+  return `"${v.replace(/(["\\$`])/g, '\\$1')}"`;
+}
+
+/** An associative array key as declare -p writes it */
+function quoteKey(k: string): string {
+  return /^[\w.-]+$/.test(k) ? k : dquote(k);
+}
+
+/** A caller's variable, saved by `local` (or declare in a function) and put back on return */
+interface LocalSave {
+  env?: string;
+  arr?: string[];
+  assoc?: Map<string, string>;
+  attrs?: Set<string>;
+  readonly?: boolean;
+  nameref?: string;
+  unexported?: boolean;
+  declared?: boolean;
+}
+
 /** The shell whose $$ is `pid`, while it runs */
 export function shellForPid(pid: number): Shell | undefined {
   const s = shellsByPid.get(pid)?.deref();
@@ -563,7 +598,10 @@ export class Shell {
   lastExitCode: number = 0;
   /** The `exit` builtin ended this shell (an interactive loop stops reading). */
   exited = false;
-  functions: Record<string, { body: string }> = {};
+  /** Function definitions; `source`: the file defining it (its BASH_SOURCE entry) */
+  functions: Record<string, { body: string; source?: string; line?: number }> = {};
+  /** The file whose commands run now (`bash FILE`, `source FILE`); '' for -c or a terminal */
+  sourceFile = '';
   /** Functions marked with `export -f`: the only ones a new shell process (sh -c, a script) gets */
   exportedFunctions = new Set<string>();
   backgroundJobs: Map<number, BackgroundJob> = new Map();
@@ -623,13 +661,15 @@ export class Shell {
   /** Directory stack for pushd/popd */
   dirStack: string[] = [];
   /** Local variable frames for function scoping — stack of {varName → savedValue|undefined} */
-  private localVarStack: Map<string, { env?: string; arr?: string[]; assoc?: Map<string, string> }>[] = [];
+  private localVarStack: Map<string, LocalSave>[] = [];
+  /** declare -i / -l / -u: applied on every assignment (setVar) */
+  varAttrs: Map<string, Set<string>> = new Map();
+  /** Declared without a value (`declare x`, `local x`): set for declare -p, unset otherwise */
+  declaredNames: Set<string> = new Set();
   /** Loops being run (break/continue only act inside one; a subshell starts at 0) */
   private loopDepth = 0;
   /** Readonly variable names */
   readonlyVars: Set<string> = new Set();
-  /** Call stack for BASH_SOURCE/caller: {funcName, source} */
-  callStack: { funcName: string; source: string }[] = [];
   /** Bash shopt options: extglob, nocaseglob, nullglob, dotglob, globstar, etc. */
   /** shopt options that are on (bash's non-interactive defaults to start) */
   shoptopts: Set<string> = new Set(SHOPT_DEFAULTS);
@@ -771,12 +811,213 @@ export class Shell {
   private restoreLocalVars(): void {
     const frame = this.localVarStack.pop();
     if (!frame) return;
-    for (const [varName, saved] of frame) {
-      if (saved.env === undefined) delete this.env[varName];
-      else this.env[varName] = saved.env;
-      if (saved.arr) this.arrays.set(varName, saved.arr); else this.arrays.delete(varName);
-      if (saved.assoc) this.assocArrays.set(varName, saved.assoc); else this.assocArrays.delete(varName);
+    for (const [varName, saved] of frame) this.restoreLocal(varName, saved);
+  }
+
+  /** The caller's NAME, as a local saved it */
+  private saveLocal(name: string): LocalSave {
+    return {
+      env: this.env[name], arr: this.arrays.get(name), assoc: this.assocArrays.get(name),
+      attrs: this.varAttrs.get(name), readonly: this.readonlyVars.has(name), nameref: this.namerefs.get(name),
+      unexported: this.localVars.has(name), declared: this.declaredNames.has(name),
+    };
+  }
+
+  private restoreLocal(name: string, saved: LocalSave): void {
+    if (saved.env === undefined) delete this.env[name]; else this.env[name] = saved.env;
+    if (saved.arr) this.arrays.set(name, saved.arr); else this.arrays.delete(name);
+    if (saved.assoc) this.assocArrays.set(name, saved.assoc); else this.assocArrays.delete(name);
+    if (saved.attrs === undefined && saved.readonly === undefined) return; // (a frame from before attributes were saved)
+    if (saved.attrs) this.varAttrs.set(name, saved.attrs); else this.varAttrs.delete(name);
+    if (saved.readonly) this.readonlyVars.add(name); else this.readonlyVars.delete(name);
+    if (saved.nameref !== undefined) this.namerefs.set(name, saved.nameref); else this.namerefs.delete(name);
+    if (saved.unexported) this.localVars.add(name); else if (saved.env !== undefined) this.localVars.delete(name);
+    if (saved.declared) this.declaredNames.add(name); else this.declaredNames.delete(name);
+  }
+
+  /**
+   * declare / typeset / local [-aAfFgilnprtux] [+…] [NAME[=VALUE]…] (bash 5.2):
+   * attributes stick to the variable (-i evaluates every assignment, -l/-u
+   * fold case, -x exports, -r after the value is set, -n is a nameref); in
+   * a function declare and typeset make locals, as local does, unless -g.
+   * -p prints NAMEs, or without names every variable with the given
+   * attributes. (Arrays NAME=(…) are assigned by tryArrayAssignment, which
+   * calls this for the attributes first.)
+   */
+  private declareBuiltin(cmd: string, args: string[], out: (s: string) => void, err: (s: string) => void): number {
+    const inFunc = this.localVarStack.length > 0;
+    if (cmd === 'local' && !inFunc) { err(`tabcomputer: local: can only be used in a function\r\n`); return 1; }
+    const on = new Set<string>();
+    const off = new Set<string>();
+    let i = 0;
+    for (; i < args.length; i++) {
+      const a = args[i];
+      if (a === '--') { i++; break; }
+      if (!/^[-+][A-Za-z]+$/.test(a)) break;
+      for (const ch of a.slice(1)) {
+        if (!'aAfFgiIlnprtux'.includes(ch)) {
+          err(`tabcomputer: ${cmd}: ${a[0]}${ch}: invalid option\r\n${cmd}: usage: ${cmd} [-aAfFgiIlnrtux] [name[=value] ...] or ${cmd} -p [-aAfFilnrtux] [name ...]\r\n`);
+          return 2;
+        }
+        (a[0] === '-' ? on : off).add(ch);
+      }
     }
+    const names = args.slice(i);
+
+    // declare -f [NAME…]: definitions; -F: names
+    if ((on.has('f') || on.has('F')) && cmd !== 'local') {
+      let status = 0;
+      for (const name of names.length ? names : Object.keys(this.functions).sort()) {
+        const fn = this.functions[name];
+        if (!fn) { status = 1; continue; }
+        if (on.has('F')) { out(names.length ? `${name}\r\n` : `declare -f ${name}\r\n`); continue; }
+        const body = fn.body.split('\n').filter((l) => l.trim()).map((l) => '    ' + l.trim().replace(/;$/, '')).join('\r\n');
+        out(`${name} () \r\n{ \r\n${body}\r\n}\r\n`);
+      }
+      return status;
+    }
+
+    // -p, or no names: print
+    if (on.has('p') || names.length === 0) {
+      if (names.length) {
+        let status = 0;
+        for (const name of names) {
+          const line = this.declareLine(name);
+          if (line === null) { err(`tabcomputer: ${cmd}: ${name}: not found\r\n`); status = 1; }
+          else out(line + '\r\n');
+        }
+        return status;
+      }
+      const want = [...on].filter((c) => 'aAilnrux'.includes(c));
+      const all = new Set([...Object.keys(this.env), ...this.arrays.keys(), ...this.assocArrays.keys(), ...this.namerefs.keys(), ...this.declaredNames, ...this.exportedUnset]);
+      for (const name of [...all].filter((n) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(n) && !n.startsWith('__')).sort()) {
+        const flags = this.attrFlags(name, false);
+        if (want.some((c) => !flags.includes(c))) continue;
+        const line = this.declareLine(name);
+        if (line !== null) out(line + '\r\n');
+      }
+      return 0;
+    }
+
+    const makeLocal = inFunc && !on.has('g');
+    let status = 0;
+    for (const word of names) {
+      const m = /^([A-Za-z_][A-Za-z0-9_]*)(\+?=)?([\s\S]*)$/.exec(word);
+      if (!m) { err(`tabcomputer: ${cmd}: \`${word}': not a valid identifier\r\n`); status = 1; continue; }
+      const name = m[1];
+      const append = m[2] === '+=';
+      let value: string | undefined = m[2] ? m[3] : undefined;
+      if (makeLocal) {
+        const frame = this.localVarStack[this.localVarStack.length - 1];
+        if (!frame.has(name)) {
+          frame.set(name, this.saveLocal(name));
+          // a fresh local: unset (local x), not the caller's value or attributes
+          delete this.env[name];
+          this.arrays.delete(name);
+          this.assocArrays.delete(name);
+          this.varAttrs.delete(name);
+          this.readonlyVars.delete(name);
+          this.namerefs.delete(name);
+          this.declaredNames.delete(name);
+          this.localVars.add(name);
+        }
+      }
+      // -n: NAME refers to the variable named by VALUE
+      if (on.has('n')) {
+        if (value !== undefined && !/^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?$/.test(value)) {
+          err(`tabcomputer: ${cmd}: \`${value}': invalid variable name for name reference\r\n`); status = 1; continue;
+        }
+        if (value !== undefined) { this.namerefs.set(name, value); this.declaredNames.delete(name); }
+        else if (!this.namerefs.has(name)) {
+          // (a value that isn't a variable name leaves a plain variable: ref='#', ref=1)
+          const v = this.env[name];
+          if (v !== undefined && !/^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?$/.test(v)) continue;
+          this.namerefs.set(name, v ?? '');
+          delete this.env[name];
+        }
+        continue; // (bash ignores -r and -x on a nameref)
+      }
+      // +n: a plain variable again, holding the name it referred to
+      if (off.has('n') && this.namerefs.has(name)) {
+        const t = this.namerefs.get(name)!;
+        this.namerefs.delete(name);
+        if (t) this.setVar(name, t);
+      }
+      const target = this.refTarget(name);
+      if ((value !== undefined || off.has('r')) && this.readonlyVars.has(target)) {
+        err(`tabcomputer: ${cmd}: ${target}: readonly variable\r\n`);
+        status = 1;
+        continue;
+      }
+      const attrs = new Set(this.varAttrs.get(target) ?? []);
+      for (const c of 'ilu') { if (on.has(c)) attrs.add(c); if (off.has(c)) attrs.delete(c); }
+      if (on.has('l')) attrs.delete('u');
+      if (on.has('u')) attrs.delete('l');
+      if (attrs.size) this.varAttrs.set(target, attrs); else this.varAttrs.delete(target);
+      if (on.has('A') && !this.assocArrays.has(target)) {
+        if (this.arrays.has(target)) { err(`tabcomputer: ${cmd}: ${target}: cannot convert indexed to associative array\r\n`); status = 1; continue; }
+        const map = new Map<string, string>();
+        if (this.env[target] !== undefined) { map.set('0', this.env[target]); delete this.env[target]; }
+        this.assocArrays.set(target, map);
+        this.declaredNames.delete(target);
+      }
+      if (on.has('a') && !this.arrays.has(target)) {
+        if (this.assocArrays.has(target)) { err(`tabcomputer: ${cmd}: ${target}: cannot convert associative to indexed array\r\n`); status = 1; continue; }
+        this.toArray(target);
+        this.declaredNames.delete(target);
+      }
+      if (value !== undefined) {
+        const e = append ? this.appendVar(target, value) : this.setVar(target, value);
+        if (e) { err(`tabcomputer: ${cmd}: ${e}\r\n`); status = 1; continue; }
+        this.declaredNames.delete(target);
+      } else if (this.env[target] === undefined && !this.arrays.has(target) && !this.assocArrays.has(target)) {
+        this.declaredNames.add(target);
+      }
+      if (on.has('x')) { if (this.env[target] !== undefined) this.localVars.delete(target); else this.exportedUnset.add(target); }
+      if (off.has('x')) { if (this.env[target] !== undefined) this.localVars.add(target); this.exportedUnset.delete(target); }
+      if (on.has('r')) this.readonlyVars.add(target);
+    }
+    return status;
+  }
+
+  /**
+   * The variable NAME refers to: its nameref chain followed (NAME itself if it
+   * isn't one); a target like a[2] gives the subscript too. Null for a circular chain.
+   */
+  derefName(name: string): { name: string; sub?: string } | null {
+    const seen = new Set<string>();
+    let n = name;
+    for (;;) {
+      const t = this.namerefs.get(n);
+      if (t === undefined || t === '') return { name: n };
+      if (seen.has(n)) return null;
+      seen.add(n);
+      const m = /^([A-Za-z_][A-Za-z0-9_]*)(?:\[([\s\S]*)\])?$/.exec(t);
+      if (!m) return { name: n };
+      if (m[2] !== undefined) return { name: m[1], sub: m[2] };
+      n = m[1];
+    }
+  }
+
+  /** The variable NAME names, namerefs followed (NAME on a circular chain) */
+  refTarget(name: string): string {
+    return this.derefName(name)?.name ?? name;
+  }
+
+  /** NAME+=VALUE: appended, or added for an integer (declare -i) */
+  appendVar(name: string, value: string, sub?: string): string | null {
+    const target = this.refTarget(name);
+    if (this.varAttrs.get(target)?.has('i')) {
+      try {
+        const old = this.evalArithBig(this.getVar(name, sub) || '0');
+        const add = this.evalArithBig(value || '0');
+        return this.setVar(name, String(old + add), sub);
+      } catch (e) {
+        if (e instanceof ArithError) return e.message;
+        throw e;
+      }
+    }
+    return this.setVar(name, (this.getVar(name, sub) ?? '') + value, sub);
   }
 
   /** The abort of the shell this one was forked from (Ctrl-C reaches it); timeout gives its child its own */
@@ -809,6 +1050,49 @@ export class Shell {
     this.parentPid = ppid;
     this.shellPid = pid;
     shellsByPid.set(pid, new WeakRef(this));
+    // A new process starts with no call stack, and getopts at the start (OPTIND=1, not exported)
+    this.sourceFile = '';
+    this.env['OPTIND'] = '1';
+    this.localVars.add('OPTIND');
+    for (const n of ['FUNCNAME', 'BASH_SOURCE', 'BASH_LINENO']) this.arrays.delete(n);
+  }
+
+  /** The process runs FILE (`bash FILE`): BASH_SOURCE=(FILE), BASH_LINENO=(0), no FUNCNAME */
+  setScriptSource(file: string): void {
+    this.sourceFile = file;
+    this.arrays.set('BASH_SOURCE', [file]);
+    this.arrays.set('BASH_LINENO', ['0']);
+    this.arrays.delete('FUNCNAME');
+  }
+
+  /** A function defined now: its body, the file (BASH_SOURCE) and its line (LINENO inside it) */
+  private functionRecord(body: string): { body: string; source: string; line: number } {
+    // (statements arrive flattened onto one line: the definition's line is as close as it gets)
+    return { body, source: this.definingSource(), line: this.currentLine };
+  }
+
+  /** BASH_SOURCE for a function defined now (bash: "environment" for -c, "main" at a prompt) */
+  private definingSource(): string {
+    return this.sourceFile || (this.interactiveFlag ? 'main' : 'environment');
+  }
+
+  /**
+   * Push a frame on the FUNCNAME / BASH_SOURCE / BASH_LINENO stacks (a
+   * function call, or `source`); returns the undo. bash adds the "main" frame
+   * under a script's first function, and lists `source` only inside one.
+   */
+  private pushCallFrame(func: string, source: string): () => void {
+    const prev = ['FUNCNAME', 'BASH_SOURCE', 'BASH_LINENO'].map((n) => this.arrays.get(n));
+    const [f, src, line] = prev;
+    if (func !== 'source') this.arrays.set('FUNCNAME', [func, ...(f?.length ? f : src?.length ? ['main'] : [])]);
+    else if (f?.length) this.arrays.set('FUNCNAME', ['source', ...f]);
+    this.arrays.set('BASH_SOURCE', [source, ...(src ?? [])]);
+    this.arrays.set('BASH_LINENO', [this.env['LINENO'] ?? '0', ...(line ?? [])]);
+    return () => {
+      ['FUNCNAME', 'BASH_SOURCE', 'BASH_LINENO'].forEach((n, k) => {
+        if (prev[k]) this.arrays.set(n, prev[k]!); else this.arrays.delete(n);
+      });
+    };
   }
 
   /** A new process keeps only the functions exported with `export -f` (bash's BASH_FUNC_name%%) */
@@ -925,6 +1209,7 @@ export class Shell {
     child.parentTraps = this.trapsModified || !this.parentTraps ? new Map(this.traps) : this.parentTraps;
     child.aliases = new Map(this.aliases);
     child.namerefs = new Map(this.namerefs);
+    child.sourceFile = this.sourceFile;
     child.dirStack = [...this.dirStack];
     child.history = this.history; // share history array reference
     child.completionSpecs = new Map(this.completionSpecs);
@@ -1363,6 +1648,9 @@ export class Shell {
   /** The last status checked by set -e was a failure it ignored (&&, ||, !, a condition) */
   private failureIgnored = false;
 
+  /** The ERR trap is running */
+  private inErrTrap = false;
+
   /** Here-document bodies, referenced by `< MARKER` redirections */
   heredocs = new HeredocStore();
 
@@ -1666,7 +1954,7 @@ export class Shell {
     // Check for function definition: name() { ... } or function name { ... }
     const funcDef = this.parseFunctionDef(effectiveLine);
     if (funcDef) {
-      this.functions[funcDef.name] = { body: funcDef.body };
+      this.functions[funcDef.name] = this.functionRecord(funcDef.body);
       // A function definition is a command whose status is 0
       this.lastExitCode = 0;
       this.env['?'] = '0';
@@ -1724,7 +2012,7 @@ export class Shell {
       // Check for function definition in this compound
       const compFuncDef = this.parseFunctionDef(compound.command.trim());
       if (compFuncDef) {
-        this.functions[compFuncDef.name] = { body: compFuncDef.body };
+        this.functions[compFuncDef.name] = this.functionRecord(compFuncDef.body);
         exitCode = 0;
         this.lastExitCode = 0;
         this.env['?'] = '0';
@@ -2188,7 +2476,7 @@ export class Shell {
           // Regular variable assignment: FOO=bar, FOO+=bar (element 0 of an array)
           if (key.endsWith('+') && /^[A-Za-z_][A-Za-z0-9_]*\+$/.test(key)) {
             const name = key.slice(0, -1);
-            const err = this.setVar(name, (this.getVar(name) ?? '') + val);
+            const err = this.appendVar(name, val);
             if (err) stderrWriter(`tabcomputer: ${err}\r\n`);
             exitCode = err ? 1 : this.substStatus ?? 0;
             this.lastExitCode = exitCode;
@@ -2205,15 +2493,17 @@ export class Shell {
             this.readonlyAssignFailed();
             continue;
           }
-          this.setVar(key, val);
+          const setErr = this.setVar(key, val);
+          if (setErr) stderrWriter(`tabcomputer: ${setErr}\r\n`);
           // An assignment-only command's status is that of its last $(...)
-          exitCode = this.substStatus ?? 0;
+          exitCode = setErr ? 1 : this.substStatus ?? 0;
           // `a=1 b=2` assigns both
           for (const extra of cmdArgs) {
             const em = extra.match(/^([A-Za-z_][A-Za-z0-9_]*)=([\s\S]*)$/);
             if (!em) break;
             if (this.readonlyVars.has(em[1])) { stderrWriter(`${em[1]}: readonly variable\r\n`); exitCode = 1; this.readonlyAssignFailed(); continue; }
-            this.setVar(em[1], em[2]);
+            const e2 = this.setVar(em[1], em[2]);
+            if (e2) { stderrWriter(`tabcomputer: ${e2}\r\n`); exitCode = 1; }
           }
           // Persist API keys to localStorage
           const persistKeys: Record<string, string> = {
@@ -2229,7 +2519,9 @@ export class Shell {
 
         // Check if this builtin has been disabled via `enable -n`
         // If disabled, skip the builtin dispatch and fall through to external command lookup
-        const _builtinDisabled = this.disabledBuiltins.has(effectiveCmdName);
+        // A function of the same name runs instead (bash; in POSIX mode not for the special builtins)
+        const _builtinDisabled = this.disabledBuiltins.has(effectiveCmdName) ||
+          (!!this.functions[effectiveCmdName] && !((this.invokedAsSh || this.options.has('posix')) && POSIX_SPECIAL_BUILTINS.has(effectiveCmdName)));
 
         // Shell builtin: time — measure command execution time
         if (!_builtinDisabled && effectiveCmdName === 'time') {
@@ -2254,13 +2546,17 @@ export class Shell {
 
         // Shell builtin: caller — print call stack info
         if (!_builtinDisabled && effectiveCmdName === 'caller') {
-          const frameNum = cmdArgs.length > 0 ? parseInt(cmdArgs[0], 10) : 0;
-          if (this.callStack.length > frameNum) {
-            const frame = this.callStack[this.callStack.length - 1 - frameNum];
-            writeStdout(`1 ${frame.funcName} ${frame.source}\r\n`);
-            exitCode = 0;
+          // caller: "LINE FILE" of the current call; caller N: "LINE FUNC FILE" of frame N
+          const fn = this.arrays.get('FUNCNAME') ?? [];
+          const src = this.arrays.get('BASH_SOURCE') ?? [];
+          const lines = this.arrays.get('BASH_LINENO') ?? [];
+          exitCode = 1;
+          if (cmdArgs.length === 0) {
+            if (fn.length || src.length) { writeStdout(`${lines[0] ?? 0} ${src[1] ?? 'NULL'}\r\n`); exitCode = 0; }
           } else {
-            exitCode = 1;
+            const n = Number(cmdArgs[0]);
+            if (!/^\d+$/.test(cmdArgs[0])) stderrWriter(`tabcomputer: caller: ${cmdArgs[0]}: invalid number\r\n`);
+            else if (n + 1 < fn.length) { writeStdout(`${lines[n] ?? 0} ${fn[n + 1]} ${src[n + 1] ?? 'NULL'}\r\n`); exitCode = 0; }
           }
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
@@ -2299,111 +2595,17 @@ export class Shell {
           continue;
         }
         // declare/typeset/local/readonly/export NAME+=value appends to the current value
-        if (!_builtinDisabled && ['declare', 'typeset', 'local', 'readonly', 'export'].includes(effectiveCmdName)) {
+        if (!_builtinDisabled && ['readonly', 'export'].includes(effectiveCmdName)) {
           for (const [k, a] of cmdArgs.entries()) {
             const m = /^([A-Za-z_][A-Za-z0-9_]*)\+=([\s\S]*)$/.exec(a);
             if (m) cmdArgs[k] = `${m[1]}=${this.getVar(m[1]) ?? ''}${m[2]}`;
           }
         }
         if (!_builtinDisabled && (effectiveCmdName === 'declare' || effectiveCmdName === 'typeset' || effectiveCmdName === 'local')) {
-          // local NAME: save the caller's variable (scalar or array) and start a fresh one
-          if (effectiveCmdName === 'local' && this.localVarStack.length > 0 && !cmdArgs.some(a => /^-\w*g/.test(a))) {
-            const frame = this.localVarStack[this.localVarStack.length - 1];
-            for (const arg of cmdArgs) {
-              if (arg.startsWith('-')) continue;
-              const varName = arg.replace(/\+?=[\s\S]*$/, '');
-              if (frame.has(varName)) continue;
-              frame.set(varName, { env: this.env[varName], arr: this.arrays.get(varName), assoc: this.assocArrays.get(varName) });
-              if (!arg.includes('=')) delete this.env[varName];
-              this.arrays.delete(varName);
-              this.assocArrays.delete(varName);
-            }
-          }
-          // declare -n ref=target → nameref
-          if (cmdArgs.includes('-n')) {
-            for (const arg of cmdArgs) {
-              if (arg.startsWith('-')) continue;
-              const eqIdx = arg.indexOf('=');
-              if (eqIdx >= 0) {
-                this.namerefs.set(arg.slice(0, eqIdx), arg.slice(eqIdx + 1));
-              }
-            }
-            continue;
-          }
-          // declare -f [NAME...]: function definitions; -F: just the names
-          const fnFlag = effectiveCmdName === 'local' ? undefined : cmdArgs.find(a => /^-[a-zA-Z]*[fF]/.test(a));
-          if (fnFlag) {
-            const names = cmdArgs.filter(a => !a.startsWith('-'));
-            exitCode = 0;
-            for (const name of names.length ? names : Object.keys(this.functions).sort()) {
-              const fn = this.functions[name];
-              if (!fn) { exitCode = 1; continue; }
-              if (fnFlag.includes('F')) { writeStdout(names.length ? `${name}\r\n` : `declare -f ${name}\r\n`); continue; }
-              const body = fn.body.split('\n').filter((l) => l.trim()).map((l) => '    ' + l.trim().replace(/;$/, '')).join('\r\n');
-              writeStdout(`${name} () \r\n{ \r\n${body}\r\n}\r\n`);
-            }
-            continue;
-          }
-          // declare -A name → associative array
-          if (cmdArgs.includes('-A')) {
-            for (const arg of cmdArgs) {
-              if (arg.startsWith('-')) continue;
-              if (!this.assocArrays.has(arg)) this.assocArrays.set(arg, new Map());
-            }
-            continue;
-          }
-          // declare -a name → indexed array
-          if (cmdArgs.includes('-a')) {
-            for (const arg of cmdArgs) {
-              if (arg.startsWith('-')) continue;
-              if (!this.arrays.has(arg)) this.arrays.set(arg, []);
-            }
-            continue;
-          }
-          // Parse flags for declare/typeset/local
-          const isLocal = effectiveCmdName === 'local';
-          let declFlags = '';
-          const declPositional: string[] = [];
-          for (const arg of cmdArgs) {
-            if (arg.startsWith('-') && /^-[xrilupg]+$/.test(arg)) { declFlags += arg.slice(1); continue; }
-            if (arg.startsWith('-')) continue; // skip other flags
-            declPositional.push(arg);
-          }
-          // declare -p: show variable values
-          if (declFlags.includes('p') && declPositional.length > 0) {
-            exitCode = 0;
-            for (const name of declPositional) {
-              const line = this.declareLine(name);
-              if (line === null) { stderrWriter(`tabcomputer: declare: ${name}: not found\r\n`); exitCode = 1; }
-              else writeStdout(line + '\r\n');
-            }
-            this.lastExitCode = exitCode;
-            this.env['?'] = String(exitCode);
-            continue;
-          }
-          for (const arg of declPositional) {
-            const eqIdx = arg.indexOf('=');
-            const varName = eqIdx >= 0 ? arg.slice(0, eqIdx) : arg;
-            let value = eqIdx >= 0 ? arg.slice(eqIdx + 1) : undefined;
-            // Apply type transformations
-            if (value !== undefined) {
-              if (declFlags.includes('i')) value = String(parseInt(value) || 0);
-              if (declFlags.includes('l')) value = value.toLowerCase();
-              if (declFlags.includes('u')) value = value.toUpperCase();
-            }
-            const isArray = this.arrays.has(varName) || this.assocArrays.has(varName);
-            if (value !== undefined) {
-              // (an array's NAME=value is its element 0)
-              if (isArray) this.setVar(varName, value);
-              else this.env[varName] = value;
-            } else {
-              if (!(varName in this.env) && !isArray) this.env[varName] = '';
-            }
-            // declare -r marks variable readonly
-            if (declFlags.includes('r')) {
-              this.readonlyVars.add(varName);
-            }
-          }
+          exitCode = this.declareBuiltin(effectiveCmdName, cmdArgs, writeStdout, stderrWriter);
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
           continue;
         }
 
@@ -2872,7 +3074,7 @@ export class Shell {
             if (arg === undefined || !arg.startsWith('-') || arg === '-' || arg === '--') {
               // End of options; `--` is consumed
               if (arg === '--') optind++;
-              this.env[varName] = '?';
+              this.setVar(varName, '?');
               delete this.env['OPTARG'];
               exitCode = 1;
             } else {
@@ -2884,33 +3086,33 @@ export class Shell {
               const pos = opt === ':' ? -1 : optstring.indexOf(opt);
               if (pos < 0) {
                 // Unknown option
-                this.env[varName] = '?';
-                if (silent) this.env['OPTARG'] = opt;
+                this.setVar(varName, '?');
+                if (silent) this.setVar('OPTARG', opt);
                 else { delete this.env['OPTARG']; stderrWriter(`${this.env['0'] || 'sh'}: illegal option -- ${opt}\r\n`); }
                 advance();
               } else if (optstring[pos + 1] === ':') {
                 // Option takes an argument: the rest of this word, or the next word
                 if (charIdx + 1 < arg.length) {
-                  this.env[varName] = opt;
-                  this.env['OPTARG'] = arg.slice(charIdx + 1);
+                  this.setVar(varName, opt);
+                  this.setVar('OPTARG', arg.slice(charIdx + 1));
                   optind++;
                 } else if (optind < args.length) {
-                  this.env[varName] = opt;
-                  this.env['OPTARG'] = args[optind];
+                  this.setVar(varName, opt);
+                  this.setVar('OPTARG', args[optind]);
                   optind += 2;
                 } else if (silent) {
-                  this.env[varName] = ':';
-                  this.env['OPTARG'] = opt;
+                  this.setVar(varName, ':');
+                  this.setVar('OPTARG', opt);
                   optind++;
                 } else {
-                  this.env[varName] = '?';
+                  this.setVar(varName, '?');
                   delete this.env['OPTARG'];
                   stderrWriter(`${this.env['0'] || 'sh'}: option requires an argument -- ${opt}\r\n`);
                   optind++;
                 }
                 charIdx = 1;
               } else {
-                this.env[varName] = opt;
+                this.setVar(varName, opt);
                 delete this.env['OPTARG'];
                 advance();
               }
@@ -3087,14 +3289,22 @@ export class Shell {
         // Shell builtin: unset — remove variables or functions
         if (!_builtinDisabled && effectiveCmdName === 'unset') {
           let unsetFunc = false;
+          let unsetRef = false;
           const unsetNames: string[] = [];
           for (const arg of cmdArgs) {
             if (arg === '-f') { unsetFunc = true; continue; }
             if (arg === '-v') { unsetFunc = false; continue; }
+            if (arg === '-n') { unsetRef = true; continue; }
             unsetNames.push(arg);
           }
           exitCode = 0;
-          for (const name of unsetNames) {
+          for (let name of unsetNames) {
+            // unset REF unsets what the nameref refers to; unset -n REF the nameref itself
+            if (!unsetFunc && this.namerefs.has(name)) {
+              if (unsetRef) { this.namerefs.delete(name); continue; }
+              const r = this.derefName(name);
+              if (r && r.name !== name) name = r.sub !== undefined ? `${r.name}[${r.sub}]` : r.name;
+            }
             if (unsetFunc) {
               delete this.functions[name];
               this.exportedFunctions.delete(name);
@@ -3102,7 +3312,7 @@ export class Shell {
               // Check for array element: arr[idx]
               const bracketMatch = name.match(/^(\w+)\[(.+)\]$/);
               if (bracketMatch) {
-                const arrName = this.namerefs.get(bracketMatch[1]) ?? bracketMatch[1];
+                const arrName = this.refTarget(bracketMatch[1]);
                 const idx = bracketMatch[2];
                 const assoc = this.assocArrays.get(arrName);
                 if (assoc) {
@@ -3134,6 +3344,8 @@ export class Shell {
                 this.namerefs.delete(name);
                 this.arrays.delete(name);
                 this.assocArrays.delete(name);
+                this.varAttrs.delete(name);
+                this.declaredNames.delete(name);
                 if (saved) {
                   this.localVarStack[k].delete(name);
                   if (saved.env !== undefined) this.env[name] = saved.env;
@@ -3156,10 +3368,7 @@ export class Shell {
           exitCode = 0;
           if (cmdArgs.length === 0 || (cmdArgs.length === 1 && cmdArgs[0] === '-p')) {
             // List readonly variables
-            for (const name of [...this.readonlyVars].sort()) {
-              const val = this.env[name];
-              writeStdout(`declare -r ${name}${val !== undefined ? `="${val}"` : ''}\r\n`);
-            }
+            for (const name of [...this.readonlyVars].sort()) writeStdout(`${this.declareLine(name) ?? `declare -r ${name}`}\r\n`);
           } else {
             for (const arg of cmdArgs) {
               if (arg === '-p') continue;
@@ -3171,7 +3380,7 @@ export class Shell {
                   stderrWriter(`readonly: ${name}: readonly variable\r\n`);
                   exitCode = 1;
                 } else {
-                  this.env[name] = val;
+                  this.setVar(name, val);
                   this.readonlyVars.add(name);
                 }
               } else {
@@ -3360,12 +3569,17 @@ export class Shell {
               const savedDepth = this.executeDepth;
               this.executeDepth = 0; // source starts a fresh top-level
               this.sourcing++;
+              const popFrame = this.pushCallFrame('source', srcArgs[0]);
+              const savedSource = this.sourceFile;
+              this.sourceFile = srcArgs[0];
               try {
                 exitCode = await this.execute(content, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
               } catch (e) {
                 if (!(e instanceof ReturnSignal)) throw e;
                 exitCode = e.code; // `return` ends a sourced file
               } finally {
+                popFrame();
+                this.sourceFile = savedSource;
                 this.sourcing--;
                 this.currentLine = savedLine;
                 this.executeDepth = savedDepth;
@@ -4020,10 +4234,19 @@ export class Shell {
       this.lastExitCode = exitCode;
       this.env['?'] = String(exitCode);
 
-      // Fire ERR trap on non-zero exit code
-      if (exitCode !== 0 && this.traps.has('ERR')) {
+      // ERR trap on a failure, where set -e would act (not in a condition, a
+      // && / || list before its last command, or a ! pipeline), and not
+      // again while it runs (its own failures don't fire it)
+      if (exitCode !== 0 && this.traps.has('ERR') && !this.inErrTrap && this.errexitSuppressed === 0 && !negateExit) {
         const errCmd = this.traps.get('ERR')!;
-        await this.execute(errCmd, writeStdout, stderrWriter, false, undefined, true);
+        this.inErrTrap = true;
+        try {
+          await this.execute(errCmd, writeStdout, stderrWriter, false, undefined, true);
+        } finally {
+          this.inErrTrap = false;
+        }
+        this.lastExitCode = exitCode;
+        this.env['?'] = String(exitCode);
       }
 
     }
@@ -4433,12 +4656,21 @@ export class Shell {
             i = j + 1;
             continue;
           }
+          // ${!ref} of a nameref: the name it refers to (bash inverts ${!…} for them)
+          const refName = /^!([A-Za-z_][A-Za-z0-9_]*)$/.exec(inner);
+          if (refName && this.namerefs.has(refName[1])) {
+            result += inDouble ? protectExpansion(this.namerefs.get(refName[1])!) : this.namerefs.get(refName[1])!;
+            i = j + 1;
+            continue;
+          }
           // ${!ref…}: the variable named by $ref (ref=a, a[0] or a[@]) with the rest applied
           const ind = /^!([A-Za-z_][A-Za-z0-9_]*(?:\[(?![@*]\])[^\]]*\])?|[0-9]+)((?![@*]$)[\s\S]*)$/.exec(inner);
-          if (ind && !/^\[[@*]\]$/.test(ind[2]) && !/^![A-Za-z_][A-Za-z0-9_]*[@*]$/.test(inner) && !this.namerefs.has(ind[1])) {
+          if (ind && !/^\[[@*]\]/.test(ind[2]) && !/^![A-Za-z_][A-Za-z0-9_]*[@*]$/.test(inner) && !this.namerefs.has(ind[1])) {
             const sub = /^([A-Za-z_][A-Za-z0-9_]*)\[([^\]]*)\]$/.exec(ind[1]);
             const target = (sub ? this.getVar(sub[1], sub[2]) : this.getVar(ind[1])) ?? '';
+            if (/^[#?$!-]$/.test(target) && !ind[2]) { result += this.expandVars('$' + target, inDouble); i = j + 1; continue; }
             if (/^([A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?|[0-9]+|[@*#?$!-])$/.test(target)) inner = target + ind[2];
+            else if (target === '' && /^@[A-Za-z]$/.test(ind[2])) { i = j + 1; continue; } // (bash: nothing)
             else if (target === '' && (sub ? this.getVar(sub[1], sub[2]) : this.getVar(ind[1])) === undefined) throw new LineAbort(`${ind[1]}: invalid indirect expansion`);
             else throw new LineAbort(`${target}: invalid variable name`);
           }
@@ -4537,9 +4769,11 @@ export class Shell {
           if (varName === 'EPOCHSECONDS') { result += String(Math.floor(Date.now() / 1000)); i += m[0].length; continue; }
           if (varName === 'EPOCHREALTIME') { const now = Date.now(); result += `${Math.floor(now / 1000)}.${String(now % 1000).padStart(3, '0')}`; i += m[0].length; continue; }
           // Resolve namerefs: if varName is a nameref, follow it
-          const resolved = this.namerefs.has(varName) ? this.namerefs.get(varName)! : varName;
-          if (this.options.has('nounset') && this.env[resolved] === undefined && this.scalarOf(resolved) === undefined) throw new UnboundVariable(varName);
-          const v = this.env[resolved] ?? this.scalarOf(resolved) ?? '';
+          const ref = this.derefName(varName);
+          const resolved = ref?.name ?? varName;
+          const val = ref?.sub !== undefined ? this.getVar(resolved, ref.sub) : ref ? this.env[resolved] ?? this.scalarOf(resolved) : undefined;
+          if (this.options.has('nounset') && val === undefined) throw new UnboundVariable(varName);
+          const v = val ?? '';
           result += (inDouble ? protectExpansion(v) : splitFields(v, this.fieldIFS())) + redirGuard(line[i + m[0].length]);
           i += m[0].length;
           continue;
@@ -4599,6 +4833,9 @@ export class Shell {
       return { list, star: names[2] === '*' };
     }
     if (inner === '@' || inner === '*') return { list: this.getPositionalArgs(), star: inner === '*' };
+    // ${@@Q} ${*@a}…: each positional parameter transformed
+    const pop = /^([@*])@([QEPAKkaULu])$/.exec(inner);
+    if (pop) return { list: this.getPositionalArgs().map((v) => this.transformParam(pop[2], v, null)), star: pop[1] === '*' };
     // ${@-word} ${@:-word} ${*+word} …: set means at least one parameter
     const pdef = /^([@*])(:?)([-+])([\s\S]*)$/.exec(inner);
     if (pdef) {
@@ -4624,7 +4861,7 @@ export class Shell {
     }
     if (close >= inner.length) return null;
     const [, prefix, rawName] = m;
-    const name = this.namerefs.get(rawName) ?? rawName;
+    const name = this.refTarget(rawName);
     const sub = inner.slice(m[0].length, close);
     const op = inner.slice(close + 1);
     const assoc = this.assocArrays.get(name);
@@ -4641,10 +4878,23 @@ export class Shell {
 
     if (sub === '@' || sub === '*') {
       const star = sub === '*';
-      if (prefix === '!') return op ? null : { list: keys, star };
+      if (prefix === '!') {
+        const ktr = /^@([QEPAKkaULu])$/.exec(op);
+        if (ktr) return { list: keys.map((k) => this.transformParam(ktr[1], k, null)), star };
+        return op ? null : { list: keys, star };
+      }
       if (prefix === '#') return op ? null : { text: String(keys.length), raw: false };
       const vals = keys.map((k) => get(k)!);
       if (!op) return { list: vals, star };
+      const tr = /^@([QEPAKkaULu])$/.exec(op);
+      if (tr) {
+        if (tr[1] === 'A') return { text: keys.length ? this.declareLine(name) ?? '' : '', raw: false };
+        if (tr[1] === 'K' || tr[1] === 'k') {
+          const pairs = keys.flatMap((k) => [assoc ? quoteKey(k) : k, dquote(get(k)!)]);
+          return tr[1] === 'k' ? { list: pairs, star } : { text: pairs.join(' '), raw: false };
+        }
+        return { list: vals.map((v) => this.transformParam(tr[1], v, name)), star };
+      }
       const slice = /^:(?![-=+?])([\s\S]*)$/.exec(op);
       if (slice) {
         const pairs: [number, string][] = arr ? keys.map((k) => [Number(k), get(k)!]) : vals.map((v, k) => [k, v]);
@@ -4672,6 +4922,8 @@ export class Shell {
     if (prefix === '#') return op ? null : { text: String([...(v ?? '')].length), raw: false };
     if (prefix === '!') return null;
     if (!op) return { text: v ?? '', raw: false };
+    const tr1 = /^@([QEPAKkaULu])$/.exec(op);
+    if (tr1) return { text: v === undefined && tr1[1] !== 'a' ? '' : this.transformParam(tr1[1], v, name), raw: false };
     if (/^:?=/.test(op)) {
       const colon = op.startsWith(':');
       if (v === undefined || (colon && v === '')) {
@@ -4737,14 +4989,98 @@ export class Shell {
     }
   }
 
+  /**
+   * ${x@OP} of one value (`name`: the variable it came from, for @a and @A;
+   * null for $1, $@, $?…). An unset value expands to nothing.
+   */
+  private transformParam(op: string, v: string | undefined, name: string | null): string {
+    if (op === 'a') return name ? this.attrFlags(name) : '';
+    if (v === undefined) return '';
+    switch (op) {
+      case 'Q': case 'K': case 'k': return quoteReusable(v);
+      case 'E': return decodeAnsiC(v);
+      case 'P': return this.expandPrompt(v);
+      case 'U': return v.toUpperCase();
+      case 'u': return v.length > 0 ? v[0].toUpperCase() + v.slice(1) : '';
+      case 'L': return v.toLowerCase();
+      case 'A': {
+        if (!name) return quoteReusable(v);
+        const f = this.attrFlags(name);
+        return `${f ? `declare -${f} ` : ''}${name}=${quoteReusable(v)}`;
+      }
+      default: return v;
+    }
+  }
+
+  /** A variable's attributes as ${x@a} and declare -p list them (bash's order); `deref`: of a nameref's target */
+  attrFlags(name: string, deref = true): string {
+    const isRef = this.namerefs.has(name);
+    if (deref) name = this.refTarget(name);
+    const attrs = this.varAttrs.get(name);
+    let f = '';
+    if (this.arrays.has(name)) f += 'a';
+    if (this.assocArrays.has(name)) f += 'A';
+    if (attrs?.has('i')) f += 'i';
+    if (!deref && isRef) f += 'n';
+    if (this.readonlyVars.has(name)) f += 'r';
+    if ((this.env[name] !== undefined && !this.localVars.has(name)) || this.exportedUnset.has(name)) f += 'x';
+    if (attrs?.has('l')) f += 'l';
+    if (attrs?.has('u')) f += 'u';
+    return f;
+  }
+
+  /** PS1-style prompt expansion (${x@P}): \u \h \H \w \W \$ \n \t \d \s \v \nnn … */
+  expandPrompt(text: string): string {
+    const home = this.env.HOME;
+    const pwd = this.env.PWD ?? this.cwd;
+    const host = this.env.HOSTNAME ?? activeProfile().hostname;
+    const now = new Date();
+    const two = (n: number) => String(n).padStart(2, '0');
+    let out = '';
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (c !== '\\' || i + 1 >= text.length) { out += c; continue; }
+      const e = text[++i];
+      switch (e) {
+        case 'u': out += this.env.USER ?? 'user'; break;
+        case 'h': out += host.split('.')[0]; break;
+        case 'H': out += host; break;
+        case 'w': out += home && (pwd === home || pwd.startsWith(home + '/')) ? '~' + pwd.slice(home.length) : pwd; break;
+        case 'W': out += home && pwd === home ? '~' : pwd === '/' ? '/' : pwd.slice(pwd.lastIndexOf('/') + 1); break;
+        case '$': out += (this.env.EUID ?? this.env.UID) === '0' ? '#' : '$'; break;
+        case 'n': out += '\n'; break;
+        case 'r': out += '\r'; break;
+        case 'a': out += '\x07'; break;
+        case 'e': out += '\x1b'; break;
+        case 's': out += 'bash'; break;
+        case 'v': out += '5.2'; break;
+        case 'V': out += '5.2.21'; break;
+        case 't': out += `${two(now.getHours())}:${two(now.getMinutes())}:${two(now.getSeconds())}`; break;
+        case 'T': out += `${two(now.getHours() % 12 || 12)}:${two(now.getMinutes())}:${two(now.getSeconds())}`; break;
+        case 'A': out += `${two(now.getHours())}:${two(now.getMinutes())}`; break;
+        case 'd': out += now.toDateString().slice(0, 10); break;
+        case '[': case ']': break;
+        case '\\': out += '\\'; break;
+        default:
+          if (/[0-7]/.test(e)) {
+            const m = /^[0-7]{1,3}/.exec(text.slice(i))![0];
+            out += String.fromCharCode(parseInt(m, 8));
+            i += m.length - 1;
+          } else out += '\\' + e;
+      }
+    }
+    return out;
+  }
+
   /** `declare -p NAME` output, null if NAME is not set */
   private declareLine(name: string): string | null {
     const q = (v: string) => `"${v.replace(/(["\\$`])/g, '\\$1')}"`;
-    const flags = (base: string) => {
-      let f = base;
-      if (this.readonlyVars.has(name)) f += 'r';
+    const flags = (_base: string) => {
+      const f = this.attrFlags(name, false);
       return f ? `-${f}` : '--';
     };
+    const ref = this.namerefs.get(name);
+    if (ref !== undefined) return ref ? `declare ${flags('')} ${name}=${q(ref)}` : `declare ${flags('')} ${name}`;
     const assoc = this.assocArrays.get(name);
     if (assoc) {
       const body = [...assoc].map(([k, v]) => `[${/^[\w.-]+$/.test(k) ? k : q(k)}]=${q(v)} `).join('');
@@ -4755,7 +5091,9 @@ export class Shell {
       const body = Object.keys(arr).map((k) => `[${k}]=${q(arr[Number(k)])}`).join(' ');
       return `declare ${flags('a')} ${name}=(${body})`;
     }
-    if (this.env[name] === undefined) return null;
+    if (this.env[name] === undefined) {
+      return this.declaredNames.has(name) || this.exportedUnset.has(name) ? `declare ${flags('')} ${name}` : null;
+    }
     return `declare ${flags('')} ${name}=${q(this.env[name])}`;
   }
 
@@ -4847,27 +5185,6 @@ export class Shell {
       return mapped.join(' ');
     }
 
-    // ${arr[@]@Q} — quote all array elements
-    const arrAtOpMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\[[@*]\]@([QEUuLA])$/);
-    if (arrAtOpMatch) {
-      const name = arrAtOpMatch[1];
-      const op = arrAtOpMatch[2];
-      const assoc = this.assocArrays.get(name);
-      const values = assoc ? Array.from(assoc.values()) : (this.arrays.get(name) ?? []);
-      const mapped = values.map(v => {
-        switch (op) {
-          case 'Q': return `'${v.replace(/'/g, "'\\''")}'`;
-          case 'E': return v.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
-          case 'U': return v.toUpperCase();
-          case 'u': return v.length > 0 ? v[0].toUpperCase() + v.slice(1) : '';
-          case 'L': return v.toLowerCase();
-          case 'A': return v;
-          default: return v;
-        }
-      });
-      return mapped.join(' ');
-    }
-
     // ${arr[@]} or ${arr[*]} — all array elements (space-separated)
     const arrAllMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\[[@*]\]$/);
     if (arrAllMatch) {
@@ -4899,7 +5216,8 @@ export class Shell {
     // ${#VAR} — string length
     const lenMatch = inner.match(/^#([A-Za-z_][A-Za-z0-9_]*)$/);
     if (lenMatch) {
-      return String((this.env[lenMatch[1]] ?? '').length);
+      // (an array's is its element 0's)
+      return String([...(this.getVar(lenMatch[1]) ?? '')].length);
     }
 
     // ${!prefix*} or ${!prefix@} — list variable names matching prefix
@@ -5045,30 +5363,20 @@ export class Shell {
       }
     }
 
-    // ${VAR@op} — variable transformations
-    const atMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)@([QEUuLaAK])$/);
+    // ${NAME@op}, ${?@a}…: transformations (arrays and $@ go through expandArrayRef)
+    const atMatch = /^([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[#?$!-])@([QEPAKkaULu])$/.exec(inner);
     if (atMatch) {
-      const val = this.env[atMatch[1]] ?? '';
-      switch (atMatch[2]) {
-        case 'Q': return `'${val.replace(/'/g, "'\\''")}'`; // quote for reuse
-        case 'E': return val.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\r/g, '\r').replace(/\\\\/g, '\\'); // interpret escapes
-        case 'U': return val.toUpperCase();
-        case 'u': return val.length > 0 ? val[0].toUpperCase() + val.slice(1) : '';
-        case 'L': return val.toLowerCase();
-        case 'a': {
-          // Return actual variable attributes
-          const vname = atMatch[1];
-          let attrs = '';
-          if (this.readonlyVars.has(vname)) attrs += 'r';
-          if (this.namerefs.has(vname)) attrs += 'n';
-          if (this.arrays.has(vname)) attrs += 'a';
-          if (this.assocArrays.has(vname)) attrs += 'A';
-          return attrs;
+      const [, name, op] = atMatch;
+      if (/^[A-Za-z_]/.test(name)) {
+        const target = this.refTarget(name);
+        if (this.arrays.has(target) || this.assocArrays.has(target)) {
+          const ref = this.expandArrayRef(`${name}[0]@${op}`);
+          return ref && 'text' in ref ? ref.text : '';
         }
-        case 'A': return `declare -- ${atMatch[1]}="${val}"`; // assignment form
-        case 'K': return val; // display as key-value (stub)
-        default: return val;
+        return this.transformParam(op, this.getVar(name), target);
       }
+      const v = /^[0-9]+$/.test(name) ? this.env[name] : this.expandVars('$' + name);
+      return this.transformParam(op, v, null);
     }
 
     // Simple ${VAR}
@@ -6084,7 +6392,10 @@ export class Shell {
 
   /** Value of NAME (element 0 of an array) or NAME[SUB]; undefined if unset */
   getVar(name: string, sub?: string): string | undefined {
-    name = this.namerefs.get(name) ?? name;
+    const ref = this.derefName(name);
+    if (!ref) return undefined;
+    name = ref.name;
+    if (ref.sub !== undefined && sub === undefined) sub = ref.sub;
     const assoc = this.assocArrays.get(name);
     if (sub === undefined || sub === '@' || sub === '*') {
       if (sub !== undefined) {
@@ -6104,15 +6415,33 @@ export class Shell {
 
   /** Assign NAME (element 0 of an array) or NAME[SUB]; returns an error message or null */
   setVar(name: string, value: string, sub?: string): string | null {
-    name = this.namerefs.get(name) ?? name;
+    // (a nameref with no target yet takes VALUE as its target, as in bash)
+    if (this.namerefs.get(name) === '' && sub === undefined) { this.namerefs.set(name, value); return null; }
+    const ref = this.derefName(name);
+    if (!ref) return `${name}: circular name reference`;
+    if (ref.sub !== undefined) {
+      if (sub !== undefined) return `\`${this.namerefs.get(name)}': not a valid identifier`;
+      sub = ref.sub;
+    }
+    name = ref.name;
     if (this.readonlyVars.has(name)) return `${name}: readonly variable`;
+    const attrs = this.varAttrs.get(name);
+    if (attrs) {
+      if (attrs.has('i')) {
+        try { value = String(this.evalArithBig(value || '0')); } catch (e) { if (e instanceof ArithError) return e.message; throw e; }
+      }
+      if (attrs.has('l')) value = value.toLowerCase();
+      else if (attrs.has('u')) value = value.toUpperCase();
+    }
+    this.declaredNames.delete(name);
     const assoc = this.assocArrays.get(name);
     if (sub === undefined) {
       if (assoc) assoc.set('0', value);
       else if (this.arrays.has(name)) this.arrays.get(name)![0] = value;
       else {
-        // A new variable is not exported (unless `export NAME` came first)
-        if (!(name in this.env) && !this.exportedUnset.delete(name)) this.localVars.add(name);
+        // A new variable is not exported (unless `export NAME` came first); set -a exports every assignment
+        if (this.options.has('allexport')) { this.localVars.delete(name); this.exportedUnset.delete(name); }
+        else if (!(name in this.env) && !this.exportedUnset.delete(name)) this.localVars.add(name);
         this.env[name] = value;
       }
       return null;
@@ -6173,12 +6502,15 @@ export class Shell {
     saved['@'] = this.env['@'];
     this.setPositional(args);
 
-    // Track FUNCNAME and BASH_SOURCE stacks
-    const prevFuncname = this.arrays.get('FUNCNAME') || [];
-    this.arrays.set('FUNCNAME', [name, ...prevFuncname]);
-    const prevBashSource = this.arrays.get('BASH_SOURCE') || [];
-    this.arrays.set('BASH_SOURCE', ['main', ...prevBashSource]);
-    this.callStack.push({ funcName: name, source: 'main' });
+    // FUNCNAME, BASH_SOURCE and BASH_LINENO; LINENO counts in the body's own lines
+    const popFrame0 = this.pushCallFrame(name, func.source ?? 'main');
+    const callerLine = this.currentLine;
+    if (func.line !== undefined) { this.currentLine = func.line; this.env['LINENO'] = String(func.line); }
+    const popFrame = () => {
+      popFrame0();
+      this.currentLine = callerLine;
+      this.env['LINENO'] = String(callerLine);
+    };
 
     // Push local variable frame for `local` declarations
     this.localVarStack.push(new Map());
@@ -6196,9 +6528,7 @@ export class Shell {
       } else {
         // Restore before re-throwing
         this.restoreLocalVars();
-        this.arrays.set('FUNCNAME', prevFuncname);
-        this.arrays.set('BASH_SOURCE', prevBashSource);
-        this.callStack.pop();
+        popFrame();
         for (const key of Object.keys(saved)) {
           if (saved[key] === undefined) delete this.env[key];
           else this.env[key] = saved[key]!;
@@ -6212,10 +6542,7 @@ export class Shell {
     // Pop local variable frame — restore saved values
     this.restoreLocalVars();
 
-    // Restore FUNCNAME and BASH_SOURCE stacks
-    this.arrays.set('FUNCNAME', prevFuncname);
-    this.arrays.set('BASH_SOURCE', prevBashSource);
-    this.callStack.pop();
+    popFrame();
 
     // Restore positional params
     for (const key of Object.keys(saved)) {
@@ -6297,7 +6624,7 @@ export class Shell {
     if (!m) return;
     const [, len, name, rest] = m;
     if (rest.startsWith('[') || /^:?[-=+?]/.test(rest) || (len && rest)) return;
-    const target = this.namerefs.get(name) ?? name;
+    const target = this.refTarget(name);
     if (this.env[target] !== undefined || this.arrays.has(target) || this.assocArrays.has(target)) return;
     throw new UnboundVariable(name);
   }
@@ -7156,7 +7483,9 @@ export class Shell {
     let status = 0;
     // The declaration itself (attributes, local scope) with the array words cut to their names
     const declare = async () => {
-      const declWords = rest.map((w, k) => (isArrayWord(parsed[k]) ? parsed[k]!.name : w));
+      // (declare -r: readonly once the values are in, below)
+      const declWords = rest.map((w, k) => (isArrayWord(parsed[k]) ? parsed[k]!.name
+        : decl !== 'readonly' && /^-[A-Za-z]*r/.test(w) ? w.replace(/r/g, '') : w)).filter((w) => w !== '-');
       if (rest.some((w) => /^-\w*A/.test(w))) {
         for (const a of parsed) if (a && isArrayWord(a) && !this.assocArrays.has(a.name)) { this.arrays.delete(a.name); delete this.env[a.name]; }
       }
@@ -7166,7 +7495,8 @@ export class Shell {
       for (const a of fresh) if (this.env[a!.name] === '' && !this.arrays.has(a!.name)) delete this.env[a!.name];
       return st;
     };
-    // readonly marks the variables after assigning them
+    // readonly (and declare -r) marks the variables after assigning them
+    const roLater = decl === 'readonly' || rest.some((w) => /^-[A-Za-z]*r/.test(w));
     if (decl && decl !== 'readonly') {
       status = await declare();
       if (status !== 0) return status;
@@ -7178,7 +7508,7 @@ export class Shell {
         if (isArrayWord(a)) err = await this.assignArrayWord(a, writeStderr);
         else if (!decl) {
           const value = await this.expandScalar(a.value, writeStderr);
-          err = this.setVar(a.name, a.append ? (this.getVar(a.name) ?? '') + value : value);
+          err = a.append ? this.appendVar(a.name, value) : this.setVar(a.name, value);
         }
       } catch (e) {
         if (!(e instanceof ArithError)) throw e;
@@ -7187,16 +7517,17 @@ export class Shell {
       if (err) { writeStderr(`tabcomputer: ${err}\r\n`); status = 1; }
     }
     if (decl === 'readonly') status = (await declare()) || status;
+    else if (roLater) for (const a of parsed) if (a) this.readonlyVars.add(this.refTarget(a.name));
     return status || (this.substStatus ?? 0);
   }
 
   /** Apply one a=(…), a+=(…), a[i]=v or a[i]+=v */
   private async assignArrayWord(a: AssignWord, writeStderr: (s: string) => void): Promise<string | null> {
-    const name = this.namerefs.get(a.name) ?? a.name;
+    const name = this.refTarget(a.name);
     if (this.readonlyVars.has(name)) return `${name}: readonly variable`;
     if (!a.list) {
       const value = await this.expandScalar(a.value, writeStderr);
-      return this.setVar(name, a.append ? (this.getVar(name, a.sub) ?? '') + value : value, a.sub);
+      return a.append ? this.appendVar(name, value, a.sub) : this.setVar(name, value, a.sub);
     }
     if (a.sub !== undefined) return `${a.name}[${a.sub}]: cannot assign list to array member`;
     const items = splitListWords(a.value);
@@ -8066,6 +8397,7 @@ export class Shell {
     const child = this.fork();
     child.startProcess();
     child.setPositional(args, argv0);
+    if (argv0 !== undefined) child.setScriptSource(argv0);
     // Its first command reads the script's stdin, unless that is the shell's fd 0
     if (!ctx.liveStdin) child.setInjectedStdin(ctx.stdin);
     return child.runScriptText(content, ctx.terminal, writeStdout, writeStderr);
@@ -8121,8 +8453,9 @@ export class Shell {
       }
     } catch (e) {
       if (e instanceof ExitSignal || e instanceof ReturnSignal) exitCode = e.code;
-      // An expansion error (${x?msg}, bad substitution, set -u) ends the script with status 1 (127)
-      else if (e instanceof Error && e.name !== 'AbortError') { writeStderr(`tabcomputer: ${e.message}\r\n`); exitCode = e instanceof UnboundVariable ? e.code : 1; }
+      // An expansion error (${x?msg}, bad substitution, set -u) ends the script with status 1
+      // (bash: 127 for an unbound variable under -c, 1 in a script file)
+      else if (e instanceof Error && e.name !== 'AbortError') { writeStderr(`tabcomputer: ${e.message}\r\n`); exitCode = e instanceof UnboundVariable && this.commandStringFlag ? e.code : 1; }
       else if (!(e instanceof BreakSignal || e instanceof ContinueSignal)) throw e;
     } finally {
       this.executeDepth = depth;
