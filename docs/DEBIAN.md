@@ -194,10 +194,14 @@ A set can also name `prepare` commands, which run in the chroot after apt
 and are part of the recipe. `go` uses this to run `go build std` with
 `HOME=/home/user` and `CGO_ENABLED=0`, so the layer carries the standard
 library already compiled in the tab user's default build cache
-(`~/.cache/go-build`, unowned files). The tab's `go` has the same GOROOT,
-compiler and settings (no C compiler is on PATH, so cgo is off there too),
-so `go build` and `go run` hit that cache and compile only the user's
-packages. Go deletes cache entries unused for 5 days, judged by mtime, and
+(`~/.cache/go-build`, unowned files). The tab's `go` has the same GOROOT
+and compiler. The layer also sets `CGO_ENABLED=0` in `~/.config/go/env`,
+the file `go env -w` writes; it is merged key by key, so a user's own
+setting wins. Without that, `go` would find tabcomputer's `cc` (a WASM-only
+compiler) on PATH, turn cgo on for `net` and fail. With it, `go build`
+and `go run` hit the cache and compile only the user's packages.
+`go env -u CGO_ENABLED` turns cgo back on, for example with the `c` set
+installed; the cgo packages then compile once. Go deletes cache entries unused for 5 days, judged by mtime, and
 the layer's times are the snapshot's. The layer's `trim.txt` therefore holds
 a last-trim time of 2100, so Go never trims that cache (`go clean -cache`
 empties it).
