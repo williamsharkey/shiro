@@ -721,6 +721,13 @@ composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts,
 a few MiB each. The terminal UI's +19 KiB is /dom, the sign-in hook and the
 other integration changes since db9f698, not desktop code.
 
+### unix/shell-stdio 12 — tty, setsid, script; test -t; no global FORCE_COLOR
+
+`node bench/ab.mjs HEAD~1 HEAD --suites shell,kernel --quick` (c8dd058 →
+8973854): 23 unchanged; isolated:shell.ls_la_1000 improved 10.4 → 7.28 ms
+(-32%, every round). ls -la into the benchmark's sink no longer colours its
+output now that FORCE_COLOR isn't exported.
+
 ### unix/shell-stdio 11 — the shell's builtins read the kernel's /proc
 
 `node bench/ab.mjs 41265dd2~1 41265dd2 --suites shell,kernel --quick`: all 24
@@ -831,6 +838,26 @@ proc/s within one run); two further 15-run passes on the new code gave
 medians 1240 and 1215 proc/s, base 1200. One of those passes stalled at
 ≈10 proc/s for its last 11 samples and did not recur in two more; worth
 watching if it shows up on other branches.
+
+### unix/perf-blink 15 — SSE float arithmetic in compiled code
+
+Blink patch 0116: compiled code computes SSE float arithmetic (ss/sd/ps/pd),
+ucomis/comis, movd/movq and leave itself instead of calling Blink's handlers.
+In a libc-heavy test (snprintf, strtod, qsort) those calls went from ~3.2 M
+per run to 0 (comisd 1.7 M, movd/movq 0.9 M, leave 0.3 M, addsd etc. 0.3 M);
+wall time 1.63–1.83 → 1.61–1.78 s (Node, small).
+
+`node bench/ab.mjs HEAD --suites x86 --only 'x86\.blink\.' --rounds 3`,
+twice:
+- First run: everything "same" except go_nethttp 535 → 665 ms flagged
+  "regressed".
+- Second run: everything "same", go_nethttp 623 → 695 ms (+11.5%, not
+  significant).
+- Alternated engine swaps on one tree (0115 vs 0116 emulator, 9 runs each)
+  overlap: 558–616 vs 474–646 ms.
+
+So go_nethttp's spread is wider than these runs can separate; nothing in
+the suite is float-heavy.
 
 ### unix/perf-blink 14 — exit doesn't wait for the other threads
 

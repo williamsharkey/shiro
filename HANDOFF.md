@@ -47,32 +47,17 @@ asking workers to commit and push work they already had; nothing new was
 started. Where this section disagrees with §6, this section wins.
 
 ### Concurrency with the old coordinator (read first)
-The new coordinator may start while the old one is still finishing. Until a
-commit titled **"HANDOFF: old coordinator done"** appears on
-`origin/unix/integration`, the old coordinator still owns the following. Don't
-do them:
-- pushing `unix/integration`, tab `main` or tab `deploy`;
-- messaging or archiving the old workers.
-
-What is still being finished:
-1. The suite is running on the tidy-up merges (agent-clis, compat-dev,
-   compat-tools, conformance, docs). If it passes, they are pushed and deployed.
-2. perf-blink, perf-kernel and gui were asked to push their finished work (to
-   `unix/<area>-wip` if their suite is red).
-3. This section gets its final SHAs.
-
-In the meantime the new coordinator can safely:
-- read this file and AGENTS.md;
-- set up its clone and the `tab` remote;
-- recreate the routines (§5);
-- read the issues (§8 and below);
-- create the new worker sessions, each starting by reading its §6 and
-  §0a entries but **not pushing until the "done" commit lands**.
+**Done.** The old coordinator finished its tidy-up at about 11:52 UTC (the
+"HANDOFF: old coordinator done" commit). The new coordinator owns
+`unix/integration`, tab `main` and `deploy` from here.
+The old worker sessions are idle and only the user should archive them. One
+exception still needs the user: perf-kernel's unpushed commit `a980501d` (see
+below).
 
 ### Integration and deploy
-- **Live on tabcomputer.com:** `d739673a`. tab `deploy` = `d739673a`.
-- **`unix/integration` and tab `main`:** the merges listed below are being tested by the old coordinator, which pushes and deploys them if the suite passes. *Pending: the old coordinator fills this in when it finishes (see "Concurrency" above).*
-- **Merged in the final tidy-up:**
+- **`unix/integration` = tab `main` = tab `deploy`:** the "HANDOFF: old coordinator done" commit, a doc-only change on top of `8aef1d98`. The suite on `8aef1d98` passed (167 files, 2 skipped).
+  - Check `https://tabcomputer.com/deployed.txt` to confirm the droplet picked it up.
+- **Merged in the final tidy-up** (besides those below: perf-blink e9ba8687, gui 4ec1b2ee, shell-stdio 92087548):
   - agent-clis 51abefaa: the doctor parts of #16 (`node -v`/`node -e` probes, a /dev/null rerun of a failing node probe, `page --help`).
     - It conflicted with toolchains' doctor `packages` check. **Kept toolchains' `packagesCheck`** (local index, covered by `pkg-outdated.test.ts`); dropped agent-clis' `pkg outdated` runner and adjusted the `doctor.test.ts` expectation.
   - compat-dev 77db5b9f: **Next.js builds and serves in worker mode** (AsyncLocalStorage across await, web streams, ServerResponse internals).
@@ -88,18 +73,23 @@ In the meantime the new coordinator can safely:
     - The last `test:worker` run failed 8: chokidar's timing case, a compat-dev test now pinned to in-page node, and 6 cascade failures that pass alone.
     - Then land it on `unix/compat-tools`.
   - **`unix/gl`:** `6d8c2d0`, all committed. Stage 2 code is described under gl below. It is **not merged** because the suite hasn't been run on it and it has no tests of the in-page path. Merge it once it passes the suite.
-  - Any `*-wip` branches the workers push in the tidy-up. *Pending: the old coordinator fills this in when it finishes (see "Concurrency" above).*
+  - No `*-wip` branches were needed.
 - **Benchmark:** no new run since `integration-89e9559-quick.json`. Run one on the first cycle.
 
 ### Per-worker state at the stop (supersedes §6 where they differ)
-- **perf-blink:** asked to commit and push what it has. *Pending: the old coordinator fills this in when it finishes (see "Concurrency" above).*
+- **perf-blink:** `e9ba8687` (Blink 0116), suite green; it's merged and live.
   - Patch 0116 makes compiled code do SSE ss/sd/ps/pd arithmetic, ucomis/comis, movd/movq and leave itself, with no handler calls; 3.2 M handler calls → 0 on a libc-heavy run.
   - go_nethttp A/B reads as noise.
   - **New for its queue:**
-    - Firefox and Thunderbird exit before a window appears. Blink aborts at `memorymalloc.c:834` mapping a 242,716-byte shared `memfd:mozilla-ipc` region. It's the same assert as the conformance regression above (from gui).
-    - Blink returns EINVAL for memfd F_ADD_SEALS/F_GET_SEALS. The kernel side is on gui's branch.
+    - Firefox and Thunderbird exit before a window appears. Blink aborts at `memorymalloc.c:834` mapping a 242,716-byte shared `memfd:mozilla-ipc` region. It's the same assert as the conformance regression above (from gui). Repro: `gui install firefox-esr; firefox-esr --no-remote about:blank`; a standalone program doesn't reproduce it.
+    - Blink's fcntl hard-codes F_ADD_SEALS/F_GET_SEALS (1033/1034) to -EINVAL. The kernel now implements them (gui 4ec1b2ee), so forward them like F_SETPIPE_SZ: `KS(m, 72, A12(fd, cmd, (int)arg))`.
   - The compiled-entry work for GUI startup is still the top item.
-- **perf-kernel:** asked to commit and push what it has. *Pending: the old coordinator fills this in when it finishes (see "Concurrency" above).*
+- **perf-kernel:** `4a61f5c2` is merged.
+  - **Its #14 kernel work is committed as `a980501d` in the old session (012AHGL7ZyHXsztTa3H2ZoQS) but not pushed.** It hasn't been run through the full suite, and the worker will only push on the user's own word.
+  - If it reaches `unix/perf-kernel`, merge it after a suite run. Otherwise the new perf-kernel worker redoes it from the list below.
+  - Known gaps in it:
+    - in-page builtins still show `/dev/pts/0` in `/proc/self/fd`;
+    - `kill` on a compound in-page `bash -c "trap …; …"` job skips the trap.
   - The tabcomputer#14 kernel parts:
     - init reaps orphans at once;
     - Linux-style decaying /proc/loadavg and sysinfo;
@@ -107,7 +97,9 @@ In the meantime the new coordinator can safely:
     - real `.` and `..` in `ls -a`;
     - `kill PID` ends a `bash -c` blocked in a command (143 for SIGTERM, 137 for SIGKILL).
   - Codex finding: "Reconnecting… waiting for network" is not a kernel deadlock. Codex retries failed HTTPS without limit (`codex-rs/core/src/responses_retry.rs`).
-- **gui:** asked to commit and push what it has. *Pending: the old coordinator fills this in when it finishes (see "Concurrency" above).*
+- **gui:** `4ec1b2ee`, merged.
+  - Suite green. It added the manifest regeneration, score.mjs fixes, nine apps, the memfd-seal kernel side and the GL.md OSMesa re-run.
+  - **Open for the next gui owner** (unix/gl's asks): a GLX extension with QueryVersion/QueryServerString, mesa-utils glxgears/glxinfo manifest entries, and the glEnv call in launchApp.
   - OSMesa/llvmpipe pixels now match softpipe after 0114. The first frame takes 26–29 s, then 0.44 s per frame at 512² and about 1.3 s at 720p, so it's only a slow fallback.
   - Cross-process shared mappings work (the shm2 repro).
   - Zathura passes everything; qpdfview loads its SQLite driver; nine new apps added.
@@ -131,7 +123,12 @@ In the meantime the new coordinator can safely:
     - one of two back-to-back servers sometimes exits at once;
     - redirected npm script output ends lines with `\r\r\n`.
 - **compat-tools:** next is #13 after the flip. Also: a child spawned with `stdio:'inherit'` in Debian mode doesn't see a tty on stdin.
-- **shell-stdio, toolchains, debian, docs, conformance, bench, desktop:** idle at the stop. Everything they pushed is merged.
+- **shell-stdio:** `92087548`, merged.
+  - /proc for builtins now goes through the kernel's ProcFs.
+  - #14 shell parts: `script -qc`, `setsid [-f]`, `tty`, `test -t`/`[[ -t ]]`, and /proc/$! for in-page background jobs.
+  - `tmux new-session -d` doesn't reproduce on current builds; probably the stale tmux package (#15).
+  - #16: FORCE_COLOR is no longer exported. Side effect: `shell.ls_la_1000` is −32%.
+- **toolchains, debian, docs, conformance, bench, desktop:** idle at the stop. Everything they pushed is merged.
 
 ### Issues at the stop (supersedes the §8 table)
 - **#12 (eval `<` dropped):** the in-tab agent finished.
@@ -140,9 +137,9 @@ In the meantime the new coordinator can safely:
   - **Next:** apply its diff (`git apply`), run the suite, and commit with "Fixes williamsharkey/tabcomputer#12", crediting the in-tab agent. Or ask the user whether the in-tab agent should push it itself.
   - Its notes: Claude Code only adds `< /dev/null` when a command has no `<` of its own, and a text-rewriting hot-patch broke heredocs.
 - **#13 (`node -e` hangs in-tab):** compat-tools, after the flip. It blocks the in-tab agent running vitest and esbuild.
-- **#14:** perf-kernel's kernel parts (above), plus shell-stdio's tty and builtin parts.
+- **#14:** shell-stdio's parts are merged (92087548). perf-kernel's kernel parts are `a980501d`, not pushed (see perf-kernel above). Close the issue once those land.
 - **#15:** **closed**. The toolchains fix is live in d739673a.
-- **#16:** the docs and agent-clis parts are merged. Left: shell-stdio's `FORCE_COLOR` only when stdout is a tty. Then close it.
+- **#16:** all parts are merged and deployed (docs, the agent-clis doctor, shell-stdio FORCE_COLOR). Verify it and close it.
 - **#17 (new, unclaimed, filed by the in-tab agent):**
   - `js-eval` runs code twice when it throws and can't run statements (`src/commands/jseval/js-eval-cmd.ts`).
   - It asks for a supported way to hot-swap core code: `reload --bundle`, exposing esbuild/Shell/kernel to js-eval, a `hotpatch --ttl` safety net, and in-tab vitest (blocked by #13).

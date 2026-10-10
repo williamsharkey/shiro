@@ -707,6 +707,51 @@ describe('shell job control for kernel jobs', () => {
     expect((await sh('timeout -k x 1 true; echo "rc=$?"')).output).toContain('rc=125');
   });
 
+  it('tty names the terminal; without one (or with stdin redirected) it says not a tty', async () => {
+    expect(await sh('tty')).toEqual({ output: `${tty.pty.name}\n`, exitCode: 0 });
+    expect(await sh('tty < /dev/null')).toEqual({ output: 'not a tty\n', exitCode: 1 });
+    expect(await sh('echo x | tty -s; echo $?')).toEqual({ output: '1\n', exitCode: 0 });
+    let out = '';
+    expect(await shell.execute('tty', (s) => { out += s; })).toBe(1);
+    expect(out.replace(/\r\n/g, '\n')).toBe('not a tty\n');
+    // test -t / [[ -t ]] agree
+    expect((await sh('[ -t 0 ] && [[ -t 1 ]] && echo both; [ -t 0 ] < /dev/null || echo redirected; x=$([ -t 1 ] || echo captured); echo $x')).output).toBe('both\nredirected\ncaptured\n');
+    out = '';
+    await shell.execute('[[ -t 1 ]] || echo no-terminal', (s) => { out += s; });
+    expect(out.replace(/\r\n/g, '\n')).toBe('no-terminal\n');
+  });
+
+  it('script -qc CMD /dev/null gives CMD a pty of its own; script logs to its file', async () => {
+    let out = '';
+    // no terminal at all (an agent's shell): CMD still gets one
+    expect(await shell.execute("script -qc 'tty; test -t 1 && echo on-a-tty' /dev/null", (s) => { out += s; })).toBe(0);
+    expect(out.replace(/\r\n/g, '\n')).toMatch(/^\/dev\/pts\/\d+\non-a-tty\n$/);
+    out = '';
+    const code = await shell.execute("cd /tmp && script -c 'echo logged; exit 3' log.txt; echo rc=$?", (s) => { out += s; }, (s) => { out += s; });
+    expect(code).toBe(0);
+    expect(out.replace(/\r\n/g, '\n')).toBe("Script started, output log file is 'log.txt'.\nlogged\nScript done, output log file is 'log.txt'.\nrc=3\n");
+    const log = String(await shell.fs.readFile('/tmp/log.txt', 'utf8'));
+    expect(log).toMatch(/^Script started on .* \[COMMAND="echo logged; exit 3" TERM="xterm-256color" TTY="\/dev\/pts\/\d+" COLUMNS="\d+" LINES="\d+"\]\nlogged\r\n\nScript done on .* \[COMMAND_EXIT_CODE="3"\]\n$/);
+  });
+
+  it('setsid runs a command off the terminal; -f does not wait', async () => {
+    expect(await sh('setsid tty; echo rc=$?')).toEqual({ output: 'not a tty\nrc=1\n', exitCode: 0 });
+    expect((await sh('setsid sh -c "exit 4"; echo rc=$?')).output).toBe('rc=4\n');
+    const t0 = Date.now();
+    expect((await sh('setsid -f sleep 2; echo back')).output).toBe('back\n');
+    expect(Date.now() - t0).toBeLessThan(1500);
+    expect((await sh('setsid')).exitCode).toBe(1);
+  });
+
+  it('a background builtin job has a /proc entry under $!, and kill and wait reach it', async () => {
+    const r = await sh('sleep 5 & p=$!; cat /proc/$p/comm; tr "\\0" " " < /proc/$p/cmdline; echo; ls /proc | grep -qx $p && echo listed; kill $p; wait $p; echo "wait=$?"; test -e /proc/$p || echo gone');
+    expect(r.output).toMatch(/^\[1\] \d+\nsleep\nsleep 5 \nlisted\nwait=143\ngone\n$/);
+  });
+
+  it('FORCE_COLOR is not exported: programs colour only on a tty', async () => {
+    expect((await sh('echo "[${FORCE_COLOR-unset}]"; env | grep -c ^FORCE_COLOR=')).output).toBe('[unset]\n0\n');
+  });
+
   it('a real kernel job: Ctrl-Z, jobs, fg', async () => {
     const kernel = new Kernel({ registerWithProcessTable: false });
     attachKernelTty(kernel); // the shared jobControl
