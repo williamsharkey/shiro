@@ -296,6 +296,38 @@ describe('git commands', () => {
       expect((await sh('cd /tmp/o && git log --format=%s')).out).toBe('two\nh\ninit\n');
     });
 
+    it('rebase goes to the full git package once it can be installed (a local stand-in for the package)', async () => {
+      await setup();
+      await sh('cd /tmp/o && git commit -qm init');
+      // `pkg install git` puts the full git at /usr/bin/git: here a script that says how it was called
+      const installs: string[] = [];
+      const pkgBefore = shell.commands.get('pkg');
+      try {
+        shell.commands.register({
+          name: 'pkg', description: 'stand-in',
+          async exec(ctx) {
+            installs.push(ctx.args.join(' '));
+            if (ctx.args[0] !== 'install' || ctx.args[1] !== 'git') return 1;
+            await ctx.fs.mkdir('/usr/bin', { recursive: true });
+            await ctx.fs.writeFile('/usr/bin/git', '#!/bin/sh\necho "full git in $(pwd): $*"\n', { mode: 0o755 });
+            return 0;
+          },
+        });
+        const r = await sh('cd /tmp/o && git rebase -q main');
+        expect(installs).toEqual(['install git']);
+        expect(r.out).toBe('full git in /tmp/o: rebase -q main\n');
+        expect(r.err).toContain('installed the full git');
+        // installed: used straight away the next time, without installing again
+        const again = await sh('cd /tmp/o && git cherry-pick abc');
+        expect(installs).toEqual(['install git']);
+        expect(again.out).toBe('full git in /tmp/o: cherry-pick abc\n');
+      } finally {
+        // (the next tests use the built-in alone again)
+        await fs.unlink('/usr/bin/git').catch(() => {});
+        shell.commands.register(pkgBefore ?? { name: 'pkg', description: 'offline', exec: async () => 1 });
+      }
+    });
+
     it('unknown options and subcommands are errors, not ignored', async () => {
       await setup();
       const u = await sh('cd /tmp/o && git commit --bogus -m x');

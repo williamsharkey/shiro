@@ -26,6 +26,8 @@ export interface NodeGuestHooks {
   ttyStdin?(on: { data(text: string): void; end(): void; signal(sig: number): void }): {
     readonly reading: boolean; start(): void; pause(): void; setRaw(on: boolean): void; close(): void;
   };
+  /** What only the page can do: the clipboard, a server's preview pane */
+  page?: { clipboard(text: string): void; preview(port: number): void };
   /** Whether open handles (sockets, servers) keep the program running */
   busy?(): boolean;
 }

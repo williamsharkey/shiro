@@ -1,0 +1,44 @@
+From 02bade4b5a67ee2fa9a9f843cfc82630e7bd1b44 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 04:56:38 +0000
+Subject: [PATCH] Shiro wjit: compile instructions that straddle into the next
+ code page by default
+
+---
+ blink/wjit.c | 13 +++++++------
+ 1 file changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/blink/wjit.c b/blink/wjit.c
+index 0de9e83..e9da11d 100644
+--- a/blink/wjit.c
++++ b/blink/wjit.c
+@@ -81,11 +81,12 @@ static int g_wj_off;    // BLINK_WJIT_OFF: bitmask of categories to not inline
+ static long g_wj_max;   // BLINK_WJIT_MAX: stop compiling after this many
+ static long g_wj_dump = -1;
+ static int g_wj_maxblk = 64;  // BLINK_WJIT_BLOCKS (at most kMaxBlocks)
+-// BLINK_WJIT_STRADDLE=1: decode instructions that cross into the next code
+-// page (patch 0041). Off: with it, a forked child decoding .xz with
+-// liblzma's threads crashed in malloc or produced corrupt data (dpkg-deb
+-// in Debian mode), in one binary layout out of two, though each of the
+-// straddling instructions involved runs right on its own
++// Instructions that cross into the next code page are compiled (patch 0041)
++// when that page can't change either; BLINK_WJIT_STRADDLE=0 sends them to
++// the interpreter, as 0057 did by default. 0057's failure (a forked child
++// decoding .xz with liblzma's threads crashed in malloc in one binary
++// layout of two) no longer reproduces (20/20); left to the interpreter, a
++// straddler in a hot loop left compiled code and came back every pass
+ static bool g_wj_straddle;
+ static long g_wj_lo = -1, g_wj_hi = -1;  // BLINK_WJIT_BISECT=lo:hi (pc range)
+ static _Atomic(unsigned) g_wj_epoch;
+@@ -3545,7 +3546,7 @@ void WjInit(void) {
+     if (g_wj_maxblk < 1) g_wj_maxblk = 1;
+     if (g_wj_maxblk > kMaxBlocks) g_wj_maxblk = kMaxBlocks;
+   }
+-  g_wj_straddle = (s = getenv("BLINK_WJIT_STRADDLE")) && *s == '1';
++  g_wj_straddle = !((s = getenv("BLINK_WJIT_STRADDLE")) && *s == '0');
+   if ((s = getenv("BLINK_WJIT_BISECT"))) {
+     g_wj_lo = strtol(s, 0, 0);
+     g_wj_hi = strchr(s, ':') ? strtol(strchr(s, 58) + 1, 0, 0) : -1;
+-- 
+2.43.0
+

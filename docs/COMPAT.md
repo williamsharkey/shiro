@@ -856,6 +856,27 @@ ELF builds in Blink as kernel processes, Node builds on tabcomputer's `node`. Ru
 2026-10-09 with dummy API keys for the other vendors (a 401/400 from the
 vendor's API proves the network path).
 
+### On tabcomputer.com, 2026-10-10
+
+Re-checked on the live site (deploys 073944d…8a9231b) in headless Chromium,
+a fresh page per tool, with dummy keys. Times are wall time on that page.
+A real tool call (Bash `ls`, a file write) needs a model to ask for it, so it
+was not possible with dummy keys. Sign-in was checked up to the point where a
+real account takes over (the sign-in page opens and the CLI waits for the code).
+
+| Tool | Version | Install | `--version` | First screen | API with a dummy key | Sign-in | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Claude Code, native (default) | 2.1.296 | `claude install` 140 s | 3 s | 52 s | `-p`: "Invalid API key", ~100 s | `claude login` → `claude auth login`: the sign-in page opens in a tab (or an Open card), then "Paste code here" | Startup is ~48–52 s offline, mostly compiled guest code (perf-blink's profiles). With `TABCOMPUTER_NODE_WORKER=1`: same. |
+| Claude Code, `--npm` | 2.1.112 (reports 2.1.280) | installed at boot | 5–7 s | 14 s | `-p`: "Invalid API key", 4 s | `claude --npm login` → the in-session `/login` (URL, paste prompt) | 2.1.112's `auth login` has no paste prompt and could never finish here; fixed (ad91c0e). With `TABCOMPUTER_NODE_WORKER=1` it works but shows the first-run screens. |
+| OpenAI Codex | 0.162.1 | GitHub release tarball with the real curl (`pkg install curl`): 65 s | 4.7 s | — | `exec`: 401 on `wss://` and `https://api.openai.com`, ~50 s | not tried (ChatGPT sign-in) | `npm i -g @openai/codex` fails: npm skips its `linux-x64` platform package (the only implementation). One of three runs then hung in the HTTPS fallback until Ctrl-C. |
+| Grok Build (xAI) | 1.0.50 | `x.ai/cli/install.sh` after `pkg install curl`: 118 s | 2.4 s | — | `-p`: 400 "Incorrect API key", 25 s (148 s on 2026-10-09) | not tried | The builtin `curl` can't fetch the binary (browser fetch); the real curl goes through the relay. |
+| Gemini CLI | 0.63.0 | `npm i -g` 3 s | broken on 8a9231b, fixed in d505335 (11 s locally) | — | pending the deploy | not tried | Died at start: a process's `globalThis` broke a Proxy invariant for undici's dispatcher symbol. |
+| Antigravity (`agy`) | — | install.sh stopped: "Unknown parameter: pipefail" | pending | — | — | — | The shell took `set -euo pipefail` as `$1=pipefail`; fixed in d505335. |
+| opencode | 1.18.35 | `npm i -g`: platform package skipped, postinstall not run; `opencode.ai/install` ran `*)` as a command | pending | — | — | — | A `case` with two items inside `if` ran nothing; fixed in f2ddb76. |
+| aider | — | `aider.chat/install.sh`: uv died with glibc's `getaddrinfo` assertion (`IN6_IS_ADDR_V4MAPPED`) | pending | — | — | — | An IPv6 UDP socket connected to an IPv4 address reported a non-mapped source; fixed in the kernel (0a5e7e5). |
+
+### First pass (2026-10-09)
+
 | Tool | Version | Kind | Install | `--version` | Network | Timings | Blockers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Claude Code (native) | 2.1.295 | ELF, Bun 1.4.3 single-file exe; glibc (256 MB) and musl (250 MB) builds, dynamic | `claude.ai/install.sh` (tabcomputer substitutes the npm install; fetch the binary from `downloads.claude.ai/claude-code-releases/<v>/linux-x64-musl/claude`, plus `/lib/ld-musl-x86_64.so.1`) | **yes**: musl 2.1 s, glibc 2.2 s (since Blink 0044) | **musl: yes**: `-p "say hi"` reaches the Anthropic API through the kernel relay ("Invalid API key" for a dummy key) | `-p` to the API error (Node probe, same session): musl 107 s with JSC's JIT, 85 s with `BUN_JSC_useJIT=0`; glibc 170 s / 146 s. So `claude install --native` installs musl, and `claude --native` sets `BUN_JSC_useJIT=0` unless it is already set | glibc build: works since Blink patch 0044 (`--version` 2.2 s): glibc's `pthread_getattr_np` finds the main stack through `/proc/self/maps`, which Blink now answers from the guest's page table. `claude install --native` still installs the musl build (smaller, no glibc in the VFS needed). Live-token test not run: `CLAUDE_CODE_OAUTH_TOKEN` is not in this container's environment. |

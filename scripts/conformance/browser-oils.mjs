@@ -56,7 +56,9 @@ await page.evaluate(async ({ pyReprSrc, argvPySrc, testdata }) => {
   const argvPy = new Function(`${pyReprSrc}\n${argvPySrc}\nreturn argvPy;`)();
   commands.register({ name: 'argv.py', description: 'oils spec helper', async exec(ctx) { ctx.stdout += argvPy(ctx.args); return 0; } });
   commands.register({ name: 'printenv.py', description: 'oils spec helper', async exec(ctx) {
-    for (const n of ctx.args) ctx.stdout += (ctx.env[n] ?? 'None') + '\n';
+    // (an external program: it sees the exported environment, not every shell variable)
+    const env = ctx.shell?.exportedEnv?.() ?? ctx.env;
+    for (const n of ctx.args) ctx.stdout += (env[n] ?? 'None') + '\n';
     return 0;
   } });
   commands.register({ name: 'stdout_stderr.py', description: 'oils spec helper', async exec(ctx) {

@@ -277,6 +277,72 @@ untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
 
+### Harness: what `peak_rss` includes (DevTools response-body copies)
+
+perf-fs-shell noticed that under Playwright, DevTools keeps copies of
+response bodies in the renderer's PartitionAlloc buffer partition, and that
+counts in renderer RSS. Measured with a memory-infra dump
+(`h.bufferPartition()`), machine `e57125c23b92`:
+
+- The harness's own CDP session had `Network.enable` on for the whole
+  page (it counts boot requests and bytes). It now disables it right after
+  boot (`keepNetwork` keeps it). On its own this changed the npm/Vite peaks
+  by under 15 MiB.
+- Playwright's own Network/Fetch sessions (request events, the net-cache
+  routing) stay attached, and they can't be turned off. With them, the
+  buffer partition grows 3.8 → 29 MiB over an `npm install` with
+  typescript, and → 64 MiB after a first `claude --npm`.
+- Fetch-heavy steps now also record a `_net` twin: the peak minus the
+  buffer partition's growth over the step.
+
+| peak (MiB above pre-run) | raw | net | buffer growth |
+|---|---:|---:|---:|
+| `workload.peak_rss.claude_npm_first` | 414 | 385 | ~28 |
+| `workflow.peak_rss.vite_npm_i` | 187 | 139 | ~48 |
+| `workflow.peak_rss.vite_dev` | 332 | 332 | 0 |
+| `workload.peak_rss.ffmpeg_first` | 108 | 108 | 0 |
+| `workflow.peak_rss.go_run_first` | 488 | 488 | 0 |
+| `workflow.peak_rss.apt_update` | 656 | 656 | 0 |
+| `workflow.peak_rss.apt_install_hello` | 714 | 714 | 0 |
+
+So the inflation is real for npm (tens of MiB here, more in bigger
+installs) and absent for apt. apt fetches through the page's mirror route
+on the app origin, and Playwright doesn't intercept that. The apt and go
+peaks are the page's own memory. A/B deltas were never affected, because
+both sides carry the same overhead. Read the `_net` value for what a user's
+tab would use.
+
+### Integration 073944d → 6e69776: pipe throughput, bisected (unix/bench)
+
+The hourly compare A/B-confirmed isolated `kernel.pipe_throughput` 667 →
+555 MB/s, but with a wide interval. Re-running it in quick mode (8 rounds)
+didn't confirm it: +30% worse with a CI of −14…+75%, 7 of 8 rounds worse.
+Quick mode's 16 MiB samples span 240–1730 MB/s within one run. At 64 MiB ×
+15 samples the builds separate cleanly: 073944d 1596/1640 MB/s, 6e69776
+959/827 MB/s.
+
+Bisect of the merges at that size (median / p25):
+
+| commit | median / p25 (MB/s) |
+|---|---|
+| d120c5a | 1553 / 1413 |
+| 75115f9 | 1513 / 1326 |
+| **8265250** (perf-fs-shell merge) | **1046 / 572** |
+| be1123c | 1452 / 1303 |
+| **403bddc** | **1231 / 865** |
+
+`ab.mjs be1123c 403bddc` (10 runs × 5 rounds) confirms 1567 → 837 MB/s,
++39% worse, CI +23…+63%, all 5 rounds worse. 403bddc's hot-guest spin
+(`HOT_SPIN_MS` 0.25 ms, was 30 µs) has the page wait on one guest while the
+other side of the pipe goes unserved. Reported to unix/perf-fs-shell.
+
+The hourly run also found `workload.peak_rss.ffmpeg_warm` with "no samples
+on one side". That was another A/B filter gap: blocks gated on a group name
+(`workload.ffmpeg`) also record metrics outside it (`workload.peak_rss.*`).
+`h.wantsAny()` fixes that in the workloads and workflows suites (0dc160b).
+compare.mjs also no longer treats MiB moves under 1 MiB as candidates;
+0.06 → 0.46 MiB is below what 25 ms RSS sampling resolves.
+
 ### Integration b63f9d9 → 073944d: boot requests, and what wasn't real (unix/bench)
 
 **Boot requests, confirmed by the hourly compare.** Cold and warm boots go
@@ -618,6 +684,11 @@ three `data:` SVGs (traffic-light glyphs) that CDP counts. The +22 MiB RSS is
 composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts,
 a few MiB each. The terminal UI's +19 KiB is /dom, the sign-in hook and the
 other integration changes since db9f698, not desktop code.
+
+### unix/shell-stdio 9 — autoconf configure: case in subshells, trap comments, compound dups
+
+`node bench/ab.mjs HEAD~1 HEAD --suites shell,kernel --quick` (7c7f147 →
+dfac542): all 24 unchanged.
 
 ### unix/shell-stdio 8 — mapfile, pushd/popd, umask, trap DEBUG, PIPESTATUS
 
@@ -2017,8 +2088,8 @@ typescript@5`: 9,400 files and 98 MB in node_modules.
   - 101 MiB of ArrayBuffers, the FileSystem cache holding the files;
   - a 51 MiB JS heap, ~45 MiB of it npm's metadata cache (the abbreviated
     package documents of ~300 packages, kept for an hour);
-  - ~170 MiB not attributable, which stays after `rm -rf`: allocator slack
-    from the install.
+  - ~170 MiB not attributable, which stays after `rm -rf`. Entry 16 found
+    it is DevTools' copy of response bodies under Playwright, not Shiro.
 
   npm now trims its metadata cache to the most recently used 16 MB when the
   last npm command finishes. After the install the JS heap is 24 MiB and
@@ -2047,6 +2118,54 @@ version of the npm change: 112 metrics the same; `node.worker.fs_200` −10%.
 <!-- bench:table:begin -->
 Generated by `npm run bench` from `bench/results/2026-10-08-69296a9.json` on 2026-10-08 at 69296a9 (unix/bench).
 Environment: 4× Intel(R) Xeon(R) Processor @ 2.10GHz, 15.7 GiB, Linux 6.18.44-fc-v80 x64, Node v22.22.0, Chromium 141.0.7390.37 headless. 5 runs per metric unless *n* says otherwise; full mode, 445 s total.
+
+### unix/perf-fs-shell 16 — the RSS left after rm -rf, and built-in vs full git clone
+
+**The ~170 MiB that stays after `npm i` + `rm -rf` is DevTools, not Shiro.**
+Entry 15 called it allocator slack. It isn't. Chrome's memory-infra dump
+puts it in PartitionAlloc's `buffer` partition as live objects. It is not
+wasm (no instances alive afterwards) and not ArrayBuffers (backing stores
+are 16 MiB, mostly the FileSystem cache). The cause is the DevTools network
+agent's response-body buffer. Playwright enables `Network` on every page,
+and the renderer then keeps a copy of each response body, up to ~190 MiB.
+
+| 20 × `fetch()` + `arrayBuffer()` of a 6 MB file, after GC | buffer partition, live |
+|---|---:|
+| Playwright context with the bench's request interception | 314 MiB (incl. fulfilled copies) |
+| Playwright context, no interception | 156 MiB (60 fetches or 12 MB files: plateau at 187 MiB) |
+| plain CDP, no `Network.enable` | 3.4 MiB (= before) |
+| plain CDP after `Network.enable` | 156 MiB |
+
+A user's tab doesn't keep these bodies. Without them, what's left after
+`rm -rf` is ~40 MiB: a JS heap that grew 4.5 → 21 MiB, 16 MiB of FileSystem
+cache, and a few MiB of slack. Nothing here needs freeing. Bench
+`peak_rss` numbers for fetch-heavy workloads (npm, apt) include up to
+~190 MiB of this buffer. It is the same before and after a change, so A/B
+comparisons still hold, but the absolute numbers are too high.
+
+**git clone: built-in (isomorphic-git) vs the full git package**
+(`bench/git-clone-compare.mjs`). Same axios repo (494 files, 2,222 commits
+on the default branch, 28 MiB pack), served locally. The built-in git uses
+smart HTTP, the full git uses git:// over the relay.
+
+| | built-in | full git (Blink) | |
+|---|---:|---:|---|
+| `git clone --depth 1` | 1.5 s, +55–65 MiB | 6.0–7.2 s, +120–265 MiB | 4× |
+| `git clone` (full history) | **12.4 s**, +212–258 MiB | **95.5–96.6 s**, +184–278 MiB | 7.7× |
+| `git log --oneline` (2,222 commits) | 64 s | 2.4 s | |
+| `git status` | 0.1 s | 0.7 s | |
+
+- The built-in `git clone` defaults to `--depth 1` and a single branch.
+  Real git fetches all branches and tags, which here is 2,345 commits
+  instead of 2,222.
+- **Handoff works.** The full git package runs on a repo the built-in git
+  cloned: `status` (3.6 s the first time, while it refreshes the index),
+  `fsck` (clean), `log` and `commit`, for both shallow and full clones.
+- Routing `git clone` of http(s) URLs to the built-in git while the full
+  package is installed would cut a full clone from ~96 s to ~12 s. That
+  routing is compat-tools' call, so it hasn't been changed here. The other
+  direction matters too: history walks (`log`) belong to the full git,
+  which is 27× faster at them.
 
 ### Cross-origin isolated (SharedArrayBuffer, Blink, Worker processes)
 

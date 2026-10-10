@@ -28,8 +28,8 @@ export function createFakeProcess(
   const processEnv: Record<string, string> = {
     ...ctx.env,
     MCP_CONNECTION_NONBLOCKING: '1',
-    // Route API calls through CORS proxy when in browser
-    ...(typeof window !== 'undefined' && !ctx.env['ANTHROPIC_BASE_URL'] ? {
+    // Route API calls through CORS proxy when in browser (the page, or a guest's Worker)
+    ...((typeof window !== 'undefined' || (ctx as any).nodeGuest) && !ctx.env['ANTHROPIC_BASE_URL'] ? {
       ANTHROPIC_BASE_URL: `${getShiroOrigin()}/api/anthropic`,
     } : {}),
   };
@@ -265,7 +265,10 @@ function createStdout(ctx: CommandContext, stdoutBuf: string[], _st: SharedState
           const port = parseInt(portMatch[1]);
           if (port > 0 && port < 65536) {
             _st.portDetected = true;
-            import('../split-view').then(({ createSplitView }) => {
+            // (a kernel guest has no page of its own: the page opens it)
+            const guestPage = nodeGuestOf(ctx)?.page;
+            if (guestPage) guestPage.preview(port);
+            else import('../split-view').then(({ createSplitView }) => {
               createSplitView({ port, direction: 'right', title: `Server :${port}` });
             }).catch(() => {});
           }

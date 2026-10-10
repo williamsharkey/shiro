@@ -447,7 +447,7 @@ export class Kernel {
     // Shell builtins that are also programs (/bin/echo, /usr/bin/test, ...)
     if (inBin && SHELL_PROGRAMS.has(base)) return proc => this.runViaShell(proc, base);
     // Scripts and other executables the shell knows how to start
-    const found = path.includes('/') ? ((await this.fs?.exists(path)) ? path : null) : await shell.findExecutableInPath(path);
+    const found = path.includes('/') ? ((await this.fs?.exists(this.fs.resolvePath(path, _proc.cwd))) ? path : null) : await shell.findExecutableInPath(path);
     if (found) return proc => this.runViaShell(proc);
     return null;
   }

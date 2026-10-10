@@ -1,0 +1,259 @@
+From bc5af262f0e5be3dc96848af659065d1da13435b Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 04:26:36 +0000
+Subject: [PATCH] Shiro: signals carry their siginfo (the kernel's call 1030)
+ to SA_SIGINFO handlers; real-time signals keep every instance
+
+---
+ blink/blink.c        |  13 +++++
+ blink/machine.h      |   4 ++
+ blink/memorymalloc.c |   3 ++
+ blink/shiro.inc      | 116 +++++++++++++++++++++++++++++++++++++++----
+ blink/signal.c       |   8 ++-
+ 5 files changed, 134 insertions(+), 10 deletions(-)
+
+diff --git a/blink/blink.c b/blink/blink.c
+index 5a958b7..b8f9a68 100644
+--- a/blink/blink.c
++++ b/blink/blink.c
+@@ -269,6 +269,19 @@ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal(int sig) {
+   ShiroSignalSystem(g_shiro_system, sig);
+ }
+ 
++// the same with the signal's siginfo (the kernel's call 1030): its first 32
++// bytes as words (si_signo, si_errno, si_code, pad, pid/tid, uid/overrun,
++// value lo, value hi)
++EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_info(int sig, int w0, int w1, int w2,
++                                                  int w3, int w4, int w5, int w6,
++                                                  int w7) {
++  const int w[8] = {w0, w1, w2, w3, w4, w5, w6, w7};
++  struct System *s = g_shiro_system;
++  if (!s || sig < 1 || sig > 64) return;
++  ShiroQueueSiginfo(s, sig, w);
++  ShiroSignalSystem(s, sig);
++}
++
+ // the parent's System is going away while same-instance children run on
+ void ShiroDropSystem(void) {
+   g_shiro_system = 0;
+diff --git a/blink/machine.h b/blink/machine.h
+index 3d8676e..d4e42a4 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -310,6 +310,7 @@ struct System {
+   int sched_policy;  // sched_setscheduler (Shiro: SCHED_OTHER/BATCH/IDLE; nothing is scheduled by it)
+   bool kmask_ok;  // Shiro: the kernel has this process's signal mask...
+   u64 kmask;      // ...this one (the main thread's)
++  void *shiro_sigq;  // Shiro: siginfo of the kernel's signals not yet delivered
+ #ifdef HAVE_THREADS
+   pthread_cond_t_ machines_cond;
+   pthread_mutex_t_ machines_lock;
+@@ -673,6 +674,9 @@ void OpRetIw(P);
+ void OpSsePclmulqdq(P);
+ extern bool g_shiro_trace;
+ bool ShiroInVfork(void);
++bool ShiroTakeSiginfo(struct Machine *, int, u8 *);
++void ShiroQueueSiginfo(struct System *, int, const int *);
++void ShiroFreeSigq(struct System *);
+ extern bool g_shiro_prof;
+ void ShiroProfStep(struct Machine *, u64, bool, bool);
+ int ShiroProfWj(struct Machine *);
+diff --git a/blink/memorymalloc.c b/blink/memorymalloc.c
+index 4be848a..98ac836 100644
+--- a/blink/memorymalloc.c
++++ b/blink/memorymalloc.c
+@@ -505,6 +505,9 @@ void RemoveOtherThreads(struct System *s) {
+ 
+ void FreeSystem(struct System *s) {
+   THR_LOGF("pid=%d FreeSystem", s->pid);
++#ifdef __EMSCRIPTEN__
++  ShiroFreeSigq(s);
++#endif
+   unassert(dll_is_empty(s->machines));  // Use KillOtherThreads & FreeMachine
+   FreeHostPages(s);
+   unassert(!pthread_mutex_destroy(&s->machines_lock));
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 6e0b32d..1f2d523 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -213,22 +213,49 @@ static bool ShiroDirectCall(int nr, int args[12], void *data, int inlen,
+   return true;
+ }
+ 
+-static int ShiroKsys(int nr, int args[12], int as, void *data, int inlen, int outcap) {
+-  int r, sig, hi, a2[12];
+-  if (as || !ShiroDirectCall(nr, args, data, inlen, outcap, &r, &sig)) {
+-    return shiro_ksys(nr, args, as, data, inlen, outcap);
++void blink_shiro_signal_info(int, int, int, int, int, int, int, int, int);
++static bool g_shiro_siginfo = true;  // the kernel has call 1030
++static void ShiroDrainSignals(int);
++
++// A signal the kernel just handed over: its siginfo (1030) comes with it
++static void ShiroKernelSignal(int sig) {
++  int r, sig2 = 0, a2[12] = {sig};
++  i32 w[32];
++  if (g_shiro_siginfo && ShiroDirectCall(1030, a2, w, 0, 128, &r, &sig2)) {
++    if (r == -ENOSYS_LINUX) g_shiro_siginfo = false;
++    if (!r && w[0] == sig) {
++      blink_shiro_signal_info(sig, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
++    } else {
++      blink_shiro_signal(sig);
++    }
++    ShiroDrainSignals(sig2);  // (one that rode on that reply)
++    return;
+   }
+-  // a signal for the guest rode on the reply: queue it, then rt_sigreturn
+-  // (as GuestChannel.call and host.mjs's pool do)
+-  hi = args[0];
++  blink_shiro_signal(sig);
++}
++
++// queues each signal, then rt_sigreturn (as GuestChannel.call and
++// host.mjs's pool do), which may hand over the next
++static void ShiroDrainSignals(int sig) {
++  int a2[12];
+   while (sig) {
+-    blink_shiro_signal(sig);
++    ShiroKernelSignal(sig);
+     memset(a2, 0, sizeof(a2));
+     if (!ShiroDirectCall(15, a2, 0, 0, 0, &(int){0}, &sig)) {
+       shiro_ksys(15, a2, 0, 0, 0, 0);
+       sig = 0;
+     }
+   }
++}
++
++static int ShiroKsys(int nr, int args[12], int as, void *data, int inlen, int outcap) {
++  int r, sig, hi;
++  if (as || !ShiroDirectCall(nr, args, data, inlen, outcap, &r, &sig)) {
++    return shiro_ksys(nr, args, as, data, inlen, outcap);
++  }
++  // a signal for the guest rode on the reply
++  hi = args[0];
++  ShiroDrainSignals(sig);
+   args[0] = hi;
+   return r;
+ }
+@@ -1729,6 +1756,76 @@ static i64 ShiroVfork(struct Machine *m, i64 stack, bool copystack) {
+ 
+ // The vfork child exec'd or exited: become the parent again; fork returns
+ // the child's pid.
++// ── siginfo of the kernel's signals ──────────────────────────────────────
++// The kernel hands a signal over by number (a reply's signal word) and its
++// siginfo on request (call 1030). Blink keeps the siginfo of each one sent
++// until it is delivered, oldest first, so a handler with SA_SIGINFO sees
++// the sender, si_code and sigqueue's value, and every instance of a
++// real-time signal (the kernel queues them) is delivered, not just one.
++struct ShiroSigInfo {
++  struct ShiroSigInfo *next;
++  int sig;
++  u8 info[32];
++};
++static pthread_mutex_t_ g_shiro_sigq_lock = PTHREAD_MUTEX_INITIALIZER_;
++
++void ShiroQueueSiginfo(struct System *s, int sig, const int *w) {
++  int n = 0;
++  struct ShiroSigInfo *q, **pp;
++  if (!(q = (struct ShiroSigInfo *)calloc(1, sizeof(*q)))) return;
++  q->sig = sig;
++  memcpy(q->info, w, 32);
++  LOCK(&g_shiro_sigq_lock);
++  for (pp = (struct ShiroSigInfo **)&s->shiro_sigq; *pp; pp = &(*pp)->next) ++n;
++  if (n < 1024) {
++    *pp = q;
++    q = 0;
++  }
++  UNLOCK(&g_shiro_sigq_lock);
++  free(q);
++}
++
++// Takes the oldest siginfo queued for `sig` into `si` (32 bytes; none: just
++// drops it). With more of that signal queued, it stays pending in `m`.
++bool ShiroTakeSiginfo(struct Machine *m, int sig, u8 *si) {
++  bool more = false;
++  struct System *s = m->system;
++  struct ShiroSigInfo *q = 0, *r, **pp;
++  if (!s->shiro_sigq) return false;
++  LOCK(&g_shiro_sigq_lock);
++  for (pp = (struct ShiroSigInfo **)&s->shiro_sigq; *pp; pp = &(*pp)->next) {
++    if ((*pp)->sig == sig) {
++      q = *pp;
++      *pp = q->next;
++      break;
++    }
++  }
++  for (r = q ? *pp : 0; r; r = r->next) {
++    if (r->sig == sig) {
++      more = true;
++      break;
++    }
++  }
++  UNLOCK(&g_shiro_sigq_lock);
++  if (!q) return false;
++  if (si) memcpy(si, q->info, 32);
++  free(q);
++  if (more) {
++    m->signals |= (u64)1 << (sig - 1);
++    atomic_store_explicit(&m->attention, true, memory_order_release);
++  }
++  return true;
++}
++
++void ShiroFreeSigq(struct System *s) {
++  struct ShiroSigInfo *q, *n;
++  LOCK(&g_shiro_sigq_lock);
++  q = (struct ShiroSigInfo *)s->shiro_sigq;
++  s->shiro_sigq = 0;
++  UNLOCK(&g_shiro_sigq_lock);
++  for (; q; q = n) n = q->next, free(q);
++}
++
+ // A thread running a vfork child takes no signals: on Linux the parent is
+ // suspended in vfork, so what is sent to it stays pending until the child
+ // execs or exits (ShiroVforkReturn sets attention). Delivering one ran the
+@@ -3049,7 +3146,8 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+         UNLOCK(&m->system->sig_lock);
+         if (got) {
+           memset(si, 0, 128);
+-          Write32(si, sig);  // si_code 0: SI_USER
++          ShiroTakeSiginfo(m, sig, si);
++          Write32(si, sig);  // (none queued: si_code 0, SI_USER)
+           r = sig;
+           break;
+         }
+diff --git a/blink/signal.c b/blink/signal.c
+index 00ec5e4..5c5e04d 100644
+--- a/blink/signal.c
++++ b/blink/signal.c
+@@ -90,6 +90,9 @@ void DeliverSignal(struct Machine *m, int sig, int code) {
+     SYS_LOGF("delivering %s {.si_code = %d, .si_addr = %#" PRIx64 "}",
+              DescribeSignal(sig), code, m->faultaddr);
+   } else {
++    // what the kernel sent with it: sender, si_code, sigqueue's value
++    ShiroTakeSiginfo(m, sig, (u8 *)&sf.si);
++    Write32(sf.si.signo, sig);
+     SYS_LOGF("delivering %s, {.si_code = %d}", DescribeSignal(sig), code);
+     if (sig == SIGTRAP_LINUX) {
+       Write64(sf.uc.trapno, m->trapno);
+@@ -243,6 +246,9 @@ static int ConsumeSignalImpl(struct Machine *m, int *delivered, bool *restart) {
+     sig = bsr(signals) + 1;
+     m->signals &= ~((u64)1 << (sig - 1));
+     handler = Read64(m->system->hands[sig - 1].handler);
++    if (handler == SIG_DFL_LINUX || handler == SIG_IGN_LINUX) {
++      ShiroTakeSiginfo(m, sig, 0);  // (its siginfo goes with it)
++    }
+     if (handler == SIG_DFL_LINUX) {
+       if (IsSignalIgnoredByDefault(sig)) {
+         SYS_LOGF("ignoring %s", DescribeSignal(sig));
+@@ -279,7 +285,7 @@ int ConsumeSignal(struct Machine *m, int *delivered, bool *restart) {
+ 
+ void EnqueueSignal(struct Machine *m, int sig) {
+   if (m && (1 <= sig && sig <= 64)) {
+-    m->signals |= 1ul << (sig - 1);
++    m->signals |= (u64)1 << (sig - 1);  // (u64: long is 32 bits in wasm32, where 1ul << 33 gave SIGINT)
+     if ((m->signals & ~m->sigmask)) {
+       atomic_store_explicit(&m->attention, true, memory_order_release);
+     }
+-- 
+2.43.0
+

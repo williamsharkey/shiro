@@ -398,7 +398,8 @@ export async function executeNodeScript(
 
     // A script that reads piped stdin synchronously (fs.readFileSync(0), '/dev/stdin',
     // fs.readSync(0)) can't wait for a live stream: load it before the script runs
-    if (!ctx.stdinStream && /readFileSync\(\s*(?:0\s*[,)]|['"]\/dev\/stdin['"])|readSync\(\s*0\s*,/.test(code)) {
+    // (a guest's stdin is one too; a spawned child in the page leaves its live one be)
+    if ((!ctx.stdinStream || (ctx as any).nodeGuest) && /readFileSync\(\s*(?:0\s*[,)]|['"]\/dev\/stdin['"])|readSync\(\s*0\s*,/.test(code)) {
       await fakeProcess.stdin?.__fd0?.fill();
     }
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;

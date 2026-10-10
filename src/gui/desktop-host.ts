@@ -117,7 +117,13 @@ class DesktopCanvasWindow implements CanvasWindow {
   overlay(): HTMLElement { return this.surface.canvas.parentElement!; }
   show(): void { if (this.win.state === 'minimized') this.win.restore(); }
   hide(): void { /* rootless destroys unmapped windows instead */ }
-  activate(): void { this.win.focus(); }
+  activate(): void {
+    // createWindow() already focused a new window, before the X side listened:
+    // say so again, or the client never gets the focus until it is clicked
+    const was = this.win.focused;
+    this.win.focus();
+    if (was) this.emit('focus');
+  }
   setCursor(css: string): void { this.surface.setCursor(css); }
   destroy(): void {
     this.closing = true;

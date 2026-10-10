@@ -149,13 +149,14 @@ describe('node on a pty: process.stdin reads it as the foreground job', () => {
     const { shell } = await createTestShell();
     const t = ptyTerminal();
     shell.setTerminal(t.term);
-    let r = shell.execute(`node -e 'process.on("SIGINT", () => { console.log("caught"); process.exit(3) }); process.stdin.resume()'`, () => {}, () => {});
-    await until(() => t.tty.jobInForeground, t.screen);
+    // (typed once node says it listens: before that ^C ends it, as with node, and a guest takes a moment to start)
+    let r = shell.execute(`node -e 'process.on("SIGINT", () => { console.log("caught"); process.exit(3) }); process.stdin.resume(); console.log("ready")'`, () => {}, () => {});
+    await until(() => t.tty.jobInForeground && t.screen().includes('ready'), t.screen);
     t.type('\x03');
     expect(await r).toBe(3);
     expect(t.screen()).toContain('caught');
-    r = shell.execute(`node -e 'process.stdin.resume()'`, () => {}, () => {});
-    await until(() => t.tty.jobInForeground, t.screen);
+    r = shell.execute(`node -e 'process.stdin.resume(); console.log("ready 2")'`, () => {}, () => {});
+    await until(() => t.tty.jobInForeground && t.screen().includes('ready 2'), t.screen);
     t.type('\x03');
     expect(await r).toBe(130);
   }, 30_000);
@@ -165,8 +166,7 @@ describe('node on a pty: process.stdin reads it as the foreground job', () => {
     const t = ptyTerminal();
     shell.setTerminal(t.term);
     const r = shell.execute(`node -e 'process.stdin.setRawMode(true); process.stdin.on("data", (d) => { console.log("key " + JSON.stringify(String(d))); if (String(d) === "q") process.exit(0) })'`, () => {}, () => {});
-    await until(() => t.tty.jobInForeground, t.screen);
-    expect(t.tty.pty.termios.lflag & 0o12).toBe(0); // ICANON, ECHO off
+    await until(() => t.tty.jobInForeground && (t.tty.pty.termios.lflag & 0o12) === 0, t.screen); // ICANON, ECHO off
     t.type('a');
     await until(() => t.screen().includes('key "a"'), t.screen);
     expect(t.screen()).not.toMatch(/^a/m); // not echoed

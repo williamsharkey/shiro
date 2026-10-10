@@ -751,6 +751,58 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    `go run` hang). perf-kernel's gowait stress (60 rounds of 8 parallel
    os/exec children, BLINK_FORK_STRESS=1) failed before; it passed 3 of 3
    runs after.
+92. Same-instance fork keeps page lock counts. Fork turns the parent's
+   MAP_SHARED pages into shared host pages. It moved each onto a fresh page
+   with a plain PTE store, dropping the lock count of a thread blocked in
+   the kernel on that page (a futex waiter in sem_wait). Its release then
+   failed `entry & PAGE_LOCKS` in memory.c (Open POSIX fork_21-1,
+   pthread_attr_destroy_1-1, about 1 run in 3). A page of its own is now
+   shared in place, with no copy and no free under a user. Block and
+   reserved pages still move, with a CAS that keeps the count. The child's
+   copies of the PTEs start with no locks; it inherited the parent's and
+   waited on them as it exited. fork_21-1 passes 12/12 and
+   pthread_attr_destroy_1-1 6/6.
+93. unix/conformance's: rt_sigqueueinfo hands its siginfo to the kernel; sched_*
+   take a thread's tid as the caller's own.
+94. FUTEX_WAKE_OP and the priority-inheritance futex ops (LOCK_PI,
+   LOCK_PI2, TRYLOCK_PI, UNLOCK_PI) were EINVAL. glibc aborts on that ("The
+   futex facility returned an unexpected error code") for
+   PTHREAD_PRIO_INHERIT mutexes, which TBB, OpenEXR and Blender use. The
+   word holds the owner's tid; a contended locker sets FUTEX_WAITERS and
+   waits on the word. It takes it with FUTEX_WAITERS when it had to wait,
+   so its unlock comes back to wake the rest. EDEADLK for the owner, EPERM
+   for an unlock by a non-owner, timeouts absolute as on Linux; priority
+   inheritance itself is a no-op. Test: fixtures/x86/futexpi.c (raw ops, 4
+   threads on a PI mutex, a timed lock), identical to native output.
+95. Signals carry their siginfo. A signal from the kernel arrives as a
+   number on a reply. Blink asks the kernel's call 1030 for its siginfo
+   (si_code, sender pid/uid, sigqueue's value, a timer's overrun) before
+   rt_sigreturn: in C for direct channels, in host.mjs for the pool and
+   the loader's channel. It keeps each one until the signal is delivered,
+   when it goes into the SA_SIGINFO frame. Each queued instance of a
+   real-time signal stays pending until all are delivered, in order.
+   Found on the way: EnqueueSignal used `1ul << (sig - 1)`, and long is
+   32 bits in wasm32, so signal 34 (SIGRTMIN) became bit 1, SIGINT. Every
+   real-time signal killed the process with status 130 (the Open POSIX
+   sigqueue tests' 130/160 exits). Test: fixtures/x86/siginfo.c,
+   identical to native output. An older kernel without 1030 gets the
+   number-only frames as before.
+100. Instructions that cross into the next code page are compiled again
+   (patch 41's decoding, which 57 had turned off), when that page can't
+   change either. 57's failure, liblzma's threaded decoder crashing in a
+   forked child in one binary layout, no longer reproduces: 20 of 20 runs
+   decode right. Left to the interpreter, a straddler inside a hot loop
+   made every pass leave compiled code for one instruction and come back.
+   agent-clis' sampled profile of native Claude's startup shows such loops
+   (0x434cffe: 461 k interpreted passes). BLINK_WJIT_STRADDLE=0 gives 57's
+   behaviour. The x86 suite A/B is unchanged ("same" everywhere).
+101. SHIRO_BLINK_MMLOG=3 logs, besides the mappings, each write, pwrite
+   and pwritev to a file (fd > 2): source address, length, offset and the
+   first 16 bytes as Blink gathered them. It shows whether data a file
+   lost (PostgreSQL's zeroed WAL page) left Blink intact.
+102. MAP_HUGETLB is ENOMEM, as on Linux with no huge pages reserved.
+   PostgreSQL's huge_pages=try then maps ordinary pages; Blink used to
+   accept the flag silently. Test: fixtures/x86/hugetlb.c.
 
 The page compiles blink.wasm once and gives the `WebAssembly.Module` to every
 Blink worker (src/x86-engine/blink.ts `blinkWasmModule`, host.mjs

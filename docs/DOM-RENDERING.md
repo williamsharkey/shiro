@@ -168,6 +168,34 @@ keep their real colour for the selection highlight and hide their glyphs
 with `-webkit-text-fill-color: transparent` (Chromium paints no selection
 for `color: transparent` text).
 
+## Qt 5: the QPainter hook (implemented)
+
+**`libshiro-qt-text-hook.so`** (`scripts/gui/text-hook/shiro-qt-text-hook.cpp`,
+36 KB; `build.sh` builds it against Debian 12's own Qt 5.15 headers and
+libraries, fetched and pinned by SHA-256) is preloaded into Qt 5 apps the same
+way. Qt Widgets draws labels, buttons, menus, tabs and list items through
+QStyle, which calls `QPainter::drawText` from libQt5Widgets into libQt5Gui:
+the exported overloads (point, rect + flags with `QRect` and `QRectF`, rect +
+`QTextOption`) are interposed. Each line is placed the way Qt aligns it in
+its rect (flags, mnemonics), mapped by the painter's world transform and the
+widget's offset into its toplevel, times the device pixel ratio, and gets
+the font's ascent and descent and the pen colour.
+
+Qt differs from GTK in one way that matters: it keeps a backing store and may
+put the same pixels on the window again without painting (an expose, a
+partial flush), which erases the spans there. So the hook keeps, per
+toplevel, the runs it shows: a `QPainter` begun on a widget (its constructor
+and `begin`, interposed the same way) clears the runs in that widget's area,
+its `drawText` calls add the new ones, and every time Qt puts pixels on the
+window (`xcb_copy_area`, `xcb_put_image`, `xcb_shm_put_image`, interposed in
+libxcb) the runs in that area follow on Qt's own connection to
+`_SHIRO_TEXT`. Text Qt lays out inside libQt5Gui (`QTextLayout`: line edits,
+text documents, QPdfView's labels) isn't reached; `SHIRO_QT_TEXT_DEBUG=1`
+logs the runs. FeatherPad, QTerminal, KeePassXC, KCalc and Krita report
+their text (docs/GUI_SCORE.md).
+
+![KeePassXC with its DOM spans outlined](screenshots/gui-qt-text.png)
+
 Results in Chromium, `?xtext=overlay` (`tests`: x11.test.ts "takes text runs
 from GTK apps"):
 
@@ -194,7 +222,7 @@ stacking (a menu's spans over a covered window still answer selection).
 | **Pango hook** (`LD_PRELOAD`) | `pango_renderer_draw_glyph_item(renderer, text, glyph_item, x, y)` gets the **paragraph text**, the item's offset and length, glyph positions and the font description. The cairo context gives the device transform and, for xlib surfaces, the target drawable's XID | every GTK 2/3 app (L3afpad, Mousepad, Ristretto, GIMP, Inkscape, NetSurf), anything else drawing with Pango | an x86-64 `.so` built once, loaded by Blink via `LD_PRELOAD`; a side channel to the page (a kernel pipe, or an X property on the drawable); map buffer coordinates to window coordinates (GTK 3 draws into the window's own surface at window offsets). Text comes with exact layout, so `overlay` mode keeps pixels exact |
 | **GTK 4 GSK render nodes** | a tree: colour, border, rounded clip, shadow, gradient, transform, opacity, texture, and **text nodes holding a PangoFont and glyph IDs, not characters** | GTK 4 apps (Debian 12: GTK 4.8, gnome-text-editor, …) | Debian's GTK 4 already has the **Broadway** backend (`gtk4-broadwayd`, `GskBroadwayRenderer`): a GSK→browser renderer that turns the tree into positioned DOM nodes with CSS, but sends text as rendered textures. Real text needs the item's characters (glyph→character needs the font's cmap, ambiguous with ligatures). Doable inside a patched renderer that walks back to the PangoLayout; that is a GTK patch, not "without knowing it" |
 | **AT-SPI accessibility tree** | roles, names, states, text contents with per-character extents, actions | GTK 2/3/4 and Qt 5 (with `QT_ACCESSIBILITY=1`), when the bridge is loaded | needs a D-Bus session bus (`dbus-daemon` in Blink) plus at-spi2-registryd and the atk-bridge (we set `NO_AT_BRIDGE=1` today). It gives **semantics** (an invisible ARIA tree over the pixels for screen readers, and text for find and select), not pixels. Laggy for live text; extents are approximate |
-| **Qt** | QPainter text via QFontEngine; QAccessible | Qt 5 apps | hooking C++ symbols in `libQt5Gui` is fragile; the AT-SPI route is cleaner |
+| **Qt** | QPainter text via QFontEngine; QAccessible | Qt 5 apps | done for QStyle-drawn text (the QPainter hook above); QTextLayout text stays out of reach of LD_PRELOAD |
 | **Tk** | Tk widgets are Tcl objects; text drawn with Xft (Debian's `libtk8.6` depends on libxft2) | Tk apps, Python's tkinter | client-side pixels like the others. A DOM-native Tk would be a Tk port, not interception |
 | **dialog / whiptail** | full-screen ncurses forms | shell scripts | they run in tabcomputer's terminal, which is already DOM text. Turning their boxes into native HTML dialogs means reimplementing `dialog`'s command line as a tabcomputer builtin (cheap: a few hundred lines), not interception |
 
