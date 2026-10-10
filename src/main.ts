@@ -898,6 +898,14 @@ async function main() {
       .then(() => console.log('[tabcomputer] Claude Code ready'))
       .catch((e) => console.warn('[tabcomputer] Claude Code background install failed:', e?.message || e));
   }, 3000);
+  // The other preinstall names are pkg packages (ca-certificates: the CA bundle
+  // native programs' TLS looks for at /etc/ssl/certs/ca-certificates.crt).
+  const pkgPreinstall = profile.preinstall.filter((n) => n !== 'claude-code');
+  if (pkgPreinstall.length) setTimeout(() => {
+    import('./pkg-manager').then((m) => m.preinstallPackages(fs, pkgPreinstall))
+      .then((done) => { if (done.length) console.log(`[tabcomputer] preinstalled ${done.join(', ')}`); })
+      .catch((e) => console.warn('[tabcomputer] package preinstall failed:', e?.message || e));
+  }, 2000);
 }
 
 // Guard: the entry chunk is inlined into HTML AND kept as a file for lazy chunk
