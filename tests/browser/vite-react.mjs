@@ -117,6 +117,19 @@ const browser = await chromium.launch({ executablePath: exe, args: ['--no-sandbo
 const context = await browser.newContext({ viewport: { width: 1400, height: 900 }, ignoreHTTPSErrors: !!proxy });
 const page = await context.newPage();
 globalThis.__page = page;
+// Behind a proxy (the cloud containers, where unpkg.com is refused): the page's
+// esbuild.wasm (src/commands/build.ts) from the repo's own esbuild-wasm, same version
+if (proxy) {
+  const { readFileSync, existsSync } = await import('node:fs');
+  const dir = new URL('../../node_modules/esbuild-wasm/', import.meta.url);
+  if (existsSync(new URL('esbuild.wasm', dir))) {
+    const { version } = JSON.parse(readFileSync(new URL('package.json', dir), 'utf8'));
+    await context.route(`https://unpkg.com/esbuild-wasm@${version}/esbuild.wasm`, (r) => r.fulfill({
+      status: 200, contentType: 'application/wasm', headers: { 'access-control-allow-origin': '*', 'cross-origin-resource-policy': 'cross-origin' },
+      body: readFileSync(new URL('esbuild.wasm', dir)),
+    }));
+  }
+}
 const errors = [];
 page.on('pageerror', (e) => errors.push(e.message + (process.env.VERBOSE ? ' @ ' + (e.stack || '').split('\n').slice(1, 6).join(' | ') : '')));
 const consoleErrors = [];

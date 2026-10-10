@@ -68,6 +68,8 @@ export interface SharedState {
   exitEnds?: boolean;
   /** Stdout goes to the terminal: there is one and stdout isn't piped or redirected */
   stdoutToTerminal: boolean;
+  /** Stderr goes to the terminal: there is one and stderr isn't redirected */
+  stderrToTerminal: boolean;
   /** Something was written to the terminal on stdout / stderr (so it isn't returned in ctx too) */
   streamedToTerminal: boolean;
   streamedStderr: boolean;

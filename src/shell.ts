@@ -496,13 +496,46 @@ export function splitEnvPrefix(segment: string): { assignments: ([string, string
  * is captured instead of going to the screen.
  */
 export function capturingStdout<T extends object>(term: T): T {
+  return capturing(term, true, false);
+}
+
+/**
+ * The terminal for what a builtin runs (sh -c, timeout): programs inside keep it
+ * for input but don't write on it what the builtin's redirects or pipe take
+ */
+export function terminalForCommand<T extends object>(term: T, ctx: { stdoutIsTTY?: boolean; stderrIsTTY?: boolean }): T {
+  const out = ctx.stdoutIsTTY === false, err = ctx.stderrIsTTY === false;
+  return out || err ? capturing(term, out, err) : term;
+}
+
+/** The terminal for commands whose stdout and/or stderr something else takes (a redirected compound) */
+function capturing<T extends object>(term: T, stdout: boolean, stderr: boolean): T {
+  const t0 = term as any;
+  stdout ||= !!t0.captureStdout;
+  stderr ||= !!t0.captureStderr;
   return new Proxy(term, {
     get(t, k) {
-      if (k === 'captureStdout') return true;
+      if (k === 'captureStdout') return stdout;
+      if (k === 'captureStderr') return stderr;
       const v = Reflect.get(t, k, t);
       return typeof v === 'function' ? v.bind(t) : v;
     },
   });
+}
+
+/** Builtins whose redirected output is written as it comes (they may run a server that never ends) */
+const STREAM_REDIRECT_CMDS = new Set(['node', 'nodejs', 'npm', 'npx']);
+
+/** Is fd 2 still the terminal after these redirects? (`stdoutTty`: fd 1 is, before them) */
+function stderrIsTty(redirects: Redirect[], stdoutTty: boolean): boolean {
+  let out = stdoutTty;
+  let err = true;
+  for (const r of redirects) {
+    if (r.type === '>' || r.type === '>>') out = false;
+    else if (r.type === '2>' || r.type === '2>>') err = false;
+    else if (r.type === '2>&1') err = out;
+  }
+  return err;
 }
 
 /** The terminal minus its pty session (for background work that must not become the foreground job) */
@@ -4262,6 +4295,8 @@ export class Shell {
           // (not when the caller collects stdout: $(...), a builtin's own sink)
           stdoutIsTTY: i === pipeline.length - 1 && !redirects.some(r => r.type === '>' || r.type === '>>') &&
             !(terminalOverride || this.terminal)?.captureStdout,
+          stderrIsTTY: !(terminalOverride || this.terminal)?.captureStderr &&
+            stderrIsTty(redirects, i === pipeline.length - 1 && !(terminalOverride || this.terminal)?.captureStdout),
         };
         if (fromEnclosingPipe) {
           let taken = false;
@@ -4350,6 +4385,21 @@ export class Shell {
           if (h) h.hits++;
           else this.hashTable.set(effectiveCmdName, { path: cmd ? `/usr/bin/${effectiveCmdName}` : (await this.findExecutableInPath(effectiveCmdName)) ?? `/usr/bin/${effectiveCmdName}`, hits: 1 });
         }
+        // node, npm and npx may run a server that never ends: their redirected output
+        // goes into the files as it comes (`npm run dev > log &` wrote nothing)
+        const liveOut = !live && (cmd ? STREAM_REDIRECT_CMDS.has(effectiveCmdName) : true)
+          ? await this.openLiveRedirects(redirects, stderrWriter) : null;
+        if (liveOut === 'failed') {
+          exitCode = 1;
+          this.redirectFailed = false;
+          pipeExitCodes.push(exitCode);
+          lastOutput = '';
+          continue;
+        }
+        if (liveOut) {
+          if (liveOut.out) ctx.streamStdout = liveOut.out;
+          if (liveOut.err) ctx.streamStderr = liveOut.err;
+        }
         if (cmd) {
           try {
             exitCode = live
@@ -4404,7 +4454,8 @@ export class Shell {
           }
         }
 
-        const output = await this.applyOutputRedirects(ctx.stdout, ctx.stderr, redirects, i === pipeline.length - 1, writeStdout, stderrWriter);
+        if (liveOut) await liveOut.flush();
+        const output = await this.applyOutputRedirects(ctx.stdout, ctx.stderr, liveOut ? liveOut.rest : redirects, i === pipeline.length - 1, writeStdout, stderrWriter);
 
         lastOutput = output;
         pipeExitCodes.push(exitCode);
@@ -4544,6 +4595,67 @@ export class Shell {
       writeStdout(output.replace(/\n/g, '\r\n'));
     }
     return output;
+  }
+
+  /**
+   * A command's `> file`, `>> file`, `2> file`, `2>&1` opened before it runs, with writers
+   * that append what it writes as it writes it (ctx.streamStdout/streamStderr), for
+   * programs that may never end. `rest`: the redirects that then take what it left in
+   * ctx (the files are already truncated). null: redirects this doesn't do (fds, fifos,
+   * /dev/*, process substitution, noclobber), left to applyOutputRedirects;
+   * 'failed': a file couldn't be opened (reported; the command doesn't run).
+   */
+  private async openLiveRedirects(redirects: Redirect[], stderrWriter: (s: string) => void):
+    Promise<{ out?: (s: string) => void; err?: (s: string) => void; rest: Redirect[]; flush: () => Promise<void> } | null | 'failed'> {
+    if (!redirects.some((r) => r.type === '>' || r.type === '>>' || r.type === '2>' || r.type === '2>>')) return null;
+    if (this.options.has('noclobber')) return null;
+    const writers = new Map<string, ((s: string) => void) & { flush: () => Promise<void> }>();
+    const appender = (path: string) => {
+      let pending = '';
+      let busy: Promise<void> | null = null;
+      const pump = async () => {
+        while (pending) {
+          const t = pending;
+          pending = '';
+          await this.fs.appendFile(path, t).catch(() => {});
+        }
+        busy = null;
+      };
+      return Object.assign((t: string) => { if (!t) return; pending += t; busy ??= pump(); }, { flush: () => busy ?? Promise.resolve() });
+    };
+    const drop = Object.assign((_t: string) => {}, { flush: () => Promise.resolve() });
+    // Where fds 1 and 2 go (undefined: where they went before)
+    let w1: ((s: string) => void) | undefined;
+    let w2: ((s: string) => void) | undefined;
+    const rest: Redirect[] = [];
+    for (const r of redirects) {
+      if (r.type === '<') { rest.push(r); continue; }
+      if (r.type === '2>&1') { w2 = w1; rest.push(r); continue; }
+      if (r.type !== '>' && r.type !== '>>' && r.type !== '2>' && r.type !== '2>>') return null;
+      const append = r.type === '>>' || r.type === '2>>';
+      let w: ((s: string) => void) & { flush: () => Promise<void> };
+      if (r.target === '/dev/null') w = drop;
+      else {
+        if (fdOfRef(r.target) !== null || r.target.startsWith('/dev/') || /^>\(/.test(r.target)) return null;
+        const path = this.fs.resolvePath(r.target, this.cwd);
+        if (writers.has(path)) {
+          if (!append) return null;
+          w = writers.get(path)!;
+        } else {
+          if (await fifo.isFifo(this, path)) return null;
+          if (!append || !(await this.fs.exists(path))) {
+            await this.redirectWrite(path, r.target, '', false, stderrWriter);
+            if (this.redirectFailed) return 'failed';
+          }
+          w = appender(path);
+          writers.set(path, w);
+        }
+      }
+      if (r.type === '>' || r.type === '>>') w1 = w; else w2 = w;
+      // (the file is open: what is left at the end is appended)
+      rest.push(w === drop ? r : { ...r, type: r.type === '>' || r.type === '>>' ? '>>' : '2>>' });
+    }
+    return { out: w1, err: w2, rest, flush: async () => { await Promise.all([...writers.values()].map((w) => w.flush())); } };
   }
 
   /** Write a redirect's file; a failure (a directory, a bad path) is reported and fails the command */
@@ -7046,11 +7158,17 @@ export class Shell {
       }
     }
     let code: number;
+    // Programs inside don't write to the terminal what the compound's redirects take
+    // (`(node x.js) > f` printed on the screen and left f empty)
+    const outerTerminal = this.activeTerminal;
+    const term = this.activeTerminal ?? this.terminal;
+    if (term && (out !== writeStdout || err !== writeStderr)) this.activeTerminal = capturing(term, out !== writeStdout, err !== writeStderr);
     try {
       code = stdin === undefined
         ? await this.execControlStructureCore(compound, out, err)
         : await this.execControlStructureWithStdin(compound, stdin, out, err);
     } finally {
+      this.activeTerminal = outerTerminal;
       await fdWrites;
       restoreFds();
     }
@@ -7098,7 +7216,8 @@ export class Shell {
       if (this.injectedStdin) child.kernelStdinLive = false;
       this.injectedStdin = null;
       const inner = input.slice(1, -1).trim();
-      return inner ? child.runSubshell(inner, writeStdout, writeStderr, this.terminal) : 0;
+      // (on the terminal of the execute() in progress: a redirected compound's captures)
+      return inner ? child.runSubshell(inner, writeStdout, writeStderr, this.activeTerminal ?? this.terminal) : 0;
     }
     if (isBraceGroup(input)) {
       // { list; } runs in the current shell
@@ -8216,7 +8335,7 @@ export class Shell {
     if (handled) lastRedirects = [];
     const crlf = (w: (s: string) => void) => (t: string) => w(t.replace(/\r?\n/g, '\r\n'));
     const captureStdout = last < pipeline.length - 1 || hasOutRedirect(lastRedirects) || (!stdoutTo && !!terminal?.captureStdout);
-    const captureStderr = hasOutRedirect(lastRedirects);
+    const captureStderr = hasOutRedirect(lastRedirects) || !!terminal?.captureStderr;
     // In a shell that is a kernel process the programs get its own fds when
     // nothing in between needs the data as a string (shell-stdio.ts)
     const ks = this.kernelStdio;
@@ -8665,7 +8784,8 @@ export class Shell {
     for (const o of opts?.off ?? []) child.options.delete(o);
     // Its first command reads the script's stdin, unless that is the shell's fd 0
     if (!ctx.liveStdin) child.setInjectedStdin(ctx.stdin);
-    return child.runScriptText(content, ctx.terminal, writeStdout, writeStderr);
+    // (`./s.sh > f`: what its programs print goes to f, not the screen)
+    return child.runScriptText(content, ctx.terminal && terminalForCommand(ctx.terminal, ctx), writeStdout, writeStderr);
   }
 
   /** Stdin for the next command this shell runs (`… | sh -c CMD`) */

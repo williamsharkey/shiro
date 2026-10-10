@@ -29,6 +29,8 @@ export interface CommandContext {
   terminal?: TerminalLike;
   /** false when stdout goes to a pipe or file (ls then prints one name per line, like coreutils) */
   stdoutIsTTY?: boolean;
+  /** false when stderr goes to a file or pipe (2> file, 2>&1 with stdout redirected) */
+  stderrIsTTY?: boolean;
   /**
    * The command's stdin is fd 0 of the kernel process ctx.shell runs as, not
    * ctx.stdin: read it with ctx.shell.kernelStdio (src/shell-stdio.ts).
