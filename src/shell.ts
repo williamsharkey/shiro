@@ -167,6 +167,10 @@ export interface BackgroundJob {
   pids?: number[];
   /** Kernel jobs: tty modes saved when the job stopped */
   termios?: import('./kernel/pty').Termios;
+  /** In-page jobs: the child shell running it, its parent's pid and start time (its /proc/PID) */
+  shell?: Shell;
+  ppid?: number;
+  startMs?: number;
 }
 
 /** bash's shopt options, and those on by default in a non-interactive bash */
@@ -271,9 +275,6 @@ const inPageJobs = new Map<number, BackgroundJob>();
 export function inPageJobForPid(pid: number): BackgroundJob | undefined {
   return inPageJobs.get(pid);
 }
-/** What ps and /proc show for an in-page job: the shell running it, who started it, when */
-const inPageJobInfo = new WeakMap<BackgroundJob, { shell: Shell; ppid: number; startMs: number }>();
-
 /** Signals whose default action doesn't end a process (0, SIGCHLD, SIGCONT, the stops, SIGURG, SIGWINCH) */
 const NON_TERMINATING = new Set([0, 17, 18, 19, 20, 21, 22, 23, 28]);
 /** `kill -SIG` to an in-page job: a terminating signal aborts it and its status becomes 128+SIG */
@@ -286,17 +287,9 @@ export function signalInPageJob(job: BackgroundJob, sig: number): void {
   job.signal = sig;
 }
 
-function inPageJobProcInfo(pid: number) {
-  const job = inPageJobs.get(pid);
-  const info = job && inPageJobInfo.get(job);
-  if (!job || !info) return undefined;
-  const cmdline = job.command.trim().split(/\s+/);
-  const comm = (cmdline[0].split('/').pop() || 'sh').slice(0, 15);
-  return { job, info, cmdline, comm };
-}
-
-// In-page background jobs are processes to ps, /proc and kill(2): `sleep 30 &`
-// with the builtin sleep has a pid that `ps`, `ls /proc/$!` and Debian's kill see
+// In-page background jobs are processes to ps and kill(2) too (/proc/PID is
+// below): `sleep 30 &` with the builtin sleep is listed, and Debian's kill
+// reaches it through the kernel
 processTable.attachSource({
   list: () => [...inPageJobs.keys()].map((pid) => inPageJobView(pid)!).filter(Boolean),
   get: (pid) => inPageJobView(pid),
@@ -308,25 +301,14 @@ processTable.attachSource({
   },
 });
 function inPageJobView(pid: number): ShiroProcess | undefined {
-  const p = inPageJobProcInfo(pid);
-  if (!p) return undefined;
+  const job = inPageJobs.get(pid);
+  if (!job) return undefined;
   return {
-    pid, command: p.job.command.trim(), status: 'running', exitCode: 0, startTime: p.info.startMs,
-    windowTerminal: null, serverWindow: null, promise: p.job.promise,
-    kill: () => signalInPageJob(p.job, 15), abortController: null,
+    pid, command: job.command.trim(), status: 'running', exitCode: 0, startTime: job.startMs ?? Date.now(),
+    windowTerminal: null, serverWindow: null, promise: job.promise,
+    kill: () => signalInPageJob(job, 15), abortController: null,
   };
 }
-addProcInfoSource({
-  get(pid) {
-    const p = inPageJobProcInfo(pid);
-    if (!p) return undefined;
-    return {
-      pid, ppid: p.info.ppid, pgid: pid, sid: p.info.ppid, comm: p.comm, state: 'S', cmdline: p.cmdline,
-      cwd: p.info.shell.cwd, environ: p.info.shell.exportedEnv(), startMs: p.info.startMs,
-    };
-  },
-  list: () => [...inPageJobs.keys()],
-});
 
 /** Newlines as `; `, except inside quotes ('…', "…", $'…'), where they are text */
 function newlinesToSemicolons(s: string): string {
@@ -407,6 +389,17 @@ let activeShell: WeakRef<Shell> | undefined;
 /** In-page shells in /proc: their own pids, the shell running in-page commands as /proc/self */
 addProcInfoSource({
   get(pid) {
+    const job = inPageJobs.get(pid);
+    if (job?.shell) {
+      // an in-page background job ($!): its command, run by a child shell
+      const argv = job.command.trim().split(/\s+/);
+      const comm = argv[0].slice(argv[0].lastIndexOf('/') + 1);
+      return {
+        pid, ppid: job.ppid ?? 1, pgid: pid, sid: job.ppid ?? pid, comm, state: 'S', cmdline: argv,
+        cwd: job.shell.cwd, environ: job.shell.exportedEnv(), exe: argv[0].startsWith('/') ? argv[0] : `/usr/bin/${comm}`,
+        startMs: job.startMs,
+      };
+    }
     const active = activeShell?.deref();
     const sh = shellForPid(pid) ?? (active?.shellPid === pid ? active : undefined);
     if (!sh) return undefined;
@@ -419,7 +412,7 @@ addProcInfoSource({
   },
   list() {
     const active = activeShell?.deref();
-    return [...shellsByPid.keys(), ...(active ? [active.shellPid] : [])];
+    return [...shellsByPid.keys(), ...(active ? [active.shellPid] : []), ...inPageJobs.keys()];
   },
 });
 setProcSelf(() => activeShell?.deref()?.shellPid);
@@ -548,7 +541,7 @@ export function capturingStdout<T extends object>(term: T): T {
 }
 
 /** The terminal minus its pty session (for background work that must not become the foreground job) */
-export function withoutTty<T extends object>(term: T): T {
+function withoutTty<T extends object>(term: T): T {
   return new Proxy(term, {
     get(t, k) {
       if (k === 'tty') return undefined;
@@ -849,8 +842,8 @@ export class Shell {
       PWD: '/home/user',
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',
-      // (no FORCE_COLOR: programs get FORCE_COLOR=3 only when their stdout is
-      // the terminal, so `npm test | cat` and `cmd > log` stay free of escapes)
+      // (no FORCE_COLOR: programs colour when their stdout is a tty, and
+      // chalk, npm and python tracebacks put no escapes into pipes and files)
     };
     // Load history async (don't block construction)
     this.loadHistory();
@@ -1460,6 +1453,9 @@ export class Shell {
       status: 'running',
       exitCode: 0,
       pid,
+      shell: child,
+      ppid: this.bashPid,
+      startMs: Date.now(),
       abortController: abort,
       ignoresIntQuit: this.scriptShell && !this.options.has('monitor'),
       // No tty for in-page background work: kernel programs inside it must not take the terminal
@@ -1481,7 +1477,6 @@ export class Shell {
       ),
     };
     this.backgroundJobs.set(jobId, job);
-    inPageJobInfo.set(job, { shell: child, ppid: this.bashPid, startMs: Date.now() });
     if (job.status === 'running') inPageJobs.set(pid, job);
     this.env['!'] = String(pid);
     // An interactive shell reports the job; a script doesn't
@@ -2011,6 +2006,14 @@ export class Shell {
       else if (inp) out.push({ fd: n, content: inp.content.slice(inp.offset) });
     }
     return out;
+  }
+
+  /** [[ -t FD ]]: is the descriptor a terminal (a kernel shell's own fds, else the page terminal) */
+  private fdIsTerminal(fd: number): boolean {
+    if (this.kernelStdio) return this.kernelStdio.file(fd)?.kind === 'pty';
+    const term = this.activeTerminal ?? this.terminal;
+    if (!term || fd > 2 || this.userFds.has(fd)) return false;
+    return fd !== 1 || !(term as { captureStdout?: boolean }).captureStdout;
   }
 
   /** Write command output to fd n's target */
@@ -7650,6 +7653,7 @@ export class Shell {
         if (n.op === '-o') return this.options.has(v);
         if (n.op === '-R') return this.namerefs.has(v);
         if (n.op === '-a') return new TestEval([], this.fs, this.cwd).unary('-e', v);
+        if (n.op === '-t') return /^\d+$/.test(v) && this.fdIsTerminal(Number(v));
         return new TestEval([], this.fs, this.cwd).unary(n.op, v);
       }
       case 'binary': {
@@ -8642,6 +8646,10 @@ export class Shell {
     // The command's own context, as `node FILE` gets it: its redirects and pipes (stdoutIsTTY,
     // streamStdout…) with it; `./x.js > out` wrote to the terminal while the shell had one
     ctx.args = [filePath, ...args];
+    // and its output as it comes, to the writers this command has (a server never ends:
+    // vite's dev server under `npm run dev` printed nothing)
+    ctx.streamStdout ??= (t) => writeStdout(t.replace(/\r?\n/g, '\r\n'));
+    ctx.streamStderr ??= (t) => writeStderr(t.replace(/\r?\n/g, '\r\n'));
     return this.runCommand(nodeCmd, ctx);
   }
 

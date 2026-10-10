@@ -1,4 +1,5 @@
 import { LiveStdin } from './live-stdin';
+import { asyncContext } from './async-context';
 import type { CommandContext } from '../commands/index';
 import type { SharedState } from './types';
 import { ProcessExitError } from '../commands/jseval/utils';
@@ -115,7 +116,7 @@ export function createFakeProcess(
     emit: (event: string, ...args: any[]) => {
       (processEvents[event] || []).forEach(fn => fn(...args));
     },
-    nextTick: (fn: Function, ...args: any[]) => { queueMicrotask(() => fn(...args)); },
+    nextTick: (fn: Function, ...args: any[]) => { const run = asyncContext.bind(() => fn(...args)); queueMicrotask(run); },
     hrtime: Object.assign(
       (prev?: [number, number]) => {
         const now = performance.now();

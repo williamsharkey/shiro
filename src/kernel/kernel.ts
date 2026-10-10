@@ -791,6 +791,12 @@ export class Kernel {
     targets = targets.filter(p => this.maySignal(sender, p, sig));
     if (targets.length === 0) return -A.EPERM;
     if (sig === 0) return 0;
+    // Group signals are rare and hard to trace afterwards (a program killpg'ing
+    // its own foreground job): say who sent what to whom
+    if (pid <= 0 && sender !== this.init) {
+      const to = pid === 0 ? `its own process group ${sender.pgid}` : pid === -1 ? 'every process' : `process group ${-pid}`;
+      klog.logRatelimited(LOG_INFO, `signal: ${sender.comm}[${sender.pid}] sent ${sigName(sig)} to ${to} (${targets.length} process${targets.length === 1 ? '' : 'es'})`);
+    }
     for (const p of targets) this.deliver(p, sig, { signo: sig, code: A.SI_USER, pid: sender.pid, uid: sender.uid });
     return 0;
   }
@@ -841,7 +847,9 @@ export class Kernel {
     }
     switch (A.defaultSignalAction(sig)) {
       case 'term': void this.exit(proc, A.W_TERMSIG(sig)); break;
-      case 'stop': this.stopProcess(proc, sig); break;
+      case 'stop':
+        klog.logRatelimited(LOG_INFO, `signal: ${proc.comm}[${proc.pid}] stopped by ${sigName(sig)}`);
+        this.stopProcess(proc, sig); break;
       default: break;
     }
   }
@@ -2616,7 +2624,9 @@ export class Kernel {
           const name = str(0, args[0]);
           if (name.length > 249) return -A.EINVAL;
           if (args[1] & ~(A.MFD_CLOEXEC | A.MFD_ALLOW_SEALING)) return -A.EINVAL;
-          return fds.alloc(new MemFile(`/memfd:${name} (deleted)`), 0, (args[1] & A.MFD_CLOEXEC) !== 0);
+          const file = new MemFile(`/memfd:${name} (deleted)`);
+          if (args[1] & A.MFD_ALLOW_SEALING) file.seals = 0;
+          return fds.alloc(file, 0, (args[1] & A.MFD_CLOEXEC) !== 0);
         }
         case A.SYS_prlimit64: { // pid, resource, set → data: old {cur, max} (u64s); a new one first when set
           // RLIMIT_NOFILE only (the fd table's): engines keep the other limits
@@ -2787,6 +2797,18 @@ export class Kernel {
         if (size < 0) return -A.EINVAL;
         if (size > A.PIPE_MAX_SIZE) return -A.EPERM;
         return f.pipe.resize(size);
+      }
+      case A.F_ADD_SEALS:
+      case A.F_GET_SEALS: {
+        // memfds only (Linux: shmem files; anything else is EINVAL)
+        if (!(f instanceof MemFile)) return -A.EINVAL;
+        if (cmd === A.F_GET_SEALS) return f.seals;
+        const known = A.F_SEAL_SEAL | A.F_SEAL_SHRINK | A.F_SEAL_GROW | A.F_SEAL_WRITE | A.F_SEAL_FUTURE_WRITE;
+        if (arg & ~known) return -A.EINVAL;
+        if ((f.flags & A.O_ACCMODE) === A.O_RDONLY) return -A.EPERM;
+        if (f.seals & A.F_SEAL_SEAL) return -A.EPERM;
+        f.seals |= arg;
+        return 0;
       }
       default: return -A.EINVAL;
     }
@@ -3196,4 +3218,11 @@ function setCredentials(proc: Process, nr: number, args: ArrayLike<number>, data
     case A.SYS_setfsgid: return g.e;
   }
   return -A.ENOSYS;
+}
+
+const SIG_NAMES = ['', 'HUP', 'INT', 'QUIT', 'ILL', 'TRAP', 'ABRT', 'BUS', 'FPE', 'KILL', 'USR1', 'SEGV', 'USR2', 'PIPE', 'ALRM', 'TERM',
+  'STKFLT', 'CHLD', 'CONT', 'STOP', 'TSTP', 'TTIN', 'TTOU', 'URG', 'XCPU', 'XFSZ', 'VTALRM', 'PROF', 'WINCH', 'IO', 'PWR', 'SYS'];
+/** SIGINT, SIGRTMIN+3, … for log lines */
+function sigName(sig: number): string {
+  return SIG_NAMES[sig] ? `SIG${SIG_NAMES[sig]}` : sig >= 32 ? `SIGRTMIN+${sig - 32}` : `signal ${sig}`;
 }

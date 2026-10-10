@@ -489,12 +489,6 @@ async function main() {
     () => import('./commands/man').then(m => m.manCmd)), 'src/commands/man.ts');
   registerCommand(commands, lazyCommand('tmux', 'Terminal multiplexer',
     () => import('./commands/tmux').then(m => m.tmuxCmd)), 'src/commands/tmux.ts');
-  registerCommand(commands, lazyCommand('tty', 'Print the file name of the terminal connected to standard input',
-    () => import('./commands/session').then(m => m.ttyCmd)), 'src/commands/session.ts');
-  registerCommand(commands, lazyCommand('setsid', 'Run a program in a new session',
-    () => import('./commands/session').then(m => m.setsidCmd)), 'src/commands/session.ts');
-  registerCommand(commands, lazyCommand('script', 'Run a command on a new terminal and record its output',
-    () => import('./commands/session').then(m => m.scriptCmd)), 'src/commands/session.ts');
   registerCommand(commands, lazyCommand('systemctl', 'Control the system service manager',
     () => import('./commands/systemctl').then(m => m.systemctlCmd)), 'src/commands/systemctl.ts');
   registerCommand(commands, lazyCommand('crontab', 'Maintain crontab files',
@@ -896,6 +890,14 @@ async function main() {
       void import('./commands/remote').then(m => m.startRemoteWithCode(persistedCode, terminal));
     }
   }
+
+  // Prebuilt packages installed at a build the index marks broken are
+  // upgraded in the background (pkg-manager.ts upgradeBrokenPackages)
+  setTimeout(() => {
+    void import('./pkg-manager').then((m) => m.upgradeBrokenPackages(fs, { env: shell.env, log: (l) => console.log(`[pkg] ${l}`) }))
+      .then((names) => { if (names?.length) console.log(`[pkg] upgraded known-broken packages: ${names.join(', ')}`); })
+      .catch((e) => console.warn('[pkg] upgrade of known-broken packages failed:', e?.message || e));
+  }, 2000);
 
   // Have Claude Code ready before anyone types `claude` (the profile's preinstall
   // list). Waits a few seconds so the 18 MB tarball download doesn't compete with boot.

@@ -1,5 +1,5 @@
 /**
- * tty, setsid and script (williamsharkey/tabcomputer#14): a command's
+ * tty, setsid and script (williamsharkey/tabcomputer#14), beyond kernel-pty.test.ts: a command's
  * terminal, running without one, and running on a fresh one.
  */
 import { describe, it, expect, beforeAll } from 'vitest';
@@ -70,8 +70,8 @@ describe('script', () => {
   });
   it('without -q says where the log goes', async () => {
     const r = await sh('script -c true /dev/null');
-    expect(r.err).toContain("Script started, output log file is '/dev/null'.");
-    expect(r.err).toContain("Script done, output log file is '/dev/null'.");
+    expect(r.out).toContain("Script started, output log file is '/dev/null'.");
+    expect(r.out).toContain("Script done, output log file is '/dev/null'.");
   });
   it('an interactive session (no -c) is refused, not hung', async () => {
     const r = await sh('script /dev/null');

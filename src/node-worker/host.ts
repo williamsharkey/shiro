@@ -266,10 +266,11 @@ export async function runNodeInWorker(ctx: CommandContext): Promise<number> {
   const kernel = kernelForContext(ctx);
   const fds: Record<number, OpenFile> = {
     0: new BufferFile(ctx.stdin || '', A.O_RDONLY, { fifo: !!ctx.stdin }),
+    // (output as it comes where the shell gives writers for it: a server never ends)
     1: toTerminal
       ? new SinkFile((t) => term!.writeOutput(t.replace(/\r?\n/g, '\r\n')), { tty: true })
-      : new SinkFile((t) => { ctx.stdout += t; }),
-    2: new SinkFile((t) => { ctx.stderr += t; }),
+      : new SinkFile(ctx.streamStdout ?? ((t) => { ctx.stdout += t; })),
+    2: new SinkFile(ctx.streamStderr ?? ((t) => { ctx.stderr += t; })),
   };
   const proc = kernel.spawn({ path: 'node', argv, env, cwd: ctx.cwd, fds, pgid: 0, run: nodeWorkerRunner() });
   const abort = (ctx.shell as any)?.abortController as AbortController | null | undefined;

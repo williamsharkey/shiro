@@ -20,7 +20,16 @@ export const test: Command = {
       };
       // -o OPTION: is the shell option set
       const optSet = (n: string) => !!ctx.shell?.options?.has?.(n);
-      return (await new TestEval(ctx.args, ctx.fs, ctx.cwd, isSet, optSet).run()) ? 0 : 1;
+      // -t FD: is the descriptor a terminal (a kernel shell's own fds, else the page terminal)
+      const isTty = (fd: number) => {
+        const k = ctx.shell?.kernelStdio;
+        if (ctx.liveStdin && k) return k.file(fd)?.kind === 'pty';
+        if (fd === 0) return !!ctx.stdinIsTTY;
+        if (fd === 1) return !!ctx.terminal && ctx.stdoutIsTTY !== false;
+        if (fd === 2) return !!ctx.terminal;
+        return false;
+      };
+      return (await new TestEval(ctx.args, ctx.fs, ctx.cwd, isSet, optSet, isTty).run()) ? 0 : 1;
     } catch (e: unknown) {
       ctx.stderr += `test: ${e instanceof Error ? e.message : e}\n`;
       return 2;
@@ -35,7 +44,8 @@ export class TestEval {
   private pos = 0;
   constructor(private args: string[], private fs: FileSystem, private cwd: string,
     private isSet: (name: string) => boolean = () => false,
-    private optSet: (name: string) => boolean = () => false) {}
+    private optSet: (name: string) => boolean = () => false,
+    private isTty: (fd: number) => boolean = () => false) {}
 
   async run(): Promise<boolean> {
     const a = this.args;
@@ -51,14 +61,14 @@ export class TestEval {
         throw new Error(`${a[0]}: unary operator expected`);
       case 3:
         if (BINARY.has(a[1])) return this.binary(a[0], a[1], a[2]);
-        if (a[0] === '!') return !(await new TestEval(a.slice(1), this.fs, this.cwd, this.isSet, this.optSet).run());
+        if (a[0] === '!') return !(await new TestEval(a.slice(1), this.fs, this.cwd, this.isSet, this.optSet, this.isTty).run());
         if (a[0] === '(' && a[2] === ')') return a[1] !== '';
         if (a[1] === '-a') return a[0] !== '' && a[2] !== '';
         if (a[1] === '-o') return a[0] !== '' || a[2] !== '';
         throw new Error(`${a[1]}: binary operator expected`);
       case 4:
-        if (a[0] === '!') return !(await new TestEval(a.slice(1), this.fs, this.cwd, this.isSet, this.optSet).run());
-        if (a[0] === '(' && a[3] === ')') return new TestEval(a.slice(1, 3), this.fs, this.cwd, this.isSet, this.optSet).run();
+        if (a[0] === '!') return !(await new TestEval(a.slice(1), this.fs, this.cwd, this.isSet, this.optSet, this.isTty).run());
+        if (a[0] === '(' && a[3] === ')') return new TestEval(a.slice(1, 3), this.fs, this.cwd, this.isSet, this.optSet, this.isTty).run();
     }
     const v = await this.or();
     if (this.pos < a.length) throw new Error(`${a[this.pos]}: unexpected argument`);
@@ -122,7 +132,7 @@ export class TestEval {
     switch (op) {
       case '-z': return val === '';
       case '-n': return val !== '';
-      case '-t': return false; // no fd is a terminal from a builtin's point of view
+      case '-t': return /^\d+$/.test(val) && this.isTty(Number(val));
       case '-v': return this.isSet(val);
     }
     if (val === '') return false;
