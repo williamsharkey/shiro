@@ -73,16 +73,12 @@
    ]
   },
   "var-sub-quote": {
-   "pass": 39,
+   "pass": 40,
    "total": 41,
    "failures": [
     {
      "i": 19,
      "name": "part_value tree on RHS"
-    },
-    {
-     "i": 31,
-     "name": "Syntax error for single quote in double quote"
     }
    ]
   },
@@ -228,13 +224,9 @@
    "failures": []
   },
   "command-sub": {
-   "pass": 26,
+   "pass": 27,
    "total": 28,
    "failures": [
-    {
-     "i": 7,
-     "name": "Making keyword out of command sub should NOT work"
-    },
     {
      "i": 28,
      "name": "Syntax errors with double quotes within backticks"
@@ -242,16 +234,12 @@
    ]
   },
   "here-doc": {
-   "pass": 29,
+   "pass": 30,
    "total": 32,
    "failures": [
     {
      "i": 6,
      "name": "Here doc with bad comsub delimiter"
-    },
-    {
-     "i": 15,
-     "name": "Here doc with line continuation, then pipe.  Syntax error."
     },
     {
      "i": 25,
@@ -298,14 +286,9 @@
    ]
   },
   "case_": {
-   "pass": 12,
+   "pass": 13,
    "total": 13,
-   "failures": [
-    {
-     "i": 12,
-     "name": "case \\n bug regression"
-    }
-   ]
+   "failures": []
   },
   "sh-func": {
    "pass": 12,
@@ -313,13 +296,9 @@
    "failures": []
   },
   "func-parsing": {
-   "pass": 9,
+   "pass": 10,
    "total": 12,
    "failures": [
-    {
-     "i": 8,
-     "name": "= in function name"
-    },
     {
      "i": 9,
      "name": "Function name with $"
@@ -331,18 +310,9 @@
    ]
   },
   "builtin-echo": {
-   "pass": 25,
+   "pass": 27,
    "total": 27,
-   "failures": [
-    {
-     "i": 3,
-     "name": "echo builtin should disallow typed args - literal"
-    },
-    {
-     "i": 4,
-     "name": "echo builtin should disallow typed args - variable"
-    }
-   ]
+   "failures": []
   },
   "builtin-printf": {
    "pass": 51,
@@ -372,7 +342,7 @@
    "failures": []
   },
   "builtin-eval-source": {
-   "pass": 20,
+   "pass": 21,
    "total": 23,
    "failures": [
     {
@@ -382,10 +352,6 @@
     {
      "i": 13,
      "name": "Source with syntax error"
-    },
-    {
-     "i": 14,
-     "name": "Eval with syntax error"
     }
    ]
   },
@@ -539,13 +505,9 @@
    "failures": []
   },
   "array": {
-   "pass": 76,
+   "pass": 77,
    "total": 78,
    "failures": [
-    {
-     "i": 3,
-     "name": "space before ( in array initialization"
-    },
     {
      "i": 5,
      "name": "array with invalid token"
@@ -698,20 +660,12 @@
    ]
   },
   "posix": {
-   "pass": 11,
+   "pass": 13,
    "total": 15,
    "failures": [
     {
      "i": 1,
      "name": "Empty for loop without in.  Do can be on the same line I guess."
-    },
-    {
-     "i": 6,
-     "name": "Empty action for case is syntax error"
-    },
-    {
-     "i": 9,
-     "name": "Bare semi-colon not allowed"
     },
     {
      "i": 10,
@@ -794,14 +748,9 @@
    "failures": []
   },
   "shell-grammar": {
-   "pass": 32,
+   "pass": 33,
    "total": 33,
-   "failures": [
-    {
-     "i": 23,
-     "name": "If with then on same line missing semicolon"
-    }
-   ]
+   "failures": []
   },
   "process-sub": {
    "pass": 7,
@@ -910,7 +859,7 @@
    ]
   },
   "assign-extended": {
-   "pass": 28,
+   "pass": 29,
    "total": 34,
    "failures": [
     {
@@ -932,10 +881,6 @@
     {
      "i": 32,
      "name": "dynamic array parsing is not allowed"
-    },
-    {
-     "i": 37,
-     "name": "invalid var name"
     }
    ]
   },
@@ -1519,7 +1464,7 @@
    ]
   },
   "redirect-command": {
-   "pass": 17,
+   "pass": 18,
    "total": 23,
    "failures": [
     {
@@ -1541,10 +1486,6 @@
     {
      "i": 18,
      "name": "redirect subshell"
-    },
-    {
-     "i": 19,
-     "name": "Prefix redirect for loop -- not allowed"
     }
    ]
   },
@@ -1655,20 +1596,12 @@
    ]
   },
   "bugs": {
-   "pass": 21,
+   "pass": 23,
    "total": 29,
    "failures": [
     {
      "i": 3,
      "name": "assign readonly -- one line"
-    },
-    {
-     "i": 8,
-     "name": "First word like foo$x() and foo$[1+2] (regression)"
-    },
-    {
-     "i": 9,
-     "name": "Function names"
     },
     {
      "i": 10,
@@ -1693,7 +1626,7 @@
    ]
   },
   "toysh-posix": {
-   "pass": 16,
+   "pass": 17,
    "total": 23,
    "failures": [
     {
@@ -1715,10 +1648,6 @@
     {
      "i": 18,
      "name": "IFS 4"
-    },
-    {
-     "i": 20,
-     "name": "Can't parse extra }"
     },
     {
      "i": 21,
@@ -1895,78 +1824,9 @@
    ]
   },
   "parse-errors": {
-   "pass": 8,
+   "pass": 25,
    "total": 25,
-   "failures": [
-    {
-     "i": 5,
-     "name": "Incomplete while"
-    },
-    {
-     "i": 6,
-     "name": "Incomplete for"
-    },
-    {
-     "i": 7,
-     "name": "Incomplete if"
-    },
-    {
-     "i": 9,
-     "name": "} is a parse error"
-    },
-    {
-     "i": 10,
-     "name": "{ is its own word, needs a space"
-    },
-    {
-     "i": 13,
-     "name": "bad var name globally isn't parsed like an assignment"
-    },
-    {
-     "i": 14,
-     "name": "bad var name in export"
-    },
-    {
-     "i": 15,
-     "name": "bad var name in local"
-    },
-    {
-     "i": 16,
-     "name": "misplaced parentheses are not a subshell"
-    },
-    {
-     "i": 17,
-     "name": "incomplete command sub"
-    },
-    {
-     "i": 18,
-     "name": "incomplete backticks"
-    },
-    {
-     "i": 19,
-     "name": "misplaced ;;"
-    },
-    {
-     "i": 21,
-     "name": "interactive parse error (regression)"
-    },
-    {
-     "i": 22,
-     "name": "array literal inside array is a parse error"
-    },
-    {
-     "i": 23,
-     "name": "array literal inside loop is a parse error"
-    },
-    {
-     "i": 24,
-     "name": "array literal in case"
-    },
-    {
-     "i": 25,
-     "name": "%foo=() is parse error (regression)"
-    }
-   ]
+   "failures": []
   },
   "unicode": {
    "pass": 1,
