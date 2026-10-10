@@ -1160,9 +1160,9 @@ export class Shell {
    * for the command it is blocked in (`bash -c 'sleep 30'`, a stuck builtin);
    * that command is aborted. A trapped signal waits for it, as bash's does.
    */
-  queueSignal(sig: number): boolean {
+  queueSignal(sig: number, interrupt = true): boolean {
     this.pendingSignals.push(sig);
-    if (!this.scriptShell) return false;
+    if (!interrupt || !this.scriptShell) return false;
     if (sig !== 9 && this.traps.has(SIGNALS[sig])) return false;
     // default action ignore (CHLD, URG, WINCH), continue (CONT) or stop (STOP, TSTP, TTIN, TTOU)
     if ([17, 18, 19, 20, 21, 22, 23, 28].includes(sig)) return false;

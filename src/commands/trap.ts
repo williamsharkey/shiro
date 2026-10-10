@@ -186,7 +186,8 @@ export const kill: Command = {
       const target = /^\d+$/.test(t) ? shellForPid(parseInt(t, 10)) : undefined;
       if (target) {
         // The job running that shell ends with 128+SIG when the signal ends the shell
-        if (sig !== 0 && target.queueSignal(sig)) {
+        // (a shell signalling itself handles it before its next command, after this kill)
+        if (sig !== 0 && target.queueSignal(sig, target !== shell)) {
           const job = inPageJobForPid(parseInt(t, 10));
           if (job) (job as { signal?: number }).signal = sig;
         }
