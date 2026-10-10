@@ -32,7 +32,7 @@ import { SysvSem } from './sysvsem';
 import { SysvMsg } from './sysvmsg';
 import { SharedObjects, isShareablePath, type ShmObjMessage } from './shmobj';
 import { EpollFile, waitReady } from './epoll';
-import { SignalFile, notifySignalPending } from './signalfd';
+import { SignalFile, notifySignalPending, pendingSignalListeners } from './signalfd';
 import { EventFile, MemFile, TimerFile } from './fd';
 import { activeProfile, unameRelease, UNAME_VERSION } from '../profile';
 import { memoryInfo } from '../utils/sysinfo';
@@ -2028,6 +2028,36 @@ export class Kernel {
           dv.setUint32(0, lo, true);
           dv.setUint32(4, hi, true);
           return 0;
+        }
+        case A.SYS_rt_sigtimedwait: {
+          // args: timeout ms (-1: none); data: the set in, siginfo out. Takes the
+          // lowest pending blocked signal in the set without running a handler
+          // (sigwait, sigwaitinfo, sigtimedwait); EAGAIN at the timeout, EINTR
+          // when a signal the caller lets through arrives
+          const dv = new DataView(data.buffer, data.byteOffset, A.SIGINFO_SIZE);
+          const want = A.sigsetFromWords(dv.getUint32(0, true), dv.getUint32(4, true));
+          want.delete(A.SIGKILL);
+          want.delete(A.SIGSTOP);
+          const next = () => { let b = 0; for (const s of proc.deferredSignals) if (want.has(s) && (!b || s < b)) b = s; return b; };
+          const ms = args[0] | 0;
+          const end = ms >= 0 ? Date.now() + ms : Infinity;
+          let got: number;
+          while (!(got = next())) {
+            const left = end - Date.now();
+            if (left <= 0) return -A.EAGAIN;
+            const wakes = new Set<() => void>();
+            const off = pendingSignalListeners(proc).add(() => { for (const w of [...wakes]) w(); });
+            const timer = end === Infinity ? undefined : setTimeout(() => { for (const w of [...wakes]) w(); }, left);
+            const ok = await abortableWait(wakes, sig);
+            off();
+            if (timer !== undefined) clearTimeout(timer);
+            if (!ok) return -A.EINTR;
+          }
+          proc.deferredSignals.delete(got);
+          for (let i = 0; i < A.SIGINFO_SIZE; i += 4) dv.setUint32(i, 0, true);
+          dv.setInt32(0, got, true); // si_signo (si_code 0: SI_USER)
+          dv.setUint32(20, proc.uid, true); // si_uid
+          return got;
         }
         case A.SYS_rt_sigsuspend: {
           const dv = new DataView(data.buffer, data.byteOffset, 8);

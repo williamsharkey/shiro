@@ -699,6 +699,25 @@ medians 1240 and 1215 proc/s, base 1200. One of those passes stalled at
 ≈10 proc/s for its last 11 samples and did not recur in two more; worth
 watching if it shows up on other branches.
 
+### unix/perf-blink 10 — compiled blocks chain without the Actor loop
+
+Blink patch 0085. In native Claude Code's startup (agent-clis' profile,
+patch 0074), the main thread spent ~50 s of 78 s in compiled code running
+12.7 M blocks: JSC's LLInt ends every bytecode with an indirect jump, and
+each one left the compiled code for Actor's loop. Now WjExecute goes
+straight to the next compiled block (up to 64 in a row). A computed-goto
+loop with one block per op, in Node:
+
+| | ns per op |
+|---|---:|
+| native | 2 |
+| interpreter only (BLINK_WJIT=0) | 660 |
+| wasm JIT before | 131 (2 runs: 153, 131) |
+| wasm JIT after | 92 (3 runs: 154 first, 94, 91) |
+
+`node bench/ab.mjs HEAD --suites x86 --only 'x86\.blink\.' --rounds 3`:
+every metric "same" (the suite's programs don't dispatch indirectly much).
+
 ### unix/perf-blink 9 — shared pages in a hash table
 
 Blink patch 0068. Same-instance fork shares a process's MAP_SHARED pages
