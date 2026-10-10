@@ -1361,7 +1361,7 @@ export class Shell {
   /** `hash`: command name → where it was found, and how often it ran */
   hashTable = new Map<string, { path: string; hits: number; pinned?: boolean }>();
   /** PATH when the table was filled: assigning PATH empties it, as in bash */
-  private hashPath?: string;
+  hashPath?: string;
   /** The hash table, emptied first if PATH changed since it was filled */
   hashTableNow(): Map<string, { path: string; hits: number; pinned?: boolean }> {
     if (this.hashPath !== this.env['PATH']) { this.hashTable.clear(); this.hashPath = this.env['PATH']; }
@@ -1469,6 +1469,7 @@ export class Shell {
     child.scriptShell = this.scriptShell; // a subshell of a script is non-interactive too
     child.interactiveFlag = this.interactiveFlag;
     child.hashTable = new Map([...this.hashTable].map(([k, v]) => [k, { ...v }]));
+    child.hashPath = this.hashPath;
     child.lastExitCode = this.lastExitCode; // $? in a subshell or $(…) is the caller's
     child.forkParentPid = this.bashPid;
     child.shellPid = this.shellPid;
@@ -3466,6 +3467,13 @@ export class Shell {
           // -t NAME prints where NAME is, -l lists as reusable `hash -p` lines
           exitCode = 0;
           const table = this.hashTableNow();
+          if (cmdArgs[0] === '--help' || cmdArgs[0] === '--version') {
+            writeStdout('hash: hash [-lr] [-p pathname] [-dt] [name ...]\r\n    Remember or display program locations.\r\n');
+            this.lastExitCode = 0;
+            this.env['?'] = '0';
+            lastOutput = '';
+            continue;
+          }
           const opts = new Set<string>();
           let pinPath: string | undefined;
           let k = 0;
