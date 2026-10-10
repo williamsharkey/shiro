@@ -1,7 +1,7 @@
-From 1a2cacf9fc6454165259b79c52c75b1b0f1fc149 Mon Sep 17 00:00:00 2001
+From 51e7066ba12224e44331c66d06a88f67cd64ddac Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 05:55:37 +0000
-Subject: [PATCH 105/107] Shiro wjit: hint nops, prefetch and endbr64 inline
+Subject: [PATCH 105/109] Shiro wjit: hint nops, prefetch and endbr64 inline
 
 ---
  blink/wjit.c | 18 +++++++++++++++++-

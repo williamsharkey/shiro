@@ -786,6 +786,22 @@ medians 1240 and 1215 proc/s, base 1200. One of those passes stalled at
 ≈10 proc/s for its last 11 samples and did not recur in two more; worth
 watching if it shows up on other branches.
 
+### unix/perf-blink 12 — fork is copy-on-write
+
+Blink patch 0109. A same-instance fork used to copy every private page of
+the parent twice: into a snapshot, then into the child's pages. Now
+parent and child share them read-only, and a page is copied only when
+either side touches it through Blink (compiled code's reads keep
+sharing). Fork then exec, the common case, copies almost nothing.
+
+| fork+exit+wait (forkb, Node, 3 runs each) | 0108 | 0109 | native |
+|---|---|---|---|
+| 0 MiB dirty heap | 6.0–7.3 ms | 5.1–6.1 ms | 0.18 ms |
+| 16 MiB | 29.7–31.5 ms | 6.8–7.8 ms | — |
+| 64 MiB | 104–110 ms | 11.2–12.6 ms | 3.1 ms |
+
+`BLINK_FORK_COW=0` restores the copying fork.
+
 ### unix/perf-blink 11 — hashing and SSE code stays compiled
 
 Blink patches 0103–0107. perf-fs-shell found that a git clone (axios, 29 MB

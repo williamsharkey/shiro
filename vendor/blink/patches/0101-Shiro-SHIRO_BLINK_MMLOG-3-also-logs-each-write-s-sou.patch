@@ -1,15 +1,15 @@
-From 59312162557f5ad65ebc02f624246aee5387ae17 Mon Sep 17 00:00:00 2001
+From 647944bf44c87df3dee8eb50bdbd1d5ed4f08e92 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 05:15:40 +0000
-Subject: [PATCH] Shiro: SHIRO_BLINK_MMLOG=3 also logs each write's source and
- first bytes
+Subject: [PATCH 101/109] Shiro: SHIRO_BLINK_MMLOG=3 also logs each write's
+ source and first bytes
 
 ---
  blink/shiro.inc | 20 +++++++++++++++++++-
  1 file changed, 19 insertions(+), 1 deletion(-)
 
 diff --git a/blink/shiro.inc b/blink/shiro.inc
-index 1f2d523..a2625d7 100644
+index e999d72..52ba163 100644
 --- a/blink/shiro.inc
 +++ b/blink/shiro.inc
 @@ -25,7 +25,7 @@
