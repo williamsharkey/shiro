@@ -34,6 +34,18 @@ libreoffice-core-nogui'''.split())  # (the GUI-less build of libreoffice-core: i
 APPS = {
     # name: (packages, binaries, plugin globs, extra packages, description, category)
     'xterm': (['xterm'], ['/usr/bin/xterm'], [], [], 'Terminal emulator for X', 'x11'),
+    # (probe: Mesa's off-screen llvmpipe, docs/research/GL.md)
+    'osmesa-probe': (['libosmesa6'], ['/usr/lib/x86_64-linux-gnu/libOSMesa.so.8'], [], [], 'Mesa off-screen rendering (llvmpipe)', 'service'),
+    # (more popular desktop apps)
+    'thunderbird': (['thunderbird'], ['/usr/lib/thunderbird/thunderbird'], ['usr/lib/thunderbird/*.so', 'usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'], ['libglib2.0-bin', 'shared-mime-info'], 'Mail client (GTK3)', 'gtk3'),
+    'pidgin': (['pidgin'], ['/usr/bin/pidgin'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'], ['libglib2.0-bin', 'shared-mime-info'], 'Instant messaging (GTK2)', 'gtk2'),
+    'hexchat': (['hexchat'], ['/usr/bin/hexchat'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'], ['libglib2.0-bin', 'shared-mime-info'], 'IRC client (GTK2)', 'gtk2'),
+    'audacious': (['audacious', 'audacious-plugins'], ['/usr/bin/audacious'], ['usr/lib/x86_64-linux-gnu/audacious/General/qtui.so', 'usr/lib/x86_64-linux-gnu/audacious/Output/filewriter.so', 'usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so', 'usr/lib/x86_64-linux-gnu/qt5/plugins/imageformats/*.so'], [], 'Music player (Qt5)', 'qt5'),
+    'shotwell': (['shotwell'], ['/usr/bin/shotwell'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'], ['libglib2.0-bin', 'shared-mime-info'], 'Photo manager (GTK3)', 'gtk3'),
+    'simple-scan': (['simple-scan'], ['/usr/bin/simple-scan'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'], ['libglib2.0-bin', 'shared-mime-info'], 'Document scanner (GTK3)', 'gtk3'),
+    'xournalpp': (['xournalpp'], ['/usr/bin/xournalpp'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'], ['libglib2.0-bin', 'shared-mime-info'], 'Handwritten notes and PDF annotation (GTK3)', 'gtk3'),
+    'zathura': (['zathura', 'zathura-pdf-poppler'], ['/usr/bin/zathura'], ['usr/lib/x86_64-linux-gnu/zathura/*.so', 'usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'], ['libglib2.0-bin', 'shared-mime-info'], 'Keyboard-driven document viewer (GTK3)', 'gtk3'),
+    'geany': (['geany'], ['/usr/bin/geany'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'], ['libglib2.0-bin', 'shared-mime-info'], 'Programmer\'s text editor (GTK3)', 'gtk3'),
     # not an app: the session bus the launcher starts for apps that want one (single-instance checks, settings)
     'dbus-session': (['dbus-daemon', 'dbus-session-bus-common'], ['/usr/bin/dbus-daemon'], [], [], 'D-Bus session bus', 'service'),
     'xeyes': (['x11-apps'], ['/usr/bin/xeyes'], [], [], 'Eyes that follow the pointer', 'x11'),
@@ -72,16 +84,27 @@ APPS = {
     'abiword': (['abiword'], ['/usr/bin/abiword'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'], ['libglib2.0-bin', 'shared-mime-info'], 'Word processor (GTK3)', 'gtk3'),
     'firefox-esr': (['firefox-esr'], ['/usr/lib/firefox-esr/firefox-esr'], ['usr/lib/firefox-esr/*.so', 'usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'],
                     ['libglib2.0-bin', 'shared-mime-info'], 'Web browser (GTK3)', 'gtk3'),
-    'libreoffice-writer': (['libreoffice-writer', 'libreoffice-gtk3'], ['/usr/lib/libreoffice/program/soffice.bin'],
+    # oosplash starts soffice.bin and starts it again when it exits with 81 (a first start
+    # sets up the user profile, then asks for a restart)
+    'libreoffice-writer': (['libreoffice-writer', 'libreoffice-gtk3'], ['/usr/lib/libreoffice/program/oosplash', '/usr/lib/libreoffice/program/soffice.bin'],
                            ['usr/lib/libreoffice/program/*.so', 'usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'], ['libglib2.0-bin', 'shared-mime-info'], 'Word processor (LibreOffice)', 'gtk3'),
     'vlc': (['vlc'], ['/usr/bin/vlc'], ['usr/lib/x86_64-linux-gnu/vlc/plugins/gui/libqt_plugin.so', 'usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so', 'usr/lib/x86_64-linux-gnu/qt5/plugins/imageformats/*.so'], [], 'Media player (Qt5)', 'qt5'),
     'audacity': (['audacity'], ['/usr/bin/audacity'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'], ['libglib2.0-bin', 'shared-mime-info'], 'Audio editor (wxWidgets/GTK3)', 'gtk3'),
     'blender': (['blender'], ['/usr/bin/blender'], [], [], '3D creation suite (OpenGL)', 'gl'),
     # its resources live in an SQLite database: Qt's SQLite driver (a plugin, so not in the ELF closure)
     'krita': (['krita', 'libqt5sql5-sqlite'], ['/usr/bin/krita'], ['usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so', 'usr/lib/x86_64-linux-gnu/qt5/plugins/imageformats/*.so',
-              'usr/lib/x86_64-linux-gnu/qt5/plugins/sqldrivers/libqsqlite.so'], [], 'Painting program (Qt5)', 'qt5'),
+              'usr/lib/x86_64-linux-gnu/qt5/plugins/sqldrivers/libqsqlite.so',
+              # its color engine (LittleCMS: without it there are no color spaces), paint ops and tools,
+              # and the formats people open (the rest are OPTIONAL, below)
+              *['usr/lib/x86_64-linux-gnu/kritaplugins/' + p + '.so' for p in (
+                  'kritalcmsengine', 'kritadefaultpaintops', 'kritadefaulttools', 'kritaselectiontools', 'krita_flaketools',
+                  'krita_karbontools', 'kritapngimport', 'kritapngexport', 'kritajpegimport', 'kritajpegexport', 'kritakraimport',
+                  'kritakraexport', 'kritaqimageioimport', 'kritaqimageioexport', 'kritatiffimport', 'kritatiffexport',
+                  'kritawebpimport', 'kritawebpexport')]],
+              ['shared-mime-info'], 'Painting program (Qt5)', 'qt5'),
     'qterminal': (['qterminal'], ['/usr/bin/qterminal'], ['usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so', 'usr/lib/x86_64-linux-gnu/qt5/plugins/imageformats/*.so'], [], 'Terminal emulator (Qt5)', 'qt5'),
-    'qpdfview': (['qpdfview'], ['/usr/bin/qpdfview'], ['usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so', 'usr/lib/x86_64-linux-gnu/qt5/plugins/imageformats/*.so'], [], 'PDF viewer (Qt5)', 'qt5'),
+    'qpdfview': (['qpdfview', 'libqt5sql5-sqlite'], ['/usr/bin/qpdfview'], ['usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so', 'usr/lib/x86_64-linux-gnu/qt5/plugins/imageformats/*.so',
+                 'usr/lib/x86_64-linux-gnu/qt5/plugins/sqldrivers/libqsqlite.so'], [], 'PDF viewer (Qt5)', 'qt5'),
     'kcalc': (['kcalc'], ['/usr/bin/kcalc'], ['usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so', 'usr/lib/x86_64-linux-gnu/qt5/plugins/imageformats/*.so'], [], 'KDE calculator (Qt5)', 'qt5'),
     'keepassxc': (['keepassxc'], ['/usr/bin/keepassxc'], ['usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so', 'usr/lib/x86_64-linux-gnu/qt5/plugins/imageformats/*.so'], [], 'Password manager (Qt5)', 'qt5'),
 }
@@ -95,16 +118,24 @@ ALWAYS = {'libgcc-s1', 'fontconfig-config'}
 # (the user's own settings win). GIMP: its PNG icon theme; the SVG ones (Symbolic,
 # Color) fill every icon with a gradient, which librsvg draws blank in the x86
 # engine for now (docs/GUI_SCORE.md). Its system gimprc's icon-theme isn't used.
-HOME_FILES = {'gimp': {'.config/GIMP/2.10/gimprc': '(icon-theme "Legacy")\n'}}
+HOME_FILES = {'gimp': {'.config/GIMP/2.10/gimprc': '(icon-theme "Legacy")\n'},
+              # zathura's seccomp sandbox: the x86 engine has no seccomp, and zathura quits without it
+              'zathura': {'.config/zathura/zathurarc': 'set sandbox none\n'}}
 
 OPTIONAL = {'gimp': ['usr/lib/gimp/2.0/plug-ins/*/*', 'usr/lib/x86_64-linux-gnu/gegl-0.4/*.so'],
             'vlc': ['usr/lib/x86_64-linux-gnu/vlc/plugins/*/*.so'],
             'gnumeric': ['usr/lib/gnumeric/*/plugins/*/*.so', 'usr/lib/x86_64-linux-gnu/goffice/*/plugins/*/*.so'],
-            'abiword': ['usr/lib/x86_64-linux-gnu/abiword-3.0/plugins/*.so']}
+            'abiword': ['usr/lib/x86_64-linux-gnu/abiword-3.0/plugins/*.so'],
+            'audacious': ['usr/lib/x86_64-linux-gnu/audacious/*/*.so'],
+            'pidgin': ['usr/lib/pidgin/*.so', 'usr/lib/purple-2/*.so'],
+            'hexchat': ['usr/lib/x86_64-linux-gnu/hexchat/plugins/*.so'],
+            'geany': ['usr/lib/x86_64-linux-gnu/geany/*.so'],
+            'krita': ['usr/lib/x86_64-linux-gnu/kritaplugins/*.so']}
 
 LIBDIRS = ['lib/x86_64-linux-gnu', 'usr/lib/x86_64-linux-gnu', 'lib', 'usr/lib', 'lib64', 'usr/lib/x86_64-linux-gnu/inkscape',
            'usr/lib/firefox-esr', 'usr/lib/libreoffice/program', 'usr/lib/x86_64-linux-gnu/gedit', 'usr/lib/x86_64-linux-gnu/eog',
-           'usr/lib/x86_64-linux-gnu/thunar', 'usr/lib/gnumeric/1.12.55', 'usr/lib/x86_64-linux-gnu/blender']
+           'usr/lib/x86_64-linux-gnu/thunar', 'usr/lib/gnumeric/1.12.55', 'usr/lib/x86_64-linux-gnu/blender',
+           'usr/lib/thunderbird', 'usr/lib/x86_64-linux-gnu/shotwell', 'usr/lib/x86_64-linux-gnu/geany']
 
 
 def load_index(path):
@@ -302,6 +333,12 @@ def main():
                         todo2.append(hit)
                 if not ok: remove.append('/' + os.path.dirname(rel) if g.endswith('/*/*') else '/' + rel)
                 elif own and own not in keep: keep.append(own)
+        # LibreOffice's configuration data: Debian ships it in share/.registry and each package's
+        # postinst links it into /etc/libreoffice/registry (fundamentalrc's CONFIGURATION_LAYERS)
+        for f, n in owner.items():
+            if n in keep and f.startswith('usr/lib/libreoffice/share/.registry/') and f.endswith('.xcd'):
+                rel = f[len('usr/lib/libreoffice/share/.registry/'):]
+                links['/etc/libreoffice/registry/' + rel] = '/' + f
         dropped = [n for n in names if n not in keep]
         apps[app] = {
             'description': desc, 'toolkit': kind, 'bin': bins[0], 'pkg': roots[0], 'packages': keep,
@@ -395,7 +432,40 @@ def main():
         h = hashlib.sha256(data).hexdigest()
         open(os.path.join(os.path.dirname(out), 'overlay', h), 'wb').write(data)
         overlays.append({'path': '/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders.cache', 'sha256': h, 'size': len(data), 'when': 'librsvg2-common'})
-    json.dump({'suite': SUITE, 'overlays': overlays, 'arch': 'amd64', 'mirror': 'https://deb.debian.org/debian/',
+    # Firefox ESR's system prefs (/etc/firefox-esr is its syspref directory): see the file
+    lc = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'overlays', 'firefox-esr-shared-memory.js')
+    # (Thunderbird is the same engine: its syspref directory is /etc/thunderbird/pref)
+    for pkg, path in (('firefox-esr', '/etc/firefox-esr/shared-memory.js'), ('thunderbird', '/etc/thunderbird/pref/shared-memory.js')):
+        if not any(pkg in a['packages'] for a in apps.values()): continue
+        data = open(lc, 'rb').read()
+        h = hashlib.sha256(data).hexdigest()
+        open(os.path.join(os.path.dirname(out), 'overlay', h), 'wb').write(data)
+        overlays.append({'path': path, 'sha256': h, 'size': len(data), 'when': pkg})
+    # Font directories (installer: pinFontDirs) and fontconfig's caches for them. Fontconfig
+    # keeps a directory's mtime in its cache: the installer gives each font directory a
+    # fixed mtime when it holds just its package's files, and the caches were made with it
+    # in Blink (`gui fontcache`, see scripts/gui/overlays/fontconfig/README); a cache whose
+    # file is there ships as an overlay with its package.
+    font_dirs = {}
+    for n in sorted(packages):
+        if db[n].get('Section') != 'fonts': continue
+        listing = subprocess.run(['dpkg-deb', '-c', fetch(db, n, cache)], capture_output=True, text=True, check=True).stdout
+        for line in listing.splitlines():
+            if line.startswith('d'): continue
+            f = '/' + line.split(None, 5)[5].split(' -> ')[0].lstrip('./')
+            if f.startswith('/usr/share/fonts/'):
+                font_dirs.setdefault(n, {}).setdefault(os.path.dirname(f), []).append(os.path.basename(f))
+    fc = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'overlays', 'fontconfig')
+    for n, dirs in font_dirs.items():
+        for d in dirs:
+            # (kept per package: a cache describes the directory with just that package's files)
+            name = hashlib.md5(d.encode()).hexdigest() + '-le64.cache-8'
+            if not os.path.exists(os.path.join(fc, n, name)): continue
+            data = open(os.path.join(fc, n, name), 'rb').read()
+            h = hashlib.sha256(data).hexdigest()
+            open(os.path.join(os.path.dirname(out), 'overlay', h), 'wb').write(data)
+            overlays.append({'path': '/var/cache/fontconfig/' + name, 'sha256': h, 'size': len(data), 'when': n})
+    json.dump({'suite': SUITE, 'overlays': overlays, 'fontDirs': font_dirs, 'arch': 'amd64', 'mirror': 'https://deb.debian.org/debian/',
                'snapshot': 'https://snapshot.debian.org/archive/debian/20260712T000000Z/',
                'packages': packages, 'apps': apps}, open(out, 'w'), indent=1, sort_keys=True)
 

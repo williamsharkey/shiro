@@ -103,6 +103,8 @@ export function createPathModule(ctx: CommandContext): any {
   };
   pathMod.posix = pathMod;
   pathMod.win32 = pathMod;
-  pathMod.default = pathMod;
+  // (not enumerable: node's path has no `default`, and @vercel/nft copies its keys into a mock whose
+  // `resolve` then called itself)
+  Object.defineProperty(pathMod, 'default', { value: pathMod, writable: true, configurable: true, enumerable: false });
   return pathMod;
 }

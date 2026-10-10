@@ -13,11 +13,12 @@ import type { Shell } from '../shell';
 import type { Command, CommandContext } from '../commands/index';
 import { KernelStdio, execLazyStdin } from '../shell-stdio';
 import { parseShellArgs } from '../shell-args';
-import { ProcFs, bootMs, fdTarget } from './procfs';
+import { ProcFs, bootMs, fdTarget, syscallText, wchanText } from './procfs';
 import { klog, KmsgFile, LOG_ERR, LOG_INFO, SYSLOG_ACTION_READ_ALL, SYSLOG_ACTION_SIZE_BUFFER, SYSLOG_ACTION_SIZE_UNREAD } from './klog';
 import { processTable, type ShiroProcess } from '../process-table';
 import { packageShadows, pkgOwnShadows, packageArgsForPath, PKG_BIN_DIR } from '../pkg-manager';
 import * as A from './abi';
+import { elfInterpreter } from '../elf-interp';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
   RegularFile, DirFile, abortableWait, openInode, openInodeSync, isInodeOpen, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
@@ -32,7 +33,7 @@ import { SysvSem } from './sysvsem';
 import { SysvMsg } from './sysvmsg';
 import { MessageQueues, MqFile } from './mqueue';
 import { PosixTimers } from './posixtimers';
-import { SharedObjects, isShareablePath, type ShmObjMessage } from './shmobj';
+import { CONTROL_BYTES, SharedObjects, isShareablePath, type ShmObjMessage } from './shmobj';
 import { EpollFile, waitReady } from './epoll';
 import { SignalFile, notifySignalPending, pendingSignalListeners } from './signalfd';
 import { EventFile, MemFile, TimerFile } from './fd';
@@ -168,8 +169,24 @@ function shellQuote(s: string): string {
  * reported as the default user's is the caller's: root's git and ssh find
  * their own files theirs.
  */
+/** Where a process keeps each interval timer (ITIMER_REAL, ITIMER_VIRTUAL, ITIMER_PROF) */
+const ITIMER_KEYS = ['realTimer', 'virtualTimer', 'profTimer'];
+
 function statFor(proc: Process, st: A.KStat): A.KStat {
   return st.uid === 1000 && proc.uid !== 1000 ? { ...st, uid: proc.uid, gid: proc.gid } : st;
+}
+
+/**
+ * open(2)'s permission check on an existing file, which is the caller's own
+ * (see statFor): its owner bits must allow the access mode, unless the
+ * caller is root (Open POSIX shm_open_32-1, 34-1: a 0 or 0400 file reopened
+ * O_RDWR is EACCES).
+ */
+function ownerDenies(proc: Process, mode: number | undefined, flags: number): boolean {
+  if (proc.uid === 0 || mode === undefined) return false;
+  const acc = flags & A.O_ACCMODE;
+  const need = (acc === A.O_WRONLY ? 0 : 4) | (acc === A.O_RDONLY && !(flags & A.O_TRUNC) ? 0 : 2);
+  return ((mode >> 6) & need) !== need;
 }
 
 export class Kernel {
@@ -225,6 +242,7 @@ export class Kernel {
   /** How long an unreaped child of init stays a zombie before it is reaped automatically. */
   initReapDelayMs = 30_000;
   private detachWriteBack?: () => void;
+  private detachContentPin?: () => void;
 
   constructor(opts: { fs?: FileSystem; shell?: Shell; allocPid?: () => number; registerWithProcessTable?: boolean } = {}) {
     this.fs = opts.fs ?? opts.shell?.fs;
@@ -232,6 +250,8 @@ export class Kernel {
     // Open files' buffered writes reach storage when the page goes away
     const wfs = this.fs;
     if (wfs?.addWriteBackHook) this.detachWriteBack = wfs.addWriteBackHook(() => writeBackAll(wfs));
+    // Open files' content stays in the FileSystem's cache
+    if (wfs?.addContentPin) this.detachContentPin = wfs.addContentPin((p) => isInodeOpen(wfs, p));
     const alloc = opts.allocPid ?? (() => processTable.allocatePid());
     this.allocPid = () => (this.lastPid = alloc());
     this.init = new Process({
@@ -251,9 +271,12 @@ export class Kernel {
           cwd: p.cwd, environ: p.env, exe: typeof p.data.exe === 'string' ? p.data.exe : p.path,
           fds: p.fds.entries().map(([fd, f]) => [fd, fdTarget(f)] as [number, string]),
           startMs: p.startTime, uid: p.uid, gid: p.gid,
+          syscall: syscallText(p), wchan: wchanText(p),
         };
       },
       list: () => [...this.procs.keys()],
+      // the rest of /proc/PID (syscall, wchan, task/ …) and /proc/stat as programs see them
+      node: (path) => this.procfs.fsNode(path),
     });
     this.registerDevice('/dev/null', (_p, f) => new DevNull(f));
     this.registerDevice('/dev/zero', (_p, f) => new DevZero(f));
@@ -288,6 +311,8 @@ export class Kernel {
     this.detachTable?.();
     this.detachWriteBack?.();
     this.detachWriteBack = undefined;
+    this.detachContentPin?.();
+    this.detachContentPin = undefined;
     this.detachTable = undefined;
   }
 
@@ -562,49 +587,58 @@ export class Kernel {
     if (!proc.exiting) await this.exit(proc, A.W_EXITCODE(typeof code === 'number' ? code : 0));
   }
 
-  /** ITIMER_REAL of `proc`: milliseconds left and the reload interval. */
-  realTimer(proc: Process): { value: number; interval: number } {
-    const t = proc.data.realTimer as { deadline: number; interval: number } | undefined;
+  /**
+   * An interval timer of `proc` (which: ITIMER_REAL 0, ITIMER_VIRTUAL 1,
+   * ITIMER_PROF 2): milliseconds left and the reload interval.
+   */
+  realTimer(proc: Process, which = 0): { value: number; interval: number } {
+    const t = proc.data[ITIMER_KEYS[which]] as { deadline: number; interval: number } | undefined;
     if (!t) return { value: 0, interval: 0 };
     return { value: Math.max(0, t.deadline - Date.now()), interval: t.interval };
   }
 
   /**
-   * setitimer(ITIMER_REAL)/alarm: SIGALRM to `proc` in `valueMs` (0 disarms),
-   * then every `intervalMs`. Returns the old setting. Not inherited by fork
-   * children; kept across exec (it lives on the process).
+   * setitimer/alarm: the timer's signal (SIGALRM, SIGVTALRM, SIGPROF) to
+   * `proc` in `valueMs` (0 disarms), then every `intervalMs`. Returns the
+   * old setting. Not inherited by fork children; kept across exec (it lives
+   * on the process). ITIMER_VIRTUAL and ITIMER_PROF count wall time: there's
+   * no per-process CPU time to count (the CPU clocks are the same stand-in).
    */
-  setRealTimer(proc: Process, valueMs: number, intervalMs: number): { value: number; interval: number } {
-    const old = this.realTimer(proc);
-    const t = proc.data.realTimer as { handle?: ReturnType<typeof setTimeout>; deadline: number; interval: number } | undefined;
+  setRealTimer(proc: Process, valueMs: number, intervalMs: number, which = 0): { value: number; interval: number } {
+    const key = ITIMER_KEYS[which];
+    const signo = [A.SIGALRM, A.SIGVTALRM, A.SIGPROF][which];
+    const old = this.realTimer(proc, which);
+    const t = proc.data[key] as { handle?: ReturnType<typeof setTimeout>; deadline: number; interval: number } | undefined;
     if (t?.handle) clearTimeout(t.handle);
     if (!(valueMs > 0)) {
-      delete proc.data.realTimer;
+      delete proc.data[key];
       return old;
     }
     const timer: { handle?: ReturnType<typeof setTimeout>; deadline: number; interval: number } = { deadline: Date.now() + valueMs, interval: intervalMs > 0 ? intervalMs : 0 };
     const arm = (ms: number) => {
       // setTimeout holds at most 2^31-1 ms (~24.8 days); a longer alarm waits in steps
       timer.handle = setTimeout(() => {
-        if (proc.exiting || proc.data.realTimer !== timer) return;
+        if (proc.exiting || proc.data[key] !== timer) return;
         if (timer.deadline - Date.now() > 0 && ms > 0x7fffffff) { arm(timer.deadline - Date.now()); return; }
         if (timer.interval > 0) {
           timer.deadline = Date.now() + timer.interval;
           arm(timer.interval);
         } else {
-          delete proc.data.realTimer;
+          delete proc.data[key];
         }
-        this.deliver(proc, A.SIGALRM);
+        this.deliver(proc, signo);
       }, Math.min(0x7fffffff, Math.max(0, ms)));
       (timer.handle as any)?.unref?.();
     };
-    proc.data.realTimer = timer;
+    proc.data[key] = timer;
     if (!proc.data.realTimerCleanup) {
       proc.data.realTimerCleanup = true;
       proc.onTerminate(() => {
-        const cur = proc.data.realTimer as { handle?: ReturnType<typeof setTimeout> } | undefined;
-        if (cur?.handle) clearTimeout(cur.handle);
-        delete proc.data.realTimer;
+        for (const k of ITIMER_KEYS) {
+          const cur = proc.data[k] as { handle?: ReturnType<typeof setTimeout> } | undefined;
+          if (cur?.handle) clearTimeout(cur.handle);
+          delete proc.data[k];
+        }
       });
     }
     arm(valueMs);
@@ -749,6 +783,12 @@ export class Kernel {
     targets = targets.filter(p => this.maySignal(sender, p, sig));
     if (targets.length === 0) return -A.EPERM;
     if (sig === 0) return 0;
+    // Group signals are rare and hard to trace afterwards (a program killpg'ing
+    // its own foreground job): say who sent what to whom
+    if (pid <= 0 && sender !== this.init) {
+      const to = pid === 0 ? `its own process group ${sender.pgid}` : pid === -1 ? 'every process' : `process group ${-pid}`;
+      klog.logRatelimited(LOG_INFO, `signal: ${sender.comm}[${sender.pid}] sent ${sigName(sig)} to ${to} (${targets.length} process${targets.length === 1 ? '' : 'es'})`);
+    }
     for (const p of targets) this.deliver(p, sig, { signo: sig, code: A.SI_USER, pid: sender.pid, uid: sender.uid });
     return 0;
   }
@@ -799,7 +839,9 @@ export class Kernel {
     }
     switch (A.defaultSignalAction(sig)) {
       case 'term': void this.exit(proc, A.W_TERMSIG(sig)); break;
-      case 'stop': this.stopProcess(proc, sig); break;
+      case 'stop':
+        klog.logRatelimited(LOG_INFO, `signal: ${proc.comm}[${proc.pid}] stopped by ${sigName(sig)}`);
+        this.stopProcess(proc, sig); break;
       default: break;
     }
   }
@@ -981,6 +1023,7 @@ export class Kernel {
           return new DirFile(fs, await fs.realpath(p), statusFlags);
         }
         if (mustBeDir) return -A.ENOTDIR;
+        if (ownerDenies(proc, st.mode, flags)) return -A.EACCES;
         if (st.isFIFO?.()) return await this.openFifo(proc, await fs.realpath(target), flags);
       }
       const real = await fs.realpath(target);
@@ -1091,6 +1134,7 @@ export class Kernel {
       if ((flags & A.O_CREAT) && (flags & A.O_EXCL)) return -A.EEXIST;
       if (own.node.type !== 'file' || own.node.lazy || own.node.special) return undefined;
       if (flags & A.O_DIRECTORY) return -A.ENOTDIR;
+      if (ownerDenies(proc, own.node.mode, flags)) return -A.EACCES;
       const file = new RegularFile(openInodeSync(fs, own.path, own.node), statusFlags);
       if ((flags & A.O_TRUNC) && canWrite(flags)) file.truncateSync(0);
       return file;
@@ -1662,7 +1706,14 @@ export class Kernel {
     proc.syscalls++;
     // While in a syscall the process counts as sleeping (S in /proc/PID/stat)
     if (proc.inSyscall++ === 0) proc.syscallSince = t0;
-    const done = () => { proc.inSyscall--; proc.kernelMs += Date.now() - t0; };
+    const call = { nr, args };
+    proc.calls.push(call);
+    const done = () => {
+      proc.inSyscall--;
+      proc.kernelMs += Date.now() - t0;
+      const i = proc.calls.indexOf(call);
+      if (i >= 0) proc.calls.splice(i, 1);
+    };
     // The caller awaits the call itself: the bookkeeping adds no await hop to it
     const p = this.syscallImpl(proc, nr, args, data);
     p.then(done, done);
@@ -1941,24 +1992,44 @@ export class Kernel {
           if (!instance) return -A.ENOSYS;
           const len = (args[2] >>> 0) + (args[3] >>> 0) * 0x100000000;
           let key: string, size = len;
-          let initial: (() => Promise<Uint8Array>) | undefined;
-          let writeBack: ((b: Uint8Array) => Promise<void>) | undefined;
-          if (args[1] === 0) {
-            const f = proc.fds.get(args[0]);
+          let initial: (() => Uint8Array | Promise<Uint8Array>) | undefined;
+          let writeBack: ((b: Uint8Array) => void | Promise<void>) | undefined;
+          let onRemote: ((sab: SharedArrayBuffer) => void) | undefined;
+          const kind = args[1] & ~A.SHMOBJ_EAGER;
+          if (kind & ~0xff) return -A.EINVAL;
+          const f = kind === 0 ? proc.fds.get(args[0]) : undefined;
+          if (kind === 0 && f instanceof MemFile) {
+            // A memfd (Firefox's font list, passed over SCM_RIGHTS): keyed by
+            // the description; read/write go through the buffer while remote
+            const mf = f;
+            key = mf.shareKey;
+            size = Math.max(len, mf.statSync().size);
+            initial = () => mf.bytes();
+            onRemote = (sab) => mf.attachShared(sab, sab.byteLength - CONTROL_BYTES); // (not the control page)
+            writeBack = (b) => mf.detachShared(b);
+          } else if (kind === 0) {
             if (!f) return -A.EBADF;
             const path = f.path;
             if (f.kind !== 'file' || !path || !isShareablePath(path) || !this.fs) return -A.EINVAL;
             const fs = this.fs;
             key = `file:${inodeNumber(fs, path)}`;
-            initial = async () => { const b = await fs.readFile(path); return typeof b === 'string' ? new TextEncoder().encode(b) : b; };
+            // (through the fd: writes it holds may not have reached the filesystem yet)
+            initial = async () => {
+              if (f.pread) {
+                const b = new Uint8Array((await f.stat()).size);
+                return b.subarray(0, Math.max(0, await f.pread(b, 0)));
+              }
+              const b = await fs.readFile(path);
+              return typeof b === 'string' ? new TextEncoder().encode(b) : b;
+            };
             writeBack = async (b) => { if (await fs.exists(path)) await fs.writeFile(path, b); };
-          } else if (args[1] === 1) {
+          } else if (kind === 1) {
             const seg = this.shm.list().find((x) => x.id === args[0]);
             if (!seg) return -A.EINVAL;
             key = `shm:${seg.id}`;
             size = seg.size;
           } else return -A.EINVAL;
-          const r = await this.shmobj.map(instance, key, size, initial, writeBack);
+          const r = await this.shmobj.map(instance, key, size, initial, writeBack, { eager: !!(args[1] & A.SHMOBJ_EAGER), onRemote });
           if (typeof r === 'number') return r;
           if (data.length >= 4) new DataView(data.buffer, data.byteOffset, 4).setInt32(0, r.remote ? 1 : 0, true);
           return r.id;
@@ -2058,9 +2129,9 @@ export class Kernel {
         }
         case A.SYS_getitimer:
         case A.SYS_setitimer: {
-          // ITIMER_REAL only (the engine keeps the CPU-time timers); struct
-          // itimerval in data: interval then value, each {i64 sec, i64 usec}
-          if (args[0] !== 0) return -A.EINVAL;
+          // ITIMER_REAL, ITIMER_VIRTUAL, ITIMER_PROF; struct itimerval in
+          // data: interval then value, each {i64 sec, i64 usec}
+          if (args[0] !== 0 && args[0] !== 1 && args[0] !== 2) return -A.EINVAL;
           const dv = new DataView(data.buffer, data.byteOffset, 32);
           const ms = (o: number) => Number(dv.getBigInt64(o, true)) * 1000 + Number(dv.getBigInt64(o + 8, true)) / 1000;
           const put = (o: number, v: number) => {
@@ -2068,7 +2139,7 @@ export class Kernel {
             dv.setBigInt64(o, BigInt(Math.floor(us / 1e6)), true);
             dv.setBigInt64(o + 8, BigInt(us % 1e6), true);
           };
-          const old = nr === A.SYS_setitimer ? this.setRealTimer(proc, ms(16), ms(0)) : this.realTimer(proc);
+          const old = nr === A.SYS_setitimer ? this.setRealTimer(proc, ms(16), ms(0), args[0]) : this.realTimer(proc, args[0]);
           put(0, old.interval);
           put(16, old.value);
           return 0;
@@ -2232,9 +2303,12 @@ export class Kernel {
         }
         case A.SYS_fcntl:
           return this.fcntl(proc, args[0], args[1], args[2], data);
-        case A.SYS_fsync: {
+        case A.SYS_fsync: { // (and fdatasync: Blink sends both here)
           const f = file(args[0]);
           if (!f) return -A.EBADF;
+          // a pipe, FIFO or socket has nothing to sync: EINVAL (Open POSIX fsync_7-1)
+          const type = (await f.stat()).mode & A.S_IFMT;
+          if (type === A.S_IFIFO || type === A.S_IFSOCK) return -A.EINVAL;
           try { await f.sync?.(); } catch (e) { return A.errnoFromError(e); }
           return 0;
         }
@@ -2542,7 +2616,9 @@ export class Kernel {
           const name = str(0, args[0]);
           if (name.length > 249) return -A.EINVAL;
           if (args[1] & ~(A.MFD_CLOEXEC | A.MFD_ALLOW_SEALING)) return -A.EINVAL;
-          return fds.alloc(new MemFile(`/memfd:${name} (deleted)`), 0, (args[1] & A.MFD_CLOEXEC) !== 0);
+          const file = new MemFile(`/memfd:${name} (deleted)`);
+          if (args[1] & A.MFD_ALLOW_SEALING) file.seals = 0;
+          return fds.alloc(file, 0, (args[1] & A.MFD_CLOEXEC) !== 0);
         }
         case A.SYS_prlimit64: { // pid, resource, set → data: old {cur, max} (u64s); a new one first when set
           // RLIMIT_NOFILE only (the fd table's): engines keep the other limits
@@ -2713,6 +2789,18 @@ export class Kernel {
         if (size < 0) return -A.EINVAL;
         if (size > A.PIPE_MAX_SIZE) return -A.EPERM;
         return f.pipe.resize(size);
+      }
+      case A.F_ADD_SEALS:
+      case A.F_GET_SEALS: {
+        // memfds only (Linux: shmem files; anything else is EINVAL)
+        if (!(f instanceof MemFile)) return -A.EINVAL;
+        if (cmd === A.F_GET_SEALS) return f.seals;
+        const known = A.F_SEAL_SEAL | A.F_SEAL_SHRINK | A.F_SEAL_GROW | A.F_SEAL_WRITE | A.F_SEAL_FUTURE_WRITE;
+        if (arg & ~known) return -A.EINVAL;
+        if ((f.flags & A.O_ACCMODE) === A.O_RDONLY) return -A.EPERM;
+        if (f.seals & A.F_SEAL_SEAL) return -A.EPERM;
+        f.seals |= arg;
+        return 0;
       }
       default: return -A.EINVAL;
     }
@@ -2913,11 +3001,16 @@ export class Kernel {
       if (i > 0) env[String(kv).slice(0, i)] = String(kv).slice(i + 1);
     }
     let head: Uint8Array = new Uint8Array(0);
+    let interp: string | null = null;
     if (!builtin) try {
       const raw = await this.fs!.readFile(path);
       head = typeof raw === 'string' ? enc.encode(raw.slice(0, 4)) : raw.subarray(0, 4);
+      if (typeof raw !== 'string') interp = elfInterpreter(raw);
     } catch { /* unreadable: let the loaders decide */ }
     const isElf = head.length === 4 && head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46;
+    // A dynamic executable whose loader isn't there is ENOENT, as on Linux
+    // (bash: "cannot execute: required file not found")
+    if (interp && typeof (await this.statPath(proc, interp)) === 'number') return -A.ENOENT;
     const probe = new Process({ pid: -1, ppid: proc.pid, path, argv, env, cwd: proc.cwd });
     const embryo = !!proc.data.embryo;
     // A package command with its own arguments (zcat = gzip -dc) can't be
@@ -3117,4 +3210,11 @@ function setCredentials(proc: Process, nr: number, args: ArrayLike<number>, data
     case A.SYS_setfsgid: return g.e;
   }
   return -A.ENOSYS;
+}
+
+const SIG_NAMES = ['', 'HUP', 'INT', 'QUIT', 'ILL', 'TRAP', 'ABRT', 'BUS', 'FPE', 'KILL', 'USR1', 'SEGV', 'USR2', 'PIPE', 'ALRM', 'TERM',
+  'STKFLT', 'CHLD', 'CONT', 'STOP', 'TSTP', 'TTIN', 'TTOU', 'URG', 'XCPU', 'XFSZ', 'VTALRM', 'PROF', 'WINCH', 'IO', 'PWR', 'SYS'];
+/** SIGINT, SIGRTMIN+3, … for log lines */
+function sigName(sig: number): string {
+  return SIG_NAMES[sig] ? `SIG${SIG_NAMES[sig]}` : sig >= 32 ? `SIGRTMIN+${sig - 32}` : `signal ${sig}`;
 }

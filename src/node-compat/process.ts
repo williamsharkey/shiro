@@ -1,4 +1,5 @@
 import { LiveStdin } from './live-stdin';
+import { asyncContext } from './async-context';
 import type { CommandContext } from '../commands/index';
 import type { SharedState } from './types';
 import { ProcessExitError } from '../commands/jseval/utils';
@@ -86,7 +87,7 @@ export function createFakeProcess(
       _st.exitCalled = true;
       // Fire 'exit' event handlers (CLI registers cleanup here)
       try { (processEvents['exit'] || []).forEach(fn => fn(_st.exitCode)); } catch (_) {}
-      if (!_st.isInteractiveMode) _st.outputClosed = true;
+      if (!_st.isInteractiveMode || _st.exitEnds) _st.outputClosed = true;
       _st.deferredExitResolve?.(_st.exitCode);
       throw new ProcessExitError(_st.exitCode);
     },
@@ -113,7 +114,7 @@ export function createFakeProcess(
     emit: (event: string, ...args: any[]) => {
       (processEvents[event] || []).forEach(fn => fn(...args));
     },
-    nextTick: (fn: Function, ...args: any[]) => { queueMicrotask(() => fn(...args)); },
+    nextTick: (fn: Function, ...args: any[]) => { const run = asyncContext.bind(() => fn(...args)); queueMicrotask(run); },
     hrtime: Object.assign(
       (prev?: [number, number]) => {
         const now = performance.now();

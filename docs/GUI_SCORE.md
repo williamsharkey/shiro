@@ -4,7 +4,7 @@ Debian 12 GUI apps installed from the streaming manifest (`public/gui/apps.json`
 
 Columns: **installs**; **window**: a desktop window appears, with the time from launch (installed) to it; **renders**: its largest window isn't one flat colour after 8 s; **input**: focusing it and typing `abc 123` changes its pixels (or, if not, clicking into its middle and typing does, or Ctrl+O opens a window or changes them); **text**: the DOM text layer has spans for it (GTK via libshiro-text-hook.so, core X text; Qt and others draw pixels only).
 
-**29/29 install, 27/29 open a window, 26/29 render, 20/29 react to input, 20/29 have DOM text.**
+**38/38 install, 34/38 open a window, 33/38 render, 31/38 react to input, 30/38 have DOM text.**
 
 
 ### Editors & viewers
@@ -15,18 +15,22 @@ Columns: **installs**; **window**: a desktop window appears, with the time from 
 | gedit | gtk3 | 52.1 MB | 8.4 s | ✓ | 21 s | ✓ | ✓ | ✓ (11) |  |
 | l3afpad | gtk3 | 45.8 MB | 7.2 s | ✓ | 8.9 s | ✓ | ✓ | ✓ (6) |  |
 | evince | gtk3 | 55.4 MB | 9.3 s | ✓ | 22 s | ✓ | ✓ | ✓ (3) |  |
-| eog | gtk3 | 53 MB | 9.7 s | ✓ | 21 s | ✓ | ✗ | ✗ | input: a viewer with nothing open: typing changes nothing |
-| ristretto | gtk3 | 47.8 MB | 6.6 s | ✓ | 14 s | ✓ | ✗ | ✗ | input: a viewer with nothing open: typing changes nothing |
-| gpicview | gtk2 | 39.6 MB | 5.1 s | ✓ | 4.7 s | ✓ | ✗ | ✗ | input: a viewer with nothing open: typing changes nothing |
+| eog | gtk3 | 53 MB | 12 s | ✓ | 23 s | ✓ | ✓ | ✓ (1) | opened with an image |
+| ristretto | gtk3 | 47.8 MB | 8.0 s | ✓ | 14 s | ✓ | ✓ | ✓ (31) | opened with an image |
+| gpicview | gtk2 | 39.6 MB | 5.3 s | ✓ | 4.9 s | ✓ | ✓ | ✓ (1) | opened with an image |
+| geany | gtk3 | 50.1 MB | 6.8 s | ✓ | 25 s | ✓ | ✓ | ✓ (21) |  |
+| zathura | gtk3 | 51 MB | 11 s | ✓ | 13 s | ✓ | ✓ | ✓ (2) |  |
 
 ### Graphics
 
 | App | Toolkit | Download | Install | Window | First window | Renders | Input | Text | Notes |
 |---|---|---:|---:|:-:|---:|:-:|:-:|:-:|---|
-| gimp | gtk2 | 66.1 MB | 8.9 s | ✓ | 34 s | ✓ | ✓ | ✓ (2) |  |
+| gimp | gtk2 | 66.1 MB | 10 s | ✓ | 35 s | ✓ | ✓ | ✓ (1) | main window at 285 s |
 | inkscape | gtk3 | 83 MB | 14 s | ✓ | 54 s | ✓ | ✓ | ✓ (18) |  |
-| krita | qt5 | 118.3 MB | 8.4 s | ✓ | 14 s | ✓ | ✗ | ✓ (1) | input: its start screen has nothing to type into (passed in one run of three) |
-| blender | gl | 231.5 MB | 18 s | ✗ | – | – | – | – | exited (status 134) before a window; past OpenCV's CPU check (engine fix); now glibc aborts on PI-mutex futex ops (EINVAL in the x86 engine, reported) |
+| krita | qt5 | 118.3 MB | 13 s | ✓ | 16 s | ✓ | ✗ | ✓ (1) | opened with an image |
+| blender | gl | 231.5 MB | 22 s | ✗ | – | – | – | – | exited (status 256) before a window; past the CPU check and PI futexes (engine fixes); needs OpenGL 3.3 over GLX, which Xshiro doesn't provide |
+| shotwell | gtk3 | 60.2 MB | 9.1 s | ✓ | 21 s | ✓ | ✗ | ✗ | opened with an image |
+| simple-scan | gtk3 | 51.7 MB | 7.1 s | ✓ | 20 s | ✓ | ✓ | ✗ |  |
 
 ### Desktop
 
@@ -43,17 +47,22 @@ Columns: **installs**; **window**: a desktop window appears, with the time from 
 |---|---|---:|---:|:-:|---:|:-:|:-:|:-:|---|
 | gnumeric | gtk3 | 64.3 MB | 7.8 s | ✓ | 27 s | ✓ | ✓ | ✓ (19) |  |
 | abiword | gtk3 | 81.2 MB | 9.0 s | ✓ | 28 s | ✓ | ✓ | ✓ (22) |  |
-| libreoffice-writer | gtk3 | 155.1 MB | 17 s | ✗ | – | – | – | – | no window in 420 s; loads now (ELF .bin, libcups); an uncaught UNO RuntimeException at startup, then it hangs (not diagnosed) |
+| libreoffice-writer | gtk3 | 155.1 MB | 20 s | ✓ | 44 s | ✓ | ✓ | ✓ (16) | main window at 74 s; runs (via oosplash): its first window is the splash, the start center follows (~2 min) |
+| xournalpp | gtk3 | 55.6 MB | 9.1 s | ✓ | 31 s | ✓ | ✓ | ✓ (15) |  |
 
 ### Internet & media
 
 | App | Toolkit | Download | Install | Window | First window | Renders | Input | Text | Notes |
 |---|---|---:|---:|:-:|---:|:-:|:-:|:-:|---|
-| firefox-esr | gtk3 | 125.1 MB | 30 s | ✓ | 257 s | ✗ | – | ✗ | past the getaddrinfo abort (fixed): a blank window after minutes, gone seconds later; content processes crash (SIGSEGV) |
+| firefox-esr | gtk3 | 125.1 MB | 24 s | ✗ | – | – | – | – | exited (status 34304) before a window; runs (~4.5 min to its window): content processes get the font list by message (an overlay pref) until shared mappings work across processes; its text isn't reported |
 | netsurf | gtk3 | 56.6 MB | 7.2 s | ✓ | 13 s | ✓ | ✓ | ✓ (42) |  |
 | dillo | fltk | 11.4 MB | 1.4 s | ✓ | 5.1 s | ✓ | ✓ | ✗ | FLTK draws its text as pixels |
+| thunderbird | gtk3 | 119.4 MB | 22 s | ✗ | – | – | – | – | exited (status 34304) before a window |
+| pidgin | gtk2 | 55.1 MB | 6.1 s | ✓ | 18 s | ✓ | ✓ | ✓ (38) |  |
+| hexchat | gtk2 | 46.4 MB | 7.9 s | ✓ | 8.5 s | ✓ | ✓ | ✓ (8) |  |
 | vlc | qt5 | 39.4 MB | 5.1 s | ✓ | 13 s | ✓ | ✓ | ✓ (11) |  |
-| audacity | gtk3 | 64.3 MB | 7.9 s | ✓ | 37 s | ✓ | ✗ | ✗ | its first window is the first-run plugin scan; the main window follows (~70 s); wxWidgets text isn't reported |
+| audacity | gtk3 | 64.3 MB | 8.6 s | ✓ | 45 s | ✗ | ✓ | ✓ (64) | main window at 103 s; its first window is the first-run plugin scan; the main window follows (~70 s); wxWidgets text isn't reported |
+| audacious | qt5 | 37.8 MB | 8.3 s | ✗ | – | – | – | – | exited (status 134) before a window |
 
 ### Qt
 
@@ -61,10 +70,10 @@ Columns: **installs**; **window**: a desktop window appears, with the time from 
 |---|---|---:|---:|:-:|---:|:-:|:-:|:-:|---|
 | featherpad | qt5 | 34.9 MB | 4.9 s | ✓ | 8.8 s | ✓ | ✓ | ✓ (6) |  |
 | qterminal | qt5 | 34.2 MB | 4.3 s | ✓ | 9.1 s | ✓ | ✓ | ✓ (7) |  |
-| qpdfview | qt5 | 39.2 MB | 4.5 s | ✓ | 13 s | ✓ | ✓ | ✓ (6) |  |
+| qpdfview | qt5 | 40.1 MB | 8.0 s | ✓ | 21 s | ✓ | ✓ | ✓ (6) |  |
 | keepassxc | qt5 | 48 MB | 5.3 s | ✓ | 21 s | ✓ | ✓ | ✓ (21) |  |
 | kcalc | qt5 | 44.4 MB | 5.2 s | ✓ | 13 s | ✓ | ✓ | ✓ (8) |  |
-| lximage-qt | qt5 | 36.8 MB | 4.5 s | ✓ | 8.5 s | ✓ | ✗ | ✗ | input: a viewer with nothing open: typing changes nothing |
+| lximage-qt | qt5 | 36.8 MB | 5.7 s | ✓ | 13 s | ✓ | ✗ | ✗ | opened with an image |
 
 2026-10-10; per-app details (output tails, window titles) in .gui-score/results.json.
 
@@ -153,27 +162,106 @@ Second round (after the first scoreboard; the coordinator's list):
 Where the startup time goes (`LD_PRELOAD` timing of every file open; l3afpad,
 window at 8.2 s after the fixes, 9.9 s before): ~1.0 s of dynamic linking
 before any app code; GTK and GDK setup to ~3 s; icon themes 0.5 s (2.0 s
-before the hicolor cache); fontconfig rescans the fonts and writes its caches
-(~1.9 s, first launch in a profile only: the caches persist); then the first
-window. In Inkscape most of its time is its own code: ~9 s right after
-ImageMagick's init, ~13 s before reading its recent files, ~8 s rendering
-icons. That's guest computation, so the x86 engine's speed, not files.
-Shipping fontconfig's caches would need the font directories' mtimes pinned
-(fontconfig checks them) and is left for later.
+before the hicolor cache); then ~2 s with no file activity before fontconfig
+writes its caches, most of it `FcInit()` itself: 1.1–1.2 s at every start
+(parsing its configuration, timed alone in Blink), 1.6 s when it has to scan
+the fonts first. In Inkscape most of its time is its own code: ~9 s right
+after ImageMagick's init, ~13 s before reading its recent files, ~8 s
+rendering icons. That's guest computation, so the x86 engine's speed, not
+files.
+
+Third round (the coordinator's next list):
+
+- **Firefox's content processes** died on `MOZ_RELEASE_ASSERT(mFontFamilies.Count()
+  > 0)`: the crash address (libxul+0x15f708b, from the engine's crash report
+  and `LD_DEBUG=files` load bases) is a MOZ_CRASH whose reason string sits
+  in libxul's rodata. The parent shares its font list through shared memory,
+  and in the x86 engine a second process's fresh `mmap` of a shared file
+  doesn't see the first one's writes (and `memfd_create` is ENOSYS): the
+  content processes found no fonts. Reported with a repro; meanwhile
+  `/etc/firefox-esr/shared-memory.js` (an overlay) sets
+  `gfx.e10s.font-list.shared` to false and the content processes live. The
+  parent still goes down a few minutes in (a fault in a worker thread that a
+  handler re-raises with `tgkill`); on the next engine build (Blink
+  0103–0110, signals carrying their siginfo among them) that fault is gone
+  and Firefox runs: its window after ~4.5 min, the full browser UI.
+  ![Firefox ESR](screenshots/gui-firefox.png)
+- **LibreOffice** threw `cannot find /org.openoffice.Setup/L10N` (a
+  `__cxa_throw` preload printing each UNO exception's Message): Debian keeps
+  the configuration data in `share/.registry` and each package's postinst
+  links it into `/etc/libreoffice/registry`. gen-apps.py now records those
+  links (`links`, like Blender's BLAS). Then soffice.bin exited with 81 — its
+  "restart me" after setting up a new profile — so the launcher starts
+  `oosplash`, which restarts it, with its full path as `argv[0]` (it finds
+  soffice.bin next to it; programs outside `/usr/bin` now get the full
+  path). Desktop windows find their app through parent processes too
+  (soffice.bin is oosplash's child). Writer's start center opens (~2 min on
+  a first start; its splash after 44 s).
+- **Fontconfig caches** ship for the font packages' directories
+  (`scripts/gui/overlays/fontconfig/<package>/`): the installer pins a font
+  directory's mtime when it holds just its package's files (`pinFontDirs`),
+  and the caches were made in Blink with that mtime. It saves ~0.45 s of a
+  first start, not the ~1.9 s estimated before measuring: most of that gap
+  is `FcInit()` parsing its configuration.
+- **Blender** gets past the PI-futex abort (engine fix) and stops at
+  "A graphics card and driver with support for OpenGL 3.3 or higher is
+  required": there is no GLX in Xshiro. That needs Mesa's software
+  rendering reaching the page (Mesa's Xlib driver, or GLX over WebGL), a
+  project of its own.
+
+Fourth round (nine more apps; input; startup time):
+
+- **New apps**: Thunderbird, Pidgin, HexChat, Audacious, Shotwell,
+  simple-scan, Xournal++, Zathura and Geany are in the manifest, the
+  scoreboard and the Apps window. Meld is left out: it's a Python app
+  (PyGObject), a different packaging problem from these ELF closures.
+  Geany, Xournal++, Pidgin, HexChat and Zathura pass every check;
+  simple-scan everything but text. Zathura needed `set sandbox none`
+  (manifest `home`: its seccomp sandbox refuses the engine's syscalls).
+- **Viewers start with a file** (eog, ristretto, gpicview, LXImage-Qt,
+  Shotwell, Krita get an image), as people use them; the GTK viewers then
+  pass input. LXImage-Qt and Shotwell quit on Escape, which the scoreboard
+  pressed to close menus, and zoom on Ctrl+= rather than +: the probe now
+  zooms with Ctrl+= and presses Escape only when a dialog opened. Each
+  step's windows are recorded (`trace` in results.json).
+- **Krita** stayed on its splash ("Could not create loader" for every
+  resource): its plug-ins aren't in the ELF closure, so the LittleCMS color
+  engine (no color spaces without it), the paint ops, tools and common
+  formats were missing, and so was `shared-mime-info`, which its resource
+  loaders key on. They are now part of its set (+3.5 MB); the other plug-ins
+  are optional.
+- **Audacious** exited at once: its Qt interface (`qtui.so`, `libaudqt`) is
+  a plug-in, so Qt wasn't in its set; then "No output plugin found". It now
+  has the Qt UI and the file-writer output (there's no sound device).
+- **Audacity**'s main window paints more than 8 s after it appears: the
+  render check also takes a sample after the input steps.
+- **qpdfview** gets Qt's SQLite driver (its bookmarks database).
+- **Firefox and Thunderbird** regressed on the engine build with memfds in
+  the kernel (Blink 0111): `F_ADD_SEALS`/`F_GET_SEALS` were EINVAL and
+  Firefox asserts on it. The kernel now implements seals (memfd_create's
+  `MFD_ALLOW_SEALING`, enforced on truncate and write); the engine still
+  answers EINVAL itself (reported). On Blink 0114 the parent stops earlier,
+  in the engine (`memorymalloc.c:834` while mapping a 242,716-byte
+  `memfd:mozilla-ipc` region shared; reported).
+- **Time to window** (`SHIRO_BLINK_PROFILE` over the startup): Inkscape
+  spends 84% of its samples interpreting, GIMP 72%, Firefox 87%, and in each
+  ~87% of the interpreted instructions are "not at a branch target": code
+  reached by returns and fall-through, which the JIT never starts a block
+  at. Reported to the engine owners with the profiles (compiled blocks
+  starting at return addresses).
+
+Scores in the tables for Krita, Audacious, LXImage-Qt, Shotwell and Audacity
+predate these fixes; they are re-scored next.
 
 Known failures, not fixed here:
 
 | App | What happens | Where it has to be fixed |
 |---|---|---|
-| blender | past OpenCV's CPU check now (engine fix: CPUID family 6); glibc aborts: "The futex facility returned an unexpected error code" — PI-mutex futex ops (LOCK_PI, UNLOCK_PI…) and REQUEUE/WAKE_OP return EINVAL | x86 engine (reported) |
-| libreoffice-writer | loads; an uncaught UNO `RuntimeException` at startup (release build: no SAL_LOG detail), then it hangs. LibreOffice headless (`soffice --headless --convert-to pdf`, libreoffice-writer-nogui) works (verified 2026-10-10) | not diagnosed |
-| firefox-esr | its window opens after ~4 min, blank, and goes away seconds later; its content processes die with SIGSEGV first | not diagnosed |
+| blender | past the CPU check and the PI futexes (engine fixes); needs OpenGL 3.3 through GLX, which Xshiro doesn't have | GLX / software GL in the page |
+| libreoffice-writer | runs (start center after ~2 min); the scoreboard samples its splash, which hasn't painted 8 s after it appears | (the scoreboard's render check) |
 
-Input ✗ is left on viewers with nothing open (eog, ristretto, gpicview,
-lximage-qt) and Krita's start screen: typing changes nothing there and none
-of them answers Ctrl+O with a window in time. Text ✗ is left on FLTK
-(dillo), GNOME/Xfce image viewers with no text in view (eog, ristretto,
-gpicview), LXImage-Qt and the apps that don't start.
+Text ✗ is left on FLTK (dillo), Shotwell and LXImage-Qt with only an
+image in view, simple-scan, and the apps that don't start.
 
 Round by round (29 apps): first scoreboard 24 windows, 23 render, 18 input,
 14 DOM text; after the second round (with the engine's fixes merged) 27, 26, 20, 20.

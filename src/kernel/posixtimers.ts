@@ -212,6 +212,13 @@ export class PosixTimers {
     if (tm.handle) clearTimeout(tm.handle);
     tm.deadline = 0;
     t!.delete(id);
+    // its signal still pending goes with it (Linux frees the timer's sigqueue entry)
+    if (tm.queued && PosixTimers.pending(proc, tm.signo)) {
+      const q = proc.siginfo.get(tm.signo);
+      const left = q?.filter((i) => !(i.code === A.SI_TIMER && i.timerid === id)) ?? [];
+      if (left.length) proc.siginfo.set(tm.signo, left);
+      else proc.dropSignal(tm.signo);
+    }
     return 0;
   }
 }

@@ -42,12 +42,16 @@ async function start(): Promise<boolean> {
     const w = reg.active ?? reg.waiting ?? reg.installing;
     if (!w) return false;
     if (w.state !== 'activated') {
+      // (the listener goes once settled: the worker object lives as long as the
+      // page, and the timer may be a node script's, which kept the script)
       await new Promise<void>((resolve, reject) => {
-        const t = setTimeout(() => reject(new Error('preview service worker did not activate')), 10_000);
-        w.addEventListener('statechange', () => {
-          if (w.state === 'activated') { clearTimeout(t); resolve(); }
-          if (w.state === 'redundant') { clearTimeout(t); reject(new Error('preview service worker failed')); }
-        });
+        const done = (err?: Error) => { clearTimeout(t); w.removeEventListener('statechange', onState); if (err) reject(err); else resolve(); };
+        const onState = () => {
+          if (w.state === 'activated') done();
+          if (w.state === 'redundant') done(new Error('preview service worker failed'));
+        };
+        const t = setTimeout(() => done(new Error('preview service worker did not activate')), 10_000);
+        w.addEventListener('statechange', onState);
       });
     }
     return true;

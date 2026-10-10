@@ -15,7 +15,7 @@ import { rgCmd } from '@shiro/commands/rg';
 import { mkTempCmd } from '@shiro/commands/mktemp';
 import { jqCmd } from '@shiro/commands/jq';
 import { tputCmd } from '@shiro/commands/tput';
-import { sttyCmd } from '@shiro/commands/stty';
+import { sttyCmd, resetCmd } from '@shiro/commands/stty';
 import { gzipCmd, gunzipCmd, zcatCmd } from '@shiro/commands/gzip';
 import { wgetCmd } from '@shiro/commands/wget';
 import { pgrepCmd, pkillCmd } from '@shiro/commands/pgrep';
@@ -88,6 +88,7 @@ export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell 
   commands.register(jqCmd);
   commands.register(tputCmd);
   commands.register(sttyCmd);
+  commands.register(resetCmd);
   commands.register(gzipCmd);
   commands.register(gunzipCmd);
   commands.register(wgetCmd);

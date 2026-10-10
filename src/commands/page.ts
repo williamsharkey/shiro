@@ -20,6 +20,23 @@
 
 import { Command } from './index';
 
+const USAGE = `Usage: page [:port] <action> [selector] [value]
+
+Interact with a served app's window (serve <dir> <port>, then serve open <port>).
+
+Actions:
+  click <selector>          Click an element
+  input <selector> <value>  Set an input's value (fires input and change events)
+  text [selector]           Text content (default: body)
+  html [selector]           innerHTML (default: body)
+  attr <selector> <name>    An attribute's value
+  eval <code>               Run JavaScript in the app's window
+  title                     document.title
+  wait <selector> [ms]      Wait for an element to appear (default 3000 ms)
+
+:port picks the server window when more than one is open (page :8080 click #btn).
+`;
+
 /** Find the target iframe, optionally by port */
 function findIframe(port?: number): HTMLIFrameElement | null {
   // Check become-mode iframe first
@@ -80,9 +97,12 @@ export const pageCmd: Command = {
     }
 
     const action = raw[0]?.toLowerCase();
+    if (action === '--help' || action === '-h' || action === 'help') {
+      ctx.stdout += USAGE;
+      return 0;
+    }
     if (!action) {
-      ctx.stderr += 'Usage: page [:port] <action> [selector] [value]\n';
-      ctx.stderr += 'Actions: click, input, text, html, attr, eval, title, wait\n';
+      ctx.stderr += USAGE;
       return 1;
     }
 
@@ -139,8 +159,7 @@ export const pageCmd: Command = {
 
     const validActions = ['click', 'input', 'text', 'html', 'attr'];
     if (!validActions.includes(action)) {
-      ctx.stderr += `Unknown action: ${action}\n`;
-      ctx.stderr += 'Actions: click, input, text, html, attr, eval, title, wait\n';
+      ctx.stderr += `Unknown action: ${action}\n\n${USAGE}`;
       return 1;
     }
 
