@@ -670,6 +670,24 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    saturates). Rust's `as` casts test for that value, and librsvg drew every
    gradient transparent. Test: fixtures/x86/sse2d.c, compared with native
    output, JIT on and off.
+74. SHIRO_BLINK_PROFILE times each compiled-code entry, giving a per-thread
+   "in compiled code ms" (the JIT's compiles included; see the header line),
+   and splits the 1-ms samples by kind. In gh --version, the main thread runs
+   4.8 s, of which 3.0 s is compiled code (0.67 s of it compiling) and ~1.8 s
+   is the interpreter, at ~290 ns per instruction with the profile's own
+   overhead.
+75. A woken futex waiter stops counting as a waiter as soon as it takes its
+   wake. It used to stay counted until SysFutexWait ended, after letting go
+   of the lock and making a kernel round trip, so a FUTEX_WAKE in between
+   counted it twice. A waker that counts its wakes, like LTP's checkpoints,
+   then stopped early and the last waiter timed out: waitpid08/10, 3 to 5
+   rounds in 10 of fixtures/x86/futexckpt.c. LTP waitpid went from 4/11 to
+   8/11.
+76. ppoll, pselect6 and epoll_pwait(2) apply their signal-mask argument; they
+   used to ignore it. A signal the call lets through is delivered with the
+   caller's mask saved in its frame, as after sigsuspend; otherwise the
+   caller's mask is restored when the call returns. An interruptible kernel
+   call also takes a signal that the mask it just sent released (LTP ppoll01).
 
 The page compiles blink.wasm once and gives the `WebAssembly.Module` to every
 Blink worker (src/x86-engine/blink.ts `blinkWasmModule`, host.mjs

@@ -608,6 +608,12 @@ class IframeServerManager {
     if (!server?.iframe) {
       throw new Error(`No iframe for port ${port}`);
     }
+    // A service-worker preview (preview-sw-host.ts) is a document at a URL
+    if (server.iframe.hasAttribute('data-preview-sw')) {
+      const { previewUrl } = await import('./preview-sw-host');
+      const url = await previewUrl(port, path);
+      if (url) { server.iframe.setAttribute('data-virtual-path', path); server.iframe.src = url; return; }
+    }
 
     const response = await this.fetch(port, path);
     let html: string;
@@ -639,7 +645,9 @@ class IframeServerManager {
       ? [this.servers.get(port)].filter(Boolean)
       : Array.from(this.servers.values());
     for (const server of targets) {
-      if (server?.iframe?.contentWindow) {
+      if (server?.iframe?.contentWindow && server.iframe.hasAttribute('data-preview-sw')) {
+        try { server.iframe.contentWindow.location.reload(); } catch { /* navigated away */ }
+      } else if (server?.iframe?.contentWindow) {
         server.iframe.contentWindow.postMessage({ type: 'shiro-reload' }, '*');
       }
     }

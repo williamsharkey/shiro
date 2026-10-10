@@ -10,6 +10,8 @@ export interface ChildProcessDeps {
   FakeBuffer: any;
   /** The parent's process: inherited stdio writes to its stdout/stderr */
   getProcess?: () => any;
+  /** As a kernel guest (node-worker): children are real processes, the sync calls really block */
+  guest?: import('../../node-worker/hooks').NodeGuestHooks;
 }
 
 export function createChildProcessModule(deps: ChildProcessDeps): any {
@@ -183,7 +185,9 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
   };
   // execAsync is the underlying impl — returns a Promise
   // Shell natively handles setopt (no-op), eval (builtin), >| (clobber), /dev/null (virtual file)
-  const execAsync = async (cmd: string, env?: Record<string, unknown>, input?: string): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
+  /** Output as it arrives (a guest's spawn(): data events and stdio 'inherit' don't wait for the end) */
+  type Live = { out: (s: string) => void; err: (s: string) => void };
+  const execAsync = async (cmd: string, env?: Record<string, unknown>, input?: string, live?: Live): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
     let normalized = stripShellPrefix(cmd);
     // Strip leading shell flags (-l, -i, -e) that leak through from spawn args
     normalized = normalized.replace(/^(-[a-zA-Z]+\s+)+/, '');
@@ -201,6 +205,26 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       normalized = `rg ${rgArgs}`;
     }
 
+    if (deps.guest) {
+      // A real child process; files it changed are read again afterwards
+      const outDec = new TextDecoder(), errDec = new TextDecoder();
+      const r = await deps.guest.runChild(normalized, {
+        input, cwd: ctx.cwd,
+        ...(env ? { env: Object.fromEntries(Object.entries(env).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)])) } : {}),
+        ...(live ? {
+          onStdout: (b: Uint8Array) => { const t = outDec.decode(b, { stream: true }); if (t) live.out(t); },
+          onStderr: (b: Uint8Array) => { const t = errDec.decode(b, { stream: true }); if (t) live.err(t); },
+        } : {}),
+      });
+      if (live) {
+        const t = outDec.decode(), e = errDec.decode();
+        if (t) live.out(t);
+        if (e) live.err(e);
+      }
+      fileCache.clear();
+      const dec = new TextDecoder();
+      return { stdout: dec.decode(r.stdout), stderr: dec.decode(r.stderr), exitCode: r.status ?? 128 + (r.signal ?? 0) };
+    }
     // Drain pending IDB writes so shell commands can see files written by
     // writeFileSync (which only updates fileCache + queues async IDB write).
     if (pendingPromises.length > 0) {
@@ -253,6 +277,31 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
     if (v instanceof Uint8Array || ArrayBuffer.isView(v)) return new TextDecoder().decode(v as Uint8Array);
     return String(v);
   };
+  /**
+   * The *Sync calls as a kernel guest: the child runs to the end before this
+   * returns (the worker blocks), so the result is the real one, not a thenable.
+   */
+  const guestSync = (cmd: string, opts: any) => {
+    const r = deps.guest!.runChildSync(cmd, {
+      input: opts?.input === undefined || opts?.input === null ? undefined : typeof opts.input === 'string' ? opts.input : new Uint8Array(opts.input),
+      cwd: opts?.cwd ? String(opts.cwd) : ctx.cwd,
+      ...(opts?.env ? { env: Object.fromEntries(Object.entries(opts.env).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)])) } : {}),
+    });
+    fileCache.clear();
+    const wantString = opts?.encoding && opts.encoding !== 'buffer';
+    const wrap = (b: Uint8Array) => (wantString ? new TextDecoder().decode(b) : FakeBuffer.from(b));
+    // stdio: 'inherit' → the parent's own stdout/stderr
+    const proc = deps.getProcess?.();
+    if (opts?.stdio === 'inherit' || (Array.isArray(opts?.stdio) && opts.stdio[1] === 'inherit')) { if (r.stdout.length) proc?.stdout?.write(new TextDecoder().decode(r.stdout)); r.stdout = new Uint8Array(0); }
+    if (opts?.stdio === 'inherit' || (Array.isArray(opts?.stdio) && opts.stdio[2] === 'inherit')) { if (r.stderr.length) proc?.stderr?.write(new TextDecoder().decode(r.stderr)); r.stderr = new Uint8Array(0); }
+    return { r, stdout: wrap(r.stdout), stderr: wrap(r.stderr) };
+  };
+  const guestThrow = (cmd: string, g: ReturnType<typeof guestSync>) => {
+    if (g.r.status === 0) return;
+    const err: any = new Error(`Command failed: ${cmd}${g.r.stderr.length ? '\n' + new TextDecoder().decode(g.r.stderr) : ''}`);
+    Object.assign(err, { status: g.r.status, signal: g.r.signal, stdout: g.stdout, stderr: g.stderr, pid: g.r.pid, output: [null, g.stdout, g.stderr] });
+    throw err;
+  };
   const cpModule: any = {
     execSync: (cmd: string, opts?: any) => {
       // In browser, execSync cannot truly block. We return a placeholder
@@ -263,6 +312,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       if (opts?.cwd) {
         effectiveCmd = `cd ${shellQuoteArg(String(opts.cwd))} && ${cmd}`;
       }
+      if (deps.guest) { const g = guestSync(cmd, opts); guestThrow(cmd, g); return g.stdout; }
       // Synchronous fast-path for detection commands
       const syncResponse = inputOf(opts) === undefined ? getSyncResponse(effectiveCmd) : null;
       if (syncResponse) {
@@ -321,6 +371,10 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       if (opts?.cwd) {
         const cwdPath = String(opts.cwd);
         fullCmd = `cd ${shellQuoteArg(cwdPath)} && ${fullCmd}`;
+      }
+      if (deps.guest) {
+        const g = guestSync(fullCmd, opts);
+        return { pid: g.r.pid, output: [null, g.stdout, g.stderr], stdout: g.stdout, stderr: g.stderr, status: g.r.status, signal: g.r.signal === null ? null : (['', 'SIGHUP', 'SIGINT', 'SIGQUIT', 'SIGILL', 'SIGTRAP', 'SIGABRT', 'SIGBUS', 'SIGFPE', 'SIGKILL', 'SIGUSR1', 'SIGSEGV', 'SIGUSR2', 'SIGPIPE', 'SIGALRM', 'SIGTERM'][g.r.signal] || `SIG${g.r.signal}`) };
       }
       const wantString = opts?.encoding && opts.encoding !== 'buffer';
       const wrap = (s: string) => wantString ? s : FakeBuffer.from(s);
@@ -541,10 +595,15 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       child.catch = (reject?: (e: any) => any) => _childPromise.catch(reject);
       child.finally = (fn?: () => void) => _childPromise.finally(fn);
       // For clipboard commands, resolve after a microtask to let stdin.write/end happen first
+      // A guest's child: output reaches data listeners (or our stdout, for 'inherit') as it comes
+      const live: Live | undefined = deps.guest && !isClipboardCmd && !stdioOutPath && !stdioErrPath ? {
+        out: (t) => { if (inheritOut) deps.getProcess?.()?.stdout?.write(t); else (stdoutEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(t))); },
+        err: (t) => { if (inheritErr) deps.getProcess?.()?.stderr?.write(t); else (stderrEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(t))); },
+      } : undefined;
       const cmdPromise = isClipboardCmd
         ? new Promise<{ stdout: string; stderr: string; exitCode: number }>(resolve =>
             setTimeout(() => resolve({ stdout: '', stderr: '', exitCode: 0 }), 0))
-        : execAsync(fullCmd, opts?.env);
+        : execAsync(fullCmd, opts?.env, undefined, live);
       const p = cmdPromise.then(r => {
         const writePromises: Promise<any>[] = [];
         // Write output to stdio file paths FIRST (before emitting events, because
@@ -569,13 +628,13 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
           writePromises.push(flush);
         }
         const proc = deps.getProcess?.();
-        if (inheritOut && r.stdout) proc?.stdout?.write(r.stdout);
-        if (inheritErr && r.stderr) proc?.stderr?.write(r.stderr);
+        if (inheritOut && r.stdout && !live) proc?.stdout?.write(r.stdout);
+        if (inheritErr && r.stderr && !live) proc?.stderr?.write(r.stderr);
         return Promise.all(writePromises).then(() => {
-          if (r.stdout) (stdoutEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(r.stdout)));
+          if (r.stdout && !live) (stdoutEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(r.stdout)));
           (stdoutEvents['end'] || []).forEach(fn => fn());
           (stdoutEvents['close'] || []).forEach(fn => fn());
-          if (r.stderr) (stderrEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(r.stderr)));
+          if (r.stderr && !live) (stderrEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(r.stderr)));
           (stderrEvents['end'] || []).forEach(fn => fn());
           (stderrEvents['close'] || []).forEach(fn => fn());
           child.exitCode = r.exitCode;
@@ -600,6 +659,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       } else {
         fullCmd = args ? `${file} ${shellQuoteArgs(args)}` : file;
       }
+      if (deps.guest) { const g = guestSync(fullCmd, opts); guestThrow(fullCmd, g); return g.stdout; }
       // Synchronous fast-path for detection commands
       const syncResponse = inputOf(opts) === undefined ? getSyncResponse(fullCmd) : null;
       if (syncResponse) {

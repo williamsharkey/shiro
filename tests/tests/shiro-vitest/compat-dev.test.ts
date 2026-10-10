@@ -756,6 +756,26 @@ console.log(JSON.stringify(out));`)).toBe('[true,true,true,true,"entry","yes",7,
       .toBe('object number undefined undefined\n');
   }, 60_000);
 
+  it('what vite 8 needs: Buffer#write encodings on a view, stdin read only when asked, IPv6 literals in long form', async () => {
+    // es-module-lexer (vite's import analysis) writes the source as utf16le into WebAssembly memory
+    expect(await node(`const ab = new ArrayBuffer(8);
+const b = Buffer.from(ab, 2, 6);
+const n = b.write('ab', 'utf16le');
+const c = Buffer.alloc(6); c.write('ffee', 1, 'hex'); c.write('hi', 4);
+console.log(n, Array.from(new Uint16Array(ab)).join(), c.toString('hex'))`)).toBe('4 0,97,98,0 00ffee006869\n');
+    // An 'end' listener alone doesn't read piped input (vite exits on stdin 'end'); a 'data' listener does
+    await fs.writeFile('/home/user/m/end.js', `process.stdin.on('end', () => console.log('ended')); setTimeout(() => console.log('alive'), 100)`);
+    expect((await sh(shell, 'cd /home/user/m && echo x | node end.js')).out).toBe('alive\n');
+    await fs.writeFile('/home/user/m/data.js', `process.stdin.on('end', () => console.log('ended')); process.stdin.on('data', (d) => console.log('data', String(d).trim()))`);
+    expect((await sh(shell, 'cd /home/user/m && echo x | node data.js')).out).toBe('data x\nended\n');
+    // vite probes its port on '0000:0000:0000:0000:0000:0000:0000:0000' too
+    expect(await node(`const net = require('net');
+const s = net.createServer().listen(5199, '0000:0000:0000:0000:0000:0000:0000:0000', () => {
+  console.log(JSON.stringify(s.address())); s.close();
+});
+s.on('error', (e) => console.log('error', e.code));`)).toBe('{"address":"::","family":"IPv6","port":5199}\n');
+  }, 60_000);
+
   it('path follows Node (relative paths stay relative)', async () => {
     expect(await node(`const p = require('path');
 console.log(JSON.stringify([p.dirname('a'), p.dirname('/a'), p.dirname('a/b/'), p.join('a', '../b', './c'), p.join(''), p.normalize('./x/../y/'),
@@ -1661,7 +1681,7 @@ import { transformESModules } from '@shiro/commands/jseval/module-transform';
 describe('ES module transform: minified imports, and import text in strings left alone', () => {
   it('rewrites import{a as b}from"x", import t from"y", import i,{s as a}from"z", and keeps template text', () => {
     const src = 'import{createRequire as e}from"node:module";import t from"node:fs";import i,{styleText as a}from"node:util";import"./side.js";'
-      + 'const tpl=`import react from \'@vitejs/plugin-react\'\nexport default defineConfig({})`;export{tpl as x,e};export default 1;';
+      + 'const tpl=`import react from \'@vitejs/plugin-react\'\nexport default defineConfig({})`;export{tpl as x,e};export{e as "module.exports"};export default 1;';
     const out = transformESModules(src);
     expect(out).toContain('const {createRequire: e} = __shiro_require("node:module");');
     expect(out).toContain('const t = __shiro_require("node:fs");');
@@ -1670,6 +1690,7 @@ describe('ES module transform: minified imports, and import text in strings left
     expect(out).toContain("`import react from '@vitejs/plugin-react'\nexport default defineConfig({})`");
     expect(out).toContain('__shiro_module.exports.x = tpl; __shiro_module.exports.e = e;');
     expect(out).toContain('__shiro_module.exports = 1;');
+    expect(out).toContain('__shiro_module.exports["module.exports"] = e;');
   });
 });
 

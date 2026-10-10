@@ -10,7 +10,7 @@
 import type { FileSystem } from '../filesystem';
 import {
   type KStat, EBADF, EMFILE, EINVAL, EISDIR, ESPIPE, ENOTTY, EAGAIN, EINTR,
-  O_ACCMODE, O_RDONLY, O_WRONLY, O_APPEND, O_NONBLOCK, O_DSYNC, OPEN_MAX,
+  O_ACCMODE, O_RDONLY, O_WRONLY, O_RDWR, O_APPEND, O_NONBLOCK, O_DSYNC, OPEN_MAX, NR_OPEN,
   POLLIN, POLLOUT, SEEK_SET, SEEK_CUR, SEEK_END,
   S_IFCHR, S_IFREG, S_IFDIR, S_IFIFO, FIONREAD, errnoFromError,
 } from './abi';
@@ -115,6 +115,9 @@ interface FdEntry { file: OpenFile; cloexec: boolean }
 
 export class FdTable {
   private fds = new Map<number, FdEntry>();
+  /** RLIMIT_NOFILE: fds are below `limit` (the soft limit); `hardLimit` caps raising it (prlimit64) */
+  limit = OPEN_MAX;
+  hardLimit = NR_OPEN;
 
   get(fd: number): OpenFile | undefined {
     return this.fds.get(fd)?.file;
@@ -126,7 +129,8 @@ export class FdTable {
 
   /** Lowest free fd ≥ minFd, or -EMFILE. Takes a reference to `file`. */
   alloc(file: OpenFile, minFd = 0, cloexec = false): number {
-    for (let fd = minFd; fd < OPEN_MAX; fd++) {
+    if (minFd >= this.limit) return -EINVAL; // F_DUPFD past RLIMIT_NOFILE
+    for (let fd = minFd; fd < this.limit; fd++) {
       if (!this.fds.has(fd)) {
         this.fds.set(fd, { file: retain(file), cloexec });
         return fd;
@@ -137,7 +141,7 @@ export class FdTable {
 
   /** Install `file` at exactly `fd`, closing what was there. */
   async set(fd: number, file: OpenFile, cloexec = false): Promise<number> {
-    if (fd < 0 || fd >= OPEN_MAX) return -EBADF;
+    if (fd < 0 || fd >= this.limit) return -EBADF;
     retain(file);
     const old = this.fds.get(fd);
     this.fds.set(fd, { file, cloexec });
@@ -155,7 +159,7 @@ export class FdTable {
   async dup2(oldFd: number, newFd: number, cloexec = false): Promise<number> {
     const e = this.fds.get(oldFd);
     if (!e) return -EBADF;
-    if (newFd < 0 || newFd >= OPEN_MAX) return -EBADF;
+    if (newFd < 0 || newFd >= this.limit) return -EBADF;
     if (oldFd === newFd) return newFd;
     return this.set(newFd, e.file, cloexec);
   }
@@ -192,6 +196,7 @@ export class FdTable {
   /** A copy sharing every open file description (fork). */
   fork(): FdTable {
     const t = new FdTable();
+    t.limit = this.limit; t.hardLimit = this.hardLimit;
     for (const [fd, e] of this.fds) t.fds.set(fd, { file: retain(e.file), cloexec: e.cloexec });
     return t;
   }
@@ -203,6 +208,7 @@ export class FdTable {
    */
   inherit(overrides: Record<number, OpenFile> = {}): FdTable {
     const t = new FdTable();
+    t.limit = this.limit; t.hardLimit = this.hardLimit;
     for (const [fd, e] of this.fds) {
       if (!e.cloexec && !(fd in overrides)) t.fds.set(fd, { file: retain(e.file), cloexec: false });
     }
@@ -232,14 +238,19 @@ export class FdTable {
 
 /** A set of readiness listeners. */
 export class ReadyListeners {
-  private cbs = new Set<() => void>();
-  add(cb: () => void): () => void {
+  private cbs = new Set<(mask?: number) => void>();
+  add(cb: (mask?: number) => void): () => void {
     this.cbs.add(cb);
     return () => this.cbs.delete(cb);
   }
-  fire(): void {
+  /**
+   * `mask`: the events this change concerns (POLLIN when data arrived,
+   * POLLOUT when room was made), as Linux's wake-up keys; epoll arms only
+   * the edge-triggered entries watching them. 0 = anything may have changed.
+   */
+  fire(mask = 0): void {
     for (const cb of [...this.cbs]) {
-      try { cb(); } catch { /* listener errors must not break I/O */ }
+      try { cb(mask); } catch { /* listener errors must not break I/O */ }
     }
   }
 }
@@ -1037,4 +1048,88 @@ export class EventFile implements OpenFile {
   onReady(cb: () => void): () => void { return this.listeners.add(cb); }
   async stat(): Promise<KStat> { return charDevStat(0); }
   async close(): Promise<void> { this.wake(); }
+}
+
+let nextMemIno = 1;
+
+/**
+ * An anonymous regular file in memory (memfd_create): it reads, writes,
+ * seeks and truncates like a file on disk, and polls always ready (epoll
+ * refuses it, as it does regular files). Blink backs the /proc files it
+ * generates (/proc/self/maps) with one, so they seek and poll as Linux's do.
+ */
+export class MemFile implements OpenFile {
+  kind: OpenFileKind = 'file';
+  private data = new Uint8Array(0);
+  private len = 0;
+  private pos = 0;
+  private ino = nextMemIno++;
+  private mtimeMs = Date.now();
+  private listeners = new ReadyListeners();
+
+  constructor(public path: string, public flags = O_RDWR) {}
+
+  private grow(n: number): void {
+    if (n <= this.data.length) return;
+    const next = new Uint8Array(Math.max(n, this.data.length * 2, 4096));
+    next.set(this.data.subarray(0, this.len));
+    this.data = next;
+  }
+
+  async pread(buf: Uint8Array, off: number): Promise<number> {
+    if ((this.flags & O_ACCMODE) === O_WRONLY) return -EBADF;
+    if (off >= this.len) return 0;
+    const n = Math.min(buf.length, this.len - off);
+    buf.set(this.data.subarray(off, off + n));
+    return n;
+  }
+
+  async pwrite(buf: Uint8Array, off: number): Promise<number> {
+    if ((this.flags & O_ACCMODE) === O_RDONLY) return -EBADF;
+    this.grow(off + buf.length);
+    this.data.set(buf, off);
+    this.len = Math.max(this.len, off + buf.length);
+    this.mtimeMs = Date.now();
+    return buf.length;
+  }
+
+  async read(buf: Uint8Array): Promise<number> {
+    const n = await this.pread(buf, this.pos);
+    if (n > 0) this.pos += n;
+    return n;
+  }
+
+  async write(buf: Uint8Array): Promise<number> {
+    if (this.flags & O_APPEND) this.pos = this.len;
+    const n = await this.pwrite(buf, this.pos);
+    if (n > 0) this.pos += n;
+    return n;
+  }
+
+  seek(off: number, whence: number): number {
+    const base = whence === SEEK_SET ? 0 : whence === SEEK_CUR ? this.pos : whence === SEEK_END ? this.len : NaN;
+    if (Number.isNaN(base) || base + off < 0) return -EINVAL;
+    return (this.pos = base + off);
+  }
+
+  async truncate(len: number): Promise<number> {
+    if (len < 0) return -EINVAL;
+    this.grow(len);
+    if (len > this.len) this.data.fill(0, this.len, len);
+    this.len = len;
+    this.mtimeMs = Date.now();
+    return 0;
+  }
+
+  poll(events: number): number { return events & (POLLIN | POLLOUT); }
+  onReady(cb: () => void): () => void { return this.listeners.add(cb); }
+
+  statSync(): KStat {
+    return {
+      dev: 6, ino: this.ino, mode: S_IFREG | 0o777, nlink: 1, uid: 1000, gid: 1000, rdev: 0,
+      size: this.len, blksize: 4096, blocks: Math.ceil(this.len / 512), atimeMs: this.mtimeMs, mtimeMs: this.mtimeMs, ctimeMs: this.mtimeMs,
+    };
+  }
+  async stat(): Promise<KStat> { return this.statSync(); }
+  async close(): Promise<void> { this.data = new Uint8Array(0); this.len = 0; }
 }

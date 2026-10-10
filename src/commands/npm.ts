@@ -294,7 +294,7 @@ async function installTree(
         try {
           try {
             const have = JSON.parse(await ctx.fs.readFile(`${dir}/package.json`, 'utf8') as string);
-            if (have.version === n.version && (have.name === n.source || have.name === n.name)) continue;
+            if (have.version === n.version && have.name === n.source) continue; // (an alternate's files carry its own name)
             await ctx.fs.rm(dir, { recursive: true, force: true } as any);
           } catch { /* not installed */ }
           const response = await fetch(n.tarball);

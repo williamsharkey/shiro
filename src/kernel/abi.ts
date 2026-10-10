@@ -177,6 +177,8 @@ export const SYS_getenv = 1001;
  * for it. Returns the child pid.
  */
 export const SYS_shiro_vfork = 1010;
+/** clone(2) flag: the child's parent is the caller's parent (SYS_shiro_vfork takes it in args[0]) */
+export const CLONE_PARENT = 0x8000;
 /**
  * Shiro: execve. Data area: JSON `{ path, argv, env: ["K=V", ...], inproc? }`.
  * For a SYS_shiro_vfork child the program starts in it and the result is 0.
@@ -595,6 +597,13 @@ export const PIPE_CAPACITY = 65536;
 
 /** Most fds a process may hold. */
 export const OPEN_MAX = 1024;
+/** fs.nr_open: the most fds RLIMIT_NOFILE can allow (Linux's default) */
+export const NR_OPEN = 1048576;
+export const RLIMIT_NOFILE = 7;
+export const SYS_prlimit64 = 302;
+export const SYS_memfd_create = 319;
+export const MFD_CLOEXEC = 1;
+export const MFD_ALLOW_SEALING = 2;
 
 // ── struct stat ─────────────────────────────────────────────────────────────
 export interface KStat {

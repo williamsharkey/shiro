@@ -21,6 +21,8 @@ export interface RequireDeps {
   FakeBuffer: any;
   /** The process's own global object (process-global.ts): modules' globalThis and global */
   processGlobal?: any;
+  /** Packages loaded as their browser builds, by specifier (browser-packages.ts) */
+  browserModules?: Map<string, any>;
   /** Its Function: code compiled at run time sees the process's globals (process-global.ts) */
   processFunction?: FunctionConstructor;
   createExpressShim: () => any;
@@ -73,6 +75,11 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
   }
 
   function requireModule(modPath: string, fromDir: string): any {
+    // file: URLs name files (vite's bundled config imports its dependencies so)
+    if (modPath.startsWith('file://')) modPath = decodeURIComponent(new URL(modPath).pathname);
+    // A package that runs as its browser build (browser-packages.ts)
+    const browser = deps.browserModules?.get(modPath);
+    if (browser) return browser;
     const result = _requireModule(modPath, fromDir);
     // For Node.js builtins, wrap in auto-stub Proxy
     if (result && typeof result === 'object' && (modPath.startsWith('node:') || getBuiltinModule(modPath) !== null)) {

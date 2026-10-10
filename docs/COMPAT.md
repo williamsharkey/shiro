@@ -17,7 +17,7 @@ Blink engine.
 | --- | --- | --- |
 | python3, venv | `pkg install python3` (CPython 3.13.7 WASI) | works |
 | pip | builtin (PyPI over fetch) / Debian `python3-pip` | works for pure-Python wheels / works with the TCP relay |
-| node, npm, npx | builtin | works (commander, mocha, tsc 5, prettier) |
+| node, npm, npx | builtin | works (commander, mocha, tsc 5, prettier); `node` alone is the REPL on a terminal (`let`/`const` persist, `...` continuation lines, `await`, .help/.exit, ^C/^D as node) and reads its program from a pipe |
 | pnpm 9 | `npm install pnpm` | works (add, store, symlinks, run, exec, bins) |
 | yarn 1 | `npm install yarn` | works (add, lockfile, run, bins, offline) |
 | ruby, gem, rake | `pkg install ruby` (ruby.wasm 3.4.1) | works (no sockets) |
@@ -41,12 +41,12 @@ built app in headless Chromium, cross-origin isolated.
 
 | Software | Version | Route | Status | Tested | Known issues |
 | --- | --- | --- | --- | --- | --- |
-| python3 (CPython) | 3.13.7 | pkg `python3` (`python3.sh`: upstream WASI port + zlib + sqlite3; stdlib as a 4.3 MB zip of .pyc) | works | `-c`, `--version`, zlib/sqlite3/json/hashlib/decimal, `#!/usr/bin/env python3` scripts with argv/stdin/files, a package + `python -m unittest -v`; in Chromium: start-up ≈0.25 s | no subprocess, sockets, ssl, ctypes, threads (WASI preview1); REPL needs blocking stdin |
+| python3 (CPython) | 3.13.7 | pkg `python3` (`python3.sh`: upstream WASI port + zlib + sqlite3; stdlib as a 4.3 MB zip of .pyc) | works | `-c`, `--version`, zlib/sqlite3/json/hashlib/decimal, `#!/usr/bin/env python3` scripts with argv/stdin/files, a package + `python -m unittest -v`; in Chromium: start-up ≈0.25 s | no subprocess, sockets, ssl, ctypes, threads (WASI preview1); the REPL is the basic one (no termios), ^C ends it (WASI has no signals) |
 | pip | tabcomputer (pip-compatible CLI) | builtin `pip`/`pip3`/`python3 -m pip` | works for pure-Python wheels | resolver with PEP 440/508 (specifiers, markers, extras, pre-releases), console scripts, `-r`, `--target`, `-U`, uninstall/list/freeze/show/download, sha256 check; fake index in vitest, real PyPI in Chromium (`six`, `attrs`, `requests` + deps) | no sdists (needs a build backend run), no native wheels, no `-e` |
 | GNU make | 4.4.1 | pkg `make` (`make.sh` + the process shim `compat/wasi-proc.c`) | works | shell recipes, `$(shell)`, `$(wildcard)`, pattern rules, `-C`, up-to-date checks after `touch`, recipes running clang and llvm-ar; zlib's Makefile | no jobserver (`-j` runs jobs one at a time), no `-O` output sync, no load average |
 | clang / clang++ / wasm-ld / llvm-ar, nm, objdump... | LLVM 21.1.4 | pkg `llvm`: YoWASP's LLVM for WASI (npm `@yowasp/clang`, preview1 multi-call binary + wasi-libc sysroot, taken from the tarball by sha256) and a driver built here (`compat/clang-driver.c`) | works, targets wasm32-wasip1 | compile + link + run C; `cc -c`, static libraries, `-L/-l`, compile errors with locations; **zlib 1.3.1 built with its own Makefile passes its test suite** (vitest and Chromium: 13 s for the library, `example` and `minigzip`) | each driver step is a separate kernel process (the 72 MB module is compiled once and cached); no native target, no C++ exceptions/threads |
 | Go (go, gofmt, compile, link, asm, vet) | 1.24.7 | pkg `go` (`go.sh`: upstream source + `go/wasip1-processes.patch`, cross-built to wasip1; GOROOT with std sources and a prebuilt std build cache, 44 MB) | works, builds GOOS=wasip1 | `go version/env`, `gofmt`, `go build` of a two-package module, `go vet`, `go run`, `go test`; the built program spawns commands with `os/exec`; Chromium: install 8.7 s, first build of a small program seconds (std from the shipped cache), net/http-sized programs ~2 min the first time | no network for the go command (`GOPROXY=off`: vendor modules or use `replace`); std packages outside the shipped cache compile on first use |
-| Ruby (ruby, irb, gem, rake, bundle) | 3.4.1 | pkg `ruby` (`ruby.sh`: the official ruby.wasm wasip1 "full" CLI build, repacked; stdlib mounted at its /usr/local prefix) | works | `-e` with json/set/digest/time, `#!/usr/bin/env ruby` scripts with argv/stdin/files, minitest, rake with task dependencies, `gem list`, `gem build` + `gem install --local` + require | no sockets (`gem install` from rubygems.org, net/http connections fail; a `socket.rb` stub lets them load), no threads (minitest runs serially: `MT_CPU=0`), irb needs blocking stdin |
+| Ruby (ruby, irb, gem, rake, bundle) | 3.4.1 | pkg `ruby` (`ruby.sh`: the official ruby.wasm wasip1 "full" CLI build, repacked; stdlib mounted at its /usr/local prefix) | works | `-e` with json/set/digest/time, `#!/usr/bin/env ruby` scripts with argv/stdin/files, minitest, rake with task dependencies, `gem list`, `gem build` + `gem install --local` + require | no sockets (`gem install` from rubygems.org, net/http connections fail; a `socket.rb` stub lets them load), no threads (minitest runs serially: `MT_CPU=0`); irb reads lines from the cooked tty (`io/console` is a stub, no raw mode, so no reline editing; `--multiline` asks for it anyway), ^C ends irb (WASI has no signals) |
 | Perl | 5.40.0 | pkg `perl` (`perl.sh`: static x86-64 glibc build, all core XS linked in, `NO_LOCALE`) run in Blink — new package ABI `x86_64-linux` | works | `-e` with List::Util/Data::Dumper/POSIX, `#!/usr/bin/env perl` scripts with stdin/argv/files/regexes, backticks, `system()`, `open "-\|"`, Test::More (TAP), `prove t`, IPC::Open3, fork without exec (since Blink's real fork) | interpreted: ~1 s start, POSIX loads in seconds; no XS loading, no pods |
 | Git | 2.47.1 | pkg `git` (`git.sh`: static x86-64 glibc build, no curl) run in Blink; replaces tabcomputer's built-in (isomorphic-git) `git` while installed | works for local workflows | init/add/commit with combined flags, branch, merge, rebase, stash, blame, tags/describe, a pre-commit hook, `git clone file://` and `git push` (upload-pack/receive-pack over pipes) | no http(s) remotes (uninstall it for tabcomputer's built-in GitHub clone/push); `git clone /path` stops at "hardlink different from source" (the kernel's `link()` copies; use `file://` or `--no-hardlinks`) |
 | Ninja | 1.12.1 | pkg `ninja` (`ninja.sh`: static x86-64) run in Blink | works | a C program built with clang through rules with depfiles, no-op rebuilds, header changes rebuilding dependents, failed commands reported with clang's diagnostics | — |
@@ -55,8 +55,8 @@ built app in headless Chromium, cross-origin isolated.
 | Node.js npm CLIs and libraries | tabcomputer's node (`node`, `npm`, `npx`) | builtin | works | commander + chalk + dayjs + uuid CLI, mocha 10 (pass and fail exit codes), tsc 5.6 (compile and type errors), prettier 3.3 (files, stdin, `--check "src/**/*.js"`, `--write`), ES modules binding `module`/`require`/`process`; vitest and Chromium | TypeScript 7 (`typescript@7`) is a native Go binary; native addons (`.node`) don't load; axios needs `window.location` (fine in the browser, not under vitest) |
 | pnpm | 9.12.3 | npm package under tabcomputer's node (`npm install pnpm`) | works | `pnpm add` from the registry into the content-addressable store and `node_modules/.pnpm` virtual store (symlinks), `require` through those symlinks (resolving from the real path, as node does), `pnpm install --offline` from the store, `pnpm run` (a `node` script and a shell one), `pnpm exec`, `node_modules/.bin` shims; vitest and Chromium (`add` of 3 packages ≈5 s, `run` ≈2.4 s) | no `pnpm dlx`/`pnpm env` tested; workers run in the same thread (no parallel speed-up) |
 | yarn 1 | 1.22.22 | npm package under tabcomputer's node (`npm install yarn`) | works | `yarn add` from the registry (tarballs through `request` over the fetch-backed http shim, gunzip, tar), `yarn.lock`, `yarn run`, `node_modules/.bin`, `yarn install --offline` from its cache; vitest and Chromium (`add` of 2 packages ≈2 s) | yarn 2+ (berry) not tried |
-| Lua (lua, luac) | 5.4.7 | pkg `lua` (`lua.sh`) | works | `#!/usr/bin/env lua` script reading stdin with argv, patterns, coroutines, `table.sort`; `luac -p` syntax errors with locations | no `os.execute`/`io.popen`; the REPL needs blocking stdin |
-| SQLite shell | 3.50.4 | pkg `sqlite` (`sqlite.sh`) | works | a database file reused across runs, JSON functions, FTS5, SQL and dot-commands on stdin (`.mode csv`) | single-threaded, no WAL or loadable extensions; interactive mode needs blocking stdin |
+| Lua (lua, luac) | 5.4.7 | pkg `lua` (`lua.sh`) | works | `#!/usr/bin/env lua` script reading stdin with argv, patterns, coroutines, `table.sort`; `luac -p` syntax errors with locations | no `os.execute`/`io.popen`; ^C ends the REPL (as stock lua without readline) |
+| SQLite shell | 3.50.4 | pkg `sqlite` (`sqlite.sh`) | works | a database file reused across runs, JSON functions, FTS5, SQL and dot-commands on stdin (`.mode csv`) | single-threaded, no WAL or loadable extensions |
 
 Not available (yet), and why:
 
@@ -159,13 +159,7 @@ Shell and platform fixes these needed (all with tests in the same file):
   live-reload loop (edit a file in the shell → `fs.watch` → a `ws` push → the
   preview re-renders). `ws` takes its node build (its browser build only
   throws); `Buffer.indexOf` finds strings and Buffers; `Buffer[Symbol.species]`
-  is `Buffer`. Not yet: the vite dev server. Its native esbuild and Rollup
-  aren't installed (optional platform packages), and with their WebAssembly
-  builds swapped in, esbuild's Go runtime runs as a child node in the page's
-  realm and takes over page globals (`performance`, `TextEncoder`, `crypto`:
-  assignment to `crypto` is now ignored, but esbuild redefines it), and
-  `import('vite')` picks its CJS build, which looks for `package.json` at the
-  page's URL.
+  is `Buffer`. vite's HMR socket: see the vite 8 item below.
 - npm: `npm install` lays out node_modules as npm does (each package as high
   as it goes, a conflicting version nested under the package that needs it,
   without hiding a version another package uses), follows
@@ -174,7 +168,7 @@ Shell and platform fixes these needed (all with tests in the same file):
   to overwrite each other in a flat node_modules). Native platform builds are
   left out (`os`/`cpu`); WebAssembly ones are taken: `cpu: ["wasm32"]`
   bindings, esbuild as `esbuild-wasm`, rollup as `@rollup/wasm-node`, and
-  rolldown with `@rolldown/binding-wasm32-wasi`. `npm create <name>` (and
+  rolldown as `@rolldown/browser`. `npm create <name>` (and
   `npm init <name>`) runs `create-<name>`; `npm exec`/`npm x` is npx; npx
   installs into `~/.npm/_npx` instead of the project. Measured in Chromium:
   `npm create vite@latest app -- --template react` 0.6 s (npx cache warm),
@@ -188,11 +182,47 @@ Shell and platform fixes these needed (all with tests in the same file):
   unless a process 'unhandledRejection' listener takes it. The ES module
   transform reads minified imports (`import{a as b}from"x"`) and leaves
   import text in strings and templates alone.
-- Not yet: `npm run dev` of that vite 8 app. Rolldown's WebAssembly binding
-  for node needs `node:wasi` and real threads (`worker_threads`); the way in
-  is its browser build (`@rolldown/browser`: Web Workers, a fetched .wasm),
-  which needs a `Worker` from a module file and its WASI file system on the
-  project's files.
+- vite 8 (React template) end to end, typed into the terminal from a fresh
+  profile (`tests/browser/vite-react.mjs`, Chromium): `npm create vite@latest
+  app -- --template react` 2.3 s, `cd app && npm i` 1.9–2.7 s,
+  `npm run dev` to "ready" 7.9–8.7 s (vite reports ready in ~0.9 s; the rest
+  is loading rolldown), `serve open 5173` until the app renders 1.7–2.1 s, an
+  edit to `src/App.jsx` shown by HMR (no reload) 0.1 s; 15 s in all. JS heap
+  ≈245 MB with the dev server up, 260–300 MB with the preview (boot: 8 MB).
+  Six runs on 2026-10-10: five passed; one had `/@vite/client` answer 500
+  after vite cleared the screen (not yet explained). What it took:
+  - Rolldown runs as its browser build. `npm install` puts `@rolldown/browser`
+    where `rolldown` goes (same API and versions); a process that imports it
+    gets it bundled from the VFS with the page's esbuild
+    (`src/node-compat/vfs-bundle.ts`, `browser-packages.ts`) and run as page
+    code, so its Web Workers, fetched .wasm and top-level await work. Its WASI
+    file system is the process's `fs` (workers proxy theirs to the main
+    thread), its `process` the requiring process's, and its async calls count
+    as the process's activity.
+  - The preview is a real document: `serve open` loads
+    `/__preview/<tab>/<port>/` in the iframe and a service worker
+    (`public/preview-sw.js`, scope `/__preview/`) hands every request that
+    document makes to the in-tab server through the page
+    (`src/preview-sw-host.ts`), so the browser's module loader follows
+    `/@vite/client`, `/node_modules/.vite/deps/…` and HMR's
+    `import('/src/App.jsx?t=…')`. WebSocket and EventSource go through the
+    page as in a srcdoc preview, with the document's own origin meaning the
+    server. Where service workers aren't available the srcdoc preview stays.
+  - `Buffer#write(string, [offset, [length]], encoding)` honours the encoding
+    (es-module-lexer writes source as `utf16le` into WebAssembly memory;
+    import analysis found no imports and left `import "react"` bare).
+  - Piped stdin is read only when something reads it (a 'data' or 'readable'
+    listener, `resume()`): vite's `process.stdin.on('end')` (exit when the
+    parent goes) fired at once and closed the server.
+  - `net` listens on IPv6 literals in long form
+    (`0000:0000:0000:0000:0000:0000:0000:0000`, one of vite's port probes).
+  - ES module export names that are strings (`export { x as "module.exports" }`),
+    `x as default` among other exports, `url.pathToFileURL` of relative and
+    `\0`-prefixed ids, `crypto.getRandomValues` in node:crypto.
+  Not yet: `vite build` stops at CSS minification (lightningcss is a native
+  addon; its WebAssembly build has an async init); node output into a pipe
+  or file comes when the process exits (only the terminal streams), so
+  `npm run dev > log &` shows nothing while it runs.
 - Node: a script's timers and intervals end with it. An interval left by a
   script that called `process.exit()` kept firing in the page, and its
   `setTimeout`s became the next script's timers, so that script never went
@@ -403,7 +433,7 @@ EIO (the browser's `TextDecoder` refuses the shared syscall buffer).
 | man, apropos, whatis, makewhatis | 1.14.6 (mandoc) | pkg (Blink) | works | `man -w`, formatting `man(1)`/`mandoc(1)`, `makewhatis` then `whatis`/`apropos`; pages from other packages (`xz`, alias `xzcat` via `.so`, procps' `vmstat(8)`) | pages come with the packages here (recipes' `install_man`; publish.sh links them into /usr/share/man), except git, openssl, curl, gnupg and fzf, whose pages are generated with tools the builds leave out; pager is `less` (`pkg install less`) |
 | jq | 1.8.1 | pkg (WASI) | works | filters, `-r`, `-s`, `gsub` (oniguruma), `-e` exit status | |
 | ripgrep | 15.2.0 | pkg (WASIX) | works as `/usr/bin/rg` | `.gitignore`, `-t`, `-g`, `-c`, `-l`, exit 1 on no match | plain `rg` is tabcomputer's builtin (the package doesn't take the name); no PCRE2; one search thread |
-| sqlite3 | 3.50.4 | pkg (WASI) | works | database file, queries, SQL on stdin, `-json` | interactive shell wants blocking stdin |
+| sqlite3 | 3.50.4 | pkg (WASI) | works | database file, queries, SQL on stdin, `-json`, the interactive shell on the tty | |
 | coreutils (uutils) | 0.12.0 | pkg (WASI) | works | `coreutils sha256sum`, `/usr/bin/factor`, `sort -n`, `tr`, `numfmt`, `seq` | builtins keep the plain names; use `/usr/bin/NAME` or `coreutils NAME` |
 | fd | 10.3.0 | pkg (Blink; upstream static musl release) | works | `-e`, `-t d`, `.gitignore` respected, `-u` | |
 | bat | 0.26.1 | pkg (Blink; upstream static musl release) | works | highlighting with the built-in themes (default and `--theme`), `-n`, plain output when piped, `--list-languages` | needed Blink patches 0017 (`pextrw`) and 0018 (`FUTEX_WAIT_BITSET`, `GRND_INSECURE`) and kernel `FIONBIO` on pipes |

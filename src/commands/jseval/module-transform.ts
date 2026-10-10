@@ -1035,7 +1035,14 @@ export function transformESModules(src: string): string {
   const asColon = (list: string) => list.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/([\w$]+)\s+as\s+([\w$]+)/g, '$1: $2');
   const exportItems = (list: string) => list.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '')
     .split(',').map((x: string) => x.trim()).filter((x: string) => x && /^[\w$]/.test(x))
-    .map((item: string) => { const m = /^([\w$]+)\s+as\s+([\w$]+)$/.exec(item); return m ? [m[1], m[2]] : [item, item]; });
+    .map((item: string) => {
+      // `x as y`, and ES2022 string names: `x as "module.exports"` (@vitejs/plugin-react)
+      const m = /^([\w$]+)\s+as\s+([\w$]+|(['"])[^'"]*\3)$/.exec(item);
+      if (!m) return [item, '.' + item];
+      return [m[1], m[3] ? `[${JSON.stringify(m[2].slice(1, -1))}]` : '.' + m[2]];
+    })
+    // `x as default` is `export default x` (the exports themselves), so it goes first and the rest attach to it
+    .sort((a: string[], b: string[]) => Number(b[1] === '.default') - Number(a[1] === '.default'));
 
   // import.meta → __import_meta (must be before import statement transforms)
   replaceInCode(ms, /import\.meta/g, '__import_meta');
@@ -1070,7 +1077,7 @@ export function transformESModules(src: string): string {
   // export { x, y as z } from 'w'
   replaceInCode(ms, new RegExp(I + String.raw`export\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]\s*;?`, 'g'),
     (_: string, list: string, mod: string) => exportItems(list).map(([local, exported]) =>
-      `__shiro_module.exports.${exported} = __shiro_require("${mod}").${local};`).join(' '));
+      exported === '.default' ? `__shiro_module.exports = __shiro_require("${mod}").${local};` : `__shiro_module.exports${exported} = __shiro_require("${mod}").${local};`).join(' '));
 
   // export * as name from 'z' → module.exports.name = require('z')
   replaceInCode(ms, new RegExp(I + String.raw`export\s*\*\s*as\s+([\w$]+)\s+from\s*['"]([^'"]+)['"]\s*;?`, 'g'),
@@ -1083,7 +1090,7 @@ export function transformESModules(src: string): string {
   // export { x, y as z } → module.exports.x = x; module.exports.z = y;
   replaceInCode(ms, new RegExp(I + String.raw`export\s*\{([^}]*)\}\s*;?`, 'g'),
     (_: string, list: string) => exportItems(list).map(([local, exported]) =>
-      `__shiro_module.exports.${exported} = ${local};`).join(' '));
+      exported === '.default' ? `__shiro_module.exports = ${local};` : `__shiro_module.exports${exported} = ${local};`).join(' '));
 
   // Track named exports to add module.exports at the end
   const namedExports: string[] = [];

@@ -1,0 +1,95 @@
+From db6aa101fd5977d398fa18e734032ea4cd5ad4d1 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 01:18:50 +0000
+Subject: [PATCH 75/76] Shiro: a woken futex waiter stops counting as a waiter
+ at once
+
+A waiter that took a FUTEX_WAKE grant stayed in the futex's waiter count
+until the end of SysFutexWait, after it had let go of the lock (and, since
+patch 0054, made the kernel round trip that clears its sleeping mark). A
+FUTEX_WAKE in between counted it again and granted a wake no one would
+take, so a waker that counts its wakes (LTP's checkpoints: 8 children,
+wake until 8 counted) stopped early and the last waiter timed out
+(waitpid08/10). The waiter now leaves the count when it takes its grant;
+a separate count of the threads still holding the futex decides when it
+is freed.
+---
+ blink/bus.h     |  3 ++-
+ blink/syscall.c | 23 ++++++++++++++++-------
+ 2 files changed, 18 insertions(+), 8 deletions(-)
+
+diff --git a/blink/bus.h b/blink/bus.h
+index de3f7a2..6667e7c 100644
+--- a/blink/bus.h
++++ b/blink/bus.h
+@@ -17,7 +17,8 @@
+ 
+ struct Futex {
+   i64 addr;
+-  int waiters;
++  int refs;     // threads in SysFutexWait holding it (it's freed at 0)
++  int waiters;  // of those, still waiting (a woken one leaves at once)
+   int wakeups;  // FUTEX_WAKE grants not yet taken by a waiter
+   // a grant goes only to a waiter that was waiting at the FUTEX_WAKE:
+   // tickets below `eligible` (`old` of them still waiting) may take one
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 19dda60..29d76c3 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -666,6 +666,7 @@ static struct Futex *NewFutex(i64 addr) {
+   }
+   dll_remove(&g_bus->futexes.free, e);
+   f = FUTEX_CONTAINER(e);
++  f->refs = 1;
+   f->waiters = 1;
+   f->wakeups = 0;
+   f->tickets = 1;  // the creator's is 0
+@@ -767,6 +768,7 @@ static int SysFutexWait(struct Machine *m,  //
+   ticket = 0;
+   if ((f = FindFutex(m, (i64)(uintptr_t)mem))) {
+     LOCK(&f->lock);
++    ++f->refs;
+     ++f->waiters;
+     ticket = f->tickets++;
+     UNLOCK(&f->lock);
+@@ -798,7 +800,11 @@ static int SysFutexWait(struct Machine *m,  //
+     }
+     LOCK(&f->lock);
+     if (f->wakeups > 0 && (i32)(ticket - f->eligible) < 0) {
+-      --f->wakeups;  // a FUTEX_WAKE picked us
++      // a FUTEX_WAKE picked us: no longer a waiter from here (a wake while
++      // this thread finishes up must not count it again)
++      --f->wakeups;
++      --f->waiters;
++      --f->old;
+       picked = true;
+       rc = 0;
+     } else if (Load32(mem) != expect) {
+@@ -821,15 +827,18 @@ static int SysFutexWait(struct Machine *m,  //
+   if (sleeping) ShiroSleeping(m, -1);
+   LOCK(&g_bus->futexes.lock);
+   LOCK(&f->lock);
+-  if ((i32)(ticket - f->eligible) < 0) {
+-    if (rc == ETIMEDOUT && f->wakeups > 0 && !picked) {
+-      --f->wakeups;  // woken just as the wait ran out: count it as a wake
+-      rc = 0;
++  if (!picked) {
++    if ((i32)(ticket - f->eligible) < 0) {
++      if (rc == ETIMEDOUT && f->wakeups > 0) {
++        --f->wakeups;  // woken just as the wait ran out: count it as a wake
++        rc = 0;
++      }
++      --f->old;
+     }
+-    --f->old;
++    --f->waiters;
+   }
+   if (f->wakeups > f->old) f->wakeups = f->old;  // grants for waiters gone
+-  if (!--f->waiters) {
++  if (!--f->refs) {
+     dll_remove(&g_bus->futexes.active, &f->elem);
+     UNLOCK(&f->lock);
+     FreeFutex(f);
+-- 
+2.43.0
+

@@ -1043,7 +1043,7 @@ export class KDatagramSocket implements OpenFile {
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
-function encodeHttpRequest(req: VirtualHttpRequest, port: number): Uint8Array {
+export function encodeHttpRequest(req: VirtualHttpRequest, port: number): Uint8Array {
   const qs = req.query && Object.keys(req.query).length ? '?' + new URLSearchParams(req.query).toString() : '';
   const body = !req.body ? new Uint8Array(0) : typeof req.body === 'string' ? enc.encode(req.body) : req.body; // a preview's fetch sends bytes
   const headers: Record<string, string> = {};

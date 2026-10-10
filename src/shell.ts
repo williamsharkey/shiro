@@ -3820,6 +3820,8 @@ export class Shell {
         // pipe's remainder, once it actually reads (`echo a; cat` leaves it for cat)
         const fromEnclosingPipe = i === 0 && !stdin && !heredocStdin && hereString === undefined &&
           !redirects.some(r => r.type === '<') && '__PIPE_STDIN' in this.env;
+        const hasShellStdin = i > 0 || hereString !== undefined || (i === 0 && !!heredocStdin) || redirects.some(r => r.type === '<') || fromEnclosingPipe;
+        const live = this.liveStdin(i, heredocStdin, hereString, redirects);
 
         const pwdBefore = this.env['PWD'], cwdBefore = this.cwd;
         const ctx: CommandContext = {
@@ -3832,6 +3834,8 @@ export class Shell {
           stderr: '',
           shell: this,
           terminal: terminalOverride || this.terminal,
+          // (a live stdin is the kernel process's fd 0: a tty when it is the pty)
+          stdinIsTTY: !hasShellStdin && (live ? this.kernelStdio!.file(0)?.kind === 'pty' : !!(terminalOverride || this.terminal)),
           // (not when the caller collects stdout: $(...), a builtin's own sink)
           stdoutIsTTY: i === pipeline.length - 1 && !redirects.some(r => r.type === '>' || r.type === '>>') &&
             !(terminalOverride || this.terminal)?.captureStdout,
@@ -3892,8 +3896,6 @@ export class Shell {
         }
 
         // WASM and x86 programs, with the filter builtins piped to and from them, run as one kernel job
-        const hasShellStdin = i > 0 || hereString !== undefined || (i === 0 && !!heredocStdin) || redirects.some(r => r.type === '<') || fromEnclosingPipe;
-        const live = this.liveStdin(i, heredocStdin, hereString, redirects);
         const kernelRun = await this.tryKernelRun(pipeline, i, effectiveCmdName, cmdArgs, redirects, ctx,
           hasShellStdin, writeStdout, stderrWriter, terminalOverride || this.terminal, live);
         if (kernelRun) {
