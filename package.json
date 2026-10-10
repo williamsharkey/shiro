@@ -8,6 +8,7 @@
     "build": "tsc && vite build && node scripts/write-profiles.mjs && node scripts/build-browse.mjs",
     "preview": "vite preview",
     "test": "cd tests && npx vitest run --config vitest.config.ts",
+    "test:worker": "cd tests && npx vitest run --config vitest.worker.config.ts",
     "bench": "node bench/run.mjs",
     "bench:quick": "node bench/run.mjs --quick",
     "bench:compare": "node bench/compare.mjs",

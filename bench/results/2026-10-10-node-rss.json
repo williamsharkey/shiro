@@ -1,0 +1,162 @@
+{
+ "format": 1,
+ "env": {
+  "date": "2026-10-10T04:58:45.752Z",
+  "git": {
+   "sha": "a017529fa703379e83ee35fdcd53901c48273e36",
+   "short": "a017529f",
+   "branch": "unix/compat-tools-flip",
+   "dirty": true
+  },
+  "node": "v22.22.0",
+  "chromium": "141.0.7390.37",
+  "os": "Linux 6.18.44-fc-v114 x64",
+  "cpu": {
+   "model": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+   "count": 4
+  },
+  "memoryGiB": 15.7,
+  "quick": false,
+  "runs": 1,
+  "machine": {
+   "id": "c7438dc4bb1e",
+   "label": "4× Intel(R) Xeon(R) Processor @ 2.10GHz, 15.7 GiB, Linux 6.18.44-fc-v114 x64, Chromium 141.0.7390.37"
+  },
+  "durationSec": 42,
+  "netcache": {
+   "hits": 2,
+   "misses": 0,
+   "failed": 0
+  }
+ },
+ "results": [
+  {
+   "name": "node.rss.base",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 227,
+   "p90": 227,
+   "min": 227,
+   "max": 227,
+   "n": 1,
+   "samples": [
+    227
+   ],
+   "notes": "renderer RSS (page + Workers) on a fresh page, no node yet"
+  },
+  {
+   "name": "node.rss.worker1",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 23.88,
+   "p90": 23.88,
+   "min": 23.88,
+   "max": 23.88,
+   "n": 1,
+   "samples": [
+    23.88
+   ],
+   "notes": "RSS added by 1 live node (an http server) as kernel guests in Workers, from the fresh page"
+  },
+  {
+   "name": "node.rss.worker3",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 33.82,
+   "p90": 33.82,
+   "min": 33.82,
+   "max": 33.82,
+   "n": 1,
+   "samples": [
+    33.82
+   ],
+   "notes": "after starting 3 (3 still running; 3 more Workers)"
+  },
+  {
+   "name": "node.rss.worker0",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 25.59,
+   "p90": 25.59,
+   "min": 25.59,
+   "max": 25.59,
+   "n": 1,
+   "samples": [
+    25.59
+   ],
+   "notes": "after they are killed"
+  },
+  {
+   "name": "node.rss.page1",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 25.94,
+   "p90": 25.94,
+   "min": 25.94,
+   "max": 25.94,
+   "n": 1,
+   "samples": [
+    25.94
+   ],
+   "notes": "RSS added by 1 live node (an http server) in the page (TABCOMPUTER_NODE_WORKER=0), after the guest runs"
+  },
+  {
+   "name": "node.rss.page3",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 27.27,
+   "p90": 27.27,
+   "min": 27.27,
+   "max": 27.27,
+   "n": 1,
+   "samples": [
+    27.27
+   ],
+   "notes": "after starting 3 (3 still running; 0 more Workers)"
+  },
+  {
+   "name": "node.rss.page0",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 27.12,
+   "p90": 27.12,
+   "min": 27.12,
+   "max": 27.12,
+   "n": 1,
+   "samples": [
+    27.12
+   ],
+   "notes": "after they are killed"
+  },
+  {
+   "name": "node.rss.worker_idle2",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 31.27,
+   "p90": 31.27,
+   "min": 31.27,
+   "max": 31.27,
+   "n": 1,
+   "samples": [
+    31.27
+   ],
+   "notes": "then 2 guests that exit on their own: 2 Workers left (pooled idle)"
+  }
+ ]
+}
