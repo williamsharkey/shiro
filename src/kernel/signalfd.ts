@@ -72,12 +72,20 @@ export class SignalFile implements OpenFile {
     }
     let n = 0;
     for (let sig; n + SIGNALFD_SIGINFO_SIZE <= buf.length && (sig = this.next(proc)); n += SIGNALFD_SIGINFO_SIZE) {
-      proc.deferredSignals.delete(sig);
+      // one instance (a real-time signal may have more queued), with what it carries
+      const info = proc.takeSiginfo(sig, proc.deferredSignals);
       const rec = new DataView(buf.buffer, buf.byteOffset + n, SIGNALFD_SIGINFO_SIZE);
       for (let i = 0; i < SIGNALFD_SIGINFO_SIZE; i += 4) rec.setUint32(i, 0, true);
       rec.setUint32(0, sig, true); // ssi_signo
-      rec.setInt32(8, 0, true); // ssi_code: SI_USER
-      rec.setUint32(16, proc.uid, true); // ssi_uid
+      rec.setInt32(8, info.code, true); // ssi_code
+      rec.setUint32(12, info.pid ?? 0, true); // ssi_pid
+      rec.setUint32(16, info.uid ?? proc.uid, true); // ssi_uid
+      rec.setUint32(24, info.timerid ?? 0, true); // ssi_tid
+      rec.setUint32(32, info.overrun ?? 0, true); // ssi_overrun
+      rec.setInt32(40, info.status ?? 0, true); // ssi_status
+      const v = info.value ?? 0n;
+      rec.setInt32(44, Number(BigInt.asIntN(32, v)), true); // ssi_int
+      rec.setBigUint64(48, BigInt.asUintN(64, v), true); // ssi_ptr
     }
     return n;
   }

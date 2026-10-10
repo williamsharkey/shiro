@@ -334,6 +334,54 @@ describe('kernel syscalls found by LTP', () => {
     await kernel.syscall(proc, A.SYS_wait4, [t.pid, 0], new Uint8Array(8));
   });
 
+  it('Open POSIX sigqueue/sigwaitinfo: real-time signals queue with their values; siginfo for handlers and sigwait', async () => {
+    const t = kernel.vfork(proc);
+    const RT = A.SIGRTMIN + 2;
+    kernel.setSigmask(t, new Set([RT, A.SIGUSR1]));
+    const queue = (target: number, signo: number, value: number, code = A.SI_QUEUE, from = t) => {
+      const si = new Uint8Array(A.SIGINFO_SIZE);
+      A.encodeSiginfo({ signo, code, pid: from.pid, uid: from.uid, value: BigInt(value) }, si);
+      return kernel.syscall(from, A.SYS_rt_sigqueueinfo, [target, signo], si);
+    };
+    // three of a real-time signal queue, in order, with their values; a standard one coalesces
+    for (const v of [5, 6, 7]) expect(await queue(t.pid, RT, v)).toBe(0);
+    for (const v of [1, 2]) expect(await queue(t.pid, A.SIGUSR1, v)).toBe(0);
+    const take = async (signo: number) => {
+      const d = new Uint8Array(A.SIGINFO_SIZE);
+      new DataView(d.buffer).setUint32(signo > 32 ? 4 : 0, 1 << ((signo - 1) % 32), true);
+      const got = await kernel.syscall(t, A.SYS_rt_sigtimedwait, [0], d);
+      return got < 0 ? got : `${got}:${A.decodeSiginfo(d).code}:${A.decodeSiginfo(d).value}`;
+    };
+    expect([await take(RT), await take(RT), await take(RT), await take(RT)]).toEqual([`${RT}:-1:5`, `${RT}:-1:6`, `${RT}:-1:7`, -A.EAGAIN]);
+    expect([await take(A.SIGUSR1), await take(A.SIGUSR1)]).toEqual([`${A.SIGUSR1}:-1:1`, -A.EAGAIN]);
+    // SI_USER (or any code >= 0) to another process is the kernel's to claim; signal 0 probes
+    expect(await queue(proc.pid, A.SIGUSR2, 1, A.SI_USER)).toBe(-A.EPERM);
+    expect(await queue(t.pid, 0, 0)).toBe(0);
+    expect(await queue(99999, A.SIGUSR2, 1)).toBe(-A.ESRCH);
+    // a handler's signal: the guest takes it from the channel, then asks for its siginfo
+    t.dispositions.set(A.SIGUSR2, 0x1234);
+    expect(await queue(t.pid, A.SIGUSR2, 42)).toBe(0);
+    expect(kernel.takeSignal(t)).toBe(A.SIGUSR2);
+    const si = new Uint8Array(A.SIGINFO_SIZE);
+    expect(await kernel.syscall(t, A.SYS_shiro_siginfo, [A.SIGUSR2], si)).toBe(0);
+    expect(A.decodeSiginfo(si)).toMatchObject({ signo: A.SIGUSR2, code: A.SI_QUEUE, pid: t.pid, value: 42n });
+    expect(await kernel.syscall(t, A.SYS_shiro_siginfo, [A.SIGHUP], si)).toBe(-A.ENOENT);
+    // a timer's signal says so, with its id and sigev_value
+    const sev = new Uint8Array(24); const sv = new DataView(sev.buffer);
+    sv.setBigInt64(0, 77n, true); sv.setInt32(8, RT, true);
+    const id = await kernel.syscall(t, A.SYS_timer_create, [1, 1], sev);
+    const its = new Uint8Array(32); new DataView(its.buffer).setBigInt64(24, 5_000_000n, true);
+    expect(await kernel.syscall(t, A.SYS_timer_settime, [id, 0], its)).toBe(0);
+    await new Promise((r) => setTimeout(r, 40));
+    const d = new Uint8Array(A.SIGINFO_SIZE);
+    new DataView(d.buffer).setUint32(4, 1 << ((RT - 1) % 32), true);
+    expect(await kernel.syscall(t, A.SYS_rt_sigtimedwait, [0], d)).toBe(RT);
+    const ti = new DataView(d.buffer);
+    expect([ti.getInt32(8, true), ti.getInt32(16, true), ti.getBigInt64(24, true)]).toEqual([A.SI_TIMER, id, 77n]);
+    kernel.kill(t.pid, A.SIGKILL);
+    await kernel.syscall(proc, A.SYS_wait4, [t.pid, 0], new Uint8Array(8));
+  });
+
   it('connect03: connecting to an AF_UNIX socket file takes write permission on it', async () => {
     const stack = new NetStack();
     stack.configure({ relayUrl: null, tokenUrl: null, dohUrl: null, portHost: null });
