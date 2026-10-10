@@ -147,6 +147,27 @@ var ShiroKernelLibrary = {
     if (!sab) return 0;
     return Atomics.notify(new Int32Array(sab), (off >>> 0) >> 2, n);
   },
+
+  // Thread Workers: each is a JS engine instance (~12 MB), and every Blink
+  // process is its own module, so build.sh starts two (the guest's main
+  // thread and one spare) instead of four. A thread that takes the spare
+  // has one loading behind it, so the next fork or pthread_create finds a
+  // Worker ready (a cold one takes ~70 ms to start, a warm one ~10 ms).
+  shiro_pool_init__deps: ['$PThread'],
+  shiro_pool_init__postset: `
+    if (!ENVIRONMENT_IS_PTHREAD) {
+      var shiroGetNewWorker = PThread.getNewWorker;
+      PThread.getNewWorker = function () {
+        var worker = shiroGetNewWorker.call(PThread);
+        if (PThread.unusedWorkers.length == 0) {
+          setTimeout(function () {
+            if (PThread.unusedWorkers.length == 0) PThread.loadWasmModuleToWorker(PThread.allocateUnusedWorker());
+          }, 0);
+        }
+        return worker;
+      };
+    }`,
+  shiro_pool_init: () => {},
 };
 
 addToLibrary(ShiroKernelLibrary);
