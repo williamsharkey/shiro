@@ -148,6 +148,8 @@ ${bootSection(ctx, name)}
 
 ## Useful here
 
+- Web apps: \`npm create vite@latest app -- --template react\`, \`npm i\`, \`npm run dev\`,
+  then \`serve open 5173\` shows it in a preview window with hot reload.
 - \`serve DIR\` serves a folder in a preview window; a program that \`listen()\`s on
   a port is served the same way. Both are reachable only from this tab.
 - \`page :PORT text|click|input|eval ...\` drives that page, so you can test a UI
@@ -156,8 +158,8 @@ ${bootSection(ctx, name)}
 
 ## What doesn't work
 
-- File watching: \`fs.watch\` never fires and inotify is ENOSYS, so watch modes
-  and hot reload don't react to edits. Re-run commands instead.
+- inotify is ENOSYS for Linux programs (entr, inotifywait). Node's \`fs.watch\`
+  works, so nodemon, vite's hot reload and jest --watch do.
 - \`time\` reports no user/sys CPU time.
 - Docker, VMs, kernel modules, GPU access, a D-Bus session bus.
 - \`systemctl\` is a small built-in service manager, not systemd.
