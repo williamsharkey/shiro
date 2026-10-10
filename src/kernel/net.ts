@@ -862,7 +862,9 @@ export class KDatagramSocket implements OpenFile {
     // again on each connect unless bind() named one: glibc's getaddrinfo
     // connects one IPv6 socket to an IPv6 answer and then to a v4-mapped one
     if (!this.local || !this.boundAddr) {
-      this.local = { family: this.domain, address: localAddressFor({ ...addr, family: this.domain }), port: this.local?.port || this.stack.ephemeral() };
+      // an IPv6 socket connected with an AF_INET address talks IPv4: its source is v4-mapped (Linux's ip6_datagram_connect)
+      const to = this.domain === AF_INET6 && addr.family === AF_INET ? { ...addr, family: AF_INET6, address: `::ffff:${addr.address}` } : { ...addr, family: this.domain };
+      this.local = { family: this.domain, address: localAddressFor(to), port: this.local?.port || this.stack.ephemeral() };
     }
     return 0;
   }

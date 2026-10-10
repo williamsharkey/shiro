@@ -166,6 +166,10 @@ describe('kernel sockets over the TCP relay', () => {
     const port = d.getsockname().port;
     d.connect({ family: AF_INET6, address: '::ffff:151.101.0.223', port: 0 });
     expect(d.getsockname()).toMatchObject({ address: '::ffff:10.0.2.15', port });
+    // glibc's try_connect connects it with the AF_INET address itself
+    d.connect({ family: AF_INET6, address: '2a04:4e42::223', port: 0 });
+    d.connect(v4('151.101.0.223', 0));
+    expect(d.getsockname().address).toBe('::ffff:10.0.2.15');
     void d.close();
     const b = stack.socket(AF_INET6, SOCK_DGRAM) as KDatagramSocket;
     b.bind({ family: AF_INET6, address: '::1', port: 0 });
