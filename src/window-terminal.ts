@@ -11,6 +11,7 @@ import type { TerminalLike } from './commands/index';
 import { bufferToString } from './utils/copy-utils';
 import { setActiveTerminal } from './active-terminal';
 import { TtySession } from './kernel/pty';
+import { pinTerminalTimers } from './node-compat/page-globals';
 
 export class WindowTerminal implements TerminalLike {
   term: Terminal;
@@ -80,6 +81,7 @@ export class WindowTerminal implements TerminalLike {
         },
       },
     });
+    pinTerminalTimers(this.term);
 
     this.fitAddon = new FitAddon();
     this.term.loadAddon(this.fitAddon);
