@@ -688,6 +688,12 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    caller's mask saved in its frame, as after sigsuspend; otherwise the
    caller's mask is restored when the call returns. An interruptible kernel
    call also takes a signal that the mask it just sent released (LTP ppoll01).
+77. System V semaphores are forwarded to the kernel's (unix/perf-kernel):
+   `semget`, `semop` and `semtimedop`, which block in the kernel, and
+   `semctl`, with its SETVAL int, the GETALL/SETALL arrays (sized by an
+   IPC_STAT) and the semid_ds/seminfo structs. SEM_UNDO is applied by the
+   kernel at process exit. Test: fixtures/x86/sysvsem.c, identical to native
+   output (Audacity's single-instance lock).
 
 The page compiles blink.wasm once and gives the `WebAssembly.Module` to every
 Blink worker (src/x86-engine/blink.ts `blinkWasmModule`, host.mjs

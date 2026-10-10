@@ -112,6 +112,8 @@ const sse2dBin = join(out, 'sse2d');
 const haveSse2d = tryBuild('gcc', ['-static', '-O1', '-o', sse2dBin, 'sse2d.c']);
 const futexckptBin = join(out, 'futexckpt');
 const haveFutexckpt = tryBuild('gcc', ['-static', '-O1', '-o', futexckptBin, 'futexckpt.c']);
+const sysvsemBin = join(out, 'sysvsem');
+const haveSysvsem = 'SYS_semget' in Abi && tryBuild('gcc', ['-static', '-O1', '-o', sysvsemBin, 'sysvsem.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -912,6 +914,13 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const r = await run(shell, './prog a 10; ./prog f 10');
     expect(r.output.replace(/\r\n/g, '\n')).toBe('anon: 0 of 10 rounds bad\nfile: 0 of 10 rounds bad\n');
   }, 120_000);
+
+  // Audacity's single-instance lock: System V semaphores (the kernel's, forwarded)
+  it.skipIf(!haveSysvsem)('System V semaphores: values, blocking semop, SEM_UNDO at exit, timeouts, IPC_RMID', async () => {
+    const { shell } = await setup(readFileSync(sysvsemBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe("semget ok\nsetval 0 getval 1\ngetall 1 0 nsems 2\nnowait while held -1 Resource temporarily unavailable\nblocking semop 0 after child exit 1\nsemtimedop -1 Resource temporarily unavailable waited 1\nrmid 0\nsemop after rmid -1 Invalid argument\n");
+  }, 60_000);
 
   // vim's typeahead check blocked for a key when two reads straddled a ms tick
   it.skipIf(!haveRealtime)('CLOCK_REALTIME and gettimeofday have sub-ms resolution', async () => {
