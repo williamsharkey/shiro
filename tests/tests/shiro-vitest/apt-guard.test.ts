@@ -104,4 +104,17 @@ describe('shiro-apt (apt recovery)', () => {
       expect(calls).toEqual([`/usr/bin/apt.debian ${argv.join(' ')}`]);
     }
   });
+
+  it('a run ended by a signal is not retried, and nothing starts once the caller is gone', async () => {
+    // Ctrl-C (130) mid-unpack leaves dpkg part-way, but the user asked it to stop
+    const killed = machine({ status: STATUS_OK, behave: (argv, m) => { if (argv.includes('jq')) { m.status = STATUS_BROKEN; return 130; } return 0; } });
+    expect(await aptGuardProgram(killed.proc, killed.kernel)).toBe(130);
+    expect(killed.calls).toHaveLength(1);
+    // The caller went away during the first run (a timeout's abort): no recovery, no retry
+    let gone = false;
+    const stop = machine({ status: STATUS_OK, behave: (argv, m) => { if (argv.includes('jq')) { m.status = STATUS_BROKEN; gone = true; return 100; } return 0; } });
+    Object.defineProperty(stop.proc, 'exiting', { get: () => gone });
+    expect(await aptGuardProgram(stop.proc, stop.kernel)).toBe(100);
+    expect(stop.calls).toEqual(['/usr/bin/apt-get.debian install -y jq']);
+  });
 });

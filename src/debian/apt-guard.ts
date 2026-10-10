@@ -64,12 +64,20 @@ export interface AptGuardIO {
   /** Run a program to completion: its exit status. */
   run(path: string, argv: string[]): Promise<number>;
   say(line: string): Promise<void> | void;
+  /** The caller is gone (Ctrl-C, a timeout, a kill): start nothing more. */
+  stopped?(): boolean;
 }
+
+/** Ended by a signal (Ctrl-C 130, kill 137, SIGTERM 143), not by apt: no recovery or retry. */
+const KILLED = new Set([130, 137, 143]);
 
 /** The recovery logic, independent of how programs are run. */
 export async function aptGuard(io: AptGuardIO, product = 'tabcomputer'): Promise<number> {
   const { script, args, fs } = io;
-  const real = () => io.run(script + DEBIAN_SUFFIX, [script, ...args]);
+  const stopped = () => !!io.stopped?.();
+  // A run started after the caller went away would outlive it holding dpkg's lock
+  const run = (path: string, argv: string[]) => (stopped() ? Promise.resolve(130) : io.run(path, argv));
+  const real = () => run(script + DEBIAN_SUFFIX, [script, ...args]);
   const sub = aptSubcommand(args);
   const dry = args.some((a) => /^(-s|--simulate|--just-print|--dry-run|--recon|--no-act|--print-uris|-d|--download-only)$/.test(a));
   if (!fs || io.uid !== 0 || !sub || !CHANGES.has(sub) || dry) return real();
@@ -94,23 +102,24 @@ export async function aptGuard(io: AptGuardIO, product = 'tabcomputer'): Promise
     if (await interrupted()) {
       await tornAside();
       await say("dpkg was interrupted; running 'dpkg --configure -a' first");
-      await io.run('/usr/bin/dpkg', ['dpkg', '--configure', '-a']);
+      await run('/usr/bin/dpkg', ['dpkg', '--configure', '-a']);
     }
     const left = await broken();
     if (left.length) {
       await say(`finishing what an earlier install left part-way (${left.slice(0, 5).join(', ')}${left.length > 5 ? ', …' : ''}): apt-get -f install`);
-      await io.run('/usr/bin/apt-get' + DEBIAN_SUFFIX, ['apt-get', '-f', 'install', '-y']);
+      await run('/usr/bin/apt-get' + DEBIAN_SUFFIX, ['apt-get', '-f', 'install', '-y']);
     }
   };
 
   await recover();
+  if (stopped()) return 130;
   const code = await real();
-  if (code === 0 || !['install', 'reinstall', 'upgrade', 'full-upgrade', 'dist-upgrade'].includes(sub)) return code;
+  if (code === 0 || KILLED.has(code) || stopped() || !['install', 'reinstall', 'upgrade', 'full-upgrade', 'dist-upgrade'].includes(sub)) return code;
   // A failed run that left dpkg part-way: recover and try once more
   if (!(await interrupted()) && !(await broken()).length) return code;
   await say('the install stopped part-way; recovering and trying once more');
   await recover();
-  return real();
+  return stopped() ? 130 : real();
 }
 
 /** Runner for `shiro-apt` as a kernel program (the stub's argv is [interp, /usr/bin/apt-get, ...args]). */
@@ -128,5 +137,6 @@ export async function aptGuardProgram(proc: Process, kernel: Kernel, product = '
     fs: kernel.fs ?? undefined,
     run,
     say: async (s) => { await proc.fds.get(2)?.write(new TextEncoder().encode(s)); },
+    stopped: () => proc.exiting,
   }, product);
 }
