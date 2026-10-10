@@ -136,6 +136,8 @@ EOF
 find "$ROOT/usr/share/doc" -mindepth 1 -not -name copyright -not -type d -delete 2>/dev/null || true
 find "$ROOT/usr/share/doc" -mindepth 1 -type d -empty -delete 2>/dev/null || true
 rm -rf "$ROOT/usr/share/man/"* "$ROOT/usr/share/info/"* "$ROOT/usr/share/lintian" "$ROOT/usr/share/linda"
+# update-alternatives makes man-page slave links in these (openjdk's postinst failed without man1)
+mkdir -p "$ROOT"/usr/share/man/man{1,2,3,4,5,6,7,8}
 find "$ROOT/usr/share/locale" -mindepth 1 -maxdepth 1 -not -name locale.alias -exec rm -rf {} + 2>/dev/null || true
 
 # The Shiro user (uid 1000, as the kernel runs everything) with sudo rights
