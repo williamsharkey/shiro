@@ -71,6 +71,8 @@ const shmobjBin = join(out, 'shmobj');
 const haveShmobj = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', shmobjBin, 'shmobj.c']);
 const shmoddBin = join(out, 'shmodd');
 const haveShmodd = tryBuild('gcc', ['-static', '-O1', '-o', shmoddBin, 'shmodd.c']);
+const statpathBin = join(out, 'statpath');
+const haveStatpath = tryBuild('gcc', ['-static', '-O1', '-o', statpathBin, 'statpath.c']);
 const execenvBin = join(out, 'execenv');
 const haveExecenv = tryBuild('gcc', ['-static', '-O1', '-o', execenvBin, 'execenv.c']);
 const shmpreadBin = join(out, 'shmpread');
@@ -1523,6 +1525,19 @@ describe('Blink engine: CPU and syscall fixes', () => {
       "anon after fork 'c' munmap rounded 0\nshm after close 'qwerty' mapped 'qwerty'\ndone\nrc 0\n";
     expect(r.output.replace(/\r\n/g, '\n')).toBe(ok + ok);
   }, 120_000);
+
+  // Path lookup errors (LTP lstat02), as uid 1000
+  it.skipIf(!haveStatpath)('stat and lstat: EACCES, ENOENT for "", ENAMETOOLONG, ENOTDIR, ELOOP past 40 links', async () => {
+    const { shell } = await setup(readFileSync(statpathBin));
+    const r = await run(shell, 'rm -rf sp; ./prog; rm -rf sp');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'eacces lstat Permission denied stat Permission denied\n' +
+      'enoent lstat No such file or directory stat No such file or directory\n' +
+      'enametoolong lstat File name too long stat File name too long\n' +
+      'enotdir lstat Not a directory stat Not a directory\n' +
+      'eloop lstat Too many levels of symbolic links stat Too many levels of symbolic links\n' +
+      'ok-30 lstat ok stat ok\n');
+  }, 60_000);
 
   // execve's envp is the new program's whole environment (LTP execve01)
   it.skipIf(!haveExecenv)('execve passes exactly the envp it was given', async () => {

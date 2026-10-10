@@ -984,6 +984,32 @@ export class Kernel {
     return normalize(d.path + m[3]);
   }
 
+  /** Directories chmod or mkdir left without owner search (x) permission (searchDenied). */
+  private noSearchDirs = new Set<string>();
+
+  /** chmod/mkdir set `path`'s mode: remember a directory it can't be searched through. */
+  private noteDirMode(path: string, mode: number): void {
+    if (mode & 0o100) { this.noSearchDirs.delete(path); return; }
+    if (this.fs?.lookupCached?.(path)?.node.type === 'dir') this.noSearchDirs.add(path);
+  }
+
+  /**
+   * A directory on the way to `p` that a non-root process may not search: its
+   * owner bits lack x (mode 0666: EACCES, LTP lstat02). Only directories the
+   * kernel's chmod/mkdir made so are looked at: nothing to check otherwise
+   * (stat and open are hot), and one whose mode isn't known never refuses.
+   */
+  private searchDenied(proc: Process, p: string): boolean {
+    if (!this.noSearchDirs.size || proc.uid === 0) return false;
+    for (const d of this.noSearchDirs) {
+      if (!p.startsWith(d + '/')) continue;
+      const node = this.fs?.lookupCached?.(d)?.node;
+      if (node?.type === 'dir' && !(node.mode & 0o100)) return true;
+      if (node !== undefined) this.noSearchDirs.delete(d); // (searchable again, or gone)
+    }
+    return false;
+  }
+
   /** open(2) without the fd: returns the new OpenFile or -errno. */
   async open(proc: Process, path: string, flags: number, mode = 0o666, dirfd = A.AT_FDCWD): Promise<OpenFile | number> {
     // O_PATH: a descriptor that only names the file (fstat, fchdir, *at, dup, close)
@@ -993,6 +1019,7 @@ export class Kernel {
     }
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
+    if (this.searchDenied(proc, p)) return -A.EACCES;
     const fdm = /^\/(?:dev\/fd|proc\/self\/fd)\/(\d+)$/.exec(p) ?? (/^\/dev\/(stdin|stdout|stderr)$/.exec(p));
     if (fdm) {
       const n = fdm[1] === 'stdin' ? 0 : fdm[1] === 'stdout' ? 1 : fdm[1] === 'stderr' ? 2 : Number(fdm[1]);
@@ -1234,7 +1261,9 @@ export class Kernel {
         if (own) return -A.EEXIST;
         const real = this.childPathSync(p);
         if (typeof real !== 'string') return real;
-        return fs.createDirNow(real, mode & ~proc.umask) ? 0 : undefined;
+        if (!fs.createDirNow(real, mode & ~proc.umask)) return undefined;
+        this.noteDirMode(real, mode & ~proc.umask);
+        return 0;
       }
       case A.SYS_rename: case A.SYS_renameat: case A.SYS_renameat2: {
         const [od, ol, nd, nl, flags] = nr === A.SYS_rename
@@ -1309,6 +1338,7 @@ export class Kernel {
     }
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
+    if (this.searchDenied(proc, p)) return -A.EACCES;
     const dev = this.devices.get(p);
     if (dev) {
       // A description just for the stat: O_NOCTTY (stat must not make a pty the
@@ -2479,6 +2509,7 @@ export class Kernel {
           if (await fs().exists(p)) return -A.EEXIST;
           await fs().mkdir(p);
           await fs().chmod(p, mode & ~proc.umask & 0o7777).catch(() => {});
+          this.noteDirMode(p, mode & ~proc.umask);
           return 0;
         }
         case A.SYS_rmdir:
@@ -2607,6 +2638,7 @@ export class Kernel {
           const real = await fs().realpath(path);
           await flushInode(fs(), real);
           await fs().chmod(real, mode & 0o7777);
+          this.noteDirMode(real, mode);
           setInodeMode(fs(), real, mode);
           return 0;
         }
