@@ -560,6 +560,8 @@ export class Kernel {
     }
     for (const sig of opts.sigdefault ?? []) proc.dispositions.delete(sig);
     this.procs.set(pid, proc);
+    const cpu = parent.data.cpuLimit as { cur: number; max: number } | undefined;
+    if (cpu) this.setCpuLimit(proc, cpu.cur, cpu.max);
     for (const h of [...this.spawnHooks]) {
       try { h(proc); } catch (e) { console.warn('[kernel] onSpawn hook failed', e); }
     }
@@ -649,6 +651,34 @@ export class Kernel {
     }
     arm(valueMs);
     return old;
+  }
+
+  /** RLIMIT_CPU of `proc` in seconds (Infinity: none) */
+  cpuLimit(proc: Process): { cur: number; max: number } {
+    const l = proc.data.cpuLimit as { cur: number; max: number } | undefined;
+    return l ? { cur: l.cur, max: l.max } : { cur: Infinity, max: Infinity };
+  }
+
+  /**
+   * Set RLIMIT_CPU, as Linux enforces it: SIGXCPU when the process's CPU
+   * time (ProcFs.cpuMs: running, not asleep in the engine or in long calls)
+   * reaches the soft limit and at each second after it, SIGKILL at the hard
+   * limit (LTP setrlimit06). Fork children inherit it (spawn).
+   */
+  setCpuLimit(proc: Process, cur: number, max: number): void {
+    const prev = proc.data.cpuLimit as { timer?: ReturnType<typeof setInterval> } | undefined;
+    if (prev?.timer) clearInterval(prev.timer);
+    if (cur === Infinity && max === Infinity) { delete proc.data.cpuLimit; return; }
+    const limit: { cur: number; max: number; next: number; timer?: ReturnType<typeof setInterval> } = { cur, max, next: cur };
+    proc.data.cpuLimit = limit;
+    limit.timer = setInterval(() => {
+      if (proc.exiting || proc.state === 'zombie') { clearInterval(limit.timer); return; }
+      const s = ProcFs.cpuMs(proc) / 1000;
+      if (s >= limit.max) { clearInterval(limit.timer); this.deliver(proc, A.SIGKILL); return; }
+      if (s >= limit.next) { limit.next = Math.floor(s) + 1; this.deliver(proc, A.SIGXCPU); }
+    }, 100);
+    (limit.timer as any)?.unref?.();
+    proc.onTerminate(() => clearInterval(limit.timer));
   }
 
   /** Terminate `proc` with a wait status: close its fds, reparent its children, notify its parent. */
@@ -2748,12 +2778,26 @@ export class Kernel {
           return fds.alloc(file, 0, (args[1] & A.MFD_CLOEXEC) !== 0);
         }
         case A.SYS_prlimit64: { // pid, resource, set → data: old {cur, max} (u64s); a new one first when set
-          // RLIMIT_NOFILE only (the fd table's): engines keep the other limits
-          if (args[1] !== A.RLIMIT_NOFILE) return -A.EINVAL;
+          // RLIMIT_NOFILE (the fd table's) and RLIMIT_CPU (enforced here): engines keep the other limits
+          if (args[1] !== A.RLIMIT_NOFILE && args[1] !== A.RLIMIT_CPU) return -A.EINVAL;
           const target = args[0] ? this.procs.get(args[0]) : proc;
           if (!target) return -A.ESRCH;
           if (data.length < 16) return -A.EFAULT;
           const dv = new DataView(data.buffer, data.byteOffset, 16);
+          if (args[1] === A.RLIMIT_CPU) {
+            const INF = 0xffffffffffffffffn;
+            const old = this.cpuLimit(target);
+            if (args[2]) {
+              const sec = (o: number) => { const v = dv.getBigUint64(o, true); return v === INF ? Infinity : Number(v); };
+              const cur = sec(0), max = sec(8);
+              if (cur > max) return -A.EINVAL;
+              if (max > old.max && proc.uid !== 0) return -A.EPERM;
+              this.setCpuLimit(target, cur, max);
+            }
+            dv.setBigUint64(0, old.cur === Infinity ? INF : BigInt(old.cur), true);
+            dv.setBigUint64(8, old.max === Infinity ? INF : BigInt(old.max), true);
+            return 0;
+          }
           const t = target.fds;
           const old = [t.limit, t.hardLimit];
           if (args[2]) {
@@ -3083,6 +3127,8 @@ export class Kernel {
     child.data.embryo = true;
     child.data.forkParent = parent.pid; // startForkChild: the parent may have exited (and the child been reparented) by then
     this.procs.set(pid, child);
+    const cpu = parent.data.cpuLimit as { cur: number; max: number } | undefined;
+    if (cpu) this.setCpuLimit(child, cpu.cur, cpu.max);
     for (const h of [...this.spawnHooks]) {
       try { h(child); } catch (e) { console.warn('[kernel] onSpawn hook failed', e); }
     }
