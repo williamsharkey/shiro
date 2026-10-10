@@ -827,6 +827,37 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    cvt* to 32/64-bit, roundsd in all modes, movmskpd) over NaN, ±inf, ±0,
    denormals and integer limits. Now identical to native in the
    interpreter and in compiled code.
+109. Same-instance fork shares private pages copy-on-write. A writable
+   page of its own becomes a refcounted shared host page (PAGE_GROW), read
+   only, with PAGE_COW and PAGE_COWRW (the mapping's write intent); parent
+   and child map the same page. Pages a thread holds locked in a system
+   call are still copied. Blink writes through a resolved pointer on many
+   paths without checking PAGE_RW. So any address it resolves in a COW
+   page (LookupAddress2: interpreter, system calls, string ops, stack)
+   gives the process its own copy first, or the page itself once nobody
+   else maps it. It copies before dropping the reference and swaps the PTE
+   with a CAS. Only compiled code's inline reads keep sharing: its writes
+   miss its write cache and come back through the interpreter.
+   - mprotect keeps COW pages read-only and records write intent in
+     COWRW.
+   - madvise(DONTNEED) breaks COW first, then zeros.
+   - mremap, /proc/self/maps and IsValidMemory count COWRW as writable.
+   - The JIT doesn't treat a COW page as fixed code.
+   - Blink's own writes (futex words, clear-tid, robust lists, CopyToUser)
+     resolve with LookupAddressWrite.
+   - BLINK_FORK_COW=0 gives the copying fork.
+
+   fork+exit+wait with 16 MiB of dirty heap went from 30 to 7.5 ms, and
+   with 64 MiB from 104 to 12 ms (native: 3.1 ms). Test:
+   fixtures/x86/cowfork.c covers:
+   - heap, brk, .data, mmap and stack views on both sides after either
+     writes;
+   - a signal frame in the child;
+   - mprotect, madvise and mremap after fork;
+   - a grandchild, 8 children, and exec.
+
+   It matches native, and the gowait stress, the xz threaded decode, Open
+   POSIX fork_21-1 and the LTP fork/mm subset are unchanged.
 
 The page compiles blink.wasm once and gives the `WebAssembly.Module` to every
 Blink worker (src/x86-engine/blink.ts `blinkWasmModule`, host.mjs

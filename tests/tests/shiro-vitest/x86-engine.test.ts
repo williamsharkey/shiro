@@ -134,6 +134,8 @@ const sseiBin = join(out, 'ssei');
 const haveSsei = tryBuild('gcc', ['-static', '-O1', '-mssse3', '-o', sseiBin, 'ssei.c']);
 const ssefloatBin = join(out, 'ssefloat');
 const haveSsefloat = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', ssefloatBin, 'ssefloat.c', '-lm']);
+const cowforkBin = join(out, 'cowfork');
+const haveCowfork = tryBuild('gcc', ['-static', '-O1', '-o', cowforkBin, 'cowfork.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -991,6 +993,13 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const { shell } = await setup(readFileSync(sysvmsgBin));
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe("msgget ok\nsend 0 0\nqnum 2\nrcv type 2: 6 2 world\nrcv any: 6 1 hello\nrcv empty nowait: -1 No message of desired type\nchild got 5 7 late\nrmid 0\nsend after rmid -1 Invalid argument\n");
+  }, 60_000);
+
+  // Blink 0109: fork shares private pages copy-on-write; each side keeps its own view
+  it.skipIf(!haveCowfork)('fork copy-on-write: heap, brk, .data, mmap, stack views stay apart; mprotect/madvise/mremap/signals after fork', async () => {
+    const { shell } = await setup(readFileSync(cowforkBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('child view y, parent view 1, children 1, after 1, exec 0\n');
   }, 60_000);
 
   // scalar SSE double ops over NaN/inf/zeros/denormals/limits; comisd/ucomisd clear AF (Blink left it)
