@@ -185,16 +185,14 @@ let installing: Promise<void> | null = null;
  */
 export function installClaudeCode(fs: InstallFs): Promise<void> {
   installing ??= (async () => {
-    const { extractTarGz } = await import('./utils/tar-utils');
+    const { extractTarGzFiles } = await import('./utils/tar-utils');
     const resp = await fetch(CLAUDE_CODE_TARBALL_URL);
-    if (!resp.ok) throw new Error(`download failed: HTTP ${resp.status}`);
-    const entries = await extractTarGz(new Uint8Array(await resp.arrayBuffer()));
+    if (!resp.ok || !resp.body) throw new Error(`download failed: HTTP ${resp.status}`);
+    // (only the files kept, as the tarball streams in: not the other platforms' binaries)
+    const entries = await extractTarGzFiles(resp.body, (name) => CLAUDE_CODE_FILES.includes(name));
     await fs.mkdir(CLAUDE_CODE_DIR, { recursive: true });
     for (const entry of entries) {
-      const name = entry.name.replace(/^package\//, '');
-      if (entry.type === 'file' && entry.data && CLAUDE_CODE_FILES.includes(name)) {
-        await fs.writeFile(`${CLAUDE_CODE_DIR}/${name}`, entry.data);
-      }
+      if (entry.type === 'file' && entry.data) await fs.writeFile(`${CLAUDE_CODE_DIR}/${entry.name}`, entry.data);
     }
     await fs.mkdir('/usr/local/bin', { recursive: true });
     try { await fs.unlink(CLAUDE_BIN); } catch { /* not there yet */ }

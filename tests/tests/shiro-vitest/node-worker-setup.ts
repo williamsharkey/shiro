@@ -3,6 +3,7 @@
  * run in Node worker_threads, as the browser runs it in a Worker.
  */
 import { Worker } from 'node:worker_threads';
+import { createRequire } from 'node:module';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { build } from 'esbuild';
@@ -25,6 +26,14 @@ export async function installNodeWorker(): Promise<() => void> {
     entryPoints: [entry], bundle: true, platform: 'node', format: 'esm', outfile: file, logLevel: 'error',
     // (a CommonJS dependency's require() of a node builtin, in an ES module bundle)
     banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" },
+    // vite's `X?url` (an asset's URL: build.ts's esbuild.wasm): the file's path
+    plugins: [{
+      name: 'url-import',
+      setup(b) {
+        b.onResolve({ filter: /\?url$/ }, (a) => ({ path: createRequire(path.join(a.resolveDir, 'x.js')).resolve(a.path.slice(0, -4)), namespace: 'url-import' }));
+        b.onLoad({ filter: /.*/, namespace: 'url-import' }, (a) => ({ contents: `export default ${JSON.stringify(a.path)};`, loader: 'js' }));
+      },
+    }],
   });
   setNodeWorkerFactory((): GuestWorker => {
     const w = new Worker(file);
