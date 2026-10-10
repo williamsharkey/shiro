@@ -904,6 +904,15 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
 113. SHIRO_BLINK_MMLOG=3's write lines name the fd's file, as the kernel's
    /proc/self/fd link gives it (fds get reused; debian's PostgreSQL WAL
    hunt needed to know which file a write went to).
+114. unpckhpd took the source's high half for both halves of the result
+   (its low half is the destination's high half). llvmpipe's shader code
+   (Mesa 22, LLVM 15) uses it, so GLSL output was wrong in whole 4-pixel
+   blocks (unix/gui's osmesa-probe: 3 of 5 sampled pixels). It was wrong in
+   the interpreter, and the JIT calls the same handler. Test:
+   fixtures/x86/sse41b.c, the SSE4.1 forms LLVM emits there (pblendvb,
+   ptest+setcc, pinsrd/extractps with memory, cvtsi2ss, movshdup,
+   pminud/pmaxud, all cmpps predicates, unpck*pd, REX registers), against
+   native, with and without the JIT.
 0500. unix/conformance's mlock/munlock/mlockall and mmap argument errors
    (Open POSIX mlock_8-1, munlock_10-1, mlockall_13-1, mmap_21-1, 23-1,
    24-2). Numbered from 0500 so the two branches never renumber each
@@ -914,6 +923,10 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    libgcc's fallback unwinder expects. pthread_cancel works.
 0502. unix/conformance's: a CPU clock id that names no process or thread
    of ours is EINVAL.
+0503. unix/conformance's: tkill/tgkill of signal 0 to the calling thread is
+   0 (pthread_kill(self, 0) read hands[-1]).
+0504. unix/conformance's: setting another user's process's scheduling is
+   EPERM, as kill(pid, 0) says; reading it isn't.
 
    fork+exit+wait with 16 MiB of dirty heap went from 30 to 7.5 ms, and
    with 64 MiB from 104 to 12 ms (native: 3.1 ms). Test:
