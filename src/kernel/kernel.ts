@@ -2142,7 +2142,8 @@ export class Kernel {
             dv.setFloat64(8, i, true);
             return 0;
           }
-          if (args[1] & ~A.TFD_TIMER_ABSTIME) return -A.EINVAL;
+          // (TFD_TIMER_CANCEL_ON_SET is accepted: the realtime clock is never set here)
+          if (args[1] & ~(A.TFD_TIMER_ABSTIME | 2)) return -A.EINVAL;
           let value = dv.getFloat64(0, true);
           const interval = dv.getFloat64(8, true);
           if (!(value >= 0) || !(interval >= 0)) return -A.EINVAL;
@@ -2159,7 +2160,8 @@ export class Kernel {
         case A.SYS_close_range: {
           const first = args[0] >>> 0;
           const last = args[1] >>> 0;
-          if (first > (args[1] >>> 0)) return -A.EINVAL;
+          // (flags: CLOSE_RANGE_UNSHARE, CLOSE_RANGE_CLOEXEC; LTP close_range02)
+          if (first > last || (args[2] & ~6)) return -A.EINVAL;
           for (const [fd] of fds.entries()) {
             if (fd < first || fd > last) continue;
             if (args[2] & 4 /* CLOSE_RANGE_CLOEXEC */) fds.setCloexec(fd, true);

@@ -833,6 +833,8 @@ export class KSocket implements OpenFile {
       return -ENOPROTOOPT;
     }
     if (level === IPPROTO_IPV6 && name === IPV6_V6ONLY) return this.getOpt(level, name);
+    // a level an inet socket has no options at: EOPNOTSUPP (Linux's ip_getsockopt; LTP getsockopt01)
+    if (this.domain !== AF_UNIX && level !== IPPROTO_IP && level !== IPPROTO_IPV6) return -EOPNOTSUPP;
     return -ENOPROTOOPT;
   }
 
@@ -840,6 +842,8 @@ export class KSocket implements OpenFile {
   setsockopt(level: number, name: number, value: number): number {
     if (level === SOL_SOCKET && (name === SO_ERROR || name === SO_TYPE || name === SO_DOMAIN || name === SO_PROTOCOL || name === SO_ACCEPTCONN)) return -ENOPROTOOPT;
     if (level !== SOL_SOCKET && level !== IPPROTO_TCP && level !== IPPROTO_IPV6 && level !== IPPROTO_IP) return -ENOPROTOOPT;
+    // (option numbers that don't exist: LTP setsockopt01's -1)
+    if (name <= 0 || name > 100) return -ENOPROTOOPT;
     this.opts.set(`${level}:${name}`, value);
     return 0;
   }
