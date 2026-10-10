@@ -86,7 +86,7 @@ export async function executeNodeScript(
   fileArgs: string[],
   printResult: boolean,
   /** `code` is already what runs (Claude Code's cached transform: claude-transform-cache.ts) */
-  opts: { pretransformed?: boolean } = {},
+  opts: { pretransformed?: boolean; onTransformed?: (text: string) => void } = {},
 ): Promise<number> {
   // Suppress unhandled rejections from CLI force-exit patterns
   let _nodeStderrBuf: string[] | null = null;
@@ -453,6 +453,7 @@ export async function executeNodeScript(
     } else if (isClaudeCodeScript(scriptPath)) {
       // (the same passes as the cached text: claude-transform-cache.ts)
       transformedCode = await transformClaudeSource(code);
+      opts.onTransformed?.(transformedCode);
       if (asyncContext.active && !code.includes('AsyncLocalStorage')) transformedCode = carryAsyncContext(transformedCode);
     } else {
       transformedCode = patchPackageSource(scriptPath, code);

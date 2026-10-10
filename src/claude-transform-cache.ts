@@ -6,12 +6,9 @@
  * Each pass makes a full-size copy of the 13.7 MB source; a node guest that
  * did them while loading cli.js peaked well above the page doing the same
  * (bench: workload.peak_rss.claude_npm_first), and every launch redid them.
- * `node --tabcomputer-claude-cache` writes the file, in a guest Worker where
- * node runs as one (off the page's main thread): started in the background a
- * little after a `claude` run that found none. It costs what a first run
- * does, so it never runs beside one: not at the boot install (a first
- * `claude` soon after peaked at twice the memory). A run without it transforms as before (execution.ts, the same
- * function).
+ * A run that transformed cli.js saves the text when its program has ended
+ * (node-run.ts): no second transform, and the write is done before `claude`
+ * returns. A run that finds it reads it instead.
  *
  * Keyed by this build's commit (the transforms are this build's code), the
  * pinned version and cli.js's size; a build without a commit (tests) keeps none.
@@ -68,60 +65,15 @@ export async function readClaudeTransform(fs: Pick<CacheFs, 'readFile' | 'stat'>
 
 let writing: Promise<void> | null = null;
 
-/** Is the file there for the installed cli.js (false when this build keeps none) */
-export async function claudeTransformExists(fs: Pick<CacheFs, 'stat'>): Promise<boolean> {
-  try {
-    const path = claudeTransformPath((await fs.stat(CLAUDE_CODE_CLI_JS)).size);
-    return !!path && !!(await fs.stat(path));
-  } catch {
-    return false;
-  }
-}
-
-/** Write the cached text for the installed cli.js unless it is there; older ones are removed */
-export function ensureClaudeTransform(fs: CacheFs): Promise<void> {
-  // (the background install and a `claude` started meanwhile share one write)
-  writing ??= writeClaudeTransform(fs).finally(() => { writing = null; });
-  return writing;
-}
-
-async function writeClaudeTransform(fs: CacheFs): Promise<void> {
-  const size = (await fs.stat(CLAUDE_CODE_CLI_JS)).size;
-  const path = claudeTransformPath(size);
+/** Save `text`, cli.js as this build transforms it, for the next run; older ones are removed */
+export async function saveClaudeTransform(fs: CacheFs, text: string): Promise<void> {
+  const path = claudeTransformPath((await fs.stat(CLAUDE_CODE_CLI_JS)).size);
   if (!path) return;
   const name = path.slice(path.lastIndexOf('/') + 1);
-  const present = await fs.readdir(CLAUDE_CODE_DIR).catch(() => [] as string[]);
-  for (const f of present) if (f.startsWith(PREFIX) && f !== name && f !== `${name}.partial`) await fs.unlink(`${CLAUDE_CODE_DIR}/${f}`).catch(() => {});
-  if (present.includes(name)) return;
-  const code = await fs.readFile(CLAUDE_CODE_CLI_JS, 'utf8');
-  if (typeof code !== 'string') return;
-  // (under another name first: a write cut short is never taken for the text)
-  const tmp = `${path}.partial`;
-  await fs.writeFile(tmp, await transformClaudeSource(code));
-  await fs.rename(tmp, path);
-}
-
-/** Write it in the background, by `node --tabcomputer-claude-cache` (a guest Worker where node runs as one) */
-let backgroundWriter: Promise<unknown> | null = null;
-/** How long after a run the writer starts: it loads and transforms cli.js as a first run does, so never beside one */
-const WRITE_AFTER_MS = 2000;
-export function writeClaudeTransformInBackground(shell: { fork(): any }): void {
-  // (one at a time: a `claude` started while it works finds no file yet)
-  if (backgroundWriter) return;
-  backgroundWriter = new Promise((r) => setTimeout(r, WRITE_AFTER_MS)).then(() => startWriter(shell));
-}
-
-function startWriter(shell: { fork(): any }): Promise<unknown> {
-  try {
-    const sh = shell.fork();
-    sh.terminal = null;
-    return Promise.resolve(sh.execute(`node ${CACHE_FLAG} < /dev/null > /dev/null 2>&1`, () => {}, () => {}))
-      .catch(() => {}).finally(() => { backgroundWriter = null; });
-  } catch {
-    backgroundWriter = null;
-    return Promise.resolve();
+  for (const f of await fs.readdir(CLAUDE_CODE_DIR).catch(() => [] as string[])) {
+    if (f.startsWith(PREFIX) && f !== name) await fs.unlink(`${CLAUDE_CODE_DIR}/${f}`).catch(() => {});
   }
+  // (under another name first: a write cut short is never taken for the text)
+  await fs.writeFile(`${path}.partial`, text);
+  await fs.rename(`${path}.partial`, path);
 }
-
-/** node's internal option that writes the file and exits (node-run.ts) */
-export const CACHE_FLAG = '--tabcomputer-claude-cache';
