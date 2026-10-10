@@ -1665,6 +1665,22 @@ export class FileSystem {
     this._emitChange('delete', path);
   }
 
+  /**
+   * writeFile of a regular file whose node is cached, now (the kernel writing
+   * back an open file on close): false when it needs writeFile (uncached,
+   * lazy, not a file, or storage full).
+   */
+  writeCachedSync(path: string, content: Uint8Array, times: { mtime: number; mtimeNs?: number; atime?: number; atimeNs?: number }): boolean {
+    const node = this.cache.get(path);
+    if (!node || node.type !== 'file' || node.lazy || node.special || this._full) return false;
+    this._putNow({
+      ...node, content, size: content.length, mtime: times.mtime,
+      mtimeNs: times.mtimeNs || undefined, atime: times.atime, atimeNs: times.atimeNs || undefined,
+    });
+    this._emitChange('write', path);
+    return true;
+  }
+
   /** Create a directory at canonical `path` now (the kernel's syscallSync checked the parent); false when it needs the async path. */
   createDirNow(path: string, mode: number): boolean {
     if (this._full) return false;

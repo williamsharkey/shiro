@@ -739,13 +739,25 @@ describe('kernel processes', () => {
     expect(await kernel.syscall(proc, A.SYS_close, [bfd], data)).toBe(0);
     expect(kernel.syscallSync(proc, A.SYS_close, [fd], data)).toBe(0);
     expect(kernel.syscallSync(proc, A.SYS_close, [fd], data)).toBe(-A.EBADF);
-    // A file with unwritten data closes through the async path, which stores it
+    // A file with unwritten data is written back into the cached node and closes here too
     const w = (await kernel.open(proc, 'a.txt', A.O_WRONLY | A.O_APPEND)) as OpenFile;
     const wfd = proc.fds.alloc(w);
     await w.write(bytes(' world'));
-    expect(kernel.syscallSync(proc, A.SYS_close, [wfd], data)).toBeUndefined();
-    expect(await kernel.syscall(proc, A.SYS_close, [wfd], data)).toBe(0);
+    expect(kernel.syscallSync(proc, A.SYS_close, [wfd], data)).toBe(0);
     expect(await fs.readFile('/tmp/ksync/a.txt', 'utf8')).toBe('hello world');
+    await fs.sync();
+    const other = new (fs.constructor as typeof FileSystem)();
+    await other.init();
+    expect(await other.readFile('/tmp/ksync/a.txt', 'utf8')).toBe('hello world');
+    // with a backlog of uncommitted writes, it takes the async path (which waits for the commit)
+    const w2 = (await kernel.open(proc, 'a.txt', A.O_WRONLY | A.O_APPEND)) as OpenFile;
+    const wfd2 = proc.fds.alloc(w2);
+    await w2.write(bytes('!'));
+    Object.defineProperty(fs, 'pendingBytes', { get: () => 64 << 20, configurable: true });
+    try { expect(kernel.syscallSync(proc, A.SYS_close, [wfd2], data)).toBeUndefined(); }
+    finally { delete (fs as any).pendingBytes; }
+    expect(await kernel.syscall(proc, A.SYS_close, [wfd2], data)).toBe(0);
+    expect(await fs.readFile('/tmp/ksync/a.txt', 'utf8')).toBe('hello world!');
     kernel.kill(proc.pid, A.SIGKILL);
   });
 
