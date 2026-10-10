@@ -2393,3 +2393,22 @@ smart HTTP, the full git uses git:// over the relay.
 | `hygiene.panes10.total_heap_growth` | 5.928 | 5.928 | MiB | 1 | JS heap growth over 50 pane open/close cycles |
 
 <!-- bench:table:end -->
+
+### unix/perf-fs-shell 17 — built-in git: one object cache per command
+
+The built-in `git log` over axios's 2,222 commits took 64 s (full git:
+2.4 s). isomorphic-git takes an optional `cache`. Shiro never passed one,
+so every object read parsed the pack's `.idx` and read the whole 28 MiB
+`.pack` again. `src/commands/git-cached.ts` wraps isomorphic-git and gives
+every call one shared cache while a git command runs, dropping it when the
+last one finishes. Packs are named by content and new ones are found by
+listing `objects/pack` on each read, so the cache can't go stale. A test
+counts the `.pack` reads of `git log` on a packed repo: 12 before, 1 after.
+
+| `bench/git-clone-compare.mjs`, axios | before | after | full git |
+|---|---:|---:|---:|
+| built-in `git log --oneline` (2,222 commits) | 64.0 s | **0.5 s** | 2.4 s |
+| built-in `git clone` (full history) | 12.4 s | 12.7 s | 95.5 s |
+
+A/B (`--suites boot,shell,workloads --rounds 3 --runs 3`): 48 same, no
+regressions.
