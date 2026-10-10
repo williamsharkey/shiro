@@ -1,0 +1,44 @@
+From 74f5955e7d09b65fb0eab2fcdda662b24ca22bd9 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 15:30:16 +0000
+Subject: [PATCH] Shiro: a file mapping whose length ends mid-page shows the
+ file to the page's end
+
+Linux maps whole pages, so the rest of a mapping's last page shows the
+file's bytes; here they read zeros (Open POSIX mmap_3-1). The copy now
+goes to the end of the last page (within the file).
+
+Exports blink_shiro_mmaptail.
+---
+ blink/shiro.inc | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index aee478a..97be7d0 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2492,6 +2492,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_sigbus(void) { return 1; }
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_forkcpu(void) { return 1; }
+ // 0510: a SIGEV_THREAD_ID timer's signal goes to its thread (SIGEV_THREAD timers)
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_timerthread(void) { return 1; }
++// 0511: a file mapping's last page is the file's to its end
++EMSCRIPTEN_KEEPALIVE int blink_shiro_mmaptail(void) { return 1; }
+ 
+ // the same with the signal's siginfo (the kernel's call 1030, made as `pid`)
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid_info(int pid, int sig, int w0, int w1, int w2,
+@@ -3420,8 +3422,10 @@ static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
+                  (flags & ~3 & ~0x08000000) | 2 | 0x20 /* PRIVATE|ANONYMOUS */, -1, 0);
+   if (addr == -1) return ShiroErr();
+   buf = (u8 *)malloc(g_shiro_chunk);
+-  for (o = 0; buf && o < (i64)size && off + o < fsize; o += r) {
+-    int n = MIN(MIN((i64)size - o, fsize - off - o), (i64)g_shiro_chunk);
++  // whole pages, as Linux maps them: the rest of the last one shows the
++  // file too (Open POSIX mmap_3-1)
++  for (o = 0; buf && o < ROUNDUP((i64)size, 4096) && off + o < fsize; o += r) {
++    int n = MIN(MIN(ROUNDUP((i64)size, 4096) - o, fsize - off - o), (i64)g_shiro_chunk);
+     r = ShiroCall(m, 17, A12(fd, n, (int)(off + o), (int)((off + o) >> 32)),
+                   buf, 0, n, false, false);
+     if (r <= 0) break;
+-- 
+2.43.0
+
