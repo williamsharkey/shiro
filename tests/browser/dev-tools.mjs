@@ -33,7 +33,7 @@ const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || 
 for (const theme of shots ? ['dark', 'light'] : ['dark']) {
   const page = await (await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: theme })).newPage();
   page.on('pageerror', (e) => console.log('pageerror', e.message));
-  await page.addInitScript(() => { try { localStorage.setItem('tabcomputer-desktop-tour', '1'); } catch {} });
+  await page.addInitScript(() => { try { localStorage.setItem('tabcomputer-desktop-welcome', '1'); } catch {} });
   await page.goto(url);
   await page.waitForFunction(() => window.__tabcomputer?.terminal && !document.querySelector('.sd-booting'), null, { timeout: 60_000 });
   await page.waitForTimeout(1500);

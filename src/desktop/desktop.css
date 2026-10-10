@@ -546,26 +546,46 @@ body.sd-active #shiro-layout { display: none; }
 .sd-spot-item.sd-sel .sd-spot-kind { color: rgba(255, 255, 255, .8); }
 .sd-spot-foot { display: flex; justify-content: space-between; padding: 7px 16px; border-top: 1px solid var(--sd-sep); }
 
-/* ── First-visit tour ── */
+/* ── Brand mark, welcome ── */
+.sd-about code { font: 12px var(--sd-mono); background: var(--sd-field); padding: 1px 5px; border-radius: 4px; }
 .sd-brand-mark { color: var(--sd-text); }
 .sd-brand-mark svg { display: block; width: 100%; height: auto; }
-.sd-tour {
-  position: absolute; right: 18px; bottom: calc(var(--sd-dock-h) + var(--sd-dock-gap) + 18px); z-index: 100001; width: min(340px, calc(100vw - 24px));
-  background: var(--sd-material-strong); color: var(--sd-text); border: 1px solid var(--sd-window-border); border-radius: 16px;
-  -webkit-backdrop-filter: saturate(180%) blur(30px); backdrop-filter: saturate(180%) blur(30px);
-  box-shadow: var(--sd-shadow); padding: 18px 18px 14px; animation: sd-toast-in .35s var(--sd-ease);
+/* The first-run welcome (welcome.ts): a sheet of drafting vellum (slate at night), not a modal */
+.sd-welcome {
+  position: absolute; right: 18px; bottom: calc(var(--sd-keybar-h, 0px) + var(--sd-dock-h) + var(--sd-dock-gap) + 18px); z-index: 100001;
+  width: min(520px, calc(100vw - 24px)); max-height: calc(100% - var(--sd-keybar-h, 0px) - var(--sd-menubar-h) - var(--sd-dock-h) - 40px); overflow: auto; overscroll-behavior: contain;
+  padding: 20px 20px 14px; border-radius: 16px; color: var(--sd-text);
+  box-shadow: var(--sd-shadow); animation: sd-toast-in .35s var(--sd-ease);
+  background-image: linear-gradient(var(--sd-welcome-grid) 1px, transparent 1px), linear-gradient(90deg, var(--sd-welcome-grid) 1px, transparent 1px);
+  background-size: 22px 22px; background-position: -1px -1px;
 }
-.sd-tour h3 { font-size: 15px; font-weight: 650; margin: 2px 0 6px; padding-right: 20px; }
-.sd-tour p { font-size: 13px; color: var(--sd-text-2); line-height: 1.5; }
-.sd-tour p + p { margin-top: 6px; }
-.sd-tour code, .sd-about code { font: 12px var(--sd-mono); background: var(--sd-field); padding: 1px 5px; border-radius: 4px; }
-.sd-tour-x { position: absolute; top: 10px; right: 10px; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--sd-text-3); display: flex; align-items: center; justify-content: center; }
-.sd-tour-x:hover { background: var(--sd-hover); color: var(--sd-text); }
-.sd-tour-x svg { width: 14px; height: 14px; }
-.sd-tour-foot { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
-.sd-tour-dots { flex: 1; display: flex; gap: 5px; }
-.sd-tour-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--sd-active); }
-.sd-tour-dots i.sd-on { background: var(--sd-accent); }
+.sd-desktop[data-theme='light'] .sd-welcome { background-color: #fbfaf5; border: 1px solid rgba(46,48,54,.18); --sd-welcome-grid: rgba(46,48,54,.045); --sd-welcome-ink: #2e3036; }
+.sd-desktop[data-theme='dark'] .sd-welcome { background-color: #262c31; border: 1px solid rgba(236,240,238,.12); --sd-welcome-grid: rgba(236,240,238,.04); --sd-welcome-ink: #ecf0ee; }
+.sd-welcome.sd-leaving { animation: sd-sheet-out .2s var(--sd-ease) forwards; }
+.sd-welcome h2 { font-size: 19px; font-weight: 650; letter-spacing: -.01em; color: var(--sd-welcome-ink); margin: 0 30px 4px 0; }
+.sd-welcome-lede { font-size: 13px; color: var(--sd-text-2); line-height: 1.45; margin-bottom: 12px; }
+.sd-welcome-x { position: absolute; top: 12px; right: 12px; width: 26px; height: 26px; border: 0; border-radius: 7px; background: transparent; color: var(--sd-text-2); font: 18px/1 var(--sd-font); }
+.sd-welcome-x:hover { background: var(--sd-hover); color: var(--sd-text); }
+.sd-welcome-demos { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.sd-welcome-demo {
+  display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px; border-radius: 11px; text-align: left; cursor: default;
+  border: 1px solid color-mix(in srgb, var(--sd-welcome-ink) 16%, transparent); background: color-mix(in srgb, var(--sd-window) 55%, transparent);
+  color: var(--sd-text); font: inherit;
+}
+.sd-welcome-demo:hover, .sd-welcome-demo:focus-visible { border-color: var(--sd-accent); outline: none; background: color-mix(in srgb, var(--sd-accent) 8%, var(--sd-window)); }
+.sd-welcome-demo .sd-ic { width: 38px; height: 38px; margin: 0; flex: none; }
+.sd-welcome-text { display: flex; flex-direction: column; min-width: 0; font-size: 12.5px; }
+.sd-welcome-text b { font-weight: 600; color: var(--sd-welcome-ink); }
+.sd-welcome-text span { font-size: 11.5px; color: var(--sd-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sd-welcome-foot { display: flex; align-items: center; gap: 10px; margin-top: 12px; font-size: 11.5px; color: var(--sd-text-2); }
+.sd-welcome kbd { font: 11px var(--sd-mono); padding: 0 4px; border-radius: 4px; border: 1px solid var(--sd-sep); background: var(--sd-field); }
+/* Phones: a bottom sheet above the dock, one column */
+.sd-compact .sd-welcome { left: 8px; right: 8px; width: auto; bottom: calc(var(--sd-keybar-h, 0px) + var(--sd-dock-h) + var(--sd-dock-gap) + 8px); max-height: calc(100% - var(--sd-keybar-h, 0px) - var(--sd-menubar-h) - var(--sd-dock-h) - 24px); padding: 16px 14px 12px; }
+.sd-compact .sd-welcome-demos { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+/* A phone on its side: two columns, so more of it shows */
+@media (min-width: 560px) { .sd-compact .sd-welcome-demos { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.sd-compact .sd-welcome-foot > span { display: none; }
+.sd-compact .sd-welcome-foot { justify-content: flex-end; }
 
 /* ── Narrow screens: one full-size window at a time ── */
 .sd-desktop.sd-compact { --sd-menubar-h: 34px; --sd-dock-h: 58px; --sd-dock-gap: 6px; }

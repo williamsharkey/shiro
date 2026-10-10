@@ -138,7 +138,7 @@ for (const c of CASES) {
   const page = await ctx.newPage();
   await page.addInitScript(recorder);
   // The tour card is an overlay that appears later by design; keep it out of the frames
-  await page.addInitScript(() => { try { localStorage.setItem('tabcomputer-desktop-tour', '1'); } catch {} });
+  await page.addInitScript(() => { try { localStorage.setItem('tabcomputer-desktop-welcome', '1'); } catch {} });
   const cdp = await ctx.newCDPSession(page);
   const frames = [];
   let t0 = 0;
