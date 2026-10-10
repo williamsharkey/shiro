@@ -342,6 +342,15 @@ w.terminate();
     expect(r.out).toBe('fast0,fast1,fast2,fast3,fast4\n');
   }, 60_000);
 
+  it('a worker whose guest ended cleanly runs the next node (warm); a killed one is not reused', async () => {
+    // the realm carries over, as the page's does for in-page node
+    let r = await sh(`node -e 'globalThis.__poolProbe = (globalThis.__poolProbe || 0) + 1; console.log(globalThis.__poolProbe)' < /dev/null; node -e 'console.log(globalThis.__poolProbe)' < /dev/null`);
+    expect(r.out).toBe('1\n1\n'); // the second run saw the first's global: the same worker
+    // a guest killed mid-run: its worker is gone, the next node starts fresh
+    r = await sh(`node -e 'globalThis.__poolKilled = 1; setInterval(() => {}, 1000)' < /dev/null & sleep 0.5; kill -9 %1; wait; node -e 'console.log(String(globalThis.__poolKilled))' < /dev/null`);
+    expect(r.out.trim().split('\n').pop()).toBe('undefined');
+  }, 60_000);
+
   it('stdin from a pipe; async exec', async () => {
     const r = await sh(`printf 'a\\nb\\n' | node -e '
       let t = ""; process.stdin.on("data", (d) => t += d).on("end", () => {
