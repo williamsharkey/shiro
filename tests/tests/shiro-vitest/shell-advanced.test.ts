@@ -637,6 +637,14 @@ describe('Shell Advanced', () => {
   //  pipefail
   // ═══════════════════════════════════════════════════════════════════
 
+  describe('case inside if', () => {
+    it('keeps every item (;; was collapsed to ;, so the case ran nothing)', async () => {
+      expect((await run(shell, 'if true; then case x in a) echo A ;; *) echo hi ;; esac; fi')).output.trim()).toBe('hi');
+      expect((await run(shell, 'y=b\nif true; then\n  case "$y" in\n    a|b)\n      ;;\n    *)\n      echo other\n      ;;\n  esac\n  echo after\nfi')).output.trim()).toBe('after');
+      expect((await run(shell, 'if false; then :\nelse\n  case z in\n    a) echo A ;;\n    *) echo star ;;\n  esac\nfi')).output.trim()).toBe('star');
+    });
+  });
+
   describe('set -o pipefail', () => {
     it('without pipefail, pipe exit is last command', async () => {
       const { exitCode } = await run(shell, 'false | true');
