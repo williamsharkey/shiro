@@ -151,8 +151,8 @@ back five pixels and compares them with the same shader evaluated on the CPU.
 
 ## Addendum: option B design (unix/gl, 2026-10-10)
 
-Status: proposal, sent to the coordinator before building. Owner: unix/gl.
-Xshiro's GLX side and app scoring: unix/gui.
+Status: approved; stage 2 (glxinfo, glxgears in the page) built and tested. Owner: unix/gl.
+Xshiro's GLX (`src/gl/glx-ext.ts`) is unix/gl's too; the GL window surface and app scoring: unix/gui.
 
 ```
  guest (Blink worker)                         page
