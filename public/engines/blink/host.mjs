@@ -549,7 +549,19 @@ else self.addEventListener('unhandledrejection', (e) => { e.preventDefault(); on
 function exitGuest(code) {
   if (exiting) return;
   exiting = true;
+  // Blink's other threads are on their way out (ShiroQuiesce): the page holds
+  // this worker's termination until they are gone (blink-quiet), not the exit
+  const others = blinkModule?._blink_shiro_others;
+  if (others) post({ type: 'blink-exiting' });
   sys(SYS.exit_group, code & 255);
+  if (others) {
+    const t0 = Date.now();
+    const poll = () => {
+      if (others() > 0 && Date.now() - t0 < 500) setTimeout(poll, 1);
+      else post({ type: 'blink-quiet' });
+    };
+    poll();
+  }
   // The kernel terminates this worker. Unwind out of Blink back to the event
   // loop rather than park: Chromium takes 2 s to terminate a Worker blocked in
   // a wait, and only then starts on Blink's thread Workers (another 2 s).

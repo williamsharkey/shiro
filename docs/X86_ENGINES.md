@@ -913,6 +913,12 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    ptest+setcc, pinsrd/extractps with memory, cvtsi2ss, movshdup,
    pminud/pmaxud, all cmpps predicates, unpck*pd, REX registers), against
    native, with and without the JIT.
+115. exit_group no longer waits for the guest's other threads before the
+   kernel hears of it (0053's wait cost ~200 ms per run of a Go net/http
+   program in Chromium). The page holds the worker's termination until
+   they're gone instead: host.mjs polls blink_shiro_others, then posts
+   blink-quiet, at most 0.5 s. go_nethttp 751 → 583 ms (BENCHMARKS.md,
+   perf-blink 14).
 0500. unix/conformance's mlock/munlock/mlockall and mmap argument errors
    (Open POSIX mlock_8-1, munlock_10-1, mlockall_13-1, mmap_21-1, 23-1,
    24-2). Numbered from 0500 so the two branches never renumber each
