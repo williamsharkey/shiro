@@ -73,8 +73,9 @@ export const npxCmd: Command = {
 
     // Output of a nested execute() is terminal-style (\r\n); ours is a plain
     // stream again, converted once by whoever shows it
-    const out = (s: string) => { ctx.stdout += s.replace(/\r\n/g, '\n'); };
-    const err = (s: string) => { ctx.stderr += s.replace(/\r\n/g, '\n'); };
+    // (as it comes where the shell streams npx's output: a redirect's file)
+    const out = (s: string) => { s = s.replace(/\r\n/g, '\n'); if (ctx.streamStdout) ctx.streamStdout(s); else ctx.stdout += s; };
+    const err = (s: string) => { s = s.replace(/\r\n/g, '\n'); if (ctx.streamStderr) ctx.streamStderr(s); else ctx.stderr += s; };
     const run = (line: string) => ctx.shell.execute(line, out, err, false, ctx.terminal, true);
     // The package's command reads npx's own (piped) stdin
     const runBin = (line: string) => ctx.stdin ? ctx.shell.executeWithStdin(line, ctx.stdin, out, err) : run(line);

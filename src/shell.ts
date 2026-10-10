@@ -11,6 +11,7 @@ import { posixRegExp, RegexSyntaxError } from './utils/posix-regex';
 import { arrayValues, arrayTop, copyArray, splitRawWords as splitAssignWords, parseAssignWord, splitListWords, type AssignWord } from './shell-arrays';
 import { HeredocStore, extractHeredocs, hasHeredoc } from './shell-heredoc';
 import { FileSystem, addProcInfoSource, setProcSelf } from './filesystem';
+import { processTable, type ShiroProcess } from './process-table';
 import { CommandRegistry, CommandContext, type Command } from './commands/index';
 import type { ShiroTerminal } from './terminal';
 import type { KernelStdio } from './shell-stdio';
@@ -80,6 +81,11 @@ const POSIX_CLASSES: Record<string, string> = {
 
 /** A tilde expansion's text: one field, never globbed, literal in [[ =~ ]] (as if quoted) */
 const tildeText = (dir: string) => `"${protectExpansion(dir)}"`;
+
+/** `cmd` with its quoted parts ('…', "…", \x) dropped: for looking at its unquoted operators */
+function withoutQuoted(cmd: string): string {
+  return cmd.replace(/\\.|'[^']*'|"(?:\\.|[^"\\])*"/gs, '');
+}
 
 /** Does `cmd` end with the `&` operator (not &&, >&, an escaped \& or one in quotes)? */
 function endsWithBackgroundAmp(cmd: string): boolean {
@@ -206,6 +212,9 @@ const SHELL_BUILTIN_NAMES = new Set([':', '.', '[', 'alias', 'bg', 'bind', 'brea
 const PIPELINE_SUBSHELL_BUILTINS = new Set(['cd', 'pushd', 'popd', 'eval', 'source', '.', 'exit', 'export', 'unset',
   'set', 'shift', 'declare', 'typeset', 'local', 'readonly', 'alias', 'unalias', 'trap', 'umask', 'shopt', 'hash']);
 
+/** Signals whose default action doesn't end a process: CHLD, CONT, STOP, TSTP, TTIN, TTOU, URG, WINCH */
+const NONFATAL_SIGNALS = new Set([17, 18, 19, 20, 21, 22, 23, 28]);
+
 /** Signal names by number, as trap and kill use them (0 is EXIT) */
 const SIGNALS = ['EXIT', 'HUP', 'INT', 'QUIT', 'ILL', 'TRAP', 'ABRT', 'BUS', 'FPE', 'KILL', 'USR1', 'SEGV', 'USR2',
   'PIPE', 'ALRM', 'TERM', 'STKFLT', 'CHLD', 'CONT', 'STOP', 'TSTP', 'TTIN', 'TTOU', 'URG', 'XCPU', 'XFSZ',
@@ -269,10 +278,44 @@ let nextInPagePid = 40000;
 
 /** Shells started as their own process (`sh script`, `sh -c`), by $$: `kill PID` reaches them */
 const shellsByPid = new Map<number, WeakRef<Shell>>();
-/** Running in-page background jobs by their made-up pid ($!), for `kill PID` from any shell */
+/** Running in-page background jobs by their pid ($!), for `kill PID` from any shell */
 const inPageJobs = new Map<number, BackgroundJob>();
 export function inPageJobForPid(pid: number): BackgroundJob | undefined {
   return inPageJobs.get(pid);
+}
+/** Signals whose default action doesn't end a process (0, SIGCHLD, SIGCONT, the stops, SIGURG, SIGWINCH) */
+const NON_TERMINATING = new Set([0, 17, 18, 19, 20, 21, 22, 23, 28]);
+/** `kill -SIG` to an in-page job: a terminating signal aborts it and its status becomes 128+SIG */
+export function signalInPageJob(job: BackgroundJob, sig: number): void {
+  if (NON_TERMINATING.has(sig) || job.status !== 'running') return;
+  if (job.ignoresIntQuit && (sig === 2 || sig === 3)) return;
+  job.abortController?.abort();
+  job.status = 'failed';
+  job.exitCode = 128 + sig;
+  job.signal = sig;
+}
+
+// In-page background jobs are processes to ps and kill(2) too (/proc/PID is
+// below): `sleep 30 &` with the builtin sleep is listed, and Debian's kill
+// reaches it through the kernel
+processTable.attachSource({
+  list: () => [...inPageJobs.keys()].map((pid) => inPageJobView(pid)!).filter(Boolean),
+  get: (pid) => inPageJobView(pid),
+  kill: (pid, sig = 15) => {
+    const job = inPageJobs.get(pid);
+    if (!job) return false;
+    signalInPageJob(job, sig);
+    return true;
+  },
+});
+function inPageJobView(pid: number): ShiroProcess | undefined {
+  const job = inPageJobs.get(pid);
+  if (!job) return undefined;
+  return {
+    pid, command: job.command.trim(), status: 'running', exitCode: 0, startTime: job.startMs ?? Date.now(),
+    windowTerminal: null, serverWindow: null, promise: job.promise,
+    kill: () => signalInPageJob(job, 15), abortController: null,
+  };
 }
 
 /** Newlines as `; `, except inside quotes ('…', "…", $'…'), where they are text */
@@ -367,7 +410,8 @@ addProcInfoSource({
     }
     const active = activeShell?.deref();
     const sh = shellForPid(pid) ?? (active?.shellPid === pid ? active : undefined);
-    if (!sh) return undefined;
+    // A shell that is a kernel process: the kernel's table has its argv and fds
+    if (!sh || sh.kernelPid === pid) return undefined;
     const comm = sh.invokedAsSh ? 'sh' : 'bash';
     return {
       pid, ppid: sh.parentPid, pgid: pid, sid: pid, comm, state: sh === active ? 'R' : 'S', cmdline: [comm],
@@ -496,13 +540,46 @@ export function splitEnvPrefix(segment: string): { assignments: ([string, string
  * is captured instead of going to the screen.
  */
 export function capturingStdout<T extends object>(term: T): T {
+  return capturing(term, true, false);
+}
+
+/**
+ * The terminal for what a builtin runs (sh -c, timeout): programs inside keep it
+ * for input but don't write on it what the builtin's redirects or pipe take
+ */
+export function terminalForCommand<T extends object>(term: T, ctx: { stdoutIsTTY?: boolean; stderrIsTTY?: boolean }): T {
+  const out = ctx.stdoutIsTTY === false, err = ctx.stderrIsTTY === false;
+  return out || err ? capturing(term, out, err) : term;
+}
+
+/** The terminal for commands whose stdout and/or stderr something else takes (a redirected compound) */
+function capturing<T extends object>(term: T, stdout: boolean, stderr: boolean): T {
+  const t0 = term as any;
+  stdout ||= !!t0.captureStdout;
+  stderr ||= !!t0.captureStderr;
   return new Proxy(term, {
     get(t, k) {
-      if (k === 'captureStdout') return true;
+      if (k === 'captureStdout') return stdout;
+      if (k === 'captureStderr') return stderr;
       const v = Reflect.get(t, k, t);
       return typeof v === 'function' ? v.bind(t) : v;
     },
   });
+}
+
+/** Builtins whose redirected output is written as it comes (they may run a server that never ends) */
+const STREAM_REDIRECT_CMDS = new Set(['node', 'nodejs', 'npm', 'npx']);
+
+/** Is fd 2 still the terminal after these redirects? (`stdoutTty`: fd 1 is, before them) */
+function stderrIsTty(redirects: Redirect[], stdoutTty: boolean): boolean {
+  let out = stdoutTty;
+  let err = true;
+  for (const r of redirects) {
+    if (r.type === '>' || r.type === '>>') out = false;
+    else if (r.type === '2>' || r.type === '2>>') err = false;
+    else if (r.type === '2>&1') err = out;
+  }
+  return err;
 }
 
 /** The terminal minus its pty session (for background work that must not become the foreground job) */
@@ -769,6 +846,8 @@ export class Shell {
    * process's real fds 0-2 (binary-safe, the tty) and stay in its process
    * group, as a real non-interactive sh would do it.
    */
+  /** This shell's $$ is a kernel process (Kernel.forkShell): /proc describes it from the kernel's table */
+  kernelPid?: number;
   kernelHost: { kernel: import('./kernel/kernel').Kernel; proc: import('./kernel/process').Process } | null = null;
   /** File descriptors for `read -u FD` and `exec N< file` */
   fileDescriptors: Map<number, { content: string; offset: number }> = new Map();
@@ -1136,7 +1215,13 @@ export class Shell {
     this.localVars.add('IFS');
     this.parentPid = ppid;
     this.shellPid = pid;
+    this.kernelPid = undefined;
     shellsByPid.set(pid, new WeakRef(this));
+    const own = new AbortController();
+    const outer = this.inheritedAbort?.signal;
+    if (outer?.aborted) own.abort();
+    else outer?.addEventListener('abort', () => own.abort(), { once: true });
+    this.processAbort = this.inheritedAbort = own;
     // A new process starts with no call stack, and getopts at the start (OPTIND=1, not exported)
     this.sourceFile = '';
     this.env['OPTIND'] = '1';
@@ -1234,7 +1319,18 @@ export class Shell {
   /** `kill -SIG $$`: handled before the shell's next command (processSignals) */
   queueSignal(sig: number): void {
     this.pendingSignals.push(sig);
+    // One that ends the shell ends it now, as bash dies while it waits for a
+    // command: the abort stops the wait (Ctrl-C's path), then processSignals
+    // ends the shell with 128+sig
+    if (this.processAbort && this.scriptShell && !this.traps.has(SIGNALS[sig]) && !NONFATAL_SIGNALS.has(sig)) {
+      this.killedMidCommand = true;
+      this.processAbort.abort();
+    }
   }
+  /** A shell process's own abort (startProcess): its parent's aborts reach it, not the reverse */
+  private processAbort?: AbortController;
+  /** A fatal signal aborted the command in progress: the EXIT trap gets a fresh abort */
+  private killedMidCommand = false;
 
   /**
    * Act on signals sent to this shell: run its trap (keeping $?), ignore it
@@ -1317,6 +1413,7 @@ export class Shell {
     child.errexitSuppressed = this.errexitSuppressed;
     child.inheritedReturn = this.canReturn();
     child.kernelHost = this.kernelHost;
+    child.kernelPid = this.kernelPid;
     child.uid = this.uid;
     child.bootGate = this.bootGate;
     return child;
@@ -1389,8 +1486,9 @@ export class Shell {
   ): number {
     const jobId = this.nextJobId++;
     const stderrWriter = writeStderr || writeStdout;
-    // An in-page job has no kernel process; $! and `wait PID` use a made-up pid
-    const pid = nextInPagePid++;
+    // An in-page job has no kernel process; its pid comes from the kernel's
+    // pid space, so it never collides with one (ps, /proc and kill see it)
+    const pid = processTable.allocatePid();
     // `( list ) &`: the job's shell is already the subshell
     const t = command.trim();
     if (t.startsWith('(') && !t.startsWith('((') && t.endsWith(')') && this.parseCompound(t).length === 1 && splitTopLevelPipes(t).length === 1) {
@@ -1403,7 +1501,8 @@ export class Shell {
     // A shell run as the job's only command gets the job's pid as its $$, as if exec'd
     // (in a pipeline $! is its last element: the earlier ones must not start a shell themselves)
     const parts = splitTopLevelPipes(command);
-    if (!/[;&]/.test(command) && parts.slice(0, -1).every((p) => !/^(\S*\/)?(sh|bash)\b|^\$/.test(p.trim()))) {
+    // (one command: a quoted ; or & inside `bash -c '...'` doesn't count)
+    if (!/[;&]/.test(withoutQuoted(command)) && parts.slice(0, -1).every((p) => !/^(\S*\/)?(sh|bash)\b|^\$/.test(p.trim()))) {
       child.execPid = pid;
       child.execPpid = this.bashPid;
     }
@@ -1572,6 +1671,7 @@ export class Shell {
       if (e instanceof ExitSignal && depth === 0 && this.sourcing === 0) {
         this.executeDepth = 0;
         this.exited = true;
+        if (this.killedMidCommand) this.abortController = new AbortController();
         const code = (await this.runExitTrap(writeStdout, writeStderr || writeStdout, terminalOverride)) ?? e.code;
         this.lastExitCode = code;
         this.env['?'] = String(code);
@@ -2742,8 +2842,31 @@ export class Shell {
             exitCode = 2;
             if (this.posixFatal()) throw new ExitSignal(2);
           } else if (evalCmd) {
-            this.injectedStdin = nestedStdin;
-            exitCode = await this.execute(evalCmd, writeStdout, stderrWriter, false, undefined, true);
+            // `eval '…' < file`: the redirect is the evaluated commands' stdin, as for a
+            // function (an empty one, like /dev/null, is EOF rather than the inherited stdin)
+            const inRedirect = redirects.find(r => r.type === '<' && (r.fd === undefined || r.fd === 0));
+            let ownStdin: string | undefined;
+            if (inRedirect && hereString === undefined) {
+              try {
+                ownStdin = inRedirect.target === '/dev/null' ? '' : await this.readInputRedirect(inRedirect.target);
+              } catch (e: any) {
+                stderrWriter(`tabcomputer: ${inRedirect.target}: ${e.message}\r\n`);
+                exitCode = 1;
+              }
+            }
+            if (exitCode === 0) {
+              const savedPipeStdin = this.env['__PIPE_STDIN'];
+              if (ownStdin !== undefined) this.env['__PIPE_STDIN'] = ownStdin;
+              this.injectedStdin = ownStdin ?? nestedStdin;
+              try {
+                exitCode = await this.execute(evalCmd, writeStdout, stderrWriter, false, undefined, true);
+              } finally {
+                if (ownStdin !== undefined) {
+                  if (savedPipeStdin === undefined) delete this.env['__PIPE_STDIN'];
+                  else this.env['__PIPE_STDIN'] = savedPipeStdin;
+                }
+              }
+            }
           }
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
@@ -4239,6 +4362,8 @@ export class Shell {
           // (not when the caller collects stdout: $(...), a builtin's own sink)
           stdoutIsTTY: i === pipeline.length - 1 && !redirects.some(r => r.type === '>' || r.type === '>>') &&
             !(terminalOverride || this.terminal)?.captureStdout,
+          stderrIsTTY: !(terminalOverride || this.terminal)?.captureStderr &&
+            stderrIsTty(redirects, i === pipeline.length - 1 && !(terminalOverride || this.terminal)?.captureStdout),
         };
         if (fromEnclosingPipe) {
           let taken = false;
@@ -4327,6 +4452,21 @@ export class Shell {
           if (h) h.hits++;
           else this.hashTable.set(effectiveCmdName, { path: cmd ? `/usr/bin/${effectiveCmdName}` : (await this.findExecutableInPath(effectiveCmdName)) ?? `/usr/bin/${effectiveCmdName}`, hits: 1 });
         }
+        // node, npm and npx may run a server that never ends: their redirected output
+        // goes into the files as it comes (`npm run dev > log &` wrote nothing)
+        const liveOut = !live && (cmd ? STREAM_REDIRECT_CMDS.has(effectiveCmdName) : true)
+          ? await this.openLiveRedirects(redirects, stderrWriter) : null;
+        if (liveOut === 'failed') {
+          exitCode = 1;
+          this.redirectFailed = false;
+          pipeExitCodes.push(exitCode);
+          lastOutput = '';
+          continue;
+        }
+        if (liveOut) {
+          if (liveOut.out) ctx.streamStdout = liveOut.out;
+          if (liveOut.err) ctx.streamStderr = liveOut.err;
+        }
         if (cmd) {
           try {
             exitCode = live
@@ -4381,7 +4521,8 @@ export class Shell {
           }
         }
 
-        const output = await this.applyOutputRedirects(ctx.stdout, ctx.stderr, redirects, i === pipeline.length - 1, writeStdout, stderrWriter);
+        if (liveOut) await liveOut.flush();
+        const output = await this.applyOutputRedirects(ctx.stdout, ctx.stderr, liveOut ? liveOut.rest : redirects, i === pipeline.length - 1, writeStdout, stderrWriter);
 
         lastOutput = output;
         pipeExitCodes.push(exitCode);
@@ -4521,6 +4662,67 @@ export class Shell {
       writeStdout(output.replace(/\n/g, '\r\n'));
     }
     return output;
+  }
+
+  /**
+   * A command's `> file`, `>> file`, `2> file`, `2>&1` opened before it runs, with writers
+   * that append what it writes as it writes it (ctx.streamStdout/streamStderr), for
+   * programs that may never end. `rest`: the redirects that then take what it left in
+   * ctx (the files are already truncated). null: redirects this doesn't do (fds, fifos,
+   * /dev/*, process substitution, noclobber), left to applyOutputRedirects;
+   * 'failed': a file couldn't be opened (reported; the command doesn't run).
+   */
+  private async openLiveRedirects(redirects: Redirect[], stderrWriter: (s: string) => void):
+    Promise<{ out?: (s: string) => void; err?: (s: string) => void; rest: Redirect[]; flush: () => Promise<void> } | null | 'failed'> {
+    if (!redirects.some((r) => r.type === '>' || r.type === '>>' || r.type === '2>' || r.type === '2>>')) return null;
+    if (this.options.has('noclobber')) return null;
+    const writers = new Map<string, ((s: string) => void) & { flush: () => Promise<void> }>();
+    const appender = (path: string) => {
+      let pending = '';
+      let busy: Promise<void> | null = null;
+      const pump = async () => {
+        while (pending) {
+          const t = pending;
+          pending = '';
+          await this.fs.appendFile(path, t).catch(() => {});
+        }
+        busy = null;
+      };
+      return Object.assign((t: string) => { if (!t) return; pending += t; busy ??= pump(); }, { flush: () => busy ?? Promise.resolve() });
+    };
+    const drop = Object.assign((_t: string) => {}, { flush: () => Promise.resolve() });
+    // Where fds 1 and 2 go (undefined: where they went before)
+    let w1: ((s: string) => void) | undefined;
+    let w2: ((s: string) => void) | undefined;
+    const rest: Redirect[] = [];
+    for (const r of redirects) {
+      if (r.type === '<') { rest.push(r); continue; }
+      if (r.type === '2>&1') { w2 = w1; rest.push(r); continue; }
+      if (r.type !== '>' && r.type !== '>>' && r.type !== '2>' && r.type !== '2>>') return null;
+      const append = r.type === '>>' || r.type === '2>>';
+      let w: ((s: string) => void) & { flush: () => Promise<void> };
+      if (r.target === '/dev/null') w = drop;
+      else {
+        if (fdOfRef(r.target) !== null || r.target.startsWith('/dev/') || /^>\(/.test(r.target)) return null;
+        const path = this.fs.resolvePath(r.target, this.cwd);
+        if (writers.has(path)) {
+          if (!append) return null;
+          w = writers.get(path)!;
+        } else {
+          if (await fifo.isFifo(this, path)) return null;
+          if (!append || !(await this.fs.exists(path))) {
+            await this.redirectWrite(path, r.target, '', false, stderrWriter);
+            if (this.redirectFailed) return 'failed';
+          }
+          w = appender(path);
+          writers.set(path, w);
+        }
+      }
+      if (r.type === '>' || r.type === '>>') w1 = w; else w2 = w;
+      // (the file is open: what is left at the end is appended)
+      rest.push(w === drop ? r : { ...r, type: r.type === '>' || r.type === '>>' ? '>>' : '2>>' });
+    }
+    return { out: w1, err: w2, rest, flush: async () => { await Promise.all([...writers.values()].map((w) => w.flush())); } };
   }
 
   /** Write a redirect's file; a failure (a directory, a bad path) is reported and fails the command */
@@ -7023,11 +7225,17 @@ export class Shell {
       }
     }
     let code: number;
+    // Programs inside don't write to the terminal what the compound's redirects take
+    // (`(node x.js) > f` printed on the screen and left f empty)
+    const outerTerminal = this.activeTerminal;
+    const term = this.activeTerminal ?? this.terminal;
+    if (term && (out !== writeStdout || err !== writeStderr)) this.activeTerminal = capturing(term, out !== writeStdout, err !== writeStderr);
     try {
       code = stdin === undefined
         ? await this.execControlStructureCore(compound, out, err)
         : await this.execControlStructureWithStdin(compound, stdin, out, err);
     } finally {
+      this.activeTerminal = outerTerminal;
       await fdWrites;
       restoreFds();
     }
@@ -7075,7 +7283,8 @@ export class Shell {
       if (this.injectedStdin) child.kernelStdinLive = false;
       this.injectedStdin = null;
       const inner = input.slice(1, -1).trim();
-      return inner ? child.runSubshell(inner, writeStdout, writeStderr, this.terminal) : 0;
+      // (on the terminal of the execute() in progress: a redirected compound's captures)
+      return inner ? child.runSubshell(inner, writeStdout, writeStderr, this.activeTerminal ?? this.terminal) : 0;
     }
     if (isBraceGroup(input)) {
       // { list; } runs in the current shell
@@ -8193,7 +8402,7 @@ export class Shell {
     if (handled) lastRedirects = [];
     const crlf = (w: (s: string) => void) => (t: string) => w(t.replace(/\r?\n/g, '\r\n'));
     const captureStdout = last < pipeline.length - 1 || hasOutRedirect(lastRedirects) || (!stdoutTo && !!terminal?.captureStdout);
-    const captureStderr = hasOutRedirect(lastRedirects);
+    const captureStderr = hasOutRedirect(lastRedirects) || !!terminal?.captureStderr;
     // In a shell that is a kernel process the programs get its own fds when
     // nothing in between needs the data as a string (shell-stdio.ts)
     const ks = this.kernelStdio;
@@ -8642,7 +8851,8 @@ export class Shell {
     for (const o of opts?.off ?? []) child.options.delete(o);
     // Its first command reads the script's stdin, unless that is the shell's fd 0
     if (!ctx.liveStdin) child.setInjectedStdin(ctx.stdin);
-    return child.runScriptText(content, ctx.terminal, writeStdout, writeStderr);
+    // (`./s.sh > f`: what its programs print goes to f, not the screen)
+    return child.runScriptText(content, ctx.terminal && terminalForCommand(ctx.terminal, ctx), writeStdout, writeStderr);
   }
 
   /** Stdin for the next command this shell runs (`… | sh -c CMD`) */
@@ -8678,6 +8888,7 @@ export class Shell {
     let exitCode = 0;
     try {
       for (const stmt of groupStatements(stripComments(content))) {
+        if (this.pendingSignals.length) await this.processSignals(writeStdout, writeStderr);
         if (this.abortController?.signal.aborted) { exitCode = 130; break; }
         // set -n (noexec): a non-interactive shell reads the rest without running it
         if (this.options.has('noexec') && !this.interactiveFlag) break;
@@ -8704,6 +8915,7 @@ export class Shell {
     }
     this.lastExitCode = exitCode;
     this.env['?'] = String(exitCode);
+    if (this.killedMidCommand) this.abortController = new AbortController();
     const trapExit = await this.runExitTrap(writeStdout, writeStderr, terminal);
     if (trapExit !== undefined) { exitCode = trapExit; this.env['?'] = String(exitCode); }
     if (this.execOutSubs.length) {

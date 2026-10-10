@@ -493,20 +493,42 @@ async function textHookEnv(kernel: Kernel, app: GuiApp): Promise<Record<string, 
   const name = TEXT_HOOKS[app.toolkit];
   if (!name || !kernel.fs) return {};
   if ((await import('../x11/dom-text')).domTextMode() === 'pixels') return {};
-  const fs = kernel.fs as FileSystem;
   const path = `/usr/lib/shiro/${name}`;
+  return (await shipLib(kernel.fs as FileSystem, name, path)) ? { LD_PRELOAD: path } : {};
+}
+
+/** glvnd loads vendor libraries by name from the library path */
+const GLX_VENDOR_LIB = 'libGLX_tabcomputer.so.0';
+
+/**
+ * Fast GL (docs/research/GL.md): while glshiro serves GL (Xshiro advertises
+ * GLX), apps that link libglvnd get its vendor library libGLX_tabcomputer
+ * and pick it by name. Otherwise nothing changes: no GLX, Mesa's software
+ * paths or none.
+ */
+export async function glEnv(kernel: Kernel, app: GuiApp): Promise<Record<string, string>> {
+  if (!kernel.fs || !(app.packages ?? []).includes('libglx0')) return {};
+  const { glxEnabled, GLX_VENDOR_NAME } = await import('../x11/glx');
+  if (!glxEnabled()) return {};
+  const ok = await shipLib(kernel.fs as FileSystem, GLX_VENDOR_LIB, `/usr/lib/x86_64-linux-gnu/${GLX_VENDOR_LIB}`);
+  return ok ? { __GLX_VENDOR_LIBRARY_NAME: GLX_VENDOR_NAME } : {};
+}
+
+/** Put one of public/gui/lib/'s libraries at `path` (small, HTTP-cached; rewritten when it changed). True when it's there. */
+async function shipLib(fs: FileSystem, name: string, path: string): Promise<boolean> {
   try {
-    // small, HTTP-cached; rewritten when it changed
     const r = await fetch(new URL(`gui/lib/${name}`, baseUrl()).href);
-    if (!r.ok) return (await fs.exists(path).catch(() => false)) ? { LD_PRELOAD: path } : {};
+    if (!r.ok) return await fs.exists(path).catch(() => false);
     const lib = new Uint8Array(await r.arrayBuffer());
+    // not a library (a dev server's index.html for a missing file)
+    if (lib[0] !== 0x7f || lib[1] !== 0x45 || lib[2] !== 0x4c || lib[3] !== 0x46) return await fs.exists(path).catch(() => false);
     const have = await fs.readFile(path).catch(() => null) as Uint8Array | null;
     if (!have || have.length !== lib.length || have.some((b, i) => b !== lib[i])) {
-      await fs.mkdir('/usr/lib/shiro', { recursive: true }).catch(() => {});
+      await fs.mkdir(path.slice(0, path.lastIndexOf('/')), { recursive: true }).catch(() => {});
       await fs.writeFile(path, lib, { mode: 0o755 });
     }
-  } catch { return {}; }
-  return { LD_PRELOAD: path };
+  } catch { return false; }
+  return true;
 }
 
 export interface LaunchedApp { pid: number; exited: Promise<number>; output: () => string }
@@ -530,7 +552,7 @@ export async function launchApp(kernel: Kernel, name: string, args: string[] = [
     // argv[0]: the name for programs on the PATH, the full path for the others (LibreOffice's
     // oosplash finds soffice.bin next to argv[0])
     path: app.bin, argv: [/^\/usr\/(local\/)?s?bin\//.test(app.bin) ? app.bin.split('/').pop()! : app.bin, ...args], cwd: '/home/user',
-    env: appEnv({ ...toolkitEnv(app), ...(await textHookEnv(kernel, app)), ...env }), fds: { 0: new BufferFile(''), 1: out, 2: out },
+    env: appEnv({ ...toolkitEnv(app), ...(await textHookEnv(kernel, app)), ...(await glEnv(kernel, app)), ...env }), fds: { 0: new BufferFile(''), 1: out, 2: out },
   });
   ids.pidAppIds.set(p.pid, name);
   const launched = { pid: p.pid, exited: p.wait().finally(() => ids.pidAppIds.delete(p.pid)), output: () => out.text() };

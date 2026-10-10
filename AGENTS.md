@@ -53,7 +53,7 @@ cd tests && npx vitest run tests/shiro-vitest/kernel-net.test.ts   # one file wh
 PORT=5299 STATIC_DIR=$PWD/dist node server.mjs                     # serve a build
 ```
 
-- Browser checks (need a build and a running server; they use the pre-installed Chromium at `/opt/pw-browsers`, never `playwright install`): `tests/browser/first-run.mjs` (first impressions, desktop and `?ui=terminal`), `tests/browser/dev-workflows.mjs` (git, npm, venv + pytest, make, ssh), `tests/browser/no-reflow.mjs` (one draw at load), `tests/browser/gui-first-launch.mjs`, `tests/browser/job-control.mjs`, `tests/browser/vim-keys.mjs`, `tests/browser/web-score.mjs`. `scripts/browser-check.mjs URL 'cmd' ...` runs any commands.
+- Browser checks (need a build and a running server; they use the pre-installed Chromium at `/opt/pw-browsers`, never `playwright install`): `tests/browser/first-run.mjs` (first impressions, desktop and `?ui=terminal`), `tests/browser/dev-workflows.mjs` (git, npm, venv + pytest, make, ssh), `tests/browser/no-reflow.mjs` (one draw at load), `tests/browser/gui-first-launch.mjs`, `tests/browser/job-control.mjs`, `tests/browser/vim-keys.mjs`, `tests/browser/web-score.mjs`, `tests/browser/gl-glxgears.mjs` (glxgears through WebGL2; needs `GL_PROBE_ROOT`, docs/research/GL.md). `scripts/browser-check.mjs URL 'cmd' ...` runs any commands.
 - Scoreboards: `npm run conformance` (docs/CONFORMANCE.md), `npm run debian-score` (docs/DEBIAN_SCORE.md), `npm run gui-score` (docs/GUI_SCORE.md), `node tests/browser/vite-react.mjs` (vite dev + HMR), `npm run bench:quick` before and after a performance change.
 - CI (`.github/workflows/ci.yml`, pull requests to main) runs `npm test`, `npx tsc --noEmit` and `npm run build`.
 

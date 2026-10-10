@@ -368,18 +368,13 @@ function createStderr(ctx: CommandContext, stderrBuf: string[], _st: SharedState
         return true;
       }
       const str = typeof s === 'string' ? s : new TextDecoder().decode(s);
+      // (on to the terminal, a redirect's file or a pipe as it comes: execution.ts)
       stderrBuf.push(str);
-      if (ctx.terminal) {
-        _st.streamedStderr = true;
-        // \n is \r\n on a terminal, escape sequences or not (libuv keeps ONLCR even in raw mode):
-        // clack's prompts (create-vite) stepped down the screen as a staircase
-        ctx.terminal.writeOutput(str.replace(/\r?\n/g, '\r\n'));
-      }
       const callback = typeof encodingOrCb === 'function' ? encodingOrCb : cb;
       if (callback) queueMicrotask(() => (callback as Function)());
       return true;
     },
-    isTTY: !!ctx.terminal,
+    isTTY: _st.stderrToTerminal,
     get columns() { return ctx.terminal ? ctx.terminal.getSize().cols : 80; },
     get rows() { return ctx.terminal ? ctx.terminal.getSize().rows : 24; },
     on: (ev: string, fn: Function) => { (stderrEvts[ev] ??= []).push(fn); return stderrObj; },

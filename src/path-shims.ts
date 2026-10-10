@@ -35,6 +35,13 @@ export const SHIM_COMMANDS = [
 export const ALWAYS_SHIMS = ['xdg-open', 'sensible-browser', 'xclip', 'xsel', 'pbcopy', 'pbpaste', 'wl-copy'];
 /** The `#!` of those files: no such program, so the kernel and the shell run the builtin the file is named after. */
 export const BUILTIN_SHIM_INTERP = '/usr/libexec/tabcomputer/builtin';
+/** Is `path` a builtin's shim file (`#!/usr/libexec/tabcomputer/builtin`) rather than a program? Small files only. */
+export async function isBuiltinShimFile(fs: FileSystem, path: string): Promise<boolean> {
+  const st = await fs.stat(path).catch(() => null);
+  if (!st || st.type !== 'file' || st.size > 512) return false;
+  const text = await fs.readFile(path, 'utf8').catch(() => '');
+  return typeof text === 'string' && text.startsWith(`#!${BUILTIN_SHIM_INTERP}\n`);
+}
 const alwaysShim = (cmd: string) => `#!${BUILTIN_SHIM_INTERP}\n# The kernel runs tabcomputer's builtin ${cmd} for this path; the file lets PATH searches find it.\n`;
 
 export async function installAlwaysShims(fs: FileSystem): Promise<void> {

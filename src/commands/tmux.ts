@@ -52,9 +52,14 @@ export const tmuxCmd: Command = {
     }
     if (ctx.args[0] === '-h' || ctx.args[0] === '--help') {
       ctx.stdout += 'usage: tmux [-V] [new [-s NAME] | attach [-t NAME] | ls | kill-server]\n' +
+        '       tmux new -d [-s NAME] [-c DIR] [-x W -y H] [CMD] | send-keys -t T KEYS... | capture-pane -p [-t T] [-S N]\n' +
+        '       tmux has -t NAME | kill-session -t NAME | list-panes [-F FMT] | display -p FMT\n' +
         'Ctrl-B then: % split left/right, " split top/bottom, arrows move, c new window, n/p next/previous, d detach\n';
       return 0;
     }
+    const scripted = await runScripted(ctx);
+    if (scripted !== null) return scripted;
+
     const terminal = ctx.terminal;
     if (!terminal && ctx.args[0] !== 'ls' && ctx.args[0] !== 'list-sessions' && ctx.args[0] !== 'kill-server') {
       ctx.stderr += 'tmux: open terminal failed: not a terminal\n';
@@ -77,6 +82,7 @@ export const tmuxCmd: Command = {
     }
 
     if (ctx.args[0] === 'kill-server') {
+      for (const session of sessions.values()) endSession(session);
       sessions.clear();
       ctx.stdout += 'tmux: server killed\n';
       return 0;
@@ -429,4 +435,253 @@ async function executeInPane(pane: TmuxPane, command: string, ctx: CommandContex
   } catch (e: any) {
     pane.writeOutput(`\r\nError: ${e.message}\r\n`);
   }
+}
+
+// ── Scripted use, no terminal needed ────────────────────────────────
+// What agents and scripts run: `tmux new -d -s NAME 'cmd'`, send-keys,
+// capture-pane -p, has-session, kill-session. A detached pane is a shell of
+// its own; its command runs in the background and the session ends when the
+// command does, as in tmux.
+
+const SCRIPTED = new Set([
+  'new-session', 'new', 'send-keys', 'send', 'capture-pane', 'capturep',
+  'has-session', 'has', 'kill-session', 'list-panes', 'lsp', 'display-message', 'display',
+]);
+
+/** Pane state for scripted use: what the pane's shell is running, queued lines */
+interface PaneRun { busy: Promise<void>; line: string; pid: number }
+const paneRuns = new Map<number, PaneRun>();
+let nextPanePid = 60000;
+
+/** Parse `-x VALUE` style options; flags in `bool` take no value */
+function parseOpts(args: string[], bool: string): { opts: Record<string, string | true>; rest: string[] } {
+  const opts: Record<string, string | true> = {};
+  let i = 0;
+  for (; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--') { i++; break; }
+    if (!/^-[A-Za-z]/.test(a)) break;
+    for (let j = 1; j < a.length; j++) {
+      const f = a[j];
+      if (bool.includes(f)) { opts[f] = true; continue; }
+      const v = a.slice(j + 1) || args[++i];
+      opts[f] = v ?? '';
+      break;
+    }
+  }
+  return { opts, rest: args.slice(i) };
+}
+
+/** `-t session[:window[.pane]]` or `-t %PANE`: the pane it names (the session's active one by default) */
+function resolveTarget(target: string | true | undefined): { session: TmuxSession; pane: TmuxPane } | string {
+  const t = typeof target === 'string' ? target : '';
+  if (t.startsWith('%')) {
+    const id = Number(t.slice(1));
+    for (const session of sessions.values()) {
+      for (const win of session.windows) {
+        const pane = win.panes.find((p) => p.id === id);
+        if (pane) return { session, pane };
+      }
+    }
+    return `can't find pane: ${t}`;
+  }
+  const [name, rest] = t.split(':', 2);
+  const session = name ? sessions.get(name) : [...sessions.values()].pop();
+  if (!session) return name ? `can't find session: ${name}` : 'no server running on /tmp/tmux-1000/default';
+  let win = session.getActiveWindow();
+  let paneIdx: number | undefined;
+  if (rest) {
+    const [w, p] = rest.split('.', 2);
+    if (w !== '') win = session.windows[Number(w)] ?? session.windows.find((x) => x.name === w);
+    if (p !== undefined) paneIdx = Number(p);
+  }
+  const pane = win && (paneIdx !== undefined ? win.panes[paneIdx] : win.getActivePane());
+  if (!pane) return `can't find pane: ${t}`;
+  return { session, pane };
+}
+
+/** Stop everything a session's panes run */
+function endSession(session: TmuxSession): void {
+  for (const win of session.windows) {
+    for (const pane of win.panes) {
+      pane.running = false;
+      pane.shell.abortController?.abort();
+      paneRuns.delete(pane.id);
+    }
+  }
+}
+
+/** Run one line in a pane's shell, after whatever it is running now */
+function runInPane(pane: TmuxPane, line: string, ctx: CommandContext): Promise<void> {
+  const run = paneRuns.get(pane.id)!;
+  run.busy = run.busy.then(() => executeInPane(pane, line, ctx)).then(() => {
+    if (pane.running) pane.writeOutput(pane.getPrompt());
+  });
+  return run.busy;
+}
+
+/** send-keys key names → the characters they type */
+const KEY_NAMES: Record<string, string> = {
+  'Enter': '\r', 'C-m': '\r', 'KPEnter': '\r', 'C-j': '\r', 'Tab': '\t', 'C-i': '\t', 'Space': ' ',
+  'Escape': '\x1b', 'BSpace': '\x7f', 'C-c': '\x03', 'C-d': '\x04', 'C-l': '\x0c', 'C-u': '\x15',
+};
+
+async function runScripted(ctx: CommandContext): Promise<number | null> {
+  const [cmd, ...args] = ctx.args;
+  if (!SCRIPTED.has(cmd)) return null;
+  const fail = (msg: string) => { ctx.stderr += msg + '\n'; return 1; };
+
+  switch (cmd) {
+    case 'new-session': case 'new': {
+      const { opts, rest } = parseOpts(args, 'dADEPX');
+      // Attaching needs the terminal: the TUI path below handles it
+      if (!opts.d) {
+        if (ctx.terminal) {
+          ctx.args = typeof opts.s === 'string' ? ['new', opts.s] : ['new'];
+          return null;
+        }
+        return fail('open terminal failed: not a terminal');
+      }
+      const name = typeof opts.s === 'string' ? opts.s : String(sessions.size);
+      if (sessions.has(name)) return fail(`duplicate session: ${name}`);
+      const cols = Number(opts.x) || 80;
+      const rows = Number(opts.y) || 24;
+      const session = new TmuxSession(name);
+      const win = new TmuxWindow(typeof opts.n === 'string' ? opts.n : (rest[0]?.split(/\s+/)[0] || 'bash'));
+      const paneShell = ctx.shell.fork();
+      // The pane outlives the command that made it: its own abort, not the caller's
+      paneShell.inheritedAbort = null;
+      if (typeof opts.c === 'string') paneShell.cwd = ctx.fs.resolvePath(opts.c, ctx.cwd);
+      const pane = new TmuxPane(paneShell, 0, 0, cols, rows);
+      const pid = nextPanePid++;
+      paneShell.env['TMUX'] = `/tmp/tmux-1000/default,${pid},0`;
+      paneShell.env['TMUX_PANE'] = `%${pane.id}`;
+      win.addPane(pane);
+      session.addWindow(win);
+      sessions.set(name, session);
+      paneRuns.set(pane.id, { busy: Promise.resolve(), line: '', pid });
+      const command = rest.join(' ').trim();
+      if (command) {
+        // The command is the pane: when it ends, so does the session (tmux without remain-on-exit)
+        void executeInPane(pane, command, ctx).then(() => {
+          pane.running = false;
+          paneRuns.delete(pane.id);
+          if (sessions.get(name) === session) sessions.delete(name);
+        });
+      } else {
+        pane.writeOutput(pane.getPrompt());
+      }
+      if (opts.P) ctx.stdout += typeof opts.F === 'string' ? formatPane(opts.F, session, pane) + '\n' : `${name}:\n`;
+      return 0;
+    }
+
+    case 'send-keys': case 'send': {
+      const { opts, rest } = parseOpts(args, 'lRMX');
+      const found = resolveTarget(opts.t);
+      if (typeof found === 'string') return fail(found);
+      const { pane } = found;
+      const run = paneRuns.get(pane.id);
+      if (!run || !pane.running) return fail(`pane %${pane.id} is not running`);
+      for (const word of rest) {
+        const text = !opts.l && word in KEY_NAMES ? KEY_NAMES[word] : word;
+        for (const ch of text) {
+          if (ch === '\r' || ch === '\n') {
+            const line = run.line;
+            run.line = '';
+            pane.writeOutput('\r\n');
+            if (line.trim() === 'exit') { pane.running = false; continue; }
+            if (line.trim()) void runInPane(pane, line, ctx);
+          } else if (ch === '\x03') {
+            run.line = '';
+            pane.writeOutput('^C\r\n');
+            pane.shell.abortController?.abort();
+          } else if (ch === '\x7f') {
+            run.line = run.line.slice(0, -1);
+          } else if (ch === '\x15') {
+            run.line = '';
+          } else if (ch >= ' ' || ch === '\t') {
+            run.line += ch;
+            pane.writeOutput(ch);
+          }
+        }
+      }
+      return 0;
+    }
+
+    case 'capture-pane': case 'capturep': {
+      const { opts } = parseOpts(args, 'aCeJNpPqT');
+      const found = resolveTarget(opts.t);
+      if (typeof found === 'string') return fail(found);
+      const buf = found.pane.buffer;
+      const screen = buf.toLines();
+      const history = buf.scrollback.map((r) => r.join(''));
+      // -S/-E: line numbers, 0 the top of the screen, negative into the history, `-` its start/end
+      const all = [...history, ...screen];
+      const at = (v: string | true | undefined, dflt: number, dash: number) =>
+        typeof v !== 'string' || v === '' ? dflt : v === '-' ? dash : history.length + Number(v);
+      const start = Math.max(0, at(opts.S, history.length, 0));
+      const end = Math.min(all.length - 1, at(opts.E, all.length - 1, all.length - 1));
+      const text = all.slice(start, end + 1).map((l) => l.replace(/\s+$/, '')).join('\n') + '\n';
+      if (opts.p) ctx.stdout += text;
+      else captureBuffer = text;
+      return 0;
+    }
+
+    case 'has-session': case 'has': {
+      const { opts } = parseOpts(args, '');
+      const found = resolveTarget(opts.t);
+      if (typeof found === 'string') return fail(found);
+      return 0;
+    }
+
+    case 'kill-session': {
+      const { opts } = parseOpts(args, 'aC');
+      const found = resolveTarget(opts.t);
+      if (typeof found === 'string') return fail(found);
+      endSession(found.session);
+      for (const [n, s] of sessions) if (s === found.session) sessions.delete(n);
+      return 0;
+    }
+
+    case 'list-panes': case 'lsp': {
+      const { opts } = parseOpts(args, 'as');
+      const found = resolveTarget(opts.t);
+      if (typeof found === 'string') return fail(found);
+      const win = found.session.getActiveWindow();
+      for (const [i, pane] of (win?.panes ?? []).entries()) {
+        ctx.stdout += (typeof opts.F === 'string' ? formatPane(opts.F, found.session, pane)
+          : `${i}: [${pane.width}x${pane.height}] %${pane.id}${pane === found.pane ? ' (active)' : ''}`) + '\n';
+      }
+      return 0;
+    }
+
+    case 'display-message': case 'display': {
+      const { opts, rest } = parseOpts(args, 'apIv');
+      const found = resolveTarget(opts.t);
+      if (typeof found === 'string') return fail(found);
+      const text = formatPane(rest.join(' '), found.session, found.pane);
+      if (opts.p || !ctx.terminal) ctx.stdout += text + '\n';
+      return 0;
+    }
+  }
+  return null;
+}
+
+/** The last capture-pane without -p (tmux keeps it as a paste buffer) */
+let captureBuffer = '';
+
+/** `#{session_name}`, `#{pane_id}`, `#{pane_pid}` … in a -F format */
+function formatPane(fmt: string, session: TmuxSession, pane: TmuxPane): string {
+  const vars: Record<string, string> = {
+    session_name: session.name,
+    pane_id: `%${pane.id}`,
+    pane_pid: String(paneRuns.get(pane.id)?.pid ?? ''),
+    pane_dead: pane.running ? '0' : '1',
+    pane_current_path: pane.shell.cwd,
+    pane_width: String(pane.width),
+    pane_height: String(pane.height),
+    window_name: session.getActiveWindow()?.name ?? '',
+    window_index: String(session.activeWindow),
+  };
+  return fmt.replace(/#\{(\w+)\}/g, (_, k) => vars[k] ?? '').replace(/#S/g, session.name).replace(/#D/g, `%${pane.id}`);
 }
