@@ -1,5 +1,5 @@
 /**
- * node as a kernel guest (TABCOMPUTER_NODE_WORKER=1): this runs in a
+ * node as a kernel guest (by default; TABCOMPUTER_NODE_WORKER=0 opts out): this runs in a
  * Worker. It turns the kernel's start message into the CommandContext
  * node-compat expects (files through SyscallFs, children through real
  * processes, fds 0/1/2 for stdio and the terminal), runs the `node`
@@ -165,8 +165,9 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
         const r = sys.readAll(0);
         return typeof r === 'number' ? '' : dec.decode(r);
       };
-      // `node < script.js` / `cat x.js | node`: the program comes from stdin
-      const code = start.argv.slice(1).some((a) => !a.startsWith('-') || a === '-e' || a === '--eval' || a === '-p' || a === '--print');
+      // `node < script.js` / `cat x.js | node`: the program comes from stdin (`node -v` and
+      // `node --help` answer without reading it)
+      const code = start.argv.slice(1).some((a) => !a.startsWith('-') || /^(-e|--eval|-p|--print|-v|--version|-h|--help)$/.test(a));
       if (!code) ctx.stdin = await ctx.readStdin();
       // else bytes as they arrive (a parent that talks to this node while it runs: esbuild's service)
       else ctx.stdinStream = pipeStdin(sys);

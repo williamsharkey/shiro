@@ -253,6 +253,20 @@ Fourth round (nine more apps; input; startup time):
 Scores in the tables for Krita, Audacious, LXImage-Qt, Shotwell and Audacity
 predate these fixes; they are re-scored next.
 
+Since the last scoring run (Build 940), not yet scored:
+
+- **OpenSCAD 2021.01 runs.** CGAL aborted at startup ("Wrong rounding"):
+  SSE arithmetic always rounded to nearest, whatever `fesetround` asked for.
+  Blink 0119 follows MXCSR's rounding mode. Through glshiro (docs/research/GL.md),
+  `openscad -o t.png` (Qt offscreen) renders its OpenCSG preview in 3.8 s and a
+  full CGAL render (`--render`) in 6.4 s (`gl-guest.test.ts`, Blink in the test
+  harness). Its desktop window hasn't been scored yet.
+- **Firefox ESR and Thunderbird** exited before a window on Blink's
+  `memorymalloc.c:834` assert, mapping a shared `memfd:mozilla-ipc` region
+  whose length isn't a whole page. Blink 0117 fixes the assert and 0118 passes
+  memfd `F_ADD_SEALS`/`F_GET_SEALS` to the kernel. Neither app has been
+  confirmed to open a window since; their rows stand until they are re-scored.
+
 Known failures, not fixed here:
 
 | App | What happens | Where it has to be fixed |

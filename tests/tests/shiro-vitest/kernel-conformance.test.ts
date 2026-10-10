@@ -912,6 +912,40 @@ describe('kernel syscalls found by LTP', () => {
     off();
   });
 
+  it('a SIG_SETMASK marked as the process mask (Blink 0507) is what rt_sigreturn restores for a signal handed over meanwhile (Open POSIX pthread_kill_8-1)', async () => {
+    const p = kernel.spawn({ path: 'mt', cwd: '/tmp/kc', fds: {}, run: () => new Promise<number>(() => {}) });
+    const sys = (nr: number, args: number[], data = new Uint8Array(256)) => kernel.syscall(p, nr, args, data);
+    const set = (...sigs: number[]) => {
+      const d = new Uint8Array(16);
+      const [lo, hi] = A.sigsetToWords(sigs);
+      new DataView(d.buffer).setUint32(0, lo, true); new DataView(d.buffer).setUint32(4, hi, true);
+      return d;
+    };
+    p.dispositions.set(A.SIGUSR1, 0x1234);
+    p.dispositions.set(A.SIGUSR2, 0x1234);
+    // USR1 is handed over (its frame blocks it until rt_sigreturn); meanwhile one
+    // thread's handler blocks USR2, and then all of them unblock it again
+    kernel.deliver(p, A.SIGUSR1);
+    expect(kernel.takeSignal(p)).toBe(A.SIGUSR1);
+    expect(await sys(A.SYS_rt_sigprocmask, [A.SIG_SETMASK, 1, 0, 1], set(A.SIGUSR2))).toBe(0);
+    expect(await sys(A.SYS_rt_sigreturn, [])).toBe(0);
+    expect([...p.sigmask]).toEqual([A.SIGUSR2]);
+    // a USR2 the new mask releases is taken within the call: its own frame
+    // gets the mask that was sent, not one with USR2 in it
+    kernel.deliver(p, A.SIGUSR2);
+    expect(await sys(A.SYS_rt_sigprocmask, [A.SIG_SETMASK, 1, 0, 1], set())).toBe(0);
+    expect(kernel.takeSignal(p)).toBe(A.SIGUSR2);
+    expect(await sys(A.SYS_rt_sigprocmask, [A.SIG_SETMASK, 1, 0, 1], set())).toBe(0);
+    expect(await sys(A.SYS_rt_sigreturn, [])).toBe(0);
+    expect([...p.sigmask]).toEqual([]);
+    // without the mark, rt_sigreturn restores the mask from before the handler (Linux)
+    kernel.deliver(p, A.SIGUSR1);
+    expect(kernel.takeSignal(p)).toBe(A.SIGUSR1);
+    expect(await sys(A.SYS_rt_sigprocmask, [A.SIG_SETMASK, 1, 0], set(A.SIGUSR2))).toBe(0);
+    expect(await sys(A.SYS_rt_sigreturn, [])).toBe(0);
+    expect([...p.sigmask]).toEqual([]);
+  });
+
   it('signalfd: blocked signals in its mask are read as signalfd_siginfo; poll/epoll readiness; mask updates (PostgreSQL 17)', async () => {
     const p = kernel.spawn({ path: 'pg', cwd: '/tmp/kc', fds: {}, run: () => new Promise<number>(() => {}) });
     const sys = (nr: number, args: number[], data = new Uint8Array(256)) => kernel.syscall(p, nr, args, data);
