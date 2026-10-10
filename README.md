@@ -145,7 +145,7 @@ Not here: hardware devices, kernel modules, and any access to your own machine.
   in the page over the relay ([docs/BROWSER.md](docs/BROWSER.md), [docs/WEB_SCORE.md](docs/WEB_SCORE.md)).
 - **Languages.** Node.js (tabcomputer's runtime with real npm tarballs; each `node` is a
   real process in a background Worker, so a server stays in the foreground until you stop it
-  or start it with `&`; `node` alone is a REPL), Python, Ruby (`irb` works), Go, clang, and whatever Debian packages
+  or start it with `&`; on a page that isn't cross-origin isolated it runs in the page; `node` alone is a REPL), Python, Ruby (`irb` works), Go, clang, and whatever Debian packages
   ([docs/COMPAT.md](docs/COMPAT.md)).
 - **Web development.** `npm create vite@latest app -- --template react`, `npm i`,
   `npm run dev`, then `serve open 5173`: the app renders in a preview window and an edit to
