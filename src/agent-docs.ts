@@ -170,7 +170,7 @@ ${bootSection(ctx, name)}
 - \`gh auth login\` signs in to GitHub; git and gh then use the token. The built-in
   gh takes \`--body-file FILE\` and \`--json FIELDS --jq EXPR\`; a flag it doesn't
   implement is an error, never silently ignored.
-- If a prebuilt package misbehaves, run \`pkg upgrade\` first: fixed builds ship as
+- If a prebuilt package misbehaves, check \`pkg outdated\` and run \`pkg upgrade\` first: fixed builds ship as
   new versions (a stale python3 caused tabcomputer#5).
 
 ## What doesn't work
