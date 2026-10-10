@@ -369,6 +369,13 @@ export const F_OFD_SETLKW = 38;
 export const FLOCK_SIZE = 32;
 export const F_SETPIPE_SZ = 1031;
 export const F_GETPIPE_SZ = 1032;
+export const F_ADD_SEALS = 1033;
+export const F_GET_SEALS = 1034;
+export const F_SEAL_SEAL = 1;
+export const F_SEAL_SHRINK = 2;
+export const F_SEAL_GROW = 4;
+export const F_SEAL_WRITE = 8;
+export const F_SEAL_FUTURE_WRITE = 0x10;
 /** /proc/sys/fs/pipe-max-size: the largest F_SETPIPE_SZ an unprivileged process may ask for */
 export const PIPE_MAX_SIZE = 1048576;
 export const FD_CLOEXEC = 1;
