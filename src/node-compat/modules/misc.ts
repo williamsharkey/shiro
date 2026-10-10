@@ -195,7 +195,7 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
           'diagnostics_channel', 'dns', 'dns/promises', 'events', 'fs', 'fs/promises', 'http', 'https',
           'module', 'net', 'os', 'path', 'perf_hooks', 'process', 'querystring',
           'readline', 'stream', 'stream/consumers', 'stream/promises', 'stream/web', 'string_decoder', 'timers', 'timers/promises', 'tls',
-          'tty', 'url', 'util', 'v8', 'worker_threads', 'zlib',
+          'tty', 'url', 'util', 'v8', 'wasi', 'worker_threads', 'zlib',
         ],
         isBuiltin: (name: string) => {
           const clean = name.startsWith('node:') ? name.slice(5) : name;

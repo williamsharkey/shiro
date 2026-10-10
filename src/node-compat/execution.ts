@@ -32,6 +32,7 @@ import { createUrlModule } from './modules/url';
 import { createUtilModule } from './modules/util';
 import { createFsModule, createFsPromisesModule } from './modules/fs';
 import { createChildProcessModule, CHILD_HOLD } from './modules/child-process';
+import { createWasiModule } from './modules/wasi';
 import { createStreamModule } from './modules/stream';
 import { createCryptoModule } from './modules/crypto';
 import { createProcessGlobal, createProcessFunction } from './process-global';
@@ -294,6 +295,8 @@ export async function executeNodeScript(
         }
         case 'fs/promises':
         case 'node:fs/promises': return trackModule(createFsPromisesModule({ ctx, fileCache, fileMtimes, pendingPromises, tickSyncOps, FakeBuffer, getBuiltinModule, homeDir, trackAsync, atExit }));
+        case 'wasi':
+        case 'node:wasi': return createWasiModule({ guest, exit: (code) => fakeProcess.exit(code) as never });
         case 'child_process':
         case 'node:child_process': return createChildProcessModule({ ctx, fileCache, fileMtimes, pendingPromises, FakeBuffer, getProcess: () => fakeProcess, guest });
         case 'os':

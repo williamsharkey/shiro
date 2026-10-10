@@ -331,9 +331,21 @@ Shell and platform fixes these needed (all with tests in the same file):
     serves and keeps writing; `$!` is node's pid. In the page
     (`TABCOMPUTER_NODE_WORKER=0`), a script that only serves returns once idle
     and its server stays up; what its request handlers print after that is
-    lost.
+    lost. Started in the background there, timers its handlers set after the
+    script has gone idle don't run, so a server-sent events stream never
+    starts; in the foreground it does.
   Not yet, in the page: node output into a pipe, with a terminal attached,
   comes when the process exits (a guest's streams).
+- `node:wasi` (preview1) works when node runs as a guest: node's `WASI` class
+  (`getImportObject`/`wasiImport`, `start`, `initialize`, `finalizeBindings`,
+  `returnOnExit`, `args`, `env`, `preopens`) on the preview1 code WASM
+  processes run, so a module's files, pipes and terminal are the process's own
+  fds and a preopen is a directory fd. napi-rs WebAssembly bindings load and
+  run their emnapi threads on worker_threads: `@rolldown/binding-wasm32-wasi`
+  (sync and async APIs) and rolldown's node build bundling on it
+  (`tests/browser/node-wasi.mjs`). In the page there is no blocking channel:
+  `new WASI()` throws `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`. `stdin`/`stdout`/
+  `stderr` other than 0, 1 and 2 aren't supported.
 - Next.js 16 (`create-next-app`, App Router, webpack): `next build` and
   `next start` work in worker mode (the default on a cross-origin isolated page).
   - The build takes 54 s: compile 14 s, then page data and the static pages

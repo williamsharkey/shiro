@@ -72,3 +72,13 @@ describe('node: children and exit', () => {
     expect(r).toEqual({ code: 0, out: 'exited true\nstatus 0\n' });
   }, 30_000);
 });
+
+describe('node:wasi', () => {
+  it('a WASI instance as a guest; in the page ERR_FEATURE_UNAVAILABLE_ON_PLATFORM (no blocking channel)', async () => {
+    const { shell } = await createTestShell();
+    let out = '';
+    await shell.execute(`node -e 'const { WASI } = require("node:wasi"); try { const w = new WASI({ version: "preview1" }); console.log(typeof w.getImportObject().wasi_snapshot_preview1.fd_write) } catch (e) { console.log(e.code) }; console.log(require("module").isBuiltin("wasi"))' < /dev/null`, (s) => { out += s; }, (s) => { out += s; });
+    const { nodeWorkerMode } = await import('@shiro/node-worker/boot');
+    expect(out.replace(/\r\n/g, '\n')).toBe(`${nodeWorkerMode(shell.env) ? 'function' : 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM'}\ntrue\n`);
+  }, 30_000);
+});
