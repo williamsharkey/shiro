@@ -67,6 +67,8 @@ const STORE_NAME = 'files';
  */
 const BLOCK_KEY = '\u0001b/';
 const BLOB_MAP_KEY = '\u0001blobs';
+/** Blob map key of a file createWriter is writing (no node yet): dropped at the next init if never closed. */
+const WRITING_KEY = '\u0001w/';
 const isInternalKey = (k: string) => k.charCodeAt(0) === 1;
 const blockKey = (id: string, i: number) => BLOCK_KEY + id + '/' + i.toString(16).padStart(8, '0');
 
@@ -129,6 +131,14 @@ function pathIno(path: string): number {
  * one, 0.3 s as a range (in a large store, 38 s one by one after an npm install).
  */
 const RANGE = '\0range:';
+
+/** A file being written a piece at a time (FileSystem.createWriter). */
+export interface FileWriter {
+  readonly size: number;
+  write(bytes: Uint8Array): Promise<void>;
+  close(): Promise<void>;
+  abort(): void;
+}
 
 /** Bytes a queued record adds to IndexedDB (a blob node's are in its block records). */
 function storedBytes(node: FSNode | null | undefined): number {
@@ -1259,6 +1269,8 @@ export class FileSystem {
       this._blobs.set(p, id);
       this._blobOwner.set(id, p);
     }
+    // Files a writer never closed (the page went away mid-write): their blocks go
+    for (const p of [...this._blobs.keys()]) if (p.startsWith(WRITING_KEY)) this._noteBlob(p, null);
   }
 
   private _saveBlobMap(): void {
@@ -1408,6 +1420,92 @@ export class FileSystem {
     });
     this._emitChange('write', path);
   }
+
+  /**
+   * Write a file a piece at a time without holding it all (apt's decoded
+   * indexes, downloads): pieces are handed over (not copied, don't modify
+   * them), packed into blocks queued for IndexedDB as they fill, and
+   * write() waits while more than WRITER_BACKLOG bytes await the commit.
+   * The file appears (replacing what was at `path`) only at close(); abort()
+   * drops what was written. A file that stays under BLOB_MIN is written by
+   * close() with writeFile.
+   */
+  async createWriter(path: string, options?: { mode?: number }): Promise<FileWriter> {
+    path = await this._canon(path, true);
+    const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
+    const parent = await this._get(parentPath);
+    if (!parent) throw fsError('ENOENT', `ENOENT: no such file or directory, open '${path}'`);
+    if (parent.type !== 'dir') throw fsError('ENOTDIR', `ENOTDIR: not a directory '${parentPath}'`);
+    const B = FileSystem.BLOCK;
+    let small: Uint8Array[] = [];
+    let size = 0;
+    let id: string | null = null;
+    let block: Uint8Array | null = null, blockLen = 0, index = 0;
+    let done = false;
+    const put = (bytes: Uint8Array) => {
+      for (let off = 0; off < bytes.length;) {
+        if (!block) { block = new Uint8Array(B); blockLen = 0; }
+        const k = Math.min(B - blockLen, bytes.length - off);
+        block.set(bytes.subarray(off, off + k), blockLen);
+        blockLen += k; off += k;
+        if (blockLen === B) { this._queueBlock(blockKey(id!, index++), block); block = null; }
+      }
+    };
+    const writer: FileWriter = {
+      get size() { return size; },
+      write: async (bytes: Uint8Array) => {
+        if (done) throw fsError('EBADF', `EBADF: writer closed, write '${path}'`);
+        if (this._full) throw this._enospc(path);
+        size += bytes.length;
+        if (!id) {
+          small.push(bytes);
+          if (size < FileSystem.BLOB_MIN) return;
+          id = this.newBlobId();
+          this._blobs.set(WRITING_KEY + id, id);
+          this._blobOwner.set(id, WRITING_KEY + id);
+          this._saveBlobMap();
+          for (const b of small) put(b);
+          small = [];
+        } else put(bytes);
+        if (this.pendingBytes > FileSystem.WRITER_BACKLOG) await this.flushed();
+      },
+      close: async () => {
+        if (done) return;
+        done = true;
+        if (!id) {
+          const all = new Uint8Array(size);
+          let off = 0;
+          for (const b of small) { all.set(b, off); off += b.length; }
+          small = [];
+          return this.writeFile(path, all, options?.mode !== undefined ? { mode: options.mode } : undefined);
+        }
+        if (block) this._queueBlock(blockKey(id, index), (block as Uint8Array).slice(0, blockLen));
+        block = null;
+        const existing = await this._get(path);
+        if (existing?.type === 'dir') { this._noteBlob(WRITING_KEY + id, null); throw fsError('EISDIR', `EISDIR: illegal operation on a directory, write '${path}'`); }
+        const now = Date.now();
+        // The node takes the blob over from the writing entry (in the same commit)
+        this._putNow({
+          path, type: 'file', content: null, blob: id,
+          ...(existing ? { ino: existing.ino } : {}),
+          mode: options?.mode ?? existing?.mode ?? 0o644, mtime: now, ctime: existing?.ctime ?? now, size,
+        });
+        this._blobs.delete(WRITING_KEY + id);
+        this._saveBlobMap();
+        this._emitChange('write', path);
+      },
+      abort: () => {
+        if (done) return;
+        done = true;
+        small = []; block = null;
+        if (id) this._noteBlob(WRITING_KEY + id, null);
+      },
+    };
+    return writer;
+  }
+
+  /** Uncommitted bytes past which a createWriter write waits for IndexedDB. */
+  static WRITER_BACKLOG = 8 << 20;
 
   /** BLOB_MIN and BLOCK, for the kernel's open files. */
   get blobMin(): number { return FileSystem.BLOB_MIN; }

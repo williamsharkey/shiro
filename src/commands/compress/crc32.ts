@@ -15,3 +15,10 @@ export function crc32(b: Uint8Array, start = 0, end = b.length): number {
   for (let i = start; i < end; i++) c = (c >>> 8) ^ TABLE[(c ^ b[i]) & 0xff];
   return ~c >>> 0;
 }
+
+/** CRC-32 continued over more bytes: `crc` is the CRC of what came before (0 at the start). */
+export function crc32Update(crc: number, b: Uint8Array, start = 0, end = b.length): number {
+  let c = ~crc;
+  for (let i = start; i < end; i++) c = (c >>> 8) ^ TABLE[(c ^ b[i]) & 0xff];
+  return ~c >>> 0;
+}
