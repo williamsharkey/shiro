@@ -1549,6 +1549,47 @@ export class Shell {
   }
 
   /**
+   * The shell of a new kernel process (Kernel.forkShell: a builtin, `sh -c`,
+   * a script run as a program): what exec passes on and nothing more. `env`
+   * (adopted, not copied) is the process's environment, every name exported;
+   * `base`'s exported functions come along. Options and shopts start at
+   * bash's defaults, or from SHELLOPTS/BASHOPTS when the environment exports
+   * them. No aliases, arrays, traps (ignored signals are the process's
+   * dispositions), hash table, dir stack or fds (the kernel's fd table is the
+   * process's; runShellProcess wires kernelStdio). Cheaper than fork(), which
+   * copies all of the page shell only for it to be replaced.
+   */
+  static forProcess(base: Shell, p: { env: Record<string, string>; cwd: string; pid: number; ppid: number; uid: number; umask: number }): Shell {
+    const s = new Shell(base.fs, base.commands, true);
+    // (the defaults' SHELLOPTS/BASHOPTS, which the constructor computed)
+    const defOpts = s.env.SHELLOPTS, defShopts = s.env.BASHOPTS;
+    s.env = p.env;
+    s.localVars = new Set(['0']); // $0 is not exported
+    for (const name of base.exportedFunctions) {
+      const fn = base.functions[name];
+      if (fn) { s.functions[name] = fn; s.exportedFunctions.add(name); }
+    }
+    // Options: the defaults, or what an exported SHELLOPTS/BASHOPTS says (the setters resync the variables)
+    if (p.env.SHELLOPTS === undefined) { p.env.SHELLOPTS = defOpts; s.localVars.add('SHELLOPTS'); }
+    else if (p.env.SHELLOPTS !== defOpts) s.options = new Set(p.env.SHELLOPTS.split(':').filter((o) => SET_O_OPTIONS.includes(o)));
+    if (p.env.BASHOPTS === undefined) { p.env.BASHOPTS = defShopts; s.localVars.add('BASHOPTS'); }
+    else if (p.env.BASHOPTS !== defShopts) s.shoptopts = new Set(p.env.BASHOPTS.split(':').filter(Boolean));
+    s.cwd = p.cwd;
+    // PWD names cwd (Kernel.processEnv): the logical directory pwd prints, no realpath
+    if (p.env.PWD === p.cwd) s.logicalPwd = p.cwd;
+    // The command-location cache, seeded from the page's (a cache, as fork()
+    // copies it: a new bash would find the same files on PATH)
+    if (base.hashPath === p.env.PATH) s.hashTable = new Map([...base.hashTable].map(([k, v]) => [k, { ...v }]));
+    s.hashPath = base.hashPath;
+    s.ownUmask = p.umask;
+    s.uid = p.uid;
+    s.bashPid = s.shellPid = s.kernelPid = p.pid;
+    s.parentPid = p.ppid;
+    s.bootGate = base.bootGate;
+    return s;
+  }
+
+  /**
    * Replace secret env values in text with '***'.
    * Used by terminals to mask tokens in output.
    */

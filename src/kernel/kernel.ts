@@ -1536,27 +1536,32 @@ export class Kernel {
    * `echo`, `mkdir`... leave it for the next reader.
    */
   async runBuiltin(proc: Process, cmd: Command): Promise<number> {
-    const shell = this.forkShell(proc);
+    const env = this.processEnv(proc);
+    // The process's Shell is made when the command first asks for it (most
+    // never do: true, cat, ls), then it is that one Shell every time
+    let shell: Shell | undefined;
+    const getShell = () => (shell ??= this.forkShell(proc, env));
     let stdio: KernelStdio | undefined;
     if (SHELL_NAMES.has(cmd.name) || SHELL_NAMES.has(proc.argv[0]?.slice(proc.argv[0].lastIndexOf('/') + 1))) {
+      const sh = getShell();
       stdio = new KernelStdio(this, proc);
-      shell.kernelStdio = stdio;
-      stdio.adoptFds(shell);
-      shell.kernelStdinLive = true;
+      sh.kernelStdio = stdio;
+      stdio.adoptFds(sh);
+      sh.kernelStdinLive = true;
     }
     const lazy = !stdio;
-    const ctx: CommandContext = {
+    const ctx = {
       args: proc.argv.slice(1),
-      fs: this.fs ?? shell.fs,
+      fs: this.fs ?? this.shell!.fs,
       cwd: proc.cwd,
-      env: shell.env,
+      env,
       stdin: '',
       stdout: '',
       stderr: '',
-      shell,
       stdoutIsTTY: proc.fds.get(1)?.kind === 'pty',
       ...(stdio ? { liveStdin: true, streamStdout: stdio.out, streamStderr: stdio.err } : {}),
-    };
+    } as CommandContext;
+    Object.defineProperty(ctx, 'shell', { get: getShell, set: (v: Shell) => { shell = v; }, enumerable: true, configurable: true });
     let code: number;
     try {
       code = lazy ? await execLazyStdin(cmd, ctx, () => this.stdinText(proc)) : await cmd.exec(ctx);
@@ -1569,8 +1574,13 @@ export class Kernel {
     // Byte-exact (src/utils/byte-text.ts): binary output of a builtin keeps its bytes
     if (ctx.stdout) await this.writeAll(proc, 1, encodeText(ctx.stdout));
     if (ctx.stderr && !proc.exiting) await this.writeAll(proc, 2, enc.encode(ctx.stderr));
-    if (shell.cwd !== proc.cwd) proc.cwd = shell.cwd;
+    if (shell && shell.cwd !== proc.cwd) proc.cwd = shell.cwd;
     return code;
+  }
+
+  /** A new process's shell environment: proc.env with PWD and $0. */
+  private processEnv(proc: Process): Record<string, string> {
+    return { ...proc.env, PWD: proc.cwd, 0: proc.argv[0] ?? proc.path };
   }
 
   /** Run argv through a forked shell (scripts, node programs, anything in PATH that is not a registered command). */
@@ -1723,22 +1733,13 @@ export class Kernel {
     return code;
   }
 
-  private forkShell(proc: Process): Shell {
+  private forkShell(proc: Process, env = this.processEnv(proc)): Shell {
     const base = this.shell;
     if (!base) throw new Error('kernel has no shell attached');
-    const shell = base.fork();
-    shell.cwd = proc.cwd;
-    shell.env = { ...proc.env, PWD: proc.cwd, 0: proc.argv[0] ?? proc.path };
-    shell.localVars = new Set(['0']); // $0 is not exported
-    // $$, $PPID and $BASHPID are the process's
-    shell.shellPid = shell.bashPid = shell.kernelPid = proc.pid;
-    shell.parentPid = proc.ppid;
-    shell.uid = proc.uid;
-    // Its fds are the process's (KernelStdio, adoptFds), not whatever exec did in the page's shell
-    shell.userFds = new Map();
-    shell.fileDescriptors = new Map();
-    // A new process: only the page shell's `export -f` functions come along
-    shell.dropUnexportedFunctions();
+    // A new process: what exec passes on (env, `export -f` functions, cwd,
+    // umask, uid; $$ and $PPID are the process's), not a copy of the page's shell
+    // (through the instance: kernel.ts imports Shell only as a type)
+    const shell = (base.constructor as typeof Shell).forProcess(base, { env, cwd: proc.cwd, pid: proc.pid, ppid: proc.ppid, uid: proc.uid, umask: proc.umask });
     // Its own abort, which its end fires. Not the page shell's: killing a
     // program's `sh -c` child would abort the page's foreground job, whose
     // abort SIGINTs that program's whole group (codex's "turn interrupted")
