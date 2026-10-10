@@ -489,6 +489,12 @@ async function main() {
     () => import('./commands/man').then(m => m.manCmd)), 'src/commands/man.ts');
   registerCommand(commands, lazyCommand('tmux', 'Terminal multiplexer',
     () => import('./commands/tmux').then(m => m.tmuxCmd)), 'src/commands/tmux.ts');
+  registerCommand(commands, lazyCommand('tty', 'Print the file name of the terminal connected to standard input',
+    () => import('./commands/session').then(m => m.ttyCmd)), 'src/commands/session.ts');
+  registerCommand(commands, lazyCommand('setsid', 'Run a program in a new session',
+    () => import('./commands/session').then(m => m.setsidCmd)), 'src/commands/session.ts');
+  registerCommand(commands, lazyCommand('script', 'Run a command on a new terminal and record its output',
+    () => import('./commands/session').then(m => m.scriptCmd)), 'src/commands/session.ts');
   registerCommand(commands, lazyCommand('systemctl', 'Control the system service manager',
     () => import('./commands/systemctl').then(m => m.systemctlCmd)), 'src/commands/systemctl.ts');
   registerCommand(commands, lazyCommand('crontab', 'Maintain crontab files',
