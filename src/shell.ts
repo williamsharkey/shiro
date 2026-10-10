@@ -3447,6 +3447,13 @@ export class Shell {
         if (!_builtinDisabled && effectiveCmdName === 'set') {
           // Check for -- to set positional parameters; the first word that isn't an
           // option (set a b c) starts them too, as does a lone - (set - a b)
+          // Bundled flags are single ones (-euo pipefail = -e -u -o pipefail): each
+          // o takes the next word as its option name, as in bash
+          {
+            const end = cmdArgs.indexOf('--');
+            const head = (end < 0 ? cmdArgs : cmdArgs.slice(0, end)).flatMap((a) => /^[-+][A-Za-z]{2,}$/.test(a) && a.includes('o') ? [...a.slice(1)].map((c) => a[0] + c) : [a]);
+            cmdArgs.splice(0, end < 0 ? cmdArgs.length : end, ...head);
+          }
           let ddIdx = cmdArgs.indexOf('--');
           if (ddIdx < 0) {
             let k = 0;
