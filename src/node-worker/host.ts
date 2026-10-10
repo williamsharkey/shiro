@@ -7,27 +7,19 @@
  */
 import type { CommandContext } from '../commands/index';
 import * as A from '../kernel/abi';
-import { canBlock } from '../kernel/channel';
 import { BufferFile, type OpenFile } from '../kernel/fd';
 import type { Kernel, Runner } from '../kernel/kernel';
 import { attachThread, webWorker, workerRunner, type GuestThread, type GuestWorker } from '../kernel/worker-host';
+import { installNodeWorkerBoot, nodeWorkerFactory, nodeWorkerMode } from './boot';
 import type { Process } from '../kernel/process';
 
-let factory: (() => GuestWorker) | null = null;
-
-/** Tests (Node worker_threads) set how a guest worker is made; null restores the default */
-export function setNodeWorkerFactory(f: (() => GuestWorker) | null): void { factory = f; }
+export { setNodeWorkerFactory, nodeWorkerMode } from './boot';
 
 function createNodeWorker(): GuestWorker {
+  const factory = nodeWorkerFactory();
   if (factory) return factory();
   // The browser: a module worker built from guest-entry.ts (vite bundles it)
   return webWorker(new Worker(new URL('./guest-entry.ts', import.meta.url), { type: 'module', name: 'node' }));
-}
-
-/** Whether `node` runs as a kernel guest here */
-export function nodeWorkerMode(env: Record<string, string | undefined>): boolean {
-  if (env.TABCOMPUTER_NODE_WORKER !== '1' || canBlock() !== 'sab') return false;
-  return !!factory || (typeof Worker !== 'undefined' && typeof window !== 'undefined');
 }
 
 /** A guest on a terminal started a server: its preview pane, as for node in the page */
@@ -125,45 +117,41 @@ export function nodeShebangArgs(head: string): string[] | null {
   return /^(\/(usr\/)?(local\/)?bin\/)?node$/.test(words[i] ?? '') && (i > 0 || words[i].startsWith('/')) ? words.slice(i + 1) : null;
 }
 
-const loaderInstalled = new WeakSet<Kernel>();
-
 /**
- * With TABCOMPUTER_NODE_WORKER=1 in its environment, a process the kernel
- * starts as `node` (or as a `#!...node` script) runs the guest itself: its
- * fds are the node's stdio and it is the process its parent waits for (not a
- * builtin that starts a second process for the guest). Otherwise (the flag off, no blocking channel, a packaged node
- * on PATH) the usual loaders run it as before.
+ * The kernel's node loader (boot.ts calls it once the flag is on): `node` by
+ * name or in a bin directory, or a `#!...node` script, runs the guest itself:
+ * its fds are the node's stdio and it is the process its parent waits for.
+ * A packaged node on PATH, or no node builtin, leaves it to the other loaders.
  */
+export async function nodeLoader(path: string, proc: Process, k: Kernel): Promise<Runner | null> {
+  if (!nodeWorkerMode(proc.env) || !k.shell?.commands.get('node')) return null;
+  const fs = k.fs;
+  const base = path.slice(path.lastIndexOf('/') + 1);
+  if (base === 'node' && (!path.includes('/') || /^\/(usr\/)?(local\/)?bin\/node$/.test(path))) {
+    if (fs && (await import('../pkg-manager')).packageShadows(fs).has('node')) return null;
+    return nodeWorkerRunner();
+  }
+  if (!fs || !path.includes('/')) return null;
+  let flags: string[] | null;
+  try {
+    const abs = fs.resolvePath(path, proc.cwd);
+    const raw = await fs.readFile(abs);
+    const head = typeof raw === 'string' ? raw.slice(0, 256) : A.decodeText(raw.subarray(0, 256));
+    flags = nodeShebangArgs(head);
+  } catch { return null; }
+  if (!flags || (await import('../pkg-manager')).packageShadows(fs).has('node')) return null;
+  const run = nodeWorkerRunner();
+  return (p, kk) => {
+    p.argv = ['node', ...flags!, path, ...p.argv.slice(1)];
+    return run(p, kk);
+  };
+}
+
+/** A kernel that may not have booted with node-worker (tests' kernels): its loader and socket syscalls */
 export function installNodeLoader(kernel: Kernel): void {
-  if (loaderInstalled.has(kernel)) return;
-  loaderInstalled.add(kernel);
+  installNodeWorkerBoot(kernel);
   // the guest's sockets are kernel sockets (the page's kernel has them from boot)
   void import('../kernel/net').then((n) => { if (!n.netStackOf(kernel)) n.installNet(kernel); });
-  // `sh -c 'node ...'` (execSync, npm scripts) execs node in place, so this loader sees it
-  kernel.execDirect.push((name, proc) => name === 'node' && proc.env.TABCOMPUTER_NODE_WORKER === '1' && nodeWorkerMode(proc.env));
-  kernel.addLoader(async (path, proc, k) => {
-    if (proc.env.TABCOMPUTER_NODE_WORKER !== '1' || !nodeWorkerMode(proc.env) || !k.shell?.commands.get('node')) return null;
-    const fs = k.fs;
-    const base = path.slice(path.lastIndexOf('/') + 1);
-    if (base === 'node' && (!path.includes('/') || /^\/(usr\/)?(local\/)?bin\/node$/.test(path))) {
-      if (fs && (await import('../pkg-manager')).packageShadows(fs).has('node')) return null;
-      return nodeWorkerRunner();
-    }
-    if (!fs || !path.includes('/')) return null;
-    let flags: string[] | null;
-    try {
-      const abs = fs.resolvePath(path, proc.cwd);
-      const raw = await fs.readFile(abs);
-      const head = typeof raw === 'string' ? raw.slice(0, 256) : A.decodeText(raw.subarray(0, 256));
-      flags = nodeShebangArgs(head);
-    } catch { return null; }
-    if (!flags || (await import('../pkg-manager')).packageShadows(fs).has('node')) return null;
-    const run = nodeWorkerRunner();
-    return (p, kk) => {
-      p.argv = ['node', ...flags!, path, ...p.argv.slice(1)];
-      return run(p, kk);
-    };
-  });
 }
 
 /** `node ARGS` from the shell as a kernel process: a foreground job on the terminal's pty, or on the shell's stdio */

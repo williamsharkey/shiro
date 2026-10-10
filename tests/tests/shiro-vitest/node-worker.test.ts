@@ -112,6 +112,16 @@ console.log(a[0], a[1] === me, b[0], b[1] === me);
     expect(r.out).toBe('x true y,z true\n');
   }, 60_000);
 
+  it('in a script, node is the shell\'s child; its redirects and pipes are the shell\'s', async () => {
+    const r = await sh(`node -e '
+      const out = String(require("child_process").execSync("echo $$; node -e \\"console.log(require(\\\\\\"fs\\\\\\").readFileSync(\\\\\\"/proc/self/stat\\\\\\", \\\\\\"utf8\\\\\\").split(\\\\\\" \\\\\\")[3])\\" > /tmp/nk3; cat /tmp/nk3; node -p 6*7 | tr 4 x"));
+      const [sh, ppid, piped] = out.trim().split("\\n");
+      console.log(sh === ppid, piped);
+    ' < /dev/null`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('true x2\n');
+  }, 60_000);
+
   it('output to a pipe streams, and spawn() delivers it as it comes', async () => {
     // inner node waits for a file its parent makes on seeing inner's first line:
     // with output held until exit (either end) that never happens
