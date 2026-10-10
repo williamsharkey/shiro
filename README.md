@@ -55,7 +55,7 @@ on top. Each program's files download the first time it runs.
 toolchain list                   # the sets, their size, which are installed
 toolchain install c              # build-essential (gcc, g++, make), gdb, cmake, pkg-config
 printf '#include <stdio.h>\nint main(void){puts("hi");}\n' > hi.c && gcc hi.c && ./a.out
-toolchain install python         # also: tex, classic (Fortran, COBOL, Pascal, Ada), node, java
+toolchain install python         # also: go, tex, classic (Fortran, COBOL, Pascal, Ada), node, java
 ```
 
 From a fresh tab to the first working program: `c` 8.9 s (`gcc hi.c && ./a.out`), `python` 6.6 s,
