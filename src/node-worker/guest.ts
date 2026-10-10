@@ -72,6 +72,12 @@ function terminalFacade(sys: GuestSys, stdinTTY: boolean) {
 /** Run node for one start message; exits the process (does not return normally). */
 export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) => void): Promise<void> {
   const sys = connectGuest(start, post);
+  // (a pooled worker runs one guest after another: nothing of the last one's carries over)
+  exitRequested = false;
+  fsEvents = null;
+  parentMessages = null;
+  earlyMessages.length = 0;
+  threadEvents.clear();
   try {
     const fs = new SyscallFs(sys);
     // fs.watch: the page sends its filesystem's changes once asked (host.ts)
@@ -83,14 +89,8 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
     const net = new GuestNetStack(sys);
     const { iframeServer } = await import('../iframe-server');
     installGuestPorts(iframeServer as any, net, (port) => { if (stdoutTTY) post({ type: 'node-guest-listen', port }); });
-    // Unhandled rejections: the worker's own event (a browser Worker; node's process in tests)
-    let rejection: ((reason: unknown, promise: Promise<unknown>) => void) | null = null;
-    const g: any = globalThis;
-    if (typeof g.addEventListener === 'function') {
-      g.addEventListener('unhandledrejection', (e: any) => { if (rejection) { e.preventDefault(); rejection(e.reason, e.promise); } });
-    } else if (typeof g.process?.on === 'function' && g.process.versions?.node) {
-      g.process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) => { rejection?.(reason, promise); });
-    }
+    rejection = null;
+    installWorkerHandlers();
     // A worker_threads thread of a node process (host.ts started it with attachThread)
     const nodeThread = (start as any).nodeThread as { file: string; eval?: boolean; workerData?: unknown; argv?: string[]; threadId: number } | undefined;
     const hooks: NodeGuestHooks = {
@@ -173,10 +173,47 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
       sys.exitThread(status);
     }
     if (ctx.stderr) sys.write(2, ctx.stderr);
+    exitRequested = true; // a clean end: the worker can run another guest (host.ts's pool)
+    // Said in the channel's memory, which the page reads when the process ends (a message would come too late)
+    if (!nodeThread) { const w = new Int32Array(sys.ch.sab); Atomics.store(w, w.length - 1, EXITING_MARK); }
     sys.exit(status);
   } catch (e) {
     if (e instanceof ChannelClosed) return; // killed: the kernel is done with us
     try { sys.write(2, `node: ${(e as any)?.stack ?? e}\n`); sys.exit(1); } catch { /* channel gone */ }
+  }
+}
+
+/** In the last word of the channel's buffer before exit_group: this guest ends itself (host.ts) */
+export const EXITING_MARK = 0x45584954;
+
+/** The guest ended itself (exit_group), so this worker may run another */
+let exitRequested = false;
+/** Who hears unhandled rejections now (node-compat's handler for the running guest) */
+let rejection: ((reason: unknown, promise: Promise<unknown>) => void) | null = null;
+let handlersInstalled = false;
+
+/**
+ * The worker's own handlers, once: unhandled rejections go to the running
+ * guest's node-compat, and a ChannelClosed from a finished guest's leftover
+ * callbacks (its channel is gone) is not an error of the next one.
+ */
+function installWorkerHandlers(): void {
+  if (handlersInstalled) return;
+  handlersInstalled = true;
+  const g: any = globalThis;
+  if (typeof g.addEventListener === 'function') {
+    g.addEventListener('unhandledrejection', (e: any) => {
+      if (e.reason instanceof ChannelClosed) { e.preventDefault(); return; }
+      if (rejection) { e.preventDefault(); rejection(e.reason, e.promise); }
+    });
+    g.addEventListener('error', (e: any) => { if (e.error instanceof ChannelClosed) e.preventDefault(); });
+  } else if (typeof g.process?.on === 'function' && g.process.versions?.node) {
+    g.process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) => {
+      if (reason instanceof ChannelClosed) return;
+      rejection?.(reason, promise);
+    });
+    // (a finished guest's timer calling into its closed channel; anything else still ends the worker)
+    g.process.on('uncaughtException', (e: unknown) => { if (!(e instanceof ChannelClosed)) throw e; });
   }
 }
 
@@ -192,6 +229,19 @@ const earlyMessages: unknown[] = [];
 /** The worker's message handler: the first start message runs node; then filesystem changes */
 export function nodeGuestMain(on: (handler: (m: unknown) => void) => void, post: (m: unknown) => void): void {
   let started = false;
+  /** The next guest's start, come while this one finishes its exit (host.ts lends the worker then) */
+  let queued: GuestStartMessage | null = null;
+  const start = (m: GuestStartMessage) => {
+    started = true;
+    // After a clean exit the worker takes another start message (host.ts pools it); a thread doesn't
+    void runNodeGuest(m, post).then(() => {
+      if (!exitRequested || (m as any).nodeThread) return;
+      started = false;
+      const next = queued;
+      queued = null;
+      if (next) start(next); else post({ type: 'node-guest-idle' });
+    });
+  };
   on((m) => {
     const t = (m as any)?.type;
     if (started && t === 'node-guest-fs') { fsEvents?.(m as any); return; }
@@ -204,8 +254,8 @@ export function nodeGuestMain(on: (handler: (m: unknown) => void) => void, post:
       (ev as any)[kind]?.(value);
       return;
     }
-    if (started || !isStartMessage(m)) return;
-    started = true;
-    void runNodeGuest(m, post);
+    if (!isStartMessage(m)) return;
+    if (started) { queued = m; return; }
+    start(m);
   });
 }

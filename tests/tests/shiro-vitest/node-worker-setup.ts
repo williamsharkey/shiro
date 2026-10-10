@@ -7,7 +7,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { build } from 'esbuild';
 import type { GuestWorker } from '@shiro/kernel/worker-host';
-import { setNodeWorkerFactory } from '@shiro/node-worker/host';
+import { drainNodeWorkerPool, setNodeWorkerFactory } from '@shiro/node-worker/host';
 
 const REPO = path.resolve(__dirname, '../../..');
 
@@ -36,5 +36,5 @@ export async function installNodeWorker(): Promise<() => void> {
       onExit: (cb) => { w.on('exit', cb); },
     };
   });
-  return () => { setNodeWorkerFactory(null); rmSync(tmp, { recursive: true, force: true }); };
+  return () => { drainNodeWorkerPool(); setNodeWorkerFactory(null); rmSync(tmp, { recursive: true, force: true }); };
 }
