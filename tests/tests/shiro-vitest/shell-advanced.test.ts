@@ -655,6 +655,14 @@ describe('Shell Advanced', () => {
       expect(exitCode).toBe(0);
     });
 
+    it('set -euo pipefail: o takes the next word (install scripts start with it)', async () => {
+      const r = await run(shell, 'set -euo pipefail; echo "n=$#"; false | true; echo "status=$?"; set +euo pipefail');
+      expect(r.output).toContain('n=0');
+      expect(r.exitCode).not.toBe(0); // errexit + pipefail: the pipeline fails the script
+      const kept = await run(shell, 'set -- a b; set -eo pipefail; echo "$# $1"; set +eo pipefail');
+      expect(kept.output.trim()).toBe('2 a');
+    });
+
     it('pipefail can be disabled with set +o pipefail', async () => {
       await run(shell, 'set -o pipefail');
       await run(shell, 'set +o pipefail');

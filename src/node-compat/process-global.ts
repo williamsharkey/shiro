@@ -84,6 +84,13 @@ export function createProcessGlobal(own: Record<string, unknown>): any {
       return true;
     },
     defineProperty(t, k, desc) {
+      // A non-configurable property must exist on the proxy's target (a Proxy
+      // invariant): undici defines its global dispatcher symbol that way, so
+      // such a new global stays the process's own instead of the page's
+      if (desc.configurable === false && !Object.prototype.hasOwnProperty.call(t, k) && (through.has(k) || isNew(k))) {
+        if (through.has(k)) { through.delete(k); if (!('value' in desc) && !desc.get && !desc.set) desc = { value: page[k as any], ...desc }; }
+        return Reflect.defineProperty(t, k, desc);
+      }
       if (through.has(k) || (isNew(k) && !deleted.has(k))) { through.add(k); return Reflect.defineProperty(page, k, desc); }
       deleted.delete(k);
       // A partial descriptor (esbuild's {writable, configurable} for crypto) keeps the value it had
