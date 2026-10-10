@@ -202,13 +202,8 @@ export const lnCmd: Command = {
           await fs.symlink(target, dstAbs);
           if (verbose) ctx.stdout += `${q(dst)} -> ${q(target)}\n`;
         } else {
-          if (srcSt.isSymbolicLink()) {
-            await fs.symlink(await fs.readlink(srcAbs), dstAbs);
-          } else {
-            const data = await fs.readFile(srcAbs);
-            await fs.writeFile(dstAbs, data, { mode: srcSt.mode & 0o7777 });
-            await fs.utimes(dstAbs, srcSt.mtime.getTime(), srcSt.mtime.getTime()).catch(() => {});
-          }
+          // A real hard link: one inode, two names (-L links what a symlink points at)
+          await fs.link(srcAbs, dstAbs, { follow: logical });
           if (verbose) ctx.stdout += `${q(dst)} => ${q(src)}\n`;
         }
       } catch (e: any) {
