@@ -4,7 +4,7 @@ Debian 12 GUI apps installed from the streaming manifest (`public/gui/apps.json`
 
 Columns: **installs**; **window**: a desktop window appears, with the time from launch (installed) to it; **renders**: its largest window isn't one flat colour after 8 s; **input**: focusing it and typing `abc 123` changes its pixels (or, if not, clicking into its middle and typing does, or Ctrl+O opens a window or changes them); **text**: the DOM text layer has spans for it (GTK via libshiro-text-hook.so, core X text; Qt and others draw pixels only).
 
-**29/29 install, 28/29 open a window, 26/29 render, 20/29 react to input, 20/29 have DOM text.**
+**29/29 install, 28/29 open a window, 27/29 render, 20/29 react to input, 20/29 have DOM text.**
 
 
 ### Editors & viewers
@@ -49,7 +49,7 @@ Columns: **installs**; **window**: a desktop window appears, with the time from 
 
 | App | Toolkit | Download | Install | Window | First window | Renders | Input | Text | Notes |
 |---|---|---:|---:|:-:|---:|:-:|:-:|:-:|---|
-| firefox-esr | gtk3 | 125.1 MB | 22 s | ✓ | 279 s | ✗ | – | ✗ | content processes live (font list by message, an overlay pref); the parent goes down a few minutes in (not diagnosed) |
+| firefox-esr | gtk3 | 125.1 MB | 22 s | ✓ | 274 s | ✓ | ✗ | ✗ | runs (~4.5 min to its window): content processes get the font list by message (an overlay pref) until shared mappings work across processes; its text isn't reported |
 | netsurf | gtk3 | 56.6 MB | 7.2 s | ✓ | 13 s | ✓ | ✓ | ✓ (42) |  |
 | dillo | fltk | 11.4 MB | 1.4 s | ✓ | 5.1 s | ✓ | ✓ | ✗ | FLTK draws its text as pixels |
 | vlc | qt5 | 39.4 MB | 5.1 s | ✓ | 13 s | ✓ | ✓ | ✓ (11) |  |
@@ -173,7 +173,10 @@ Third round (the coordinator's next list):
   `/etc/firefox-esr/shared-memory.js` (an overlay) sets
   `gfx.e10s.font-list.shared` to false and the content processes live. The
   parent still goes down a few minutes in (a fault in a worker thread that a
-  handler re-raises with `tgkill`): not diagnosed yet.
+  handler re-raises with `tgkill`); on the next engine build (Blink
+  0103–0110, signals carrying their siginfo among them) that fault is gone
+  and Firefox runs: its window after ~4.5 min, the full browser UI.
+  ![Firefox ESR](screenshots/gui-firefox.png)
 - **LibreOffice** threw `cannot find /org.openoffice.Setup/L10N` (a
   `__cxa_throw` preload printing each UNO exception's Message): Debian keeps
   the configuration data in `share/.registry` and each package's postinst
@@ -203,7 +206,6 @@ Known failures, not fixed here:
 |---|---|---|
 | blender | past the CPU check and the PI futexes (engine fixes); needs OpenGL 3.3 through GLX, which Xshiro doesn't have | GLX / software GL in the page |
 | libreoffice-writer | runs (start center after ~2 min); the scoreboard samples its splash, which hasn't painted 8 s after it appears | (the scoreboard's render check) |
-| firefox-esr | content processes live now (font list by message); the parent goes down a few minutes in, after a blank window | not diagnosed (shared file mappings: x86 engine, reported) |
 
 Input ✗ is left on viewers with nothing open (eog, ristretto, gpicview,
 lximage-qt) and Krita's start screen: typing changes nothing there and none
