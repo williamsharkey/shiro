@@ -196,6 +196,10 @@ async function smoke(m, pkg) {
       if (crashed) return { ok: false, how: `${bin} ${flagArg}`, category: r.code === 124 ? 'timeout' : 'engine-crash', error: firstError(r.out) || `exit ${r.code}` };
       const mod = /Can't locate (\S+\.pm) in @INC/.exec(r.out)?.[1];
       if (mod && !undeclared && !(await m.run(`dpkg -S '*/${mod}' 2>/dev/null`)).out.trim()) undeclared = { bin, mod };
+      // A launcher for another package's program (libreoffice-common's loffice runs
+      // libreoffice-core's soffice, which it doesn't depend on): exit 127 on Debian too
+      const exe = r.code === 127 && /(\/[\w./+-]+): (?:No such file or directory|not found)/.exec(r.out)?.[1];
+      if (exe && !undeclared && exe !== bin && !(await m.run(`dpkg -S '${exe}' 2>/dev/null`)).out.trim()) undeclared = { bin, mod: exe };
       // helpztags exits 0 printing nothing; select-editor wants a terminal
       if (!ran && !broken && (r.code === 0 || (r.code < 3 && r.out.trim()))) ran = { bin, flagArg, r };
     }
