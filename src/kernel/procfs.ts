@@ -9,8 +9,9 @@
  * seq_file), so `cat /proc/PID/stat` and ps/top/htop read consistent lines.
  *
  * CPU time is an estimate: a process's wall time minus the time it spends
- * inside kernel syscalls (`Process.kernelMs`), for processes that make
- * syscalls through a channel (programs in workers). A busy loop shows as
+ * blocked in kernel syscalls (2 ms or more) and in waits the engine reports
+ * (SYS_shiro_sleeping; `Process.kernelMs`), for processes that make syscalls through a channel
+ * (programs in workers). A busy loop shows as
  * busy, a shell waiting at its prompt as idle. Memory sizes are not known to
  * the kernel and read as 0.
  */
@@ -146,7 +147,8 @@ export class ProcFs {
   static cpuMs(p: Process, now = Date.now()): number {
     if (!p.syscalls) return 0;
     const end = p.state === 'zombie' && p.exitTime ? p.exitTime : now;
-    return Math.max(0, end - p.startTime - p.kernelMs);
+    const asleep = p.engineSleeps > 0 ? Math.max(0, end - p.engineSleepSince) : 0;
+    return Math.max(0, end - p.startTime - p.kernelMs - asleep);
   }
 
   private live(): Process[] {

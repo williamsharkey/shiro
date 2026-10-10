@@ -496,6 +496,8 @@ export function decodeSiginfo(data: Uint8Array): SigInfo {
 }
 /** The siginfo of the signal a guest handler was last given (SYS_shiro_siginfo 1030: signo → struct siginfo) */
 export const SYS_shiro_siginfo = 1030;
+/** The caller's CPU time and its reaped children's (data: two i64 µs) */
+export const SYS_shiro_cputimes = 1031;
 export const SYS_rt_sigqueueinfo = 129;
 export const SYS_rt_tgsigqueueinfo = 297;
 /** Real-time signals (and how many of one may be queued) */

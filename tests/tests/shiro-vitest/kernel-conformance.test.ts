@@ -912,6 +912,34 @@ describe('kernel syscalls found by LTP', () => {
     off();
   });
 
+  it('SYS_shiro_cputimes: the CPU estimate leaves out engine sleeps and long calls, and a parent counts what it reaped (Blink 0509, Open POSIX fork_8-1)', async () => {
+    const p = kernel.spawn({ path: 'cpu', cwd: '/tmp/kc', fds: {}, run: () => new Promise<number>(() => {}) });
+    const times = async () => {
+      const d = new Uint8Array(16);
+      expect(await kernel.syscall(p, A.SYS_shiro_cputimes, [0], d)).toBe(0);
+      const dv = new DataView(d.buffer);
+      return [Number(dv.getBigInt64(0, true)) / 1000, Number(dv.getBigInt64(8, true)) / 1000];
+    };
+    // 150 ms reported asleep by the engine: not CPU
+    expect(await kernel.syscall(p, A.SYS_shiro_sleeping, [1], new Uint8Array(0))).toBe(0);
+    await new Promise((r) => setTimeout(r, 150));
+    const [during] = await times();
+    expect(await kernel.syscall(p, A.SYS_shiro_sleeping, [-1], new Uint8Array(0))).toBe(0);
+    const [self, kids] = await times();
+    expect(during).toBeLessThan(100);
+    expect(self).toBeLessThan(100);
+    expect(kids).toBe(0);
+    // a reaped child's CPU goes to the parent, and to wait4's reply after the status
+    p.childCpuMs = 0;
+    const c = kernel.spawn({ path: 'kid', cwd: '/tmp/kc', fds: {}, parent: p, run: () => new Promise<number>((r) => setTimeout(() => r(0), 120)) });
+    c.syscalls = 1;
+    const d = new Uint8Array(16);
+    expect(await kernel.syscall(p, A.SYS_wait4, [c.pid, 0], d)).toBe(c.pid);
+    const us = Number(new DataView(d.buffer).getBigInt64(4, true));
+    expect(us).toBeGreaterThan(50_000);
+    expect((await times())[1]).toBeCloseTo(us / 1000, 0);
+  });
+
   it('a SIG_SETMASK marked as the process mask (Blink 0507) is what rt_sigreturn restores for a signal handed over meanwhile (Open POSIX pthread_kill_8-1)', async () => {
     const p = kernel.spawn({ path: 'mt', cwd: '/tmp/kc', fds: {}, run: () => new Promise<number>(() => {}) });
     const sys = (nr: number, args: number[], data = new Uint8Array(256)) => kernel.syscall(p, nr, args, data);
