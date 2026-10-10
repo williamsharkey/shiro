@@ -1,0 +1,120 @@
+From 1b7a2aad29bcbe54cdfc9217f426e98158239d93 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 23:51:18 +0000
+Subject: [PATCH 72/72] Shiro wjit: after an instruction compiled code stopped
+ at, try the next one as an entry
+
+Compiled code is entered at branch targets. Where it stops at an
+instruction it can't compile (one that straddles a page since patch 0057,
+an unsupported op), the interpreter ran that instruction and then every
+instruction after it up to the next taken branch. gh --version: 7.1 M of
+its 8.1 M interpreted instructions were such runs. WjExecute now says when
+the entry it was asked for failed to compile, and the next instruction is
+tried as an entry.
+---
+ blink/machine.c |  7 +++++--
+ blink/wjit.c    | 16 ++++++++--------
+ blink/wjit.h    |  5 ++++-
+ 3 files changed, 17 insertions(+), 11 deletions(-)
+
+diff --git a/blink/machine.c b/blink/machine.c
+index 9d4e89c..7dc6de6 100644
+--- a/blink/machine.c
++++ b/blink/machine.c
+@@ -2344,13 +2344,16 @@ void Actor(struct Machine *mm) {
+       // compiled code is entered at branch targets (where wjhot is set)
+       u64 ip = m->ip;
+       bool wjhot = m->wjhot;
+-      if (!wjhot || !WjExecute(m)) {
++      int wj = 0;
++      if (!wjhot || (wj = WjExecute(m)) != 1) {
+         if (UNLIKELY(g_shiro_trace)) {
+           g_shiro_ring[g_shiro_ringi++ & 1023] = ip;
+           if (g_shiro_probes[0]) ShiroProbe(m, ip);
+         }
+         ExecuteInstruction(m);
+-        m->wjhot = g_wj_enabled && m->ip - ip != m->xedd->length;
++        // compiled code is tried after a branch, and after an instruction
++        // the compiled code stopped at (it goes on from the next one)
++        m->wjhot = g_wj_enabled && (m->ip - ip != m->xedd->length || wj == 2);
+         if (UNLIKELY(g_shiro_prof)) ShiroProfStep(m, ip, false, wjhot);
+       } else if (UNLIKELY(g_shiro_prof)) {
+         ShiroProfStep(m, ip, true, true);
+diff --git a/blink/wjit.c b/blink/wjit.c
+index 483370a..8e4d6de 100644
+--- a/blink/wjit.c
++++ b/blink/wjit.c
+@@ -3568,11 +3568,11 @@ typedef void (*wj_f)(struct Machine *);
+ extern bool g_shiro_prof;
+ long g_wj_miss[4];
+ 
+-bool WjExecute(struct Machine *m) {
++int WjExecute(struct Machine *m) {
+   int fn;
+   unsigned epoch;
+   struct WjEnt *e;
+-  if (!g_wj_enabled) return false;
++  if (!g_wj_enabled) return 0;
+   epoch = atomic_load_explicit(&g_wj_epoch, memory_order_acquire);
+   if (UNLIKELY(!t_ready || t_epoch != epoch)) {
+     Clear();
+@@ -3585,23 +3585,23 @@ bool WjExecute(struct Machine *m) {
+   if ((e = Find(m->ip)) && e->fn > 0) {
+     ((wj_f)(uintptr_t)e->fn)(m);
+     ++t_runs;
+-    return true;
++    return 1;
+   }
+   if (!e) {
+     e = Insert(m->ip);
+     if (UNLIKELY(g_shiro_prof)) ++g_wj_miss[0];
+-    return false;
++    return 0;
+   }
+   if (e->fn || ++e->count < g_wj_thresh) {
+     if (UNLIKELY(g_shiro_prof)) ++g_wj_miss[e->fn ? 2 : 1];
+-    return false;
++    return e->fn ? 2 : 0;
+   }
+   if ((g_wj_max >= 0 && g_wj_blocks >= g_wj_max) ||
+       m->ip >= 0xffffffffff600000ull ||  // the vsyscall page (instruction.c)
+       (g_wj_lo >= 0 && !(g_wj_lo <= m->ip && m->ip < g_wj_hi))) {
+     e->fn = -1;
+     if (UNLIKELY(g_shiro_prof)) ++g_wj_miss[2];
+-    return false;
++    return 2;
+   }
+   {
+     extern bool g_shiro_prof;
+@@ -3615,10 +3615,10 @@ bool WjExecute(struct Machine *m) {
+   e->fn = fn;
+   if (e->fn > 0) {
+     ((wj_f)(uintptr_t)e->fn)(m);
+-    return true;
++    return 1;
+   }
+   if (UNLIKELY(g_shiro_prof)) ++g_wj_miss[3];
+-  return false;
++  return 2;
+ }
+ 
+ // Runs compiled code for a call made from compiled code, until the guest
+diff --git a/blink/wjit.h b/blink/wjit.h
+index a673b3f..fa42d4d 100644
+--- a/blink/wjit.h
++++ b/blink/wjit.h
+@@ -24,7 +24,10 @@ struct System;
+ #define HAVE_WJIT
+ extern bool g_wj_enabled;
+ void WjInit(void);
+-bool WjExecute(struct Machine *);
++// 1: ran compiled code; 0: interpret this instruction; 2: interpret it,
++// and the compiled code there failed (a straddling or unsupported
++// instruction), so try the next instruction as an entry
++int WjExecute(struct Machine *);
+ void WjResetTlb(struct Machine *);
+ void WjPageChanged(i64);
+ #else
+-- 
+2.43.0
+

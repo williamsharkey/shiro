@@ -654,6 +654,22 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    `vendor/blink/blink.symbols` (wasm function index → name, from
    `--emit-symbol-map`) comes with each build, for naming `wasm-function[N]`
    frames in a stack.
+71. SHIRO_BLINK_PROFILE says why instructions ran interpreted: not at a branch
+   target, first visit, below the compile threshold (200), or a failed
+   compile. In gh --version, 6.8 M of 7.9 M interpreted instructions are
+   warm-up: a block's entry below the threshold, then the instructions after
+   it up to the next branch.
+72. After an instruction compiled code stopped at (one straddling a page since
+   patch 0057, an unsupported op), the next instruction is tried as an entry,
+   instead of interpreting everything up to the next taken branch. Neutral on
+   the x86 suite (A/B, all "same").
+73. `sqrtpd` computes in double precision: it read and wrote each double as
+   32 bits. The float → int conversions (`cvt(t)sd2si`, `cvt(t)ss2si`, the
+   packed ones) give x86's integer indefinite (the most negative value) for
+   NaN and out-of-range input, instead of C's undefined result (wasm
+   saturates). Rust's `as` casts test for that value, and librsvg drew every
+   gradient transparent. Test: fixtures/x86/sse2d.c, compared with native
+   output, JIT on and off.
 
 The page compiles blink.wasm once and gives the `WebAssembly.Module` to every
 Blink worker (src/x86-engine/blink.ts `blinkWasmModule`, host.mjs
