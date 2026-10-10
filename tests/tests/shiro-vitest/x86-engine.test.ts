@@ -156,6 +156,8 @@ const siginfochildBin = join(out, 'siginfochild');
 const haveSiginfochild = tryBuild('gcc', ['-static', '-O1', '-o', siginfochildBin, 'siginfochild.c']);
 const memfdBin = join(out, 'memfd');
 const haveMemfd = tryBuild('gcc', ['-static', '-O1', '-o', memfdBin, 'memfd.c']);
+const memfdsealBin = join(out, 'memfdseal');
+const haveMemfdseal = tryBuild('gcc', ['-static', '-O1', '-o', memfdsealBin, 'memfdseal.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -1165,6 +1167,16 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const { shell } = await setup(readFileSync(memfdBin));
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe("write 11 trunc 0 read 11 'hello memfd' map 'hello' cloexec 1 name ok\n");
+  }, 60_000);
+
+  // Firefox seals its shared memory (F_SEAL_GROW|F_SEAL_SHRINK): the kernel's
+  // memfds keep the seals, Blink passes the fcntl through (0118)
+  it.skipIf(!haveMemfdseal)('memfd seals: F_ADD_SEALS/F_GET_SEALS, enforced on truncate and write', async () => {
+    const { shell } = await setup(readFileSync(memfdsealBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'seals 0 add 0 seals 6 truncate -1 EPERM grow -1 EPERM overwrite 1 seal 0 again -1 EPERM \n' +
+      'plain seals 1 add -1 EPERM pipe -1 EINVAL\n');
   }, 60_000);
 
   // Open POSIX sigqueue_1-1: a same-instance child's handler gets the queued value (0110)

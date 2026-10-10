@@ -1057,6 +1057,7 @@ Blink makes agy *possible* in tabcomputer; with the wasm JIT its start should be
 
 ```bash
 EMSDK=/path/to/emsdk vendor/blink/build.sh          # rebuild public/engines/blink
+# (emsdk 6.0.12; Blink is built in ../blink-build, which must be outside the repo: build.sh says why)
 cd tests && npx vitest run --config vitest.config.ts tests/shiro-vitest/x86-engine.test.ts
 # Chromium numbers: serve the app with COOP same-origin + COEP credentialless,
 # build the vendor/blink/bench programs (CGO_ENABLED=0 go build / musl-gcc -static)
