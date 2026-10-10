@@ -199,6 +199,11 @@ export const SYS_shmget = 29;
 export const SYS_shmat = 30;
 export const SYS_shmctl = 31;
 export const SYS_shmdt = 67;
+/** SysV semaphores (src/kernel/sysvsem.ts) */
+export const SYS_semget = 64;
+export const SYS_semop = 65;
+export const SYS_semctl = 66;
+export const SYS_semtimedop = 220;
 
 // ── errno (Linux) ──────────────────────────────────────────────────────────
 export const EPERM = 1;
@@ -231,6 +236,7 @@ export const ESPIPE = 29;
 export const EROFS = 30;
 export const EPIPE = 32;
 export const ERANGE = 34;
+export const EIDRM = 43;
 export const ENAMETOOLONG = 36;
 export const ENOSYS = 38;
 export const ENOTEMPTY = 39;
