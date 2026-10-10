@@ -117,6 +117,10 @@ interface WriteState {
   chains: Map<string, Promise<void>>; inflight: Set<Promise<any>>; push: (p: Promise<any>) => number; gone: Set<string>;
   /** Modes set at creation that the filesystem hasn't stored yet */
   modes: Map<string, number>;
+  /** Write streams still open, by the file they write: they follow a rename, as an open file does */
+  streams: Map<string, { path: string }>;
+  /** Writes to these paths wait for a rename to land first (a stream's file renamed under it) */
+  renaming: Map<string, Promise<void>>;
 }
 const writeStates = new WeakMap<Promise<any>[], WriteState>();
 function writeStateFor(pending: Promise<any>[]): WriteState {
@@ -127,6 +131,8 @@ function writeStateFor(pending: Promise<any>[]): WriteState {
       chains: new Map(),
       gone: new Set(),
       modes: new Map(),
+      streams: new Map(),
+      renaming: new Map(),
       inflight,
       push: (p: Promise<any>) => {
         inflight.add(p);
@@ -147,6 +153,15 @@ function writeStateFor(pending: Promise<any>[]): WriteState {
  */
 async function renameAfterWrites(deps: FsDeps, oldRes: string, newRes: string): Promise<void> {
   const st = writeStateFor(deps.pendingPromises);
+  // A stream open on the source writes to the target, after the rename (which would replace what it wrote)
+  let renamed: (() => void) | undefined;
+  if (retargetStream(st, oldRes, newRes)) st.renaming.set(newRes, new Promise<void>((r) => { renamed = r; }));
+  try { await renameAfterWritesNow(deps, st, oldRes, newRes); } finally {
+    if (renamed) { st.renaming.delete(newRes); renamed(); }
+  }
+}
+
+async function renameAfterWritesNow(deps: FsDeps, st: WriteState, oldRes: string, newRes: string): Promise<void> {
   await Promise.allSettled([...st.inflight]);
   const { fileCache, fileMtimes, ctx } = deps;
   moveCachedTree(fileCache, fileMtimes, oldRes, newRes);
@@ -156,6 +171,20 @@ async function renameAfterWrites(deps: FsDeps, oldRes: string, newRes: string): 
   st.chains.set(oldRes, done);
   st.push(done);
   await op;
+}
+
+/**
+ * A write stream open on `from` writes to `to` from now on, as an open file
+ * follows a rename (webpack renames its cache's `X_` to `X` once the gzip in
+ * front of the file stream has finished, before the stream has written it).
+ */
+function retargetStream(st: WriteState, from: string, to: string): boolean {
+  const open = st.streams.get(from);
+  if (!open) return false;
+  st.streams.delete(from);
+  open.path = to;
+  st.streams.set(to, open);
+  return true;
 }
 
 /**
@@ -448,6 +477,13 @@ export function createFsModule(deps: FsDeps): any {
   // child process started right after (a really blocking execSync) sees it
   const writeNowToo = !!nodeGuestOf(ctx);
   const queueWrite = (path: string, op: () => Promise<unknown>): Promise<void> => {
+    // (after a rename still landing onto this path: renameAfterWrites)
+    const renaming = writeState.renaming.get(path);
+    if (renaming) {
+      const next = renaming.then(() => queueWrite(path, op));
+      inflight.push(next);
+      return next;
+    }
     if (writeNowToo) {
       let r: Promise<unknown>;
       try { r = op(); } catch (e) { r = Promise.reject(e); }
@@ -794,6 +830,7 @@ export function createFsModule(deps: FsDeps): any {
     renameSync: (oldP: string, newP: string) => {
       const oldRes = ctx.fs.resolvePath(pathArg(oldP), ctx.cwd);
       const newRes = ctx.fs.resolvePath(pathArg(newP), ctx.cwd);
+      retargetStream(writeState, oldRes, newRes);
       if (writeNowToo) {
         // A kernel guest: one rename(2), at once; the cache reads both paths again
         (ctx.fs as any).renameSync(oldRes, newRes);
@@ -1021,89 +1058,8 @@ export function createFsModule(deps: FsDeps): any {
     },
     // Real streams over the file's bytes (yarn pipes downloaded tarballs into
     // createWriteStream; chunks used to be decoded as text)
-    createReadStream: (p: string, opts?: any) => {
-      const s = getBuiltinModule('stream');
-      const o = typeof opts === 'string' ? { encoding: opts } : (opts || {});
-      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
-      const hwm = o.highWaterMark ?? 65536;
-      let data: Uint8Array | null = null;
-      let pos = 0;
-      let wanted = false;
-      const pushSome = () => {
-        const end = Math.min(data!.length, o.end !== undefined ? o.end + 1 : data!.length);
-        if (pos >= end) { rs.push(null); return; }
-        const next = Math.min(end, pos + hwm);
-        const chunk = FakeBuffer.from(data!.subarray(pos, next));
-        rs.bytesRead += next - pos;
-        pos = next;
-        rs.push(chunk);
-      };
-      const rs = new s.Readable({
-        highWaterMark: hwm,
-        encoding: o.encoding,
-        read() { if (data) pushSome(); else wanted = true; },
-      });
-      // Opened right away, as in Node: a missing file is an 'error' even
-      // before anything reads
-      const cached = currentBytes(resolved);
-      const got = cached ? Promise.resolve(cached) : ctx.fs.readFile(resolved).then((d: any) => typeof d === 'string' ? new TextEncoder().encode(d) : new Uint8Array(d));
-      got.then((bytes: Uint8Array) => {
-        data = bytes;
-        pos = o.start ?? 0;
-        rs.pending = false;
-        rs.emit('open', 100);
-        rs.emit('ready');
-        if (wanted) pushSome();
-      }, () => {
-        rs.destroy(fsError('ENOENT', `ENOENT: no such file or directory, open '${p}'`, 'open', String(p)));
-      });
-      rs.path = p;
-      rs.bytesRead = 0;
-      rs.pending = true;
-      rs.close = (cb?: Function) => { rs.destroy(); if (cb) rs.once('close', cb); };
-      return rs;
-    },
-    createWriteStream: (p: string, opts?: any) => {
-      const s = getBuiltinModule('stream');
-      const o = typeof opts === 'string' ? { encoding: opts } : (opts || {});
-      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
-      const append = String(o.flags || 'w').includes('a');
-      const parts: Uint8Array[] = [];
-      if (append) { const prior = currentBytes(resolved); if (prior) parts.push(prior); }
-      const flush = () => {
-        const total = parts.reduce((n, c) => n + c.length, 0);
-        const bytes = new Uint8Array(total);
-        let off = 0;
-        for (const c of parts) { bytes.set(c, off); off += c.length; }
-        const text = decodeUtf8Strict(bytes);
-        fileMtimes.set(resolved, Date.now());
-        if (text === null) {
-          fileCache.delete(resolved);
-          return queueWrite(resolved, () => ctx.fs.writeNow(resolved, bytes));
-        }
-        fileCache.set(resolved, text);
-        return queueWrite(resolved, () => ctx.fs.writeFile(resolved, text));
-      };
-      const ws = new s.Writable({
-        highWaterMark: o.highWaterMark,
-        decodeStrings: false,
-        write(chunk: any, enc: string, cb: Function) {
-          const bytes = typeof chunk === 'string' ? FakeBuffer.from(chunk, enc === 'buffer' ? 'utf8' : enc) : toBytes(chunk) ?? new TextEncoder().encode(String(chunk));
-          parts.push(new Uint8Array(bytes));
-          ws.bytesWritten += bytes.length;
-          cb();
-        },
-        final(cb: Function) { flush().then(() => cb(), (e: any) => cb(e)); },
-      });
-      ws.path = p;
-      ws.bytesWritten = 0;
-      ws.pending = false;
-      ws.close = (cb?: Function) => { ws.end(); if (cb) ws.once('close', cb); };
-      // created (or truncated) when opened, as in Node
-      if (!append) { fileCache.set(resolved, ''); fileMtimes.set(resolved, Date.now()); materializeOpenFile(resolved); }
-      queueMicrotask(() => { ws.emit('open', 100); ws.emit('ready'); });
-      return ws;
-    },
+    createReadStream: (p: string, opts?: any) => new fsShim.ReadStream(p, opts),
+    createWriteStream: (p: string, opts?: any) => new fsShim.WriteStream(p, opts),
     constants: { F_OK: 0, R_OK: 4, W_OK: 2, X_OK: 1, O_RDONLY: 0, O_WRONLY: 1, O_RDWR: 2, O_CREAT: 64, O_EXCL: 128, O_TRUNC: 512, O_APPEND: 1024, O_NONBLOCK: 2048, S_IFMT: 61440, S_IFREG: 32768, S_IFDIR: 16384, S_IFLNK: 40960 },
     // Callback-style async fs methods (used by graceful-fs, fs-extra)
     readFile: (p: string, optsOrCb?: any, cb?: any) => {
@@ -1538,6 +1494,113 @@ export function createFsModule(deps: FsDeps): any {
       },
     },
   };
+  const initReadStream = (rs: any, p: string, opts?: any) => {
+    const s = getBuiltinModule('stream');
+    const o = typeof opts === 'string' ? { encoding: opts } : (opts || {});
+    const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
+    const hwm = o.highWaterMark ?? 65536;
+    let data: Uint8Array | null = null;
+    let pos = 0;
+    let wanted = false;
+    const pushSome = () => {
+      const end = Math.min(data!.length, o.end !== undefined ? o.end + 1 : data!.length);
+      if (pos >= end) { rs.push(null); return; }
+      const next = Math.min(end, pos + hwm);
+      const chunk = FakeBuffer.from(data!.subarray(pos, next));
+      rs.bytesRead += next - pos;
+      pos = next;
+      rs.push(chunk);
+    };
+    s.Readable.call(rs, {
+      highWaterMark: hwm,
+      encoding: o.encoding,
+      read() { if (data) pushSome(); else wanted = true; },
+    });
+    // Opened right away, as in Node: a missing file is an 'error' even
+    // before anything reads
+    const cached = currentBytes(resolved);
+    const got = cached ? Promise.resolve(cached) : ctx.fs.readFile(resolved).then((d: any) => typeof d === 'string' ? new TextEncoder().encode(d) : new Uint8Array(d));
+    got.then((bytes: Uint8Array) => {
+      data = bytes;
+      pos = o.start ?? 0;
+      rs.pending = false;
+      rs.emit('open', 100);
+      rs.emit('ready');
+      if (wanted) pushSome();
+    }, () => {
+      rs.destroy(fsError('ENOENT', `ENOENT: no such file or directory, open '${p}'`, 'open', String(p)));
+    });
+    rs.path = p;
+    rs.bytesRead = 0;
+    rs.pending = true;
+    rs.close = (cb?: Function) => { rs.destroy(); if (cb) rs.once('close', cb); };
+  };
+  const initWriteStream = (ws: any, p: string, opts?: any) => {
+    const s = getBuiltinModule('stream');
+    const o = typeof opts === 'string' ? { encoding: opts } : (opts || {});
+    const opened = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
+    // (where it writes: the file it opened, wherever a rename has taken it since)
+    const target = { path: opened };
+    writeState.streams.set(opened, target);
+    const append = String(o.flags || 'w').includes('a');
+    const parts: Uint8Array[] = [];
+    if (append) { const prior = currentBytes(opened); if (prior) parts.push(prior); }
+    const done = () => { if (writeState.streams.get(target.path) === target) writeState.streams.delete(target.path); };
+    const flush = () => {
+      const total = parts.reduce((n, c) => n + c.length, 0);
+      const bytes = new Uint8Array(total);
+      let off = 0;
+      for (const c of parts) { bytes.set(c, off); off += c.length; }
+      const text = decodeUtf8Strict(bytes);
+      const resolved = target.path;
+      done();
+      // (again when the write runs: a rename it waited for moved the old file's entry here)
+      const cache = () => {
+        fileMtimes.set(resolved, Date.now());
+        if (text === null) fileCache.delete(resolved); else fileCache.set(resolved, text);
+      };
+      cache();
+      return queueWrite(resolved, () => { cache(); return text === null ? ctx.fs.writeNow(resolved, bytes) : ctx.fs.writeFile(resolved, text); });
+    };
+    s.Writable.call(ws, {
+      highWaterMark: o.highWaterMark,
+      decodeStrings: false,
+      write(chunk: any, enc: string, cb: Function) {
+        const bytes = typeof chunk === 'string' ? FakeBuffer.from(chunk, enc === 'buffer' ? 'utf8' : enc) : toBytes(chunk) ?? new TextEncoder().encode(String(chunk));
+        parts.push(new Uint8Array(bytes));
+        ws.bytesWritten += bytes.length;
+        cb();
+      },
+      final(cb: Function) { flush().then(() => cb(), (e: any) => cb(e)); },
+    });
+    ws.path = p;
+    ws.bytesWritten = 0;
+    ws.pending = false;
+    ws.close = (cb?: Function) => { ws.end(); if (cb) ws.once('close', cb); };
+    ws.once('close', done);
+    // created (or truncated) when opened, as in Node
+    if (!append) { fileCache.set(opened, ''); fileMtimes.set(opened, Date.now()); materializeOpenFile(opened); }
+    queueMicrotask(() => { ws.emit('open', 100); ws.emit('ready'); });
+  };
+  // fs.ReadStream / fs.WriteStream as node has them: constructors that make `this` the
+  // stream, so a subclass can run them on its own instance (graceful-fs, which Next's
+  // webpack cache writes through: `fs$WriteStream.apply(this, arguments)`; they were
+  // missing, and every cache store failed). Made when first asked for; assignable.
+  const streamCtor = (base: 'Readable' | 'Writable', init: (self: any, p: string, opts?: any) => void) => {
+    let made: any;
+    return () => made ??= (() => {
+      const Ctor: any = function (this: any, p: string, opts?: any) {
+        if (!(this instanceof Ctor)) return new Ctor(p, opts);
+        init(this, p, opts);
+      };
+      Ctor.prototype = Object.create(getBuiltinModule('stream')[base].prototype, { constructor: { value: Ctor, writable: true, configurable: true } });
+      return Ctor;
+    })();
+  };
+  for (const [name, ctor] of [['ReadStream', streamCtor('Readable', initReadStream)], ['WriteStream', streamCtor('Writable', initWriteStream)]] as const) {
+    let assigned: any;
+    Object.defineProperty(fsShim, name, { get: () => assigned ?? ctor(), set: (v) => { assigned = v; }, enumerable: true, configurable: true });
+  }
   Object.defineProperty(fsShim, ASYNC, { value: { writeFile: writeFileAsync, stat: statAsync, open: openAsync, symlink: symlinkAsync, mkdir: mkdirAsync } });
   // realpath and realpath.native need special handling (function with properties)
   const realpathFn: any = (p: string, optsOrCb?: any, cb?: any) => {

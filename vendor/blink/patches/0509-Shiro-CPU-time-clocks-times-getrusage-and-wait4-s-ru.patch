@@ -1,0 +1,274 @@
+From 6dbb0d0007a8fc0e8076d54c8dc2191332a3c614 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 13:37:42 +0000
+Subject: [PATCH] Shiro: CPU-time clocks, times(), getrusage and wait4's rusage
+
+The CPU-time clocks counted from the first read in the instance, so a
+fork child's (same-instance, the default) went on from its parent's;
+Linux starts a child's at 0 (Open POSIX fork_22-1). The stand-in is now
+the time since the process (NewSystem: fork, exec) or the thread
+(NewMachine) started; another process's still counts from the first read.
+
+emscripten's times() and getrusage() are zeros, so a loop waiting for
+times() to move never ended, and a parent never saw its children's CPU
+time (Open POSIX fork_8-1; bash's `time` showed 0). The user times now
+come from the kernel's CPU estimates (its call 1031: the process's, and
+that of the children it reaped): times() tms_utime/tms_cutime,
+getrusage(RUSAGE_SELF, RUSAGE_CHILDREN); RUSAGE_THREAD is the thread's
+stand-in. wait4's and waitid's rusage get the reaped child's CPU time,
+which the kernel now puts after the status. times() returns clock ticks
+of the monotonic clock. Without call 1031, the stand-in.
+
+Exports blink_shiro_forkcpu.
+---
+ blink/machine.h      |  2 ++
+ blink/memorymalloc.c |  2 ++
+ blink/shiro.inc      | 44 +++++++++++++++++++---------
+ blink/syscall.c      | 68 ++++++++++++++++++++++++++++++++++++++++----
+ 4 files changed, 96 insertions(+), 20 deletions(-)
+
+diff --git a/blink/machine.h b/blink/machine.h
+index 61743fc..cd2c6c3 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -320,6 +320,7 @@ struct System {
+   int nice;  // getpriority/setpriority (Shiro: nothing is scheduled by it)
+   u32 persona;  // personality(2) (Shiro: UNAME26 changes uname's release)
+   int sched_policy;  // sched_setscheduler (Shiro: SCHED_OTHER/BATCH/IDLE; nothing is scheduled by it)
++  struct timespec cpu0;  // Shiro: CPU-time clocks count from here (the process's start: NewSystem)
+   bool kmask_ok;  // Shiro: the kernel has this process's signal mask...
+   u64 kmask;      // ...this one (what every thread blocks)
+   void *shiro_sigq;  // Shiro: siginfo of the kernel's signals not yet delivered
+@@ -449,6 +450,7 @@ struct Machine {               //
+   _Atomicish(u64) signals;               // [attention] pending delivery
+   u64 tkills;                            // [Shiro] of those, sent by tkill/tgkill (SI_TKILL)
+   _Atomic(int) shiro_incall;             // [Shiro] interruptible kernel calls this thread is in
++  struct timespec cpu0;                  // [Shiro] the thread's CPU-time clock counts from here
+   bool shiro_kmask_ok;                   // [Shiro] ShiroSyncMask has looked at...
+   u64 shiro_kmask;                       // [Shiro] ...this sigmask of this thread
+   _Atomicish(u64) sigmask;               // signals that've been blocked
+diff --git a/blink/memorymalloc.c b/blink/memorymalloc.c
+index a1c38b0..dbb3c87 100644
+--- a/blink/memorymalloc.c
++++ b/blink/memorymalloc.c
+@@ -387,6 +387,7 @@ struct System *NewSystem(struct XedMachineMode mode) {
+   }
+   memset(s, 0, sizeof(*s));
+   s->mode = mode;
++  s->cpu0 = GetMonotonic();
+   if (s->mode.omode == XED_MODE_REAL) {
+     u8 *real =
+         Mmap(NULL, ROUNDUP(kRealSize, FLAG_pagesize), PROT_READ | PROT_WRITE,
+@@ -573,6 +574,7 @@ struct Machine *NewMachine(struct System *system, struct Machine *parent) {
+   m->ctid = 0;
+   m->oplen = 0;
+   m->system = system;
++  m->cpu0 = GetMonotonic();
+   m->mode = system->mode;
+   m->thread = pthread_self();
+   Write32(m->sigaltstack.flags, SS_DISABLE_LINUX);
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 5383de8..c58619b 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -1695,24 +1695,42 @@ static i64 ShiroGetsockopt(struct Machine *m, int fd, int level, int name,
+ 
+ // ── processes ────────────────────────────────────────────────────────────
+ 
++// The kernel's CPU time (µs) of this process and of the children it
++// reaped (times, getrusage); false without call 1031
++static bool ShiroCpuTimes(struct Machine *m, i64 *self, i64 *kids) {
++  u8 b[16];
++  if (!g_shiro_pid || t_vfork) return false;
++  if (ShiroCall(m, 1031, A12(0), b, 0, 16, false, false) < 0) return false;
++  *self = Read64(b);
++  *kids = Read64(b + 8);
++  return true;
++}
++
++// wait4's and waitid's rusage: the user time is the reaped child's CPU
++// time, which the kernel puts after the status (µs at buf + 4)
++static void ShiroChildRusage(struct Machine *m, i64 rusage, const u8 *buf) {
++  u8 ru[144];
++  i64 us = Read64(buf + 4);
++  memset(ru, 0, sizeof(ru));
++  Write64(ru, us / 1000000);
++  Write64(ru + 8, us % 1000000);
++  CopyToUserWrite(m, rusage, ru, sizeof(ru));
++}
++
+ static i64 ShiroWait4(struct Machine *m, int pid, i64 status, int options,
+                       i64 rusage) {
+-  u8 buf[8];
++  u8 buf[16];
+   i64 r;
+   memset(buf, 0, sizeof(buf));
+-  r = ShiroCall(m, 61, A12(pid, options), buf, 0, 4, true, true);
++  r = ShiroCall(m, 61, A12(pid, options), buf, 0, 12, true, true);
+   if (r > 0 && status && CopyToUserWrite(m, status, buf, 4) == -1) return -EFAULT_LINUX;
+-  if (r >= 0 && rusage) {
+-    u8 ru[144];
+-    memset(ru, 0, sizeof(ru));
+-    CopyToUserWrite(m, rusage, ru, sizeof(ru));
+-  }
++  if (r >= 0 && rusage) ShiroChildRusage(m, rusage, buf);
+   return r;
+ }
+ 
+ static i64 ShiroWaitid(struct Machine *m, int idtype, int id, i64 info,
+                        int options, i64 rusage) {
+-  u8 buf[8], si[128];
++  u8 buf[16], si[128];
+   int pid, st, code, status;
+   i64 r;
+   switch (idtype) {
+@@ -1727,7 +1745,7 @@ static i64 ShiroWaitid(struct Machine *m, int idtype, int id, i64 info,
+   // WEXITED is implied; WSTOPPED is WUNTRACED; WNOHANG, WCONTINUED, WNOWAIT pass
+   options = (options & (1 | 8 | 0x01000000)) | (options & 2 ? 2 : 0);
+   memset(buf, 0, sizeof(buf));
+-  r = ShiroCall(m, 61, A12(pid, options), buf, 0, 4, true, true);
++  r = ShiroCall(m, 61, A12(pid, options), buf, 0, 12, true, true);
+   if (r < 0) return r;
+   memset(si, 0, sizeof(si));
+   if (r > 0) {
+@@ -1748,11 +1766,7 @@ static i64 ShiroWaitid(struct Machine *m, int idtype, int id, i64 info,
+     Write32(si + 24, status);
+   }
+   if (info && CopyToUserWrite(m, info, si, sizeof(si)) == -1) return -EFAULT_LINUX;
+-  if (rusage) {
+-    u8 ru[144];
+-    memset(ru, 0, sizeof(ru));
+-    CopyToUserWrite(m, rusage, ru, sizeof(ru));
+-  }
++  if (rusage) ShiroChildRusage(m, rusage, buf);
+   return 0;
+ }
+ 
+@@ -2472,6 +2486,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_othercpuclock(void) { return 1; }
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_threadintr(void) { return 1; }
+ // 0508: a page of a file mapping past the file's end is SIGBUS
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_sigbus(void) { return 1; }
++// 0509: CPU-time clocks and times() start at a fork child's (and a thread's) start
++EMSCRIPTEN_KEEPALIVE int blink_shiro_forkcpu(void) { return 1; }
+ 
+ // the same with the signal's siginfo (the kernel's call 1030, made as `pid`)
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid_info(int pid, int sig, int w0, int w1, int w2,
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 0ccbfe9..847abbc 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -777,6 +777,8 @@ static void ShiroSleeping(struct Machine *, int);
+ static double ShiroRealtime(void);
+ static void ShiroSyncMask(struct Machine *);
+ static void ShiroInterruptThread(struct Machine *);
++static bool ShiroCpuTimes(struct Machine *, i64 *, i64 *);
++static struct timespec CpuClockNow(struct Machine *, int);
+ #else
+ #define ShiroSleeping(m, n) (void)0
+ #define ShiroSyncMask(m) (void)0
+@@ -4182,6 +4184,24 @@ static int SysGetrusage(struct Machine *m, i32 resource, i64 rusageaddr) {
+   struct rusage_linux grusage;
+   if ((rc = getrusage(XlatRusage(resource), &hrusage)) != -1) {
+     XlatRusageToLinux(&grusage, &hrusage);
++#ifdef __EMSCRIPTEN__
++    {
++      // emscripten's are zeros: the user time is the kernel's CPU estimate
++      // of the process (RUSAGE_SELF) or of the children it reaped
++      // (RUSAGE_CHILDREN: bash's `time`), or the thread's stand-in
++      i64 self, kids, us = -1;
++      if (resource == 1) {  // RUSAGE_THREAD
++        struct timespec t = CpuClockNow(m, 3);
++        us = (i64)t.tv_sec * 1000000 + t.tv_nsec / 1000;
++      } else if ((resource == 0 || resource == -1) && ShiroCpuTimes(m, &self, &kids)) {
++        us = resource ? kids : self;
++      }
++      if (us >= 0) {
++        Write64(grusage.utime.sec, us / 1000000);
++        Write64(grusage.utime.usec, us % 1000000);
++      }
++    }
++#endif
+     if (CopyToUserWrite(m, rusageaddr, &grusage, sizeof(grusage)) == -1) {
+       rc = -1;
+     }
+@@ -4801,8 +4821,10 @@ static int SysSigaltstack(struct Machine *m, i64 newaddr, i64 oldaddr) {
+ // CPU-time clocks, which emscripten doesn't have: CLOCK_PROCESS_CPUTIME_ID,
+ // CLOCK_THREAD_CPUTIME_ID and the per-process/thread ids that
+ // clock_getcpuclockid and pthread_getcpuclockid encode as ~pid << 3 | type
+-// (GHC's runtime: "getCurrentThreadCPUTime: no supported"). They count the
+-// time since the first such read, a stand-in that only ever moves forward.
++// (GHC's runtime: "getCurrentThreadCPUTime: no supported"). A stand-in
++// that only ever moves forward: the time since the process (fork, exec) or
++// the thread started, so a fork child's and a new thread's start at 0
++// (Open POSIX fork_22-1); another process's, since the first such read.
+ // A negative id is ~pid << 3 | thread << 2 | type (clock_getcpuclockid,
+ // pthread_getcpuclockid): pid 0 is the caller; otherwise a process that
+ // exists, or one of our threads. Type 3, or no such process, is EINVAL
+@@ -4826,10 +4848,24 @@ static struct timespec g_cpuclock0;
+ static void InitCpuClock(void) {
+   g_cpuclock0 = GetMonotonic();
+ }
+-static struct timespec CpuClockNow(void) {
++static struct timespec CpuClockNow(struct Machine *m, int clock) {
+   static pthread_once_t once = PTHREAD_ONCE_INIT;
+-  pthread_once(&once, InitCpuClock);
+-  return SubtractTime(GetMonotonic(), g_cpuclock0);
++  struct timespec t0 = m->system->cpu0;
++  int id = clock < 0 ? ~clock >> 3 : 0;
++  if (clock == 3 || (clock < 0 && (clock & 4) && (!id || id == m->tid))) {
++    t0 = m->cpu0;
++  } else if (clock < 0 && (clock & 4)) {  // another of our threads
++    struct Dll *e;
++    LOCK(&m->system->machines_lock);
++    for (e = dll_first(m->system->machines); e; e = dll_next(m->system->machines, e)) {
++      if (MACHINE_CONTAINER(e)->tid == id) t0 = MACHINE_CONTAINER(e)->cpu0;
++    }
++    UNLOCK(&m->system->machines_lock);
++  } else if (id && id != m->system->pid) {  // another process's
++    pthread_once(&once, InitCpuClock);
++    t0 = g_cpuclock0;
++  }
++  return SubtractTime(GetMonotonic(), t0);
+ }
+ #endif
+ 
+@@ -4840,7 +4876,7 @@ static int SysClockGettime(struct Machine *m, int clock, i64 ts) {
+   struct timespec_linux gtimespec;
+ #ifdef __EMSCRIPTEN__
+   if (IsCpuClock(m, clock)) {
+-    htimespec = CpuClockNow();
++    htimespec = CpuClockNow(m, clock);
+     if (ts) {
+       Write64(gtimespec.sec, htimespec.tv_sec);
+       Write64(gtimespec.nsec, htimespec.tv_nsec);
+@@ -4956,7 +4992,27 @@ static i64 SysTimes(struct Machine *m, i64 bufaddr) {
+   clock_t res;
+   struct tms tms;
+   struct tms_linux gtms;
++#ifdef __EMSCRIPTEN__
++  // emscripten's times() is all zeros. The return value is clock ticks of
++  // the monotonic clock; the user times are the kernel's CPU estimates of
++  // the process and of the children it reaped (Open POSIX fork_8-1), or
++  // without them the process's CPU-time stand-in (CpuClockNow)
++  {
++    long hz = sysconf(_SC_CLK_TCK);
++    i64 self, kids;
++    struct timespec now = GetMonotonic(), cpu = SubtractTime(now, m->system->cpu0);
++    memset(&tms, 0, sizeof(tms));
++    if (ShiroCpuTimes(m, &self, &kids)) {
++      tms.tms_utime = (clock_t)(self * hz / 1000000);
++      tms.tms_cutime = (clock_t)(kids * hz / 1000000);
++    } else {
++      tms.tms_utime = (clock_t)(cpu.tv_sec * hz + cpu.tv_nsec / (1000000000 / hz));
++    }
++    res = (clock_t)(now.tv_sec * hz + now.tv_nsec / (1000000000 / hz));
++  }
++#else
+   if ((res = times(&tms)) == (clock_t)-1) return -1;
++#endif
+   Write64(gtms.utime, tms.tms_utime);
+   Write64(gtms.stime, tms.tms_stime);
+   Write64(gtms.cutime, tms.tms_cutime);
+-- 
+2.43.0
+

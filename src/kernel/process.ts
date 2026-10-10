@@ -68,9 +68,13 @@ export class Process {
   readonly startTime = Date.now();
   /** When it became a zombie. */
   exitTime = 0;
-  /** Syscalls made through kernel.syscall, the time spent in them, and how many are in progress (/proc CPU estimate). */
+  /** Syscalls made through kernel.syscall, the time spent blocked in them, and how many are in progress (/proc CPU estimate). */
   syscalls = 0;
   kernelMs = 0;
+  /** Since when the engine has reported itself sleeping (SYS_shiro_sleeping): that time isn't CPU either. */
+  engineSleepSince = 0;
+  /** CPU ms of the children (and theirs) it has reaped: times() tms_cutime, getrusage(RUSAGE_CHILDREN). */
+  childCpuMs = 0;
   /** Pending signals not yet seen by the guest (also mirrored in the channel's signal word). */
   pendingSignals = new Set<number>();
   /** Blocked signals (sigprocmask); signals.ts maintains it. */
