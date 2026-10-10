@@ -2049,6 +2049,63 @@ describe('require.resolve finds any existing file', () => {
   }, 60_000);
 });
 
+describe('fs.ReadStream and fs.WriteStream', () => {
+  it("are constructors a subclass can apply to its own instance (graceful-fs, Next's webpack cache)", async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/gfs', { recursive: true });
+    await fs.writeFile('/home/user/gfs/t.js', `const fs = require('fs');
+function WS(p, o) { if (this instanceof WS) return fs.WriteStream.apply(this, arguments), this; return WS.apply(Object.create(WS.prototype), arguments); }
+WS.prototype = Object.create(fs.WriteStream.prototype);
+function RS(p, o) { if (this instanceof RS) return fs.ReadStream.apply(this, arguments), this; return RS.apply(Object.create(RS.prototype), arguments); }
+RS.prototype = Object.create(fs.ReadStream.prototype);
+const w = new WS(__dirname + '/out.txt');
+w.write('a');
+w.end('b', () => {
+  console.log(fs.readFileSync(__dirname + '/out.txt', 'utf8'), w instanceof fs.WriteStream, w instanceof require('stream').Writable, fs.createWriteStream(__dirname + '/x') instanceof fs.WriteStream);
+  let got = '';
+  new RS(__dirname + '/out.txt').on('data', (d) => { got += d; }).on('end', () => console.log(got, typeof fs.ReadStream));
+});`);
+    const r = await sh(shell, 'node /home/user/gfs/t.js');
+    // (node 22's output)
+    expect(r.out).toBe('ab true true true\nab function\n');
+  }, 60_000);
+
+  it("a write stream's file renamed while it is open gets what it writes after (webpack's cache: X_ renamed to X before the gzip stream's file stream ends)", async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/wsr', { recursive: true });
+    await fs.writeFile('/home/user/wsr/t.js', `const fs = require('fs');
+const zlib = require('zlib');
+const gz = zlib.createGzip();
+const file = fs.createWriteStream(__dirname + '/p.gz_');
+gz.pipe(file);
+gz.on('finish', () => fs.rename(__dirname + '/p.gz_', __dirname + '/p.gz', (e) => {
+  file.on('close', () => console.log(e, fs.existsSync(__dirname + '/p.gz_'), zlib.gunzipSync(fs.readFileSync(__dirname + '/p.gz')).toString()));
+}));
+gz.end(Buffer.from('packed'));`);
+    const r = await sh(shell, 'node /home/user/wsr/t.js');
+    // (node 22's output)
+    expect(r.out).toBe('null false packed\n');
+  }, 60_000);
+});
+
+describe('require.cache as node has it', () => {
+  it("entries are modules with children, JSON ones too; Module._cache and createRequire's cache are the same object (Next's dev server clears its manifests)", async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/rc', { recursive: true });
+    await fs.writeFile('/home/user/rc/m.json', '{"a":1}');
+    await fs.writeFile('/home/user/rc/c.js', 'module.exports = 2;');
+    await fs.writeFile('/home/user/rc/t.js', `const Module = require('module');
+require('./m.json'); require('./c.js');
+const j = require.cache[__dirname + '/m.json'], c = require.cache[__dirname + '/c.js'];
+console.log(Array.isArray(j.children), j.filename === __dirname + '/m.json', j.loaded, Array.isArray(c.children), j.exports.a);
+console.log(Module._cache === require.cache, Module.createRequire(__filename).cache === require.cache, typeof Module._cache.get);
+delete require.cache[__dirname + '/m.json'];
+console.log(__dirname + '/m.json' in require.cache, Object.keys(Module._cache).includes(__dirname + '/c.js'));`);
+    const r = await sh(shell, 'cd /home/user/rc && node t.js');
+    expect(r.out).toBe('true true true true 1\ntrue true undefined\nfalse true\n');
+  }, 60_000);
+});
+
 describe('node:querystring as node has it', () => {
   it('repeated keys are arrays both ways, + is a space, separators, bad escapes (Next\'s loader options)', async () => {
     const { fs, shell } = await createTestShell();
@@ -2134,6 +2191,23 @@ async function job(id, ms) {
     const r = await sh(shell, 'node /home/user/als/als.js');
     // (node 22's lines for the same script; their order follows the timers)
     expect(r.out.trim().split('\n').sort()).toEqual(["A:after-sleep=A", "A:inner=A", "A:other-after=undefined", "A:other=oA", "A:then=A", "A:tick=A", "A:timer=A", "B:after-sleep=B", "B:inner=B", "B:other-after=undefined", "B:other=oB", "B:then=B", "B:tick=B", "B:timer=B", "C:after-sleep=C", "C:inner=C", "C:other-after=undefined", "C:other=oC", "C:then=C", "C:tick=C", "C:timer=C", "enterWith=W", "resource=R", "results=A,B,C outside=undefined", "snapshot=S exit=undefined"]);
+  }, 60_000);
+});
+
+describe('AsyncLocalStorage in eval\'d code', () => {
+  it("keeps its store across awaits in code run by eval, as webpack's dev builds wrap each module (Next's dev server)", async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/alse', { recursive: true });
+    await fs.writeFile('/home/user/alse/m.js', `const { AsyncLocalStorage } = require('async_hooks');
+const als = new AsyncLocalStorage();
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const mod = {};
+eval("mod.f = async function (id) { await sleep(10); const a = als.getStore(); await sleep(5); return id + ':' + a + ':' + eval('als.getStore()'); };");
+const other = () => sleep(1).then(() => als.run('x', () => sleep(20)));
+Promise.all(['A', 'B'].map((id) => als.run(id, () => { other(); return mod.f(id); }))).then((r) => console.log(r.join(' '), als.getStore()));`);
+    const r = await sh(shell, 'node /home/user/alse/m.js');
+    // (node 22: 'A:A:A B:B:B undefined')
+    expect(r.out).toBe('A:A:A B:B:B undefined\n');
   }, 60_000);
 });
 

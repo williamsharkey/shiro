@@ -175,7 +175,7 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
           if (mk) return mk(dir);
           const fakeReq: any = (id: string) => requireModule(id, dir);
           fakeReq.resolve = (id: string) => id;
-          fakeReq.cache = moduleCache;
+          fakeReq.cache = (requireModule as any).cache ?? moduleCache;
           return fakeReq;
         },
         // The node_modules directories searched from a directory (pnpm's bin linking)
@@ -208,7 +208,7 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
           const dir = typeof f === 'string' && f.startsWith('/') ? f.substring(0, f.lastIndexOf('/')) || '/' : ctx.cwd;
           return mk(dir).resolve(request);
         },
-        _cache: moduleCache,
+        _cache: (requireModule as any).cache ?? moduleCache,
         _extensions: (requireModule as any).extensions ?? {},
         Module: class Module {
           id: string;
