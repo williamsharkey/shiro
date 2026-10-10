@@ -1,6 +1,7 @@
 import { stripComments } from './shell-comments';
 import * as fifo from './shell-fifo';
 import { groupStatements, trimCommand } from './shell-statements';
+import { syntaxError } from './shell-syntax';
 import { printfFormat } from './utils/printf';
 import { evalArith, ArithError, type ArithEnv } from './utils/arith';
 import { readRecord, recordText, splitRecord } from './shell-read';
@@ -1170,7 +1171,8 @@ export class Shell {
     let status = 0;
     for (const word of names) {
       const m = /^([A-Za-z_][A-Za-z0-9_]*)(\+?=)?([\s\S]*)$/.exec(word);
-      if (!m) { err(`tabcomputer: ${cmd}: \`${word}': not a valid identifier\r\n`); status = 1; continue; }
+      // (NAME, NAME=…, NAME+=…, NAME[…]=…: `a-b=1` is no name)
+      if (!m || !/^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?(\+?=|$)/.test(word)) { err(`tabcomputer: ${cmd}: \`${word}': not a valid identifier\r\n`); status = 1; continue; }
       const name = m[1];
       const append = m[2] === '+=';
       let value: string | undefined = m[2] ? m[3] : undefined;
@@ -2832,7 +2834,8 @@ export class Shell {
         }
 
         // Handle array assignment: arr=(a b c) or arr[N]=val
-        if (effectiveCmdName.includes('=') && !effectiveCmdName.startsWith('=')) {
+        // (only NAME= / NAME[…]= / NAME+=: `FOO-BAR=foo` is a command word, as in bash)
+        if (effectiveCmdName.includes('=') && /^[A-Za-z_][A-Za-z0-9_]*(\[[\s\S]*\])?\+?=/.test(cmdName)) {
           const eqIdx = cmdName.indexOf('=');
           const key = cmdName.substring(0, eqIdx);
           const val = cmdName.substring(eqIdx + 1);
@@ -2988,9 +2991,12 @@ export class Shell {
           // Execute remaining args as a shell command
           exitCode = 0;
           const evalCmd = stripComments((cmdArgs[0] === '--' ? cmdArgs.slice(1) : cmdArgs).join(' '));
-          if (evalCmd && !this.compoundsBalanced(evalCmd)) {
-            // `eval "if"`: a syntax error; as sh it ends the script (eval is a special builtin)
-            stderrWriter('tabcomputer: eval: syntax error: unexpected end of file\r\n');
+          // The string is parsed whole first: a syntax error runs none of it
+          // (`eval 'echo hi; if'` prints nothing); as sh it ends the script (a special builtin)
+          const evalErr = !evalCmd ? null : !this.compoundsBalanced(evalCmd) ? 'syntax error: unexpected end of file'
+            : this.aliases.size ? null : syntaxError(evalCmd);
+          if (evalErr) {
+            stderrWriter(`tabcomputer: eval: ${evalErr}\r\n`);
             exitCode = 2;
             if (this.posixFatal()) throw new ExitSignal(2);
           } else if (evalCmd) {
@@ -3859,6 +3865,11 @@ export class Shell {
             for (const arg of cmdArgs) {
               if (arg === '-p') continue;
               const eqIdx = arg.indexOf('=');
+              if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(eqIdx !== -1 ? arg.slice(0, eqIdx) : arg)) {
+                stderrWriter(`tabcomputer: readonly: \`${arg}': not a valid identifier\r\n`);
+                exitCode = 1;
+                continue;
+              }
               if (eqIdx !== -1) {
                 const name = arg.slice(0, eqIdx);
                 const val = arg.slice(eqIdx + 1);
@@ -3909,6 +3920,11 @@ export class Shell {
               }
               const eqIdx = arg.indexOf('=');
               const name = eqIdx !== -1 ? arg.slice(0, eqIdx) : arg;
+              if (!/^[A-Za-z_][A-Za-z0-9_]*(\+)?$/.test(name)) {
+                stderrWriter(`tabcomputer: export: \`${arg}': not a valid identifier\r\n`);
+                exitCode = 1;
+                continue;
+              }
               if (eqIdx !== -1) {
                 const err = this.setVar(name, arg.slice(eqIdx + 1));
                 if (err) {
@@ -9177,8 +9193,20 @@ export class Shell {
     this.executeDepth++;
     if (!this.abortController) this.abortController = this.inheritedAbort ?? new AbortController();
     let exitCode = 0;
+    // Each statement is parsed whole before it runs, as bash does: one with a syntax
+    // error doesn't run at all and ends the script (2). Aliases can change how a line
+    // parses, so a script that uses them isn't checked.
+    const checkSyntax = !this.aliases.size && !/\balias\b/.test(content);
     try {
       for (const stmt of groupStatements(stripComments(content))) {
+        if (checkSyntax) {
+          const err = syntaxError(stmt.text);
+          if (err) {
+            writeStderr(`tabcomputer: line ${stmt.line}: ${err}\r\n`);
+            exitCode = 2;
+            break;
+          }
+        }
         if (this.pendingSignals.length) await this.processSignals(writeStdout, writeStderr);
         if (this.abortController?.signal.aborted) { exitCode = 130; break; }
         // set -n (noexec): a non-interactive shell reads the rest without running it
