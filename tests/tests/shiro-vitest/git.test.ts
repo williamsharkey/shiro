@@ -5,6 +5,9 @@ import { Shell } from '@shiro/shell';
 import { CommandRegistry } from '@shiro/commands/index';
 import { gitCmd } from '@shiro/commands/git';
 import { createTestShell, run } from './helpers';
+import { createRequire } from 'node:module';
+
+const nodeRequire = createRequire(import.meta.url);
 
 describe('git commands', () => {
   // These cover the built-in git on its own: keep the package mirror
@@ -390,5 +393,103 @@ describe('git object cache', () => {
       fs.readFile = read;
     }
     expect(packReads).toBe(1);
+  });
+});
+
+// With the full git installed, `git clone` of an http(s) URL is still the built-in's,
+// with the full git's defaults (git.ts builtinCloneHandles). The remote: a bare repository
+// served by this machine's git (`git http-backend`), skipped without one.
+const hostGit = (() => { try { nodeRequire('node:child_process').execFileSync('git', ['--version'], { stdio: 'ignore' }); return true; } catch { return false; } })();
+describe.skipIf(!hostGit)('git clone with the full git installed', () => {
+  it('clones like the full git (all branches, tags, origin/HEAD, tracking), hands the rest to it, and falls back to it', async () => {
+    const { execFileSync, spawn } = nodeRequire('node:child_process') as typeof import('node:child_process');
+    const { mkdtempSync, writeFileSync, rmSync } = nodeRequire('node:fs') as typeof import('node:fs');
+    const { tmpdir } = nodeRequire('node:os') as typeof import('node:os');
+    const { join } = nodeRequire('node:path') as typeof import('node:path');
+    const { createServer } = nodeRequire('node:http') as typeof import('node:http');
+    const iso = (await import('isomorphic-git')).default;
+    const root = mkdtempSync(join(tmpdir(), 'shiro-clone-'));
+    const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@e', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@e' };
+    const g = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, env, stdio: 'pipe' });
+    const work = join(root, 'work');
+    execFileSync('mkdir', ['-p', work]);
+    g(work, 'init', '-q', '-b', 'main');
+    for (let i = 0; i < 3; i++) { writeFileSync(join(work, 'f.txt'), `rev ${i}\n`); g(work, 'add', '.'); g(work, 'commit', '-qm', `c${i}`); }
+    g(work, 'tag', 'v1');
+    g(work, 'checkout', '-qb', 'dev'); writeFileSync(join(work, 'd.txt'), 'dev\n'); g(work, 'add', '.'); g(work, 'commit', '-qm', 'dev');
+    g(work, 'checkout', '-q', 'main');
+    g(root, 'clone', '-q', '--bare', work, 'repo.git');
+    const server = createServer((req, res) => {
+      const u = new URL(req.url!, 'http://x');
+      const cgi = spawn('git', ['http-backend'], { env: { ...env, GIT_PROJECT_ROOT: root, GIT_HTTP_EXPORT_ALL: '1', PATH_INFO: u.pathname.replace(/^\/[^/]+/, ''), REQUEST_METHOD: req.method!, QUERY_STRING: u.search.slice(1), CONTENT_TYPE: req.headers['content-type'] || '' } });
+      req.pipe(cgi.stdin);
+      let head = Buffer.alloc(0), sent = false;
+      cgi.stdout.on('data', (d: Buffer) => {
+        if (sent) { res.write(d); return; }
+        head = Buffer.concat([head, d]);
+        const i = head.indexOf('\r\n\r\n');
+        if (i < 0) return;
+        const hdrs: Record<string, string> = {}; let status = 200;
+        for (const l of head.subarray(0, i).toString().split('\r\n')) { const [k, ...v] = l.split(':'); if (k.toLowerCase() === 'status') status = parseInt(v.join(':')); else hdrs[k] = v.join(':').trim(); }
+        res.writeHead(status, hdrs); sent = true; res.write(head.subarray(i + 4));
+      });
+      cgi.stdout.on('end', () => res.end());
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const proxy = `GIT_CORS_PROXY=http://127.0.0.1:${(server.address() as any).port}`;
+
+    const { shell, fs } = await createTestShell();
+    // the full git: a script that says how it was called; `git` is now the package's
+    await fs.mkdir('/usr/bin', { recursive: true });
+    await fs.writeFile('/usr/bin/git', '#!/bin/sh\necho "full git: $*"\n', { mode: 0o755 });
+    const { extraShadows } = await import('@shiro/pkg-manager');
+    extraShadows.set(fs, new Set(['git']));
+    try {
+      await fs.mkdir('/tmp/cl', { recursive: true });
+      const r = await run(shell, `cd /tmp/cl && ${proxy} git clone http://example.test/repo.git r`);
+      expect(r.output).not.toContain('full git:');
+      expect(r.exitCode).toBe(0);
+      const ifs = fs.toIsomorphicGitFS(), dir = '/tmp/cl/r';
+      expect((await iso.log({ fs: ifs, dir })).map((c) => c.commit.message.trim())).toEqual(['c2', 'c1', 'c0']); // all history
+      expect(await iso.currentBranch({ fs: ifs, dir })).toBe('main');
+      expect((await iso.listBranches({ fs: ifs, dir, remote: 'origin' })).sort()).toEqual(['HEAD', 'dev', 'main']);
+      expect(await iso.listTags({ fs: ifs, dir })).toEqual(['v1']);
+      const config = await fs.readFile('/tmp/cl/r/.git/config', 'utf8') as string;
+      expect(config).toMatch(/\[remote "origin"\][^[]*fetch = \+refs\/heads\/\*:refs\/remotes\/origin\/\*/);
+      const branchMain = /\[branch "main"\]([^[]*)/.exec(config)?.[1] ?? '';
+      expect(branchMain).toMatch(/remote = origin/);
+      expect(branchMain).toMatch(/merge = refs\/heads\/main/);
+      expect(await fs.readFile('/tmp/cl/r/f.txt', 'utf8')).toBe('rev 2\n');
+      // everything else is the full git's
+      expect((await run(shell, 'cd /tmp/cl/r && git status')).output).toContain('full git: status');
+      expect((await run(shell, `cd /tmp/cl && ${proxy} git clone --bare http://example.test/repo.git b`)).output).toContain('full git: clone --bare');
+      // --depth: shallow and one branch, as git
+      await run(shell, `cd /tmp/cl && ${proxy} git clone -q --depth 1 http://example.test/repo.git s`);
+      expect((await iso.log({ fs: ifs, dir: '/tmp/cl/s' })).length).toBe(1);
+      expect(await iso.listBranches({ fs: ifs, dir: '/tmp/cl/s', remote: 'origin' })).not.toContain('dev');
+      // a clone the built-in can't do goes to the full git, and leaves nothing of its own behind
+      const f = await run(shell, 'cd /tmp/cl && GIT_CORS_PROXY=http://127.0.0.1:9/nope git clone http://example.test/repo.git n');
+      expect(f.output).toContain('full git: clone http://example.test/repo.git n');
+      expect(await fs.exists('/tmp/cl/n')).toBe(false);
+    } finally {
+      extraShadows.delete(fs);
+      server.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
+
+describe('builtinCloneHandles', () => {
+  it('takes http(s) clones with the options the built-in has, and its lazy stub carries it', async () => {
+    const { builtinCloneHandles } = await import('@shiro/commands/git-clone-route');
+    const { lazyCommand } = await import('@shiro/utils/lazy-command');
+    for (const a of ['clone https://h/r.git', 'clone -q --depth 1 -b dev http://h/r.git dir', 'clone --origin=up --no-tags --single-branch https://h/r']) {
+      expect(builtinCloneHandles(a.split(' '))).toBe(true);
+    }
+    for (const a of ['clone --bare https://h/r.git', 'clone --recurse-submodules https://h/r', 'clone git://h/r.git', 'clone ssh://h/r.git',
+      'clone /tmp/r', 'clone file:///tmp/r', 'clone --filter=blob:none https://h/r', 'clone https://h/r a b', 'clone --depth', 'status']) {
+      expect(builtinCloneHandles(a.split(' '))).toBe(false);
+    }
+    expect(lazyCommand('git', '', async () => { throw new Error('not loaded'); }, { keepOverPackage: builtinCloneHandles }).keepOverPackage).toBe(builtinCloneHandles);
   });
 });
