@@ -11,7 +11,8 @@
 // pre-installed Chromium (/opt/pw-browsers/chromium); never `playwright install`.
 import { createRequire } from 'node:module';
 import { spawn, execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const require = createRequire(import.meta.url);
@@ -100,10 +101,22 @@ async function waitFor(url, ms = 30000) {
 
 let chromium;
 try { ({ chromium } = require('playwright-core')); } catch { ({ chromium } = require('playwright')); }
+const LAUNCH = { executablePath: process.env.CHROMIUM || '/opt/pw-browsers/chromium', args: ['--no-sandbox', '--js-flags=--max-old-space-size=8192'] };
+// A machine's profile is replaced once its storage passes this (disk use stays bounded)
+const MACHINE_MAX_BYTES = Number(opt('--machine-max-gib', '4')) * 2 ** 30;
 
-/** One Shiro page in Debian mode with fresh storage. */
-async function newMachine(browser, base, log) {
-  const context = await browser.newContext();
+/**
+ * One Shiro page in Debian mode with fresh storage: a persistent profile in a
+ * temporary directory (an incognito context's quota is a fraction of a real
+ * profile's, and big installs ran out of it mid-dpkg), removed by close().
+ */
+async function newMachine(base, log) {
+  const dir = mkdtempSync(join(tmpdir(), 'debian-score-'));
+  const context = await chromium.launchPersistentContext(dir, LAUNCH);
+  const close = async () => {
+    await context.close().catch(() => {});
+    rmSync(dir, { recursive: true, force: true });
+  };
   const page = await context.newPage();
   page.on('pageerror', (e) => log(`[pageerror] ${e.message}`));
   await page.goto(base + '/');
@@ -133,7 +146,7 @@ async function newMachine(browser, base, log) {
   const st = await page.evaluate(() => navigator.storage.estimate()).catch(() => null);
   log(`machine ready: install ${inst.ms} ms, apt-get update ${upd.ms} ms (exit ${upd.code}), storage ${st ? Math.round(st.usage / 2 ** 20) : '?'} MiB`);
   if (upd.code) throw new Error('apt-get update failed: ' + upd.out.slice(-2000));
-  return { context, page, run, bootMs: Date.now() - t0, updateMs: upd.ms };
+  return { context, close, page, run, bootMs: Date.now() - t0, updateMs: upd.ms };
 }
 
 /** Smoke-test an installed package: its programs, libraries, modules. */
@@ -293,12 +306,12 @@ async function main() {
       const info = archive.get(p.name);
       if (!info) { results[p.name] = { name: p.name, rank: p.rank, result: 'skip', category: 'not-in-trixie', error: 'no such binary package in trixie amd64 (popcon counts every release and architecture)' }; continue; }
       const prev = results[p.name];
-      if (prev && prev.version === info.version && prev.result !== 'error' && !flag('--rescore')) continue;
+      // harness errors and storage-full (the harness's storage, not the package) are scored again
+      if (prev && prev.version === info.version && prev.result !== 'error' && prev.category !== 'storage-full' && !flag('--rescore')) continue;
       queue.push({ p, info });
     }
     save();
     console.log(`${queue.length} packages to score with ${WORKERS} workers`);
-    const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || '/opt/pw-browsers/chromium', args: ['--no-sandbox', '--js-flags=--max-old-space-size=8192'] });
     const BATCH = Number(opt('--batch', '8'));
     let next = 0;
     await Promise.all(Array.from({ length: Math.min(WORKERS, queue.length) }, async (_, w) => {
@@ -310,22 +323,22 @@ async function main() {
         try {
           // A dpkg left half-configured by an earlier failure fails everything after it
           // ("dpkg was interrupted": its journal, /var/lib/dpkg/updates, isn't empty)
-          // A headless context's storage quota is far below a real profile's: start over before it fills
-          // (dpkg's fsync of a full IndexedDB is EIO)
+          // Start over before storage fills (dpkg's fsync of a full IndexedDB is EIO),
+          // and keep each profile's disk use bounded
           if (m) {
             const st = await m.page.evaluate(() => navigator.storage.estimate()).catch(() => null);
-            if (st && st.quota && st.usage / st.quota > 0.8) {
+            if (st && st.quota && (st.usage / st.quota > 0.8 || st.usage > MACHINE_MAX_BYTES)) {
               log(`storage ${Math.round(st.usage / 2 ** 20)} of ${Math.round(st.quota / 2 ** 20)} MiB; new machine`);
-              await m.context.close().catch(() => {});
+              await m.close();
               m = null;
             }
           }
           if (m && (await m.run('dpkg --audit 2>&1; ls -A /var/lib/dpkg/updates 2>/dev/null')).out.trim()) {
             log('dpkg --audit reports problems (or dpkg was interrupted); new machine');
-            await m.context.close().catch(() => {});
+            await m.close();
             m = null;
           }
-          m ??= await newMachine(browser, base, log);
+          m ??= await newMachine(base, log);
           const broken = await scoreBatch(m, batch, (r) => {
             results[r.name] = r;
             save();
@@ -340,13 +353,12 @@ async function main() {
           }
           save();
           log(`batch ${batch[0].p.name}..: harness error ${e?.message ?? e}`);
-          if (m) await m.context.close().catch(() => {});
+          if (m) await m.close();
           m = null;
         }
       }
-      if (m) await m.context.close().catch(() => {});
+      if (m) await m.close();
     }));
-    await browser.close();
   } finally {
     srv.kill();
   }
@@ -392,7 +404,7 @@ function report() {
 const CAT_MEANING = {
   'blink-lchown': "Blink's lchown follows symlinks, so dpkg can't set the owner of a symlink whose target isn't unpacked yet (reported to unix/perf-blink)",
   'not-in-trixie': 'popcon counts every release and architecture; no such amd64 package in trixie',
-  'storage-full': "the browser's storage quota ran out mid-install (the scoreboard's headless profile has a small one)",
+  'storage-full': "the browser's storage quota ran out mid-install",
   'kernel-netlink': "the program needs an AF_NETLINK socket (nft, and iproute2 beyond -V); Shiro's kernel has none",
   'engine-crash': 'a program died of a signal in Blink (an unimplemented instruction or an emulation bug)',
   'missing-syscall': 'a system call Shiro or Blink does not implement',
