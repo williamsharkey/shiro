@@ -50,6 +50,10 @@ const tcpBin = join(out, 'tcpecho');
 const haveTcp = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', tcpBin, 'tcpecho.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const gorunBin = join(out, 'gorun');
 const haveGorun = haveHttp && tryBuild(goExe, ['build', '-ldflags=-s', '-o', gorunBin, 'gorun.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
+const execerrBin = join(out, 'execerr');
+const haveExecerr = tryBuild('musl-gcc', ['-static', '-O1', '-o', execerrBin, 'execerr.c']);
+const dynBin = join(out, 'hello-dyn');
+const haveDyn = tryBuild('gcc', ['-O1', '-o', dynBin, 'hello.c']);
 const gowaitBin = join(out, 'gowait');
 const haveGowait = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', gowaitBin, 'gowait.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const ttyBin = join(out, 'tty');
@@ -554,6 +558,27 @@ describe.skipIf(!haveTcp)('Blink engine: real TCP through the kernel relay', () 
   }, 120_000);
 });
 
+
+// A glibc program before `debian install`: no /lib64/ld-linux-x86-64.so.2.
+// Linux's execve fails with ENOENT and bash says "required file not found";
+// here the shell adds how to get glibc, instead of a silent 127.
+describe.skipIf(!haveDyn || !haveExecerr)('Blink engine: dynamic executable without its loader', () => {
+  it('the shell prints bash\'s message and a hint, exit 127', async () => {
+    const { shell } = await setup(readFileSync(dynBin));
+    const r = await run(shell, './prog');
+    expect(r.output).toContain('tabcomputer: ./prog: cannot execute: required file not found');
+    expect(r.output).toContain('(this program needs glibc: run `debian install`)');
+    expect(r.exitCode).toBe(127);
+  });
+
+  it('execve fails with ENOENT', async () => {
+    const { fs, shell } = await setup(readFileSync(execerrBin));
+    await fs.writeFile('/home/user/work/dyn', readFileSync(dynBin), { mode: 0o755 });
+    const r = await run(shell, './prog ./dyn');
+    expect(r.output).toContain('execv: errno 2 (ENOENT)');
+    expect(r.exitCode).toBe(1);
+  }, 60_000);
+});
 
 // cmd/go's build loop: parallel children that exit close together, each
 // waited for by os/exec in its own goroutine. Under load a SIGURG (Go's
