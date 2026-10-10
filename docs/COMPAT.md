@@ -266,6 +266,42 @@ Shell and platform fixes these needed (all with tests in the same file):
   - On the terminal, `\n` is `\r\n` in every write, escape sequences or
     not (libuv keeps ONLCR in raw mode): output with colours or cursor moves
     (clack's prompts in create-vite 7) stepped down the screen.
+- Astro 5 (a minimal site; `APP=astro` in the same script): `npm i` 8.8 s
+  (277 packages), `astro dev` to ready 12.4 s, the preview 2.0 s, an edit to
+  `src/pages/index.astro` shown 0.4 s later (Astro reloads pages), `astro
+  build` 10.7 s; renderer resident 828 MB with dev up, 1088 MB after the
+  build. `npm create astro` itself fails in the test container: create-astro
+  fetches its template from codeload.github.com, which the container's relay
+  can't reach (api.github.com works). What it took, all general:
+  - npm: empty files in a tarball are installed (a 0-byte `types.js` that
+    @astrojs/markdown-remark's index re-exports was left out).
+  - ES modules: `/*` inside a template or string isn't a comment
+    (tsconfck's `` `**/*` `` hid every export after it); a method named
+    `import` (`import(id) { … }`) and `.import(` calls, also across a line
+    break, aren't dynamic imports (the bundled-module path's `\bimport\(`
+    rewrote `runner.import(…)`); `import { default as x }` is the default
+    import; exported function declarations exist from the start (hoisted);
+    named imports of a module still loading (a cycle) are read again once it
+    has loaded (Astro's render-context → middleware → sequence cycle); named
+    exports ahead of `export default` stay (zod's index.js); `import('./x.mjs?t=1')`
+    loads x.mjs afresh.
+  - Packages that load as their ESM node build: vite (its CommonJS entry is
+    deprecated and finds its package.json through esbuild's import.meta.url
+    shim, which takes the page's `document` for a browser) and
+    @astrojs/compiler (its browser build wants `initialize()`; its CommonJS
+    build reads astro.wasm at the page's URL the same way).
+  - Globals: a global a script defines on the page (it reaches the page:
+    bare identifiers resolve there) stays writable and redefinable
+    (@astrojs/compiler defines a read-only `fs`); `fs` and `require` set on
+    globalThis stay the process's own (two esbuild services wrote each
+    other's stdout through a shared `globalThis.fs`: "Invalid packet").
+  - fs takes file: URL objects in every call (`fs.promises.readFile(new
+    URL(…))`).
+  - A spawned child's output reaches the parent on a microtask, not inside
+    the child's write (an error in the parent's reader came back to Go's
+    fs.write and panicked esbuild).
+  - Requests to in-tab servers carry `Host: localhost:PORT` when the browser
+    gave none (vite 6+ refuses an unknown host).
   Not yet: node output into a pipe or file comes when the process exits
   (only the terminal streams), so `npm run dev > log &` shows nothing while
   it runs.
