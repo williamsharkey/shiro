@@ -762,6 +762,31 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    copies of the PTEs start with no locks; it inherited the parent's and
    waited on them as it exited. fork_21-1 passes 12/12 and
    pthread_attr_destroy_1-1 6/6.
+93. unix/conformance's: rt_sigqueueinfo hands its siginfo to the kernel; sched_*
+   take a thread's tid as the caller's own.
+94. FUTEX_WAKE_OP and the priority-inheritance futex ops (LOCK_PI,
+   LOCK_PI2, TRYLOCK_PI, UNLOCK_PI) were EINVAL. glibc aborts on that ("The
+   futex facility returned an unexpected error code") for
+   PTHREAD_PRIO_INHERIT mutexes, which TBB, OpenEXR and Blender use. The
+   word holds the owner's tid; a contended locker sets FUTEX_WAITERS and
+   waits on the word. It takes it with FUTEX_WAITERS when it had to wait,
+   so its unlock comes back to wake the rest. EDEADLK for the owner, EPERM
+   for an unlock by a non-owner, timeouts absolute as on Linux; priority
+   inheritance itself is a no-op. Test: fixtures/x86/futexpi.c (raw ops, 4
+   threads on a PI mutex, a timed lock), identical to native output.
+95. Signals carry their siginfo. A signal from the kernel arrives as a
+   number on a reply. Blink asks the kernel's call 1030 for its siginfo
+   (si_code, sender pid/uid, sigqueue's value, a timer's overrun) before
+   rt_sigreturn: in C for direct channels, in host.mjs for the pool and
+   the loader's channel. It keeps each one until the signal is delivered,
+   when it goes into the SA_SIGINFO frame. Each queued instance of a
+   real-time signal stays pending until all are delivered, in order.
+   Found on the way: EnqueueSignal used `1ul << (sig - 1)`, and long is
+   32 bits in wasm32, so signal 34 (SIGRTMIN) became bit 1, SIGINT. Every
+   real-time signal killed the process with status 130 (the Open POSIX
+   sigqueue tests' 130/160 exits). Test: fixtures/x86/siginfo.c,
+   identical to native output. An older kernel without 1030 gets the
+   number-only frames as before.
 
 The page compiles blink.wasm once and gives the `WebAssembly.Module` to every
 Blink worker (src/x86-engine/blink.ts `blinkWasmModule`, host.mjs
