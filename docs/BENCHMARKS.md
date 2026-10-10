@@ -277,6 +277,42 @@ untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
 
+### go_nethttp +30%: patch 0053's emulator, not the kernel (unix/bench)
+
+Measured on machine `cfad8fbf4994`, which this session moved to: Xeon
+2.80 GHz, kernel fc-v114. Absolute numbers aren't comparable with
+`e57125c23b92`.
+
+`ab.mjs 1d9582a 6e69776 --suites x86` (7 runs × 5 rounds): `go_nethttp`
+507 → 687 ms, +35% (CI +18…+48%), every round worse. `go_hello` and
+`hello_musl` are unchanged. `ab.mjs 6e69776 7bb12ae`: same (713 → 719 ms),
+so nothing since 6e69776 adds to it.
+
+`bench/engine-swap.sh` rebuilds a tree with Blink's emulator
+(`blink.wasm` + `blink.mjs`) and its Worker glue (`host.mjs`) taken from
+other commits. On the 6e69776 tree:
+
+| emulator | host.mjs | go_nethttp (ms) |
+|---|---|---|
+| 5a4e756 (before 0053) | 6e69776 | 449 |
+| 6e69776 | 5a4e756 | 691 |
+| 5a4e756 | 5a4e756 | 520 |
+
+So the cost is in the emulator, not the kernel, net or host glue. Three
+interleaved rounds, host 6e69776:
+
+| emulator | go_nethttp (ms) |
+|---|---|
+| 5a4e756 | 506 / 518 / 516 |
+| **799a50f (patch 0053)** | **665 / 723 / 691** |
+| 9d1f49f (0054) | 621 / 795 / 697 |
+
+aa07d36 (the page compiles blink.wasm once) removed 0053's recompile cost,
+which is why `go_hello` recovered. What remains is in 0053's emulator change
+itself. Its sliced nanosleep/clock_nanosleep/pause fits: Go's sysmon and
+netpoller sleep and wake constantly in net/http, and much less in a hello
+world. Reported to unix/perf-blink.
+
 ### Harness: what `peak_rss` includes (DevTools response-body copies)
 
 perf-fs-shell noticed that under Playwright, DevTools keeps copies of
