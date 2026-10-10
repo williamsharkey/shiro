@@ -464,6 +464,7 @@ export async function executeNodeScript(
       }
       transformedCode = transformESModules(transformedCode);
       // spawnSync/execSync results are read right away: await them where the script can
+      // (added after the transform, so the AsyncLocalStorage rewrite can't use its code mask)
       transformedCode = awaitSyncCalls(transformedCode);
       // Once a process uses AsyncLocalStorage, awaits carry its stores (async-context.ts)
       if (asyncContext.active || code.includes('AsyncLocalStorage')) transformedCode = carryAsyncContext(transformedCode);

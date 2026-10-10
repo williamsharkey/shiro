@@ -357,8 +357,10 @@ Shell and platform fixes these needed (all with tests in the same file):
   checks all three on a minimal site.
   - `next dev`: ready in 1.6 s, the first page in 14 s (compiling it), then
     about 0.1 s a request; an edit reaches the preview by HMR in 2 to 6 s,
-    without a reload. A restart with webpack's persistent cache isn't faster
-    yet.
+    without a reload. A restart reuses webpack's persistent cache (stored 5 s
+    after the server goes idle, 128 MiB for this site): the first page in 10
+    to 12 s instead of 14 to 16 s. Most of that is the guest reading the
+    cache and the 8 MB chunks through the kernel, and inflating the cache.
   - The build takes 30 to 54 s: compile, then page data and the static pages
     in a worker thread. It writes `/` and `/_not-found` as static HTML and
     RSC.

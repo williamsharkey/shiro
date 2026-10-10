@@ -465,9 +465,9 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
       if (resolved.endsWith('.tsx') || resolved.endsWith('.jsx')) {
         transformedContent = transformJSX(transformedContent);
       }
-      transformedContent = transformESModules(transformedContent);
       // Once a process uses AsyncLocalStorage, awaits carry its stores (async-context.ts)
-      if (asyncContext.active || content.includes('AsyncLocalStorage')) transformedContent = carryAsyncContext(transformedContent);
+      transformedContent = transformESModules(transformedContent,
+        asyncContext.active || content.includes('AsyncLocalStorage') ? carryAsyncContext : undefined);
 
       const modImportMeta = {
         url: `file://${resolved}`,

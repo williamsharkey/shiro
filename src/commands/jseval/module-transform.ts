@@ -596,14 +596,20 @@ export function stripShebang(src: string): string {
  * run past the end of its line is taken to be division instead.
  */
 export function codeMask(src: string, blockComments?: [number, number][]): Uint8Array {
+  // (char codes throughout: one-character strings per character cost ~40% of a load of
+  // Claude Code's 13 MB cli.js, which is scanned on every launch)
   const len = src.length;
   const mask = new Uint8Array(len);
   const braceStack: number[] = []; // template nesting: brace depth at each `${`
   let depth = 0;
-  let prev = ''; // last significant code character
+  let prev = 0; // last significant code character (A: a literal, W: a word, 0: none)
+  const A = -1, W = -2;
   let i = 0;
   const regexAfterWord = /(?:^|[^\w$.])(?:return|typeof|instanceof|in|of|new|delete|void|throw|case|do|else|yield|await)$/;
   const isIdent = (c: number) => (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c === 95 || c === 36 || c > 127;
+  // after which a `/` starts a regex: ( , = : [ ! & | ? { } ; + - * % < > ~ ^
+  const beforeRegex = new Uint8Array(128);
+  for (const ch of '(,=:[!&|?{};+-*%<>~^') beforeRegex[ch.charCodeAt(0)] = 1;
   const scanTemplate = (): void => {
     // at template text; stops after the closing ` or after `${`
     while (i < len) {
@@ -614,79 +620,78 @@ export function codeMask(src: string, blockComments?: [number, number][]): Uint8
         i += 2;
         braceStack.push(depth);
         depth++;
-        prev = '{';
+        prev = 123;
         return;
       }
       i++;
     }
   };
   while (i < len) {
-    const ch = src[i];
     const c = src.charCodeAt(i);
     if (c === 32 || c === 10 || c === 9 || c === 13) { mask[i] = 1; i++; continue; }
-    if (ch === '/' && src[i + 1] === '/') {
-      const nl = src.indexOf('\n', i);
-      i = nl < 0 ? len : nl;
+    if (isIdent(c)) {
+      mask[i] = 1;
+      let j = i + 1;
+      while (j < len && isIdent(src.charCodeAt(j))) { mask[j] = 1; j++; }
+      i = j;
+      prev = W; // a word: `return /re/` vs `x / y` is decided from its text
       continue;
     }
-    if (ch === '/' && src[i + 1] === '*') {
-      const end = src.indexOf('*/', i + 2);
-      const start = i;
-      i = end < 0 ? len : end + 2;
-      blockComments?.push([start, i]);
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      i++;
-      while (i < len && src[i] !== ch && src[i] !== '\n') i += src[i] === '\\' ? 2 : 1;
-      i++;
-      prev = 'a';
-      continue;
-    }
-    if (ch === '`') { i++; scanTemplate(); prev = 'a'; continue; }
-    if (ch === '/') {
-      const wordBefore = prev === 'w' ? src.slice(Math.max(0, i - 12), i).trimEnd() : '';
-      const isRegex = prev === '' || (prev !== 'a' && prev !== 'w' && '(,=:[!&|?{};+-*%<>~^'.includes(prev)) || regexAfterWord.test(wordBefore);
+    if (c === 47) { // /
+      const n = src.charCodeAt(i + 1);
+      if (n === 47) {
+        const nl = src.indexOf('\n', i);
+        i = nl < 0 ? len : nl;
+        continue;
+      }
+      if (n === 42) {
+        const end = src.indexOf('*/', i + 2);
+        const start = i;
+        i = end < 0 ? len : end + 2;
+        blockComments?.push([start, i]);
+        continue;
+      }
+      const wordBefore = prev === W ? src.slice(Math.max(0, i - 12), i).trimEnd() : '';
+      const isRegex = prev === 0 || (prev > 0 && prev < 128 && beforeRegex[prev] === 1) || (prev === W && regexAfterWord.test(wordBefore));
       if (isRegex) {
         let j = i + 1, inClass = false, ok = false;
         while (j < len) {
-          const r = src[j];
-          if (r === '\n') break;
-          if (r === '\\') { j += 2; continue; }
-          if (r === '[') inClass = true;
-          else if (r === ']') inClass = false;
-          else if (r === '/' && !inClass) { ok = true; break; }
+          const r = src.charCodeAt(j);
+          if (r === 10) break;
+          if (r === 92) { j += 2; continue; }
+          if (r === 91) inClass = true;
+          else if (r === 93) inClass = false;
+          else if (r === 47 && !inClass) { ok = true; break; }
           j++;
         }
         if (ok) {
           i = j + 1;
-          while (i < len && /[a-z]/i.test(src[i])) i++;
-          prev = 'a';
+          for (let f = src.charCodeAt(i); (f >= 97 && f <= 122) || (f >= 65 && f <= 90); f = src.charCodeAt(++i));
+          prev = A;
           continue;
         }
       }
-    }
+    } else if (c === 34 || c === 39) { // " '
+      i++;
+      for (let q = src.charCodeAt(i); i < len && q !== c && q !== 10; q = src.charCodeAt(i)) i += q === 92 ? 2 : 1;
+      i++;
+      prev = A;
+      continue;
+    } else if (c === 96) { i++; scanTemplate(); prev = A; continue; }
     mask[i] = 1;
-    if (ch === '{') depth++;
-    else if (ch === '}') {
+    if (c === 123) depth++;
+    else if (c === 125) {
       depth--;
       if (braceStack.length && braceStack[braceStack.length - 1] === depth) {
         braceStack.pop();
         mask[i] = 0;
         i++;
         scanTemplate();
-        prev = 'a';
+        prev = A;
         continue;
       }
     }
-    if (isIdent(c)) {
-      let j = i + 1;
-      while (j < len && isIdent(src.charCodeAt(j))) { mask[j] = 1; j++; }
-      i = j;
-      prev = 'w'; // a word: `return /re/` vs `x / y` is decided from its text
-      continue;
-    }
-    prev = ch;
+    prev = c;
     i++;
   }
   return mask;
@@ -749,7 +754,21 @@ function replaceInCode(ms: MaskedSource, re: RegExp, replacer: string | ((...arg
   ms.mask = newMask;
 }
 
-export function transformBundledESM(src: string): string {
+/** What runs on a transformed module's text with its code mask (async-context.ts's carryAsyncContext) */
+export type MaskedPass = (src: string, mask?: Uint8Array) => string;
+
+/** ms.src[start, end) → text, the mask kept in step (text's own mask: it may hold strings) */
+function spliceMasked(ms: MaskedSource, start: number, end: number, text: string): void {
+  const m = codeMask(text);
+  const mask = new Uint8Array(ms.mask.length - (end - start) + text.length);
+  mask.set(ms.mask.subarray(0, start), 0);
+  mask.set(m, start);
+  mask.set(ms.mask.subarray(end), start + text.length);
+  ms.src = ms.src.slice(0, start) + text + ms.src.slice(end);
+  ms.mask = mask;
+}
+
+export function transformBundledESM(src: string, pass?: MaskedPass): string {
   // Fast path for large bundled files (>500KB).
   // Bundled ESM files have thousands of string/template literals.
   // The full regex-based transform introduces quote characters in
@@ -948,8 +967,6 @@ export function transformBundledESM(src: string): string {
   replaceInCode(ms, /\bimport\s+type\s+[^;]+;?/g, '/* import type */');
   replaceInCode(ms, /\bexport\s+type\s+/g, '/* export type */ ');
 
-  src = ms.src;
-
   // (Each pattern that starts with an identifier starts at an identifier's start: tried
   // at every character of one, a 145 KB run of them (an inline source map in a webpack
   // dev chunk) cost quadratic time; Next's 8 MB vendor chunk took 171 s.)
@@ -962,13 +979,14 @@ export function transformBundledESM(src: string): string {
   //    `class X extends FailedModule.SomeClass` doesn't crash.
   //    Uses regex to match any variable name, not just a hardcoded one.
   const rPattern = /(?<![\w$])([\w$]+)=\((\w+),(\w+)\)=>\(\)=>\(\3\|\|\2\(\(\3=\{exports:\{\}\}\)\.exports,\3\),\3\.exports\)/;
-  const rMatch = src.match(rPattern);
+  // (each edit keeps the mask in step: a pass after these reads it instead of scanning again)
+  const rMatch = rPattern.exec(ms.src);
   if (rMatch) {
     const [rOld, rName, rArg1, rArg2] = rMatch;
     const rNew = `${rName}=(${rArg1},${rArg2})=>()=>{if(!${rArg2}){${rArg2}={exports:{}};try{${rArg1}(${rArg2}.exports,${rArg2})}catch(e){if(e&&e._isProcessExit)throw e;${rArg2}.exports=__stubProxy(${rArg2}.exports)}}return ${rArg2}.exports}`;
-    src = src.replace(rOld, rNew);
+    spliceMasked(ms, rMatch.index, rMatch.index + rOld.length, rNew);
     // Inject __stubProxy helper and Node.js-compatible setTimeout/setInterval at the very start
-    src = [
+    spliceMasked(ms, 0, 0, [
       'function __stubProxy(o){return new Proxy(o,{get(t,p,r){if(typeof p==="symbol"||p in t)return Reflect.get(t,p,r);var _s=function(){};_s.prototype={};_s.default=_s;t[p]=_s;return _s}})}',
       // Hide browser globals from SDK browser detection (typeof window/navigator checks)
       // Must be void 0 so typeof navigator === "undefined" — SDK and CLI both guard with typeof before access
@@ -982,30 +1000,37 @@ export function transformBundledESM(src: string): string {
       'clearInterval=function(t){_origClearInterval(t&&t._id!==void 0?t._id:t)};',
       // Suppress unhandled rejections from ProcessExitError and CLI's "unreachable" throws
       'if(typeof globalThis.addEventListener==="function"){var _rejHandler=function(e){if(e&&e.reason&&(e.reason._isProcessExit||e.reason==="unreachable"||e.reason.message==="unreachable"))e.preventDefault()};globalThis.addEventListener("unhandledrejection",_rejHandler)}',
-    ].join('\n') + '\n' + src;
+    ].join('\n') + '\n');
   }
 
   // Patch lazy side-effect runner: X=(A,q)=>()=>(A&&(q=A(A=0)),q)
   // where X is a minified name like v, E, etc.
   // If the side-effect factory throws, cache undefined rather than re-throwing on every access.
   const vPattern = /(?<![\w$])([\w$]+)=\((\w+),(\w+)\)=>\(\)=>\(\2&&\(\3=\2\(\2=0\)\),\3\)/;
-  const vMatch = src.match(vPattern);
+  const vMatch = vPattern.exec(ms.src);
   if (vMatch) {
     const [vOld, vName, vArg1, vArg2] = vMatch;
     const vNew = `${vName}=(${vArg1},${vArg2})=>()=>{try{${vArg1}&&(${vArg2}=${vArg1}(${vArg1}=0))}catch(e){if(e&&e._isProcessExit)throw e;if(!${vArg2})${vArg2}=__stubProxy({})}return ${vArg2}}`;
-    src = src.replace(vOld, vNew);
+    spliceMasked(ms, vMatch.index, vMatch.index + vOld.length, vNew);
   }
 
   // 9. Detect trailing unawaited async function call (e.g., `cMz();`)
   // In real Node.js, the event loop keeps running. In our AsyncFunction, we need to await it.
-  src = src.replace(/(?<![\w$])([\w$]+)\(\)\s*;?\s*$/, 'await $1();');
+  // (in the last few hundred characters: matched against all of a 13 MB bundle it took 100 ms)
+  const from = Math.max(0, ms.src.length - 512);
+  const tail = /(?<![\w$])([\w$]+)\(\)\s*;?\s*$/.exec(ms.src.slice(from));
+  if (tail && (tail.index > 0 || from === 0 || !/[\w$]/.test(ms.src[from - 1]))) {
+    spliceMasked(ms, from + tail.index, ms.src.length, `await ${tail[1]}();`);
+  }
 
-  return src;
+  return pass ? pass(ms.src, ms.mask) : ms.src;
 }
 
 /** Transformed large bundles by source text: each `claude` launch (every pane)
  *  loads the same 13 MB cli.js, and the transform takes about a second. */
 const bundleCache = new Map<string, string>();
+/** ...and with a pass run on them */
+const passedBundleCache = new Map<string, string>();
 
 /**
  * `new Function("m", "return import(m)")`, the idiom CommonJS builds use to
@@ -1020,17 +1045,23 @@ export function rewriteFunctionImport(src: string): string {
     (_, _q, name) => `((${name}) => __dynamic_import(${name}))`);
 }
 
-export function transformESModules(src: string): string {
+/**
+ * `pass`: run on the result with its code mask, where the transform has one
+ * (carryAsyncContext: a second scan of Claude Code's 13 MB cli.js cost each
+ * launch ~150 ms and 13 MB)
+ */
+export function transformESModules(src: string, pass?: MaskedPass): string {
   src = rewriteFunctionImport(src);
   // esbuild code-split chunks need live import bindings (see esm-live.ts)
   if (isEsbuildChunk(src)) src = liveEsbuildChunk(stripShebang(src));
   // Fast path for large bundled files (>500KB)
   if (src.length > 500000) {
-    const cached = bundleCache.get(src);
+    const cache = pass ? passedBundleCache : bundleCache;
+    const cached = cache.get(src);
     if (cached !== undefined) return cached;
-    const out = transformBundledESM(src);
-    if (bundleCache.size >= 2) bundleCache.delete(bundleCache.keys().next().value!);
-    bundleCache.set(src, out);
+    const out = transformBundledESM(src, pass);
+    if (cache.size >= 2) cache.delete(cache.keys().next().value!);
+    cache.set(src, out);
     return out;
   }
 
@@ -1244,5 +1275,5 @@ export function transformESModules(src: string): string {
 
   // Note: trailing await transform is in transformBundledESM, not here
 
-  return src;
+  return pass ? pass(src) : src;
 }
