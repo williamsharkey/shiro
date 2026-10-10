@@ -11,6 +11,8 @@ import type { GuestWorker } from '@shiro/kernel/worker-host';
 import { drainNodeWorkerPool, setNodeWorkerFactory } from '@shiro/node-worker/host';
 
 const REPO = path.resolve(__dirname, '../../..');
+/** The guest's __BUILD_SHA__ (the build's commit in the browser; claude-transform-cache.ts keys on it) */
+export const TEST_BUILD_SHA = 'node-worker-test';
 
 /** Build the guest and make it node's worker; returns the cleanup */
 export async function installNodeWorker(): Promise<() => void> {
@@ -26,6 +28,7 @@ export async function installNodeWorker(): Promise<() => void> {
     entryPoints: [entry], bundle: true, platform: 'node', format: 'esm', outfile: file, logLevel: 'error',
     // (a CommonJS dependency's require() of a node builtin, in an ES module bundle)
     banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" },
+    define: { __BUILD_SHA__: JSON.stringify(TEST_BUILD_SHA) },
     // vite's `X?url` (an asset's URL: build.ts's esbuild.wasm): the file's path
     plugins: [{
       name: 'url-import',

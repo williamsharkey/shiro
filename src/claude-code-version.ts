@@ -197,6 +197,9 @@ export function installClaudeCode(fs: InstallFs): Promise<void> {
     await fs.mkdir('/usr/local/bin', { recursive: true });
     try { await fs.unlink(CLAUDE_BIN); } catch { /* not there yet */ }
     await fs.symlink(CLAUDE_CODE_CLI_JS, CLAUDE_BIN);
+    // cli.js as node-compat runs it, so a first run doesn't do those passes (not needed to install)
+    const { ensureClaudeTransform } = await import('./claude-transform-cache');
+    await ensureClaudeTransform(fs as any).catch(() => {});
   })().finally(() => { installing = null; });
   return installing;
 }

@@ -26,6 +26,7 @@ import {
   isClaudeCodeInstalled,
 } from '../claude-code-version';
 import { activeProfile } from '../profile';
+import { ensureClaudeTransform } from '../claude-transform-cache';
 
 // Flags that make Claude print something and exit instead of starting a session
 const INFO_FLAGS = new Set(['-v', '--version', '-h', '--help']);
@@ -159,6 +160,8 @@ export const claudeCmd: Command = {
       ctx.stderr += 'claude: node command not available\n';
       return 127;
     }
+    // cli.js as node-compat runs it, written here before node starts (claude-transform-cache.ts)
+    await ensureClaudeTransform(ctx.fs as any).catch(() => {});
     // OSC 8 links for the URLs it prints (the sign-in URL is clickable), as for the native build
     // Which build an agent inside is (~/AGENTS.md, src/agent-docs.ts)
     const env = { FORCE_HYPERLINK: '1', ...ctx.env, TABCOMPUTER_CLAUDE_BUILD: 'npm', TABCOMPUTER_CLAUDE_VERSION: CLAUDE_CODE_VERSION };
