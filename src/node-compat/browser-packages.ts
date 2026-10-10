@@ -14,6 +14,7 @@
  * lightningcss (vite's CSS minifier) the same way, as lightningcss-wasm.
  */
 import { bundleFromVfs, type BundleFs } from './vfs-bundle';
+import { codeMask } from '../commands/jseval/module-transform';
 
 interface BrowserPackage {
   /** The specifier node code requires it by */
@@ -40,8 +41,65 @@ const PACKAGES: BrowserPackage[] = [{
   init: (main) => main.default(),
 }];
 
-/** Loaded packages: package dir → specifier → module namespace */
-const loaded = new Map<string, Promise<Map<string, any>>>();
+/**
+ * Loaded packages by directory: their modules (specifier → namespace), the
+ * node processes using them, and what to let go when none has for a while
+ * (the Workers its bundle started, its blob: URLs): rolldown's 8 workers and
+ * memory stayed for the life of the tab after the dev server had stopped.
+ */
+interface Loaded {
+  ready: Promise<Map<string, any>>;
+  users: number;
+  workers: Set<Worker>;
+  urls: string[];
+  unloadTimer?: ReturnType<typeof setTimeout>;
+}
+const loaded = new Map<string, Loaded>();
+/** How long a package stays loaded with no process using it (the next `npm run build` reuses it) */
+export const UNLOAD_AFTER_MS = 30_000;
+
+/** A Worker class that remembers its instances for the package at `dir` (in its bundle's banner) */
+(globalThis as any).__shiroWorkerFor = (dir: string) => class extends (globalThis as any).Worker {
+  constructor(url: string | URL, opts?: WorkerOptions) {
+    super(url, opts);
+    loaded.get(dir)?.workers.add(this as unknown as Worker);
+  }
+};
+
+function release(dir: string, entry: Loaded): void {
+  if (--entry.users > 0) return;
+  clearTimeout(entry.unloadTimer);
+  entry.unloadTimer = setTimeout(() => {
+    if (entry.users > 0 || loaded.get(dir) !== entry) return;
+    loaded.delete(dir);
+    for (const w of entry.workers) w.terminate();
+    for (const u of entry.urls) URL.revokeObjectURL(u);
+  }, UNLOAD_AFTER_MS);
+}
+
+/**
+ * The processes using browser packages, latest last: the globals that point a
+ * bundle at its requirer (its process, fs, builtins, async tracker) are the
+ * latest one's, and go back to the one before when it exits (or away, with
+ * none left). They held an ended process's module cache, and with it all it
+ * loaded (rolldown's 112 MB shared memory stayed after `vite build`).
+ */
+interface Requirer { builtin: (name: string) => any; proc: any; fs: any; track?: <T>(p: Promise<T>) => Promise<T> }
+const requirers: Requirer[] = [];
+function pointGlobalsAt(r: Requirer | undefined): void {
+  const g = globalThis as any;
+  g.__shiroBrowserProcess = r?.proc;
+  g.__shiroWasiFs = r?.fs;
+  g.__shiroBuiltin = r?.builtin;
+  g.__shiroBrowserTrack = r?.track;
+  if (!r) for (const k of ['__shiroBuiltin', '__shiroBrowserProcess', '__shiroWasiFs', '__shiroBrowserTrack']) delete g[k];
+}
+function forget(r: Requirer): void {
+  const i = requirers.indexOf(r);
+  if (i < 0) return;
+  requirers.splice(i, 1);
+  pointGlobalsAt(requirers[requirers.length - 1]);
+}
 
 const dirOf = (p: string) => p.slice(0, p.lastIndexOf('/')) || '/';
 
@@ -52,7 +110,7 @@ const dirOf = (p: string) => p.slice(0, p.lastIndexOf('/')) || '/';
  * `proc` its process.
  */
 export async function loadBrowserPackages(fs: BundleFs, fromDir: string, getBuiltinModule: (name: string) => any, proc: any,
-  trackAsync?: <T>(p: Promise<T>) => Promise<T>): Promise<Map<string, any>> {
+  trackAsync?: <T>(p: Promise<T>) => Promise<T>, atExit?: (fn: () => void) => void): Promise<Map<string, any>> {
   const processFs = getBuiltinModule('fs');
   const out = new Map<string, any>();
   for (const p of PACKAGES) {
@@ -65,23 +123,35 @@ export async function loadBrowserPackages(fs: BundleFs, fromDir: string, getBuil
     }
     if (!pkgDir || pkg?.name !== p.browserName) continue;
     // The process the bundle sees (its process.cwd(), env) and the fs WASI uses: the latest requirer's
-    (globalThis as any).__shiroBrowserProcess = proc;
-    (globalThis as any).__shiroWasiFs = processFs;
-    (globalThis as any).__shiroBuiltin = getBuiltinModule;
-    let ready = loaded.get(pkgDir);
-    if (!ready) {
-      ready = loadPackage(fs, pkgDir, pkg, p, getBuiltinModule);
-      loaded.set(pkgDir, ready);
-      ready.catch(() => loaded.delete(pkgDir!));
+    let me = requirers.find((r) => r.builtin === getBuiltinModule);
+    if (!me) {
+      const r: Requirer = me = { builtin: getBuiltinModule, proc, fs: processFs, track: trackAsync };
+      requirers.push(r);
+      atExit?.(() => forget(r));
     }
-    // Its async calls count as the process's activity (the script doesn't idle out mid-build)
-    (globalThis as any).__shiroBrowserTrack = trackAsync;
+    pointGlobalsAt(me);
+    let entry = loaded.get(pkgDir);
+    if (!entry) {
+      const e: Loaded = { ready: null!, users: 0, workers: new Set(), urls: [] };
+      e.ready = loadPackage(fs, pkgDir, pkg, p, getBuiltinModule, (u) => e.urls.push(u));
+      entry = e;
+      loaded.set(pkgDir, e);
+      const dir = pkgDir;
+      e.ready.catch(() => { if (loaded.get(dir) === e) loaded.delete(dir); });
+    }
+    // In use until this process ends
+    entry.users++;
+    clearTimeout(entry.unloadTimer);
+    { const e = entry, dir = pkgDir; atExit?.(() => release(dir, e)); }
+    const ready = entry.ready;
+    // (its async calls count as the process's activity: the script doesn't idle out mid-build)
     for (const [spec, ns] of await ready) out.set(spec, trackedNamespace(ns));
   }
   return out;
 }
 
-async function loadPackage(fs: BundleFs, pkgDir: string, pkg: any, p: BrowserPackage, getBuiltinModule: (name: string) => any): Promise<Map<string, any>> {
+async function loadPackage(fs: BundleFs, pkgDir: string, pkg: any, p: BrowserPackage, getBuiltinModule: (name: string) => any,
+  onUrl: (url: string) => void): Promise<Map<string, any>> {
   // Every subpath the package exports, as one module of namespaces
   const subpaths: [string, string][] = [];
   const pick = (v: any): string | undefined => {
@@ -109,8 +179,10 @@ async function loadPackage(fs: BundleFs, pkgDir: string, pkg: any, p: BrowserPac
     readFile: (path: string, enc?: string) => (path === entryPath ? Promise.resolve(enc ? entry : new TextEncoder().encode(entry)) : fs.readFile(path, enc)),
     resolvePath: (path: string, cwd: string) => fs.resolvePath(path, cwd),
   }, entryPath, {
-    banner: PROCESS_BANNER,
+    // (its Workers are the package's, terminated when it is let go)
+    banner: PROCESS_BANNER + `\nvar Worker = globalThis.__shiroWorkerFor(${JSON.stringify(pkgDir)});`,
     builtins: getBuiltinModule,
+    onAssetUrl: onUrl,
     ...(p.napiWasi ? {
       // Its node entry points import the node WASI binding; here they get the browser one
       redirect: { [`${pkgDir}/${p.napiWasi.nodeBinding}`]: `${pkgDir}/${p.napiWasi.browserBinding}` },
@@ -120,12 +192,41 @@ async function loadPackage(fs: BundleFs, pkgDir: string, pkg: any, p: BrowserPac
       replaceInEntryGraph: { '@napi-rs/wasm-runtime/fs': wasmFsShim(wasmFsModule) },
     } : {}),
   });
-  const url = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
-  const ns: any = await import(/* @vite-ignore */ url);
+  const ns = await evaluateBundle(code);
   if (p.init) await p.init(ns.m0);
   const out = new Map<string, any>();
   subpaths.forEach(([key], i) => out.set(key === '.' ? p.name : p.name + key.slice(1), ns[`m${i}`]));
   return out;
+}
+
+/**
+ * Run a bundle (esbuild's ESM output, no imports, one trailing `export { … }`)
+ * as an async function, so all of it can be collected once the package is let
+ * go: a module import()ed from a blob: URL stays in the page's module map for
+ * good, and with it rolldown's 112 MB shared memory. `import.meta` in its code
+ * (not in its strings: rolldown's option descriptions name it) is an object
+ * of its own: no url (asset URLs are blobs by now), no env (std-env falls
+ * back to process.env).
+ */
+async function evaluateBundle(code: string): Promise<any> {
+  const tail = /\bexport\s*\{([^}]*)\}\s*;?\s*$/.exec(code);
+  if (!tail) {
+    const url = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
+    try { return await import(/* @vite-ignore */ url); } finally { URL.revokeObjectURL(url); }
+  }
+  const fields = tail[1].split(',').map((x) => x.trim()).filter(Boolean).map((item) => {
+    const m = /^([\w$]+)(?:\s+as\s+([\w$]+))?$/.exec(item);
+    return m ? `${m[2] ?? m[1]}: ${m[1]}` : '';
+  }).filter(Boolean);
+  let src = code.slice(0, tail.index);
+  if (src.includes('import.meta')) {
+    const mask = codeMask(src);
+    src = src.replace(/\bimport\.meta\b/g, (m, i: number) => (mask[i] ? '__shiroImportMeta' : m));
+  }
+  const meta = 'const __shiroImportMeta = { url: "file:///", env: undefined, resolve: (s) => s };\n';
+  const body = '"use strict";\n' + meta + src + `\nreturn { ${fields.join(', ')} };`;
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  return new AsyncFunction(body)();
 }
 
 /** `process` for browser code that reads it (process.cwd(), process.env): the requiring node process */

@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { createTestShell } from './helpers';
 import { doctorCmd } from '@shiro/commands/doctor';
-import { parseProbe, agentSummary, AGENT_STEPS } from '@shiro/commands/doctor-agents';
+import { parseProbe, agentSummary, stdinRetry, AGENT_STEPS } from '@shiro/commands/doctor-agents';
 
 async function run(cmd: string) {
   const { shell } = await createTestShell();
@@ -30,6 +30,9 @@ describe('doctor --agents', () => {
     expect(out).toMatch(/^OK\s+native mkdir\s+mode 700 uid 1000 \(getuid 1000\)/m);
     expect(out).toMatch(/^OK\s+native realpath\s+\/tmp\/doctor-1000\/native\/a\/b\/c$/m);
     expect(out).toMatch(/^INFO\s+claude native\s+not installed/m);
+    // node -v and node -e are their own lines
+    expect(out).toMatch(/^OK\s+node -v\s+v\d+\.\d+\.\d+$/m);
+    expect(out).toMatch(/^OK\s+node -e\s+42$/m);
     expect(out).not.toContain('ghp_');
   }, 60_000);
 
@@ -47,5 +50,19 @@ describe('probe output', () => {
     expect(parseProbe('node', 'node: command not found\n', 127)).toEqual([{ label: 'node probe', status: 'FAIL', detail: 'exit 127: node: command not found' }]);
     const sum = agentSummary([...parseProbe('native', AGENT_STEPS.map((s) => `OK ${s} x`).join('\n'), 0), ...c.map((x) => ({ ...x, label: x.label.replace('native', 'node') }))]);
     expect(sum).toEqual({ label: 'agents', status: 'FAIL', detail: 'native 5/5 · node 1/5 (atomic-write failed) (doctor --agents for details)' });
+  });
+
+  it('a failing node probe is run again with stdin on /dev/null, which says which run failed', () => {
+    const term = parseProbe('node', 'OK mkdir x\nOK atomic-write x\nOK stat x\nOK realpath x\nFAIL child sh -c did not exit in 10 s\n', 1);
+    const good = parseProbe('node', AGENT_STEPS.map((s) => `OK ${s} x`).join('\n'), 0);
+    expect(stdinRetry(term, good)).toEqual({ label: 'node < /dev/null', status: 'WARN', detail: 'passes with stdin on /dev/null, fails on this terminal (child): a stdin problem' });
+    expect(stdinRetry(term, term)).toEqual({ label: 'node < /dev/null', status: 'FAIL', detail: 'fails with stdin on /dev/null too (child): not a stdin problem' });
+    const hung = [{ label: 'node probe', status: 'FAIL' as const, detail: 'no answer in 20 s' }];
+    expect(stdinRetry(hung, good).detail).toBe('passes with stdin on /dev/null, fails on this terminal (probe): a stdin problem');
+    // node -v / -e and the rerun count in the summary only when they fail
+    const all = [...parseProbe('native', AGENT_STEPS.map((s) => `OK ${s} x`).join('\n'), 0), ...good];
+    expect(agentSummary([...all, { label: 'node -v', status: 'OK', detail: 'v22.12.0' }]).status).toBe('OK');
+    expect(agentSummary([...all, { label: 'node -e', status: 'FAIL', detail: 'exited 1, no output' }]))
+      .toEqual({ label: 'agents', status: 'FAIL', detail: 'native 5/5 · node 5/5 · node -e: exited 1, no output (doctor --agents for details)' });
   });
 });

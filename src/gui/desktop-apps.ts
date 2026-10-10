@@ -33,16 +33,26 @@ const APPS: [string, string, string, boolean, string?][] = [
   ['gnumeric', 'Gnumeric', 'gui/icons/gnumeric.png', true],
   ['abiword', 'AbiWord', 'gui/icons/abiword.png', true],
   ['keepassxc', 'KeePassXC', 'gui/icons/keepassxc.svg', true],
-  // stops at startup: SysV shared memory isn't there yet (docs/GUI_SCORE.md)
-  ['audacity', 'Audacity', '♫', false],
+  ['audacity', 'Audacity', '♫', true, 'first start takes a minute'],
+  // (Firefox and Thunderbird stop in the engine on their shared memfds: docs/GUI_SCORE.md; listed again once they start)
+  ['firefox-esr', 'Firefox ESR', 'gui/icons/firefox-esr.png', false, 'first start takes a few minutes'],
+  ['libreoffice-writer', 'LibreOffice Writer', 'W', true, 'first start takes a few minutes'],
+  ['thunderbird', 'Thunderbird', 'gui/icons/thunderbird.png', false, 'first start takes a few minutes'],
+  ['pidgin', 'Pidgin', 'gui/icons/pidgin.svg', true],
+  ['hexchat', 'HexChat', 'gui/icons/hexchat.svg', true],
+  ['audacious', 'Audacious', 'gui/icons/audacious.svg', true],
+  ['shotwell', 'Shotwell', 'gui/icons/shotwell.png', true],
+  ['simple-scan', 'Document Scanner', 'gui/icons/simple-scan.svg', true],
+  ['xournalpp', 'Xournal++', 'gui/icons/xournalpp.svg', true],
+  ['zathura', 'Zathura', 'gui/icons/zathura.png', true],
+  ['geany', 'Geany', 'gui/icons/geany.svg', true],
   ['xterm', 'XTerm', 'gui/icons/xterm.svg', true],
   ['qterminal', 'QTerminal', '›_', true],
   ['xeyes', 'xeyes', '◉', true],
   ['xclock', 'xclock', '◷', true],
   ['xcalc', 'xcalc', '±', true],
   ['xedit', 'xedit', '✎', true],
-  // exits at once without a D-Bus session bus (docs/GUI.md)
-  ['lximage-qt', 'LXImage-Qt', 'gui/icons/lximage-qt.png', false],
+  ['lximage-qt', 'LXImage-Qt', 'gui/icons/lximage-qt.png', true],
 ];
 
 function glyphIcon(glyph: string, hue: number): string {

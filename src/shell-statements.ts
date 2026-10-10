@@ -25,7 +25,7 @@ const CLOSERS = new Set(['done', 'fi', 'esac']);
 /** Words after which the next word is again in command position */
 const CMD_PREFIX = new Set(['do', 'then', 'else', 'elif', 'if', 'while', 'until', '!', 'time', '{']);
 /** A newline after these is plain whitespace */
-const JOIN_WITH_SPACE = new Set(['do', 'then', 'else', 'elif', 'if', 'while', 'until', '!', 'time', '{']);
+const JOIN_WITH_SPACE = new Set(['do', 'then', 'else', 'elif', 'if', 'while', 'until', '!', 'time', '{', '(']);
 
 type Paren = 'sub' | 'arith' | 'list' | 'dbracket';
 
@@ -34,9 +34,10 @@ export function groupStatements(src: string): Statement[] {
   const out: Statement[] = [];
 
   // Lexer state carried across lines
-  let quote: '' | "'" | '"' | "$'" = '';
+  let quote: '' | "'" | '"' | "$'" | '`' = '';
   const parens: Paren[] = [];
   const blocks: string[] = []; // expected closers: done / fi / esac / }
+  const blockParens: number[] = []; // how many ( were open when each block began
   let cmdPos = true;
   let patternPos = false; // in a case, before a pattern's `)`
   let caseWantIn = false; // saw `case WORD`, waiting for `in`
@@ -88,6 +89,14 @@ export function groupStatements(src: string): Statement[] {
         lineOut += line.slice(i, e + 1); i = e + 1; quote = '';
         continue;
       }
+      if (quote === '`') {
+        // A `…` substitution that went on past the end of a line (autoconf's as_me=`…`)
+        let j = i;
+        while (j < n && line[j] !== '`') j += line[j] === '\\' ? 2 : 1;
+        if (j >= n) { lineOut += line.slice(i); i = n; break; }
+        lineOut += line.slice(i, j + 1); i = j + 1; quote = '';
+        continue;
+      }
       if (quote === '"' || quote === "$'") {
         if (ch === '\\') { lineOut += line.slice(i, i + 2); i += 2; continue; }
         const close = quote === '"' ? '"' : "'";
@@ -101,6 +110,9 @@ export function groupStatements(src: string): Statement[] {
         lineOut += ch; i++;
         continue;
       }
+      // A backslash ending the line is the continuation (joined below), not a
+      // word: after `cmd | \` the next line's `{` still opens a group
+      if (ch === '\\' && i === n - 1) { lineOut += ch; i++; continue; }
       if (ch === '\\') { lineOut += line.slice(i, i + 2); i += 2; cmdPos = false; lastWord = 'x'; lastWasPatternClose = false; continue; }
       if (ch === ' ' || ch === '\t') { lineOut += ch; i++; continue; }
       if (ch === "'") { quote = "'"; lineOut += ch; i++; cmdPos = false; lastWord = 'x'; lastWasPatternClose = false; continue; }
@@ -109,7 +121,10 @@ export function groupStatements(src: string): Statement[] {
       if (ch === '`') {
         let j = i + 1;
         while (j < n && line[j] !== '`') j += line[j] === '\\' ? 2 : 1;
-        lineOut += line.slice(i, j + 1); i = j + 1; cmdPos = false; lastWord = 'x'; lastWasPatternClose = false;
+        cmdPos = false; lastWord = 'x'; lastWasPatternClose = false;
+        // (unclosed on this line: it goes on, newlines and all)
+        if (j >= n) { quote = '`'; lineOut += line.slice(i); i = n; break; }
+        lineOut += line.slice(i, j + 1); i = j + 1;
         continue;
       }
       // Operators
@@ -148,7 +163,10 @@ export function groupStatements(src: string): Statement[] {
       }
       if (ch === ')') {
         lineOut += ch; i++;
-        if (parens.length) {
+        // A case pattern's `)`: in a case opened with as many ( open as now (a case
+        // inside `( … )` doesn't close the subshell with its patterns)
+        const casePattern = blocks[blocks.length - 1] === 'esac' && blockParens[blockParens.length - 1] === parens.length;
+        if (parens.length && !casePattern) {
           // name() or name ( ) — not an empty array a=()
           const open = lineOut.lastIndexOf('(', lineOut.length - 2);
           const wasEmpty = open >= 0 && !lineOut.slice(open + 1, -1).trim() && lineOut[open - 1] !== '=';
@@ -191,7 +209,8 @@ export function groupStatements(src: string): Statement[] {
         if (line[i] === '$' && line[i + 1] === '(') {
           if (line[i + 2] === '(') { parens.push('arith'); parens.push('arith'); lineOut += '$(('; i += 3; }
           else { parens.push('sub'); lineOut += '$('; i += 2; }
-          cmdPos = parens[parens.length - 1] === 'sub'; lastWord = 'x'; lastWasPatternClose = false;
+          // (a newline right after `$(` is a blank, as after `(`)
+          cmdPos = parens[parens.length - 1] === 'sub'; lastWord = '('; lastWasPatternClose = false;
           continue;
         }
         lineOut += ch; i++; cmdPos = false; lastWord = 'x'; lastWasPatternClose = false;
@@ -207,7 +226,7 @@ export function groupStatements(src: string): Statement[] {
       if (cmdPos && !glued && word === '[[' && !patternPos) { parens.push('dbracket'); cmdPos = false; lastWord = 'x'; continue; }
       if (patternPos) {
         if (word === 'esac' && !glued && blocks[blocks.length - 1] === 'esac') {
-          blocks.pop(); patternPos = false; cmdPos = false; lastWord = 'esac';
+          blocks.pop(); blockParens.pop(); patternPos = false; cmdPos = false; lastWord = 'esac';
         } else {
           lastWord = 'x';
         }
@@ -234,7 +253,7 @@ export function groupStatements(src: string): Statement[] {
       if (cmdPos && !glued) {
         if (word === 'function') { functionWord = true; lastWord = 'x'; continue; }
         if (OPENERS[word]) {
-          blocks.push(OPENERS[word]);
+          blocks.push(OPENERS[word]); blockParens.push(parens.length);
           if (word === 'case') caseWantIn = true;
           if (word === 'for' || word === 'select') forWantIn = 1;
           cmdPos = word !== 'case' && word !== 'for' && word !== 'select';
@@ -242,11 +261,11 @@ export function groupStatements(src: string): Statement[] {
           continue;
         }
         if (CLOSERS.has(word) && blocks[blocks.length - 1] === word) {
-          blocks.pop(); cmdPos = false; lastWord = word;
+          blocks.pop(); blockParens.pop(); cmdPos = false; lastWord = word;
           continue;
         }
-        if (word === '{') { blocks.push('}'); cmdPos = true; lastWord = '{'; continue; }
-        if (word === '}' && blocks[blocks.length - 1] === '}') { blocks.pop(); cmdPos = false; lastWord = '}'; continue; }
+        if (word === '{') { blocks.push('}'); blockParens.push(parens.length); cmdPos = true; lastWord = '{'; continue; }
+        if (word === '}' && blocks[blocks.length - 1] === '}') { blocks.pop(); blockParens.pop(); cmdPos = false; lastWord = '}'; continue; }
       }
       cmdPos = cmdPos && CMD_PREFIX.has(word) && !glued;
       lastWord = cmdPos ? word : 'x';

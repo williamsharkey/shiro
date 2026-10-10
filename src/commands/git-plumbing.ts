@@ -9,7 +9,7 @@
  * gitPlumbing() returns null for anything it doesn't take, and git.ts goes on
  * with its own implementation.
  */
-import git, { TREE, STAGE, WORKDIR } from 'isomorphic-git';
+import git, { TREE, STAGE, WORKDIR } from './git-cached';
 import type { CommandContext } from './index';
 import { resolveRevision, readFileAtRef, unifiedDiff } from './git-utils';
 

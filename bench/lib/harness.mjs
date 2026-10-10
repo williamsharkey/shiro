@@ -54,7 +54,7 @@ export class Harness {
    * Open a page and boot Shiro; returns timings. `context` reuses one (warm
    * cache: its HTTP cache and IndexedDB survive), otherwise a fresh one (cold).
    */
-  async boot({ context, page, waitSettled = false, settleQuietMs = 1000, path } = {}) {
+  async boot({ context, page, waitSettled = false, settleQuietMs = 1000, path, keepNetwork = false } = {}) {
     context = context ?? (await this.newContext());
     page = page ?? (await context.newPage());
     const cdp = await context.newCDPSession(page);
@@ -110,7 +110,12 @@ export class Harness {
     this.context = context;
     this.page = page;
     this.cdp = cdp;
-    return { context, page, cdp, marks, tti, firstCmd, requests: [...requests], netBytes: net.bytes, consoleLines, settled };
+    const result = { context, page, cdp, marks, tti, firstCmd, requests: [...requests], netBytes: net.bytes, consoleLines, settled };
+    // The Network domain makes DevTools keep copies of response bodies in the renderer (up to
+    // ~190 MiB in fetch-heavy runs like npm and apt), which inflates every later RSS reading.
+    // Only the boot counts above need it; keepNetwork leaves it on.
+    if (!keepNetwork) await cdp.send('Network.disable').catch(() => {});
+    return result;
   }
 
   /** Main page heap, total renderer memory (RSS incl. workers) and DOM counters. */
@@ -157,7 +162,36 @@ export class Harness {
    * Run `fn` while sampling renderer RSS every 25 ms; returns
    * { result, peakRss, baseRss, peakDelta }.
    */
-  async withPeakRss(fn, { dynamic = false } = {}) {
+  /**
+   * Bytes in the renderers' PartitionAlloc buffer partition (memory-infra dump). DevTools keeps
+   * copies of response bodies there while Playwright's Network/Fetch sessions are attached, so
+   * fetch-heavy steps (npm, apt) grow it without the page doing anything; it counts in RSS.
+   */
+  async bufferPartition() {
+    try {
+      const pids = await this.rendererPids();
+      const s = await this.browser.newBrowserCDPSession();
+      const events = [];
+      s.on('Tracing.dataCollected', (e) => events.push(...e.value));
+      const done = new Promise((r) => s.once('Tracing.tracingComplete', r));
+      await s.send('Tracing.start', { transferMode: 'ReportEvents', traceConfig: { includedCategories: ['disabled-by-default-memory-infra'], excludedCategories: ['*'], memoryDumpConfig: { triggers: [] } } });
+      await s.send('Tracing.requestMemoryDump', { deterministic: false, levelOfDetail: 'light' });
+      await s.send('Tracing.end');
+      await done;
+      await s.detach().catch(() => {});
+      let total = 0;
+      for (const e of events) {
+        const a = e.ph === 'v' && pids.includes(e.pid) ? e.args?.dumps?.allocators : null;
+        const v = a?.['partition_alloc/partitions/buffer']?.attrs?.size?.value;
+        if (v) total += parseInt(v, 16);
+      }
+      return total;
+    } catch { return null; }
+  }
+
+  async withPeakRss(fn, { dynamic = false, buffer = false } = {}) {
+    // buffer: also return the buffer partition's growth (see bufferPartition) and the peak net of it
+    const buf0 = buffer ? await this.bufferPartition() : null;
     // dynamic: re-read the renderer list while sampling (a navigation can swap processes)
     let pids = await this.rendererPids();
     const read = () => pids.reduce((s, p) => s + (procRss(p) || 0), 0);
@@ -168,7 +202,12 @@ export class Harness {
     try {
       const result = await fn();
       const v = read(); if (v > peak) peak = v;
-      return { result, baseRss: base, peakRss: peak, peakDelta: peak - base };
+      const out = { result, baseRss: base, peakRss: peak, peakDelta: peak - base };
+      if (buffer) {
+        const buf1 = await this.bufferPartition();
+        if (buf0 != null && buf1 != null) { out.bufferGrowth = buf1 - buf0; out.peakDeltaNet = out.peakDelta - Math.max(0, out.bufferGrowth); }
+      }
+      return out;
     } finally { clearInterval(timer); stop = true; await refresh; }
   }
 
@@ -184,6 +223,9 @@ export class Harness {
       name, suite: this.suite ?? null, mode: this.mode, cache: cache ?? null, unit,
       median: round(s.median), p90: round(s.p90), min: round(s.min), max: round(s.max), n: s.n,
       samples: samples.map((x) => round(x)), notes,
+      // The h.try() block that records it, when named otherwise (kernel.file_write
+      // records kernel.file_read): compare.mjs's A/B must select that block
+      ...(this.gate && this.gate !== name ? { gate: this.gate } : {}),
       ...(extra ? { extra } : {}),
     };
     this.results.push(rec);
@@ -198,7 +240,7 @@ export class Harness {
   }
 
   /** A block that records several metrics (some named outside its group, like *.peak_rss.*) runs when the group or any of them is wanted. */
-  wantsAny(group, ...names) { return this.wants(group) || names.some((n) => this.wants(n)); }
+  wantsAny(group, ...names) { return !this.skipRe?.some((re) => re.test(group)) && (this.wants(group) || names.some((n) => this.wants(n))); }
 
   wants(name) { return (!this.only || this.only.some((re) => re.test(name))) && !this.skipRe?.some((re) => re.test(name)); }
 
@@ -208,9 +250,12 @@ export class Harness {
     const t0 = Date.now();
     const prof = process.env.BENCH_PROFILE && new RegExp(process.env.BENCH_PROFILE).test(name) && this.cdp;
     if (prof) await startProfile(this.cdp);
+    const outer = this.gate;
+    this.gate = name;
     try { await fn(); if (process.env.BENCH_VERBOSE) this.log(`    (${name}: ${((Date.now() - t0) / 1000).toFixed(1)} s)`); } catch (e) {
       this.skip(name, unit, 'failed: ' + String(e?.message || e).split('\n')[0].slice(0, 200));
     } finally {
+      this.gate = outer;
       if (prof) await stopProfile(this.cdp, `${this.mode}-${name}`, this.log).catch((e) => this.log(`      profile failed: ${e.message}`));
     }
   }

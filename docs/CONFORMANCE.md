@@ -6,66 +6,68 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1413/1567 (90.2%)** |
-| [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1412/1567 (90.1%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **2034/2417 (84.2%)** |
+| [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **2035/2417 (84.2%)** |
 | [Shell: smoosh POSIX tests](#shell-smoosh-posix-tests) | 111/162 (68.5%) | **159/162 (98.1%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **625/635 (98.4%)** |
-| [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **280/322 (87.0%)** |
+| [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **283/322 (87.9%)** |
 | [Syscalls: wasi-testsuite (wasm32-wasip1)](#syscalls-wasi-testsuite-wasm32-wasip1) | — | **71/72 (98.6%)** |
-| [POSIX: Open POSIX Test Suite under Blink (x86-64)](#posix-open-posix-test-suite-under-blink-x86-64) | — | **1326/1448 (91.6%)** |
+| [POSIX: Open POSIX Test Suite under Blink (x86-64)](#posix-open-posix-test-suite-under-blink-x86-64) | — | **1375/1448 (95.0%)** |
 
 How each suite runs, and what is and isn't scored, is described in
 [tests/conformance/README.md](../tests/conformance/README.md).
 
 ## Shell: oils spec tests
 
+The file set grew from 62 to 117 oils spec files (1567 to 2417 cases) with the bash-feature files (oils/FILES); on the original 62 files (now 1587 cases with their bash-only cases scored) it went from 1413/1567 to 1449/1587. Areas without a "Before" are the new files.
+
 | Area | Before | Now | Failing |
 |---|---|---|---|
 | smoke | 0/18 | 18/18 | 0 |
 | comments | 0/2 | 2/2 | 0 |
 | quote | 0/33 | 29/33 | 4 |
-| word-split | 1/53 | 48/53 | 5 |
+| word-split | 1/53 | 51/53 | 2 |
 | word-eval | 0/8 | 8/8 | 0 |
 | var-sub | 0/6 | 3/6 | 3 |
 | var-sub-quote | 0/41 | 39/41 | 2 |
-| var-op-test | 1/35 | 28/35 | 7 |
+| var-op-test | 1/35 | 30/37 | 7 |
 | var-op-strip | 0/28 | 25/28 | 3 |
-| var-op-len | 0/7 | 4/7 | 3 |
-| var-op-patsub | 0/27 | 22/27 | 5 |
-| var-op-slice | 0/21 | 18/21 | 3 |
+| var-op-len | 0/7 | 8/8 | 0 |
+| var-op-patsub | 0/27 | 23/28 | 5 |
+| var-op-slice | 0/21 | 19/22 | 3 |
 | var-num | 0/7 | 7/7 | 0 |
 | vars-special | 0/37 | 31/37 | 6 |
-| arith | 2/71 | 71/71 | 0 |
+| arith | 2/71 | 74/74 | 0 |
 | command-sub | 0/28 | 26/28 | 2 |
 | here-doc | 0/32 | 29/32 | 3 |
-| redirect | 3/39 | 35/39 | 4 |
+| redirect | 3/39 | 36/39 | 3 |
 | if_ | 0/5 | 5/5 | 0 |
-| loop | 1/28 | 27/28 | 1 |
+| loop | 1/28 | 27/29 | 2 |
 | case_ | 0/13 | 12/13 | 1 |
-| sh-func | 0/11 | 11/11 | 0 |
+| sh-func | 0/11 | 12/12 | 0 |
 | func-parsing | 1/12 | 9/12 | 3 |
 | builtin-echo | 0/27 | 25/27 | 2 |
 | builtin-printf | 0/55 | 51/55 | 4 |
 | builtin-read | 0/64 | 64/64 | 0 |
 | builtin-eval-source | 0/23 | 20/23 | 3 |
-| builtin-getopts | 0/30 | 26/30 | 4 |
+| builtin-getopts | 0/30 | 28/31 | 3 |
 | builtin-trap | 0/33 | 31/33 | 2 |
 | builtin-bracket | 0/50 | 47/50 | 3 |
 | builtin-cd | 3/28 | 26/28 | 2 |
-| builtin-special | 1/12 | 8/12 | 4 |
+| builtin-special | 1/12 | 12/12 | 0 |
 | builtin-type | 0/6 | 4/6 | 2 |
-| builtin-vars | 0/38 | 33/38 | 5 |
+| builtin-vars | 0/38 | 38/39 | 1 |
 | dbracket | 1/49 | 45/49 | 4 |
 | dparen | 0/14 | 13/14 | 1 |
-| assign | 2/43 | 39/43 | 4 |
+| assign | 2/43 | 41/45 | 4 |
 | append | 1/20 | 20/20 | 0 |
 | array-basic | 0/5 | 5/5 | 0 |
 | array | 2/78 | 76/78 | 2 |
-| array-assoc | 0/38 | 35/38 | 3 |
+| array-assoc | 0/38 | 36/38 | 2 |
 | brace-expansion | 0/55 | 51/55 | 4 |
 | tilde | 0/14 | 9/14 | 5 |
 | glob | 0/23 | 21/23 | 2 |
-| pipeline | 0/25 | 20/25 | 5 |
+| pipeline | 0/25 | 22/26 | 4 |
 | exit-status | 0/11 | 8/11 | 3 |
 | errexit | 0/35 | 34/35 | 1 |
 | subshell | 0/2 | 2/2 | 0 |
@@ -76,50 +78,104 @@ How each suite runs, and what is and isn't scored, is described in
 | empty-bodies | 0/3 | 3/3 | 0 |
 | whitespace | 0/0 | 0/0 | 0 |
 | shell-grammar | 29/33 | 32/33 | 1 |
-| process-sub | 0/8 | 6/8 | 2 |
+| process-sub | 0/8 | 7/8 | 1 |
 | regex | 1/37 | 35/37 | 2 |
 | temp-binding | 0/4 | 4/4 | 0 |
-| background | 3/27 | 23/27 | 4 |
-| sh-options | 0/32 | 31/32 | 1 |
+| background | 3/27 | 24/27 | 3 |
+| sh-options | 0/32 | 33/37 | 4 |
 | command-parsing | 0/2 | 2/2 | 0 |
+| var-op-bash | — | 25/26 | 1 |
+| nameref | — | 28/32 | 4 |
+| assign-extended | — | 28/34 | 6 |
+| array-literal | — | 7/19 | 12 |
+| array-sparse | — | 37/39 | 2 |
+| array-assign | — | 4/11 | 7 |
+| array-compat | — | 9/12 | 3 |
+| builtin-trap-bash | — | 8/14 | 6 |
+| builtin-trap-err | — | 8/12 | 4 |
+| builtin-set | — | 18/24 | 6 |
+| builtin-bash | — | 12/13 | 1 |
+| builtin-type-bash | — | 20/24 | 4 |
+| builtin-process | — | 10/23 | 13 |
+| builtin-kill | — | 17/20 | 3 |
+| builtin-meta | — | 10/18 | 8 |
+| builtin-meta-assign | — | 10/11 | 1 |
+| builtin-misc | — | 5/7 | 2 |
+| builtin-umask | — | 24/24 | 0 |
+| builtin-dirs | — | 18/18 | 0 |
+| extglob-match | — | 26/29 | 3 |
+| extglob-files | — | 15/23 | 8 |
+| globstar | — | 5/5 | 0 |
+| glob-bash | — | 4/8 | 4 |
+| globignore | — | 2/18 | 16 |
+| introspect | — | 4/7 | 3 |
+| var-ref | — | 23/30 | 7 |
+| xtrace | — | 18/19 | 1 |
+| sh-options-bash | — | 6/9 | 3 |
+| redirect-command | — | 17/23 | 6 |
+| redirect-multi | — | 5/13 | 8 |
+| redir-order | — | 1/5 | 4 |
+| arith-context | — | 12/16 | 4 |
+| arith-dynamic | — | 2/4 | 2 |
+| for-expr | — | 7/8 | 1 |
+| bugs | — | 21/29 | 8 |
+| toysh-posix | — | 15/23 | 8 |
+| toysh | — | 4/8 | 4 |
+| blog1 | — | 4/9 | 5 |
+| blog2 | — | 4/8 | 4 |
+| blog-other1 | — | 3/4 | 1 |
+| nix-idioms | — | 4/6 | 2 |
+| ble-idioms | — | 23/26 | 3 |
+| ble-features | — | 4/4 | 0 |
+| ble-unset | — | 0/2 | 2 |
+| nocasematch-match | — | 3/6 | 3 |
+| command-sub-ksh | — | 0/0 | 0 |
+| paren-ambiguity | — | 7/9 | 2 |
+| parse-errors | — | 8/25 | 17 |
+| unicode | — | 0/2 | 2 |
+| nul-bytes | — | 2/16 | 14 |
+| assign-deferred | — | 6/9 | 3 |
+| vars-bash | — | 0/1 | 1 |
+| bool-parse | — | 5/8 | 3 |
+| serialize | — | 5/10 | 5 |
+| sh-usage | — | 21/24 | 3 |
+| arg-parse | — | 1/3 | 2 |
 
 <details><summary>Failing cases</summary>
 
 - **quote**: $'' octal escapes don't have leading 0; $'' octal escapes with fewer than 3 chars; $'' supports \cA escape for Ctrl-A - mask with 0x1f; \c' is an escape, unlike bash
-- **word-split**: IFS and joining arrays by assignments; Bug #628 split on : with : in literal word; 4 x 3 table - with for loop; IFS=x and '' and $@ (#2); ""$A"" - empty string on both sides - derived from spec/toysh-posix #15
+- **word-split**: IFS and joining arrays by assignments; IFS=x and '' and $@ (#2)
 - **var-sub**: Braced block inside ${}; Descriptor redirect to bad "$@"; Here doc with bad "$@" delimiter
 - **var-sub-quote**: part_value tree on RHS; Syntax error for single quote in double quote
 - **var-op-test**: Lazy Evaluation of Alternative; Unquoted with array as default value; Quoted with array as default value; Assign default with array; array and - and +; $* ("" "") and - and + (IFS=); op-test for unquoted ${a[*]:-empty} with IFS=
 - **var-op-strip**: Remove const suffix is vectorized on $@ array; strip none; Strip Right Brace (#702)
-- **var-op-len**: Unicode string length (spec/testdata/utf8-chars.txt); String length with incomplete utf-8; String length with invalid utf-8 continuation bytes
 - **var-op-patsub**: Confusing unquoted slash matches bash (and ash); Synthesized ${x///} bug (similar to above); Replace backslash; When LC_ALL=C, pattern ? doesn't match multibyte character; Chromium from http://www.oilshell.org/blog/2016/11/07.html
 - **var-op-slice**: ${@:offset} and ${*:offset}; ${@:offset:length} and ${*:offset:length}; ${array[@]:} vs ${array[@]: }  - bash and zsh inconsistent
 - **vars-special**: $PATH is set if unset at startup; Vars set interactively only: $HISTFILE; Some vars are set, even without startup file, or env: PATH, PWD; $LINENO is the current line, not line of function call; $LINENO in other for loops; $_ with assignments, arrays, etc.
 - **command-sub**: Making keyword out of command sub should NOT work; Syntax errors with double quotes within backticks
 - **here-doc**: Here doc with bad comsub delimiter; Here doc with line continuation, then pipe.  Syntax error.; Function def and execution with here doc
-- **redirect**: 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes (hang/timeout); xtrace not affected by redirects
-- **loop**: bad arg to break
+- **redirect**: 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes (hang/timeout)
+- **loop**: bad arg to break; too many args to continue
 - **case_**: case \n bug regression
 - **func-parsing**: = in function name; Function name with $; Function name with command sub
 - **builtin-echo**: echo builtin should disallow typed args - literal; echo builtin should disallow typed args - variable
 - **builtin-printf**: printf %c unicode - prints the first BYTE of a string - it does not respect UTF-8; bash truncates long strftime string at 128; printf positive integer overflow; printf negative integer overflow
 - **builtin-eval-source**: eval usage; Source with syntax error; Eval with syntax error
-- **builtin-getopts**: getopts with invalid variable name; OPTIND; OPTIND after multiple getopts with same spec; OPTIND after multiple getopts with different spec
+- **builtin-getopts**: getopts with invalid variable name; OPTIND after multiple getopts with same spec; OPTIND after multiple getopts with different spec
 - **builtin-trap**: exit 1 when trap code string is invalid; trap USR1, sleep, SIGINT: non-interactively
 - **builtin-bracket**: -k for sticky bit; -ef; test -c
 - **builtin-cd**: pwd in symlinked dir on shell initialization; Survey of getcwd() syscall
-- **builtin-special**: Prefix assignments persist after readonly, but NOT exported (set -o posix); Prefix binding for exec is a special case (versus e.g. readonly); bash 'type' gets confused - says 'function', but runs builtin; command, builtin - both can be redefined, not special (regression)
 - **builtin-type**: type -\> alias external; type of relative path
-- **builtin-vars**: Export sets a global variable that persists after export -n; Export a local that shadows a global; Unset exported variable, then define it again.  It's NOT still exported.; Exporting a parent func variable (dynamic scope); local after readonly
+- **builtin-vars**: local after readonly
 - **dbracket**: [[ regex syntax error; [[ at runtime doesn't work; [[ with env prefix doesn't work; [[ ]] with redirect
 - **dparen**: (( )) with redirect
 - **assign**: Trying to run keyword 'for'; Test above without 'local' (which is not POSIX); aliased assignment doesn't split; "declare -a arr" and "readonly -a a" creates an empty array (OSH)
 - **array**: space before ( in array initialization; array with invalid token
-- **array-assoc**: unset -v and assoc array; nameref and assoc array; bash bug: (( A["$key"] = 1 )) doesn't work
+- **array-assoc**: unset -v and assoc array; bash bug: (( A["$key"] = 1 )) doesn't work
 - **brace-expansion**: expansion on RHS of assignment; no expansion with RHS assignment; Two kinds of tilde expansion; Mixed case char expansion is invalid
 - **tilde**: ${undef:-~}; ${x//~/~root}; a[x]=foo:~ has tilde expansion; x=${undef-~:~}; temp assignment x=~ env
 - **glob**: \ in unquoted substitutions does not match a backslash; \ in unquoted substitutions escapes globchars
-- **pipeline**: PIPESTATUS is set on simple commands; \|&; ! is not a command; Evaluation of argv[0] in pipeline occurs in child; SIGPIPE causes pipeline to die (regression for issue #295)
+- **pipeline**: \|&; ! is not a command; Evaluation of argv[0] in pipeline occurs in child; SIGPIPE causes pipeline to die (regression for issue #295)
 - **exit-status**: If subshell false -- exit code is propagated in a weird way (strict_argv prevents); Exit code when command sub evaluates to empty str, e.g. `false` (#2416); More test cases with empty argv
 - **errexit**: pipeline process respects errexit
 - **command_**: Command block; Permission denied; filling $PATH cache, then insert the same command earlier in cache; filling $PATH cache, then deleting command; Non-executable on $PATH; hash without args prints the cache
@@ -127,10 +183,61 @@ How each suite runs, and what is and isn't scored, is described in
 - **alias**: define and use alias on a single line; Alias must be an unquoted word, no expansions allowed; first and second word are the same alias, with trailing space; Syntax error after expansion; Loop split across alias in another way; Loop split across both iterative and recursive aliases; Alias with a quote in the middle is a syntax error; Alias can be defined and used on a single line; alias with line continuation in the middle; alias for left brace; alias for left paren; here doc inside alias; Corner case: alias inside LHS array arithmetic expression
 - **let**: let with ()
 - **shell-grammar**: If with then on same line missing semicolon
-- **process-sub**: Process sub from shell to stdin; Non-linear pipeline with \>()
+- **process-sub**: Non-linear pipeline with \>()
 - **regex**: Unquoted { is a regex parse error; make a lisp example
-- **background**: wait -n with arguments - arguments are respected; wait with invalid arg; Wait for job and PIPESTATUS - cat; Signal message for killed background job
-- **sh-options**: noclobber on \<\>
+- **background**: wait -n with arguments - arguments are respected; wait with invalid arg; Signal message for killed background job
+- **sh-options**: noclobber on \<\>; set without args lists variables; set without args and array variables; set without args and assoc array variables (not in OSH)
+- **var-op-bash**: Array expansion with nullary var op @Q
+- **nameref**: exported nameref; a[expr] in nameref; a[@] in nameref; bad mutation through nameref: ref[0]= where ref is array[0]
+- **assign-extended**: declare -F with shopt -s extdebug and main file; Env bindings shouldn't contain array assignments; syntax error in array assignment; declare -g (bash-specific; bash-completion uses it); dynamic array parsing is not allowed; invalid var name
+- **array-literal**: Tilde expansions in RHS of [k]=v (BashArray); Tilde expansions in RHS of [k]=v (BashAssoc); append to element (BashArray); append to element (BashAssoc); non-index forms of element (BashAssoc); Evaluation order (2); Evaluation order (3); [k1]=v1 (BashArray); [k1]=v1 looking like brace expansions (BashArray); BashArray cannot be changed to BashAssoc and vice versa; (strict_array) declare -A s+=(); (strict_array) assoc=(key value ...) is not allowed
+- **array-sparse**: a[i]=v with BigInt; compgen -F _set_COMPREPLY
+- **array-assign**: Multiple LHS array words; LHS array is protected with shopt -s eval_unsafe_arith, e.g. 'a[$(echo 2)]'; file named a[ is  not executed; Are quotes allowed?; Tricky parsing - a[ a[0]=1 ]=X  a[ a[0]+=1 ]+=X; argv.py a[1 + 2]=; declare builtin doesn't allow spaces
+- **array-compat**: Assignment Causes Array Decay; Array Decay with IFS; User arrays decay
+- **builtin-trap-bash**: trap DEBUG and command sub / subshell; trap DEBUG case; trap DEBUG for expr; trap DEBUG if while; trap RETURN; Combine ERR trap and USR1 trap
+- **builtin-trap-err**: trap ERR pipelines without simple commands; Pipeline group quirk; set -o errtrace: trap ERR runs in subprograms; set -o errtrace: trap ERR with &
+- **builtin-set**: set -u with undefined var in interactive shell does NOT exit the interpreter; 'set' and 'eval' round trip; set - leading single dash is ignored, turns off xtrace verbose (#2364); set - stops option processing like set --; A single + is an ignored flag; not an argument; set - + and + -
+- **builtin-bash**: bad help topic
+- **builtin-type-bash**: type -p and -P builtin -\> file; type -f builtin -\> function and file exists; type -a -\> keyword; type -P does not find directories (regression)
+- **builtin-process**: exec -- 2\>&1; exec -a sets argv[0]; Exit builtin with too many args; ulimit negative flag; ulimit negative arg; ulimit accepts 'unlimited'; ulimit of 2**32, 2**31 (int overflow); ulimit that is 64 bits; arg that would overflow 64 bits is detected; ulimit -f 1 prevents files larger 512 bytes; ulimit -S for soft limit (default), -H for hard limit; Changing resource limit is denied; ulimit -n limits file descriptors
+- **builtin-kill**: kill -L checks for invalid input; kill -l 0 returns EXIT; kill -l 0 INT lists both signals
+- **builtin-meta**: command -v executable, builtin; command -v doesn't find non-executable file; command -v doesn't find executable dir; command -V; command -p (override existing program); command -p (hide tool in custom path); builtin ls not found; builtin usage
+- **builtin-meta-assign**: builtin declare a=(x y) is allowed
+- **builtin-misc**: history builtin usage; Print shell strings with weird chars: set and printf %q and ${x@Q}
+- **extglob-match**: extglob in variable; nested @(); Turning extglob on changes the meaning of [[ !(str) ]] in bash
+- **extglob-files**: Two adjacent alternations; Extended glob patterns with spaces; Glob other punctuation chars (lexer mode); More glob escaping; Escaping of pipe (glibc bug, see demo/glibc_fnmatch.c); Extended glob in assignment builtin; In Array Literal and for loop; No extended glob with simple_word_eval (YSH evaluation)
+- **glob-bash**: shopt -s failglob in loop context; shopt -s failglob in array literal context; shopt -s failglob exits properly in loop context with set -e; shopt -s failglob behavior on single line with semicolon
+- **globignore**: Ignore *.txt; Ignore ?.txt; Ignore *.o:*.h; Ignore single file src/__main__.py; Ignore dirs dist/*:node_modules/*; find files in subdirectory but not the ignored pattern; Ignore globs with char patterns like [!ab]; Ignore globs with char classes like [[:alnum:]]; Ignore *; treat escaped patterns literally; resetting globignore reverts to default behaviour; Ignore .:..; Quoting GLOBIGNORE; . and .. always filtered when GLOBIGNORE is set; When GLOBIGNORE is set, glob may become empty (nullglob too); Extended glob expansion combined with GLOBIGNORE
+- **introspect**: Locations with temp frame; Locations when sourcing; Sourcing inside function grows the debug stack
+- **var-ref**: ${!a[@]-'default'} is legal but fails with more than one element; var ref TO array with arbitrary subscripts; Var Ref Code Injection $(tee PWNED); ${!array_ref:-set} and ${!array_ref:=assign}; Array indirect expansion with suffix operators; Array indirect expansion with replacements; Array indirect expansion with @? conversion
+- **xtrace**: xtrace with unprintable chars
+- **sh-options-bash**: export SHELLOPTS does cross-process tracing; export SHELLOPTS does cross-process tracing with bash; OSH calling bash with SHELLOPTS does not change braceexpand
+- **redirect-command**: `\< $file` behaves like $(\< file); Redirect in the middle of two assignments; Redirect in function body; Redirect in function body is evaluated multiple times; redirect subshell; Prefix redirect for loop -- not allowed
+- **redirect-multi**: File redirects with glob args (bash and zsh only); File redirect without matching any file, with failglob; File redirect to $var with glob char; File redirect that globs to more than one file (bash and zsh only); File redirect with extended glob; Extended glob that doesn't match anything; Redirect with brace expansion isn't allowed; File redirects have word splitting too!
+- **redir-order**: subshell + redirect order; for word + redirect order; case word + redirect order; [[ + redirect order
+- **arith-context**: $[ is a synonym for $((; $[$var is a synonym for $(($var (#2426); $[$undefined] is a synonym for $(($undefined (#2566); Empty expression a[]
+- **arith-dynamic**: Double quotes; Substitutions
+- **for-expr**: Accepts { } syntax too
+- **bugs**: assign readonly -- one line; First word like foo$x() and foo$[1+2] (regression); Function names; file with NUL byte; autoconf word split (#1449); command execution $(echo 42 \| tee PWNED) not allowed; unset doesn't allow command execution; Crash after changing $[] to be alias of $(( ))
+- **toysh-posix**: Function def in pipeline; IFS; IFS - http://landley.net/notes.html#05-03-2020; IFS=x and '' and unquoted $@ - reduction of case above - copied into spec/word-split; for loop parsing - http://landley.net/notes.html#04-03-2020; IFS 4; Can't parse extra }; Command Sub Syntax Error
+- **toysh**: char class / extglob; patsub of $* - http://landley.net/notes.html#23-04-2020; Brace Expansion; {abc}\<\<\< - http://landley.net/notes-2019.html#09-12-2019
+- **blog1**: ${##}; ${###}; ${####}; ${##2}; ${###2}
+- **blog2**: -a -a -a -a; -a -a -a -a -a; -a -a -a -a -a -a -a; -a -a -a -a -a -a -a -a
+- **blog-other1**: ` on its own line
+- **nix-idioms**: ${!ref} to undefined string var is fatal, INCONSISTENT with array; export with dynamic var name +=
+- **ble-idioms**: shopt -u expand_aliases and eval; Issue #1069 [53] BUG: a[1 + 1]=2, etc. fails; Issue #1069 [59] - Assigning Str to BashArray/BashAssoc should not remove BashArray/BashAssoc
+- **ble-unset**: [bash_unset] dynamic-unset for nested tempenvs; [bash_unset] local-unset for nested tempenvs
+- **nocasematch-match**: [[ equality matching; [[ regex matching; case matching
+- **paren-ambiguity**: (( closed with ) ) after multiple lines is command - #2337; $(( closed with ) ) after multiple lines is command - #2337
+- **parse-errors**: Incomplete while; Incomplete for; Incomplete if; } is a parse error; { is its own word, needs a space; bad var name globally isn't parsed like an assignment; bad var name in export; bad var name in local; misplaced parentheses are not a subshell; incomplete command sub; incomplete backticks; misplaced ;;; interactive parse error (regression); array literal inside array is a parse error; array literal inside loop is a parse error; array literal in case; %foo=() is parse error (regression)
+- **unicode**: OSH source code doesn't have to be valid Unicode (like other shells); Unicode escapes \u03bc \U000003bc in $'', echo -e, printf
+- **nul-bytes**: printf - literal NUL in format string; printf - NUL byte in value (OSH and zsh agree); NUL bytes with echo $'\0' (OSH and zsh agree); NUL bytes and IFS splitting; NUL bytes with test -n; NUL bytes with test -f; NUL bytes with ${#s} (OSH and zsh agree); Compare \x00 byte versus \x01 byte - command sub; Compare \x00 byte versus \x01 byte - read builtin; Compare \x00 byte versus \x01 byte - read -n; Compare \x00 byte versus \x01 byte - mapfile builtin; Strip ops # ## % %% with NUL bytes; Issue 2269 Reduction; Issue 2269 - Do NUL bytes match ? in ${a#?}
+- **assign-deferred**: export a[7]=8; is 'builtin' prefix and array allowed?  OSH is smarter; is 'command' prefix and array allowed?  OSH is smarter
+- **vars-bash**: $SHELL is set to what is in /etc/passwd
+- **bool-parse**: test builtin: ( = ) is confusing: equality test or non-empty string test; test builtin: ( == ) is confusing: equality test or non-empty string test; [[ -f -f ]] and [[ -f == ]]
+- **serialize**: printf %q unprintable; printf %q unicode; printf %q invalid unicode; set; declare
+- **sh-usage**: Set LC_ALL LC_CTYPE LC_COLLATE LANG - affects glob ?; LC_CTYPE=invalid; weird flag parsing -oo errexit noglob
+- **arg-parse**: shift 1 extra; continue 1 extra, break, etc.
 
 </details>
 
@@ -143,48 +250,48 @@ The same cases as above, run by scripts/conformance/browser-oils.mjs through the
 | smoke | — | 18/18 | 0 |
 | comments | — | 2/2 | 0 |
 | quote | — | 29/33 | 4 |
-| word-split | — | 48/53 | 5 |
+| word-split | — | 51/53 | 2 |
 | word-eval | — | 8/8 | 0 |
 | var-sub | — | 3/6 | 3 |
 | var-sub-quote | — | 39/41 | 2 |
-| var-op-test | — | 28/35 | 7 |
+| var-op-test | — | 30/37 | 7 |
 | var-op-strip | — | 25/28 | 3 |
-| var-op-len | — | 4/7 | 3 |
-| var-op-patsub | — | 22/27 | 5 |
-| var-op-slice | — | 18/21 | 3 |
+| var-op-len | — | 8/8 | 0 |
+| var-op-patsub | — | 23/28 | 5 |
+| var-op-slice | — | 19/22 | 3 |
 | var-num | — | 7/7 | 0 |
 | vars-special | — | 31/37 | 6 |
-| arith | — | 71/71 | 0 |
+| arith | — | 74/74 | 0 |
 | command-sub | — | 26/28 | 2 |
 | here-doc | — | 29/32 | 3 |
-| redirect | — | 35/39 | 4 |
+| redirect | — | 36/39 | 3 |
 | if_ | — | 5/5 | 0 |
-| loop | — | 26/28 | 2 |
+| loop | — | 27/29 | 2 |
 | case_ | — | 12/13 | 1 |
-| sh-func | — | 11/11 | 0 |
+| sh-func | — | 12/12 | 0 |
 | func-parsing | — | 9/12 | 3 |
 | builtin-echo | — | 25/27 | 2 |
 | builtin-printf | — | 51/55 | 4 |
 | builtin-read | — | 64/64 | 0 |
 | builtin-eval-source | — | 20/23 | 3 |
-| builtin-getopts | — | 26/30 | 4 |
+| builtin-getopts | — | 28/31 | 3 |
 | builtin-trap | — | 31/33 | 2 |
-| builtin-bracket | — | 46/50 | 4 |
+| builtin-bracket | — | 47/50 | 3 |
 | builtin-cd | — | 26/28 | 2 |
-| builtin-special | — | 8/12 | 4 |
+| builtin-special | — | 12/12 | 0 |
 | builtin-type | — | 4/6 | 2 |
-| builtin-vars | — | 33/38 | 5 |
+| builtin-vars | — | 38/39 | 1 |
 | dbracket | — | 45/49 | 4 |
 | dparen | — | 13/14 | 1 |
-| assign | — | 39/43 | 4 |
+| assign | — | 41/45 | 4 |
 | append | — | 20/20 | 0 |
 | array-basic | — | 5/5 | 0 |
 | array | — | 76/78 | 2 |
-| array-assoc | — | 35/38 | 3 |
+| array-assoc | — | 36/38 | 2 |
 | brace-expansion | — | 51/55 | 4 |
 | tilde | — | 9/14 | 5 |
 | glob | — | 21/23 | 2 |
-| pipeline | — | 20/25 | 5 |
+| pipeline | — | 22/26 | 4 |
 | exit-status | — | 8/11 | 3 |
 | errexit | — | 34/35 | 1 |
 | subshell | — | 2/2 | 0 |
@@ -195,50 +302,104 @@ The same cases as above, run by scripts/conformance/browser-oils.mjs through the
 | empty-bodies | — | 3/3 | 0 |
 | whitespace | — | 0/0 | 0 |
 | shell-grammar | — | 32/33 | 1 |
-| process-sub | — | 6/8 | 2 |
+| process-sub | — | 7/8 | 1 |
 | regex | — | 35/37 | 2 |
 | temp-binding | — | 4/4 | 0 |
-| background | — | 23/27 | 4 |
-| sh-options | — | 31/32 | 1 |
+| background | — | 24/27 | 3 |
+| sh-options | — | 33/37 | 4 |
 | command-parsing | — | 2/2 | 0 |
+| var-op-bash | — | 25/26 | 1 |
+| nameref | — | 28/32 | 4 |
+| assign-extended | — | 28/34 | 6 |
+| array-literal | — | 7/19 | 12 |
+| array-sparse | — | 37/39 | 2 |
+| array-assign | — | 4/11 | 7 |
+| array-compat | — | 9/12 | 3 |
+| builtin-trap-bash | — | 8/14 | 6 |
+| builtin-trap-err | — | 8/12 | 4 |
+| builtin-set | — | 18/24 | 6 |
+| builtin-bash | — | 12/13 | 1 |
+| builtin-type-bash | — | 20/24 | 4 |
+| builtin-process | — | 10/23 | 13 |
+| builtin-kill | — | 17/20 | 3 |
+| builtin-meta | — | 10/18 | 8 |
+| builtin-meta-assign | — | 10/11 | 1 |
+| builtin-misc | — | 5/7 | 2 |
+| builtin-umask | — | 24/24 | 0 |
+| builtin-dirs | — | 18/18 | 0 |
+| extglob-match | — | 26/29 | 3 |
+| extglob-files | — | 15/23 | 8 |
+| globstar | — | 5/5 | 0 |
+| glob-bash | — | 4/8 | 4 |
+| globignore | — | 2/18 | 16 |
+| introspect | — | 4/7 | 3 |
+| var-ref | — | 23/30 | 7 |
+| xtrace | — | 18/19 | 1 |
+| sh-options-bash | — | 6/9 | 3 |
+| redirect-command | — | 17/23 | 6 |
+| redirect-multi | — | 5/13 | 8 |
+| redir-order | — | 1/5 | 4 |
+| arith-context | — | 12/16 | 4 |
+| arith-dynamic | — | 2/4 | 2 |
+| for-expr | — | 7/8 | 1 |
+| bugs | — | 21/29 | 8 |
+| toysh-posix | — | 15/23 | 8 |
+| toysh | — | 4/8 | 4 |
+| blog1 | — | 4/9 | 5 |
+| blog2 | — | 4/8 | 4 |
+| blog-other1 | — | 3/4 | 1 |
+| nix-idioms | — | 4/6 | 2 |
+| ble-idioms | — | 23/26 | 3 |
+| ble-features | — | 4/4 | 0 |
+| ble-unset | — | 0/2 | 2 |
+| nocasematch-match | — | 3/6 | 3 |
+| command-sub-ksh | — | 0/0 | 0 |
+| paren-ambiguity | — | 7/9 | 2 |
+| parse-errors | — | 8/25 | 17 |
+| unicode | — | 0/2 | 2 |
+| nul-bytes | — | 2/16 | 14 |
+| assign-deferred | — | 6/9 | 3 |
+| vars-bash | — | 0/1 | 1 |
+| bool-parse | — | 5/8 | 3 |
+| serialize | — | 5/10 | 5 |
+| sh-usage | — | 21/24 | 3 |
+| arg-parse | — | 1/3 | 2 |
 
 <details><summary>Failing cases</summary>
 
 - **quote**: $'' octal escapes don't have leading 0; $'' octal escapes with fewer than 3 chars; $'' supports \cA escape for Ctrl-A - mask with 0x1f; \c' is an escape, unlike bash
-- **word-split**: IFS and joining arrays by assignments; Bug #628 split on : with : in literal word; 4 x 3 table - with for loop; IFS=x and '' and $@ (#2); ""$A"" - empty string on both sides - derived from spec/toysh-posix #15
+- **word-split**: IFS and joining arrays by assignments; IFS=x and '' and $@ (#2)
 - **var-sub**: Braced block inside ${}; Descriptor redirect to bad "$@"; Here doc with bad "$@" delimiter
 - **var-sub-quote**: part_value tree on RHS; Syntax error for single quote in double quote
 - **var-op-test**: Lazy Evaluation of Alternative; Unquoted with array as default value; Quoted with array as default value; Assign default with array; array and - and +; $* ("" "") and - and + (IFS=); op-test for unquoted ${a[*]:-empty} with IFS=
 - **var-op-strip**: Remove const suffix is vectorized on $@ array; strip none; Strip Right Brace (#702)
-- **var-op-len**: Unicode string length (spec/testdata/utf8-chars.txt); String length with incomplete utf-8; String length with invalid utf-8 continuation bytes
 - **var-op-patsub**: Confusing unquoted slash matches bash (and ash); Synthesized ${x///} bug (similar to above); Replace backslash; When LC_ALL=C, pattern ? doesn't match multibyte character; Chromium from http://www.oilshell.org/blog/2016/11/07.html
 - **var-op-slice**: ${@:offset} and ${*:offset}; ${@:offset:length} and ${*:offset:length}; ${array[@]:} vs ${array[@]: }  - bash and zsh inconsistent
 - **vars-special**: $PATH is set if unset at startup; Vars set interactively only: $HISTFILE; Some vars are set, even without startup file, or env: PATH, PWD; $LINENO is the current line, not line of function call; $LINENO in other for loops; $_ with assignments, arrays, etc.
 - **command-sub**: Making keyword out of command sub should NOT work; Syntax errors with double quotes within backticks
 - **here-doc**: Here doc with bad comsub delimiter; Here doc with line continuation, then pipe.  Syntax error.; Function def and execution with here doc
-- **redirect**: 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes; xtrace not affected by redirects
-- **loop**: while in pipe with subshell; bad arg to break
+- **redirect**: 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes (hang/timeout)
+- **loop**: bad arg to break; too many args to continue
 - **case_**: case \n bug regression
 - **func-parsing**: = in function name; Function name with $; Function name with command sub
 - **builtin-echo**: echo builtin should disallow typed args - literal; echo builtin should disallow typed args - variable
 - **builtin-printf**: printf %c unicode - prints the first BYTE of a string - it does not respect UTF-8; bash truncates long strftime string at 128; printf positive integer overflow; printf negative integer overflow
 - **builtin-eval-source**: eval usage; Source with syntax error; Eval with syntax error
-- **builtin-getopts**: getopts with invalid variable name; OPTIND; OPTIND after multiple getopts with same spec; OPTIND after multiple getopts with different spec
+- **builtin-getopts**: getopts with invalid variable name; OPTIND after multiple getopts with same spec; OPTIND after multiple getopts with different spec
 - **builtin-trap**: exit 1 when trap code string is invalid; trap USR1, sleep, SIGINT: non-interactively
-- **builtin-bracket**: -k for sticky bit; test -p named pipe; -ef; test -c
+- **builtin-bracket**: -k for sticky bit; -ef; test -c
 - **builtin-cd**: pwd in symlinked dir on shell initialization; Survey of getcwd() syscall
-- **builtin-special**: Prefix assignments persist after readonly, but NOT exported (set -o posix); Prefix binding for exec is a special case (versus e.g. readonly); bash 'type' gets confused - says 'function', but runs builtin; command, builtin - both can be redefined, not special (regression)
 - **builtin-type**: type -\> alias external; type of relative path
-- **builtin-vars**: Export sets a global variable that persists after export -n; Export a local that shadows a global; Unset exported variable, then define it again.  It's NOT still exported.; Exporting a parent func variable (dynamic scope); local after readonly
+- **builtin-vars**: local after readonly
 - **dbracket**: [[ regex syntax error; [[ at runtime doesn't work; [[ with env prefix doesn't work; [[ ]] with redirect
 - **dparen**: (( )) with redirect
 - **assign**: Trying to run keyword 'for'; Test above without 'local' (which is not POSIX); aliased assignment doesn't split; "declare -a arr" and "readonly -a a" creates an empty array (OSH)
 - **array**: space before ( in array initialization; array with invalid token
-- **array-assoc**: unset -v and assoc array; nameref and assoc array; bash bug: (( A["$key"] = 1 )) doesn't work
+- **array-assoc**: unset -v and assoc array; bash bug: (( A["$key"] = 1 )) doesn't work
 - **brace-expansion**: expansion on RHS of assignment; no expansion with RHS assignment; Two kinds of tilde expansion; Mixed case char expansion is invalid
 - **tilde**: ${undef:-~}; ${x//~/~root}; a[x]=foo:~ has tilde expansion; x=${undef-~:~}; temp assignment x=~ env
 - **glob**: \ in unquoted substitutions does not match a backslash; \ in unquoted substitutions escapes globchars
-- **pipeline**: PIPESTATUS is set on simple commands; \|&; ! is not a command; Evaluation of argv[0] in pipeline occurs in child; SIGPIPE causes pipeline to die (regression for issue #295)
+- **pipeline**: \|&; ! is not a command; Evaluation of argv[0] in pipeline occurs in child; SIGPIPE causes pipeline to die (regression for issue #295)
 - **exit-status**: If subshell false -- exit code is propagated in a weird way (strict_argv prevents); Exit code when command sub evaluates to empty str, e.g. `false` (#2416); More test cases with empty argv
 - **errexit**: pipeline process respects errexit
 - **command_**: Command block; Permission denied; filling $PATH cache, then insert the same command earlier in cache; filling $PATH cache, then deleting command; Non-executable on $PATH; hash without args prints the cache
@@ -246,10 +407,61 @@ The same cases as above, run by scripts/conformance/browser-oils.mjs through the
 - **alias**: define and use alias on a single line; Alias must be an unquoted word, no expansions allowed; first and second word are the same alias, with trailing space; Syntax error after expansion; Loop split across alias in another way; Loop split across both iterative and recursive aliases; Alias with a quote in the middle is a syntax error; Alias can be defined and used on a single line; alias with line continuation in the middle; alias for left brace; alias for left paren; here doc inside alias; Corner case: alias inside LHS array arithmetic expression
 - **let**: let with ()
 - **shell-grammar**: If with then on same line missing semicolon
-- **process-sub**: Process sub from shell to stdin; Non-linear pipeline with \>()
+- **process-sub**: Non-linear pipeline with \>()
 - **regex**: Unquoted { is a regex parse error; make a lisp example
-- **background**: wait -n with arguments - arguments are respected; wait with invalid arg; Wait for job and PIPESTATUS - cat; Signal message for killed background job
-- **sh-options**: noclobber on \<\>
+- **background**: wait -n with arguments - arguments are respected; wait with invalid arg; Signal message for killed background job
+- **sh-options**: noclobber on \<\>; set without args lists variables; set without args and array variables; set without args and assoc array variables (not in OSH)
+- **var-op-bash**: Array expansion with nullary var op @Q
+- **nameref**: exported nameref; a[expr] in nameref; a[@] in nameref; bad mutation through nameref: ref[0]= where ref is array[0]
+- **assign-extended**: declare -F with shopt -s extdebug and main file; Env bindings shouldn't contain array assignments; syntax error in array assignment; declare -g (bash-specific; bash-completion uses it); dynamic array parsing is not allowed; invalid var name
+- **array-literal**: Tilde expansions in RHS of [k]=v (BashArray); Tilde expansions in RHS of [k]=v (BashAssoc); append to element (BashArray); append to element (BashAssoc); non-index forms of element (BashAssoc); Evaluation order (2); Evaluation order (3); [k1]=v1 (BashArray); [k1]=v1 looking like brace expansions (BashArray); BashArray cannot be changed to BashAssoc and vice versa; (strict_array) declare -A s+=(); (strict_array) assoc=(key value ...) is not allowed
+- **array-sparse**: a[i]=v with BigInt; compgen -F _set_COMPREPLY
+- **array-assign**: Multiple LHS array words; LHS array is protected with shopt -s eval_unsafe_arith, e.g. 'a[$(echo 2)]'; file named a[ is  not executed; Are quotes allowed?; Tricky parsing - a[ a[0]=1 ]=X  a[ a[0]+=1 ]+=X; argv.py a[1 + 2]=; declare builtin doesn't allow spaces
+- **array-compat**: Assignment Causes Array Decay; Array Decay with IFS; User arrays decay
+- **builtin-trap-bash**: trap DEBUG and command sub / subshell; trap DEBUG case; trap DEBUG for expr; trap DEBUG if while; trap RETURN; Combine ERR trap and USR1 trap
+- **builtin-trap-err**: trap ERR pipelines without simple commands; Pipeline group quirk; set -o errtrace: trap ERR runs in subprograms; set -o errtrace: trap ERR with &
+- **builtin-set**: set -u with undefined var in interactive shell does NOT exit the interpreter; 'set' and 'eval' round trip; set - leading single dash is ignored, turns off xtrace verbose (#2364); set - stops option processing like set --; A single + is an ignored flag; not an argument; set - + and + -
+- **builtin-bash**: bad help topic
+- **builtin-type-bash**: type -p and -P builtin -\> file; type -f builtin -\> function and file exists; type -a -\> keyword; type -P does not find directories (regression)
+- **builtin-process**: exec -- 2\>&1; exec -a sets argv[0]; Exit builtin with too many args; ulimit negative flag; ulimit negative arg; ulimit accepts 'unlimited'; ulimit of 2**32, 2**31 (int overflow); ulimit that is 64 bits; arg that would overflow 64 bits is detected; ulimit -f 1 prevents files larger 512 bytes; ulimit -S for soft limit (default), -H for hard limit; Changing resource limit is denied; ulimit -n limits file descriptors
+- **builtin-kill**: kill -L checks for invalid input; kill -l 0 returns EXIT; kill -l 0 INT lists both signals
+- **builtin-meta**: command -v executable, builtin; command -v doesn't find non-executable file; command -v doesn't find executable dir; command -V; command -p (override existing program); command -p (hide tool in custom path); builtin ls not found; builtin usage
+- **builtin-meta-assign**: builtin declare a=(x y) is allowed
+- **builtin-misc**: history builtin usage; Print shell strings with weird chars: set and printf %q and ${x@Q}
+- **extglob-match**: extglob in variable; nested @(); Turning extglob on changes the meaning of [[ !(str) ]] in bash
+- **extglob-files**: Two adjacent alternations; Extended glob patterns with spaces; Glob other punctuation chars (lexer mode); More glob escaping; Escaping of pipe (glibc bug, see demo/glibc_fnmatch.c); Extended glob in assignment builtin; In Array Literal and for loop; No extended glob with simple_word_eval (YSH evaluation)
+- **glob-bash**: shopt -s failglob in loop context; shopt -s failglob in array literal context; shopt -s failglob exits properly in loop context with set -e; shopt -s failglob behavior on single line with semicolon
+- **globignore**: Ignore *.txt; Ignore ?.txt; Ignore *.o:*.h; Ignore single file src/__main__.py; Ignore dirs dist/*:node_modules/*; find files in subdirectory but not the ignored pattern; Ignore globs with char patterns like [!ab]; Ignore globs with char classes like [[:alnum:]]; Ignore *; treat escaped patterns literally; resetting globignore reverts to default behaviour; Ignore .:..; Quoting GLOBIGNORE; . and .. always filtered when GLOBIGNORE is set; When GLOBIGNORE is set, glob may become empty (nullglob too); Extended glob expansion combined with GLOBIGNORE
+- **introspect**: Locations with temp frame; Locations when sourcing; Sourcing inside function grows the debug stack
+- **var-ref**: ${!a[@]-'default'} is legal but fails with more than one element; var ref TO array with arbitrary subscripts; Var Ref Code Injection $(tee PWNED); ${!array_ref:-set} and ${!array_ref:=assign}; Array indirect expansion with suffix operators; Array indirect expansion with replacements; Array indirect expansion with @? conversion
+- **xtrace**: xtrace with unprintable chars
+- **sh-options-bash**: export SHELLOPTS does cross-process tracing; export SHELLOPTS does cross-process tracing with bash; OSH calling bash with SHELLOPTS does not change braceexpand
+- **redirect-command**: `\< $file` behaves like $(\< file); Redirect in the middle of two assignments; Redirect in function body; Redirect in function body is evaluated multiple times; redirect subshell; Prefix redirect for loop -- not allowed
+- **redirect-multi**: File redirects with glob args (bash and zsh only); File redirect without matching any file, with failglob; File redirect to $var with glob char; File redirect that globs to more than one file (bash and zsh only); File redirect with extended glob; Extended glob that doesn't match anything; Redirect with brace expansion isn't allowed; File redirects have word splitting too!
+- **redir-order**: subshell + redirect order; for word + redirect order; case word + redirect order; [[ + redirect order
+- **arith-context**: $[ is a synonym for $((; $[$var is a synonym for $(($var (#2426); $[$undefined] is a synonym for $(($undefined (#2566); Empty expression a[]
+- **arith-dynamic**: Double quotes; Substitutions
+- **for-expr**: Accepts { } syntax too
+- **bugs**: assign readonly -- one line; First word like foo$x() and foo$[1+2] (regression); Function names; file with NUL byte; autoconf word split (#1449); command execution $(echo 42 \| tee PWNED) not allowed; unset doesn't allow command execution; Crash after changing $[] to be alias of $(( ))
+- **toysh-posix**: Function def in pipeline; IFS; IFS - http://landley.net/notes.html#05-03-2020; IFS=x and '' and unquoted $@ - reduction of case above - copied into spec/word-split; for loop parsing - http://landley.net/notes.html#04-03-2020; IFS 4; Can't parse extra }; Command Sub Syntax Error
+- **toysh**: char class / extglob; patsub of $* - http://landley.net/notes.html#23-04-2020; Brace Expansion; {abc}\<\<\< - http://landley.net/notes-2019.html#09-12-2019
+- **blog1**: ${##}; ${###}; ${####}; ${##2}; ${###2}
+- **blog2**: -a -a -a -a; -a -a -a -a -a; -a -a -a -a -a -a -a; -a -a -a -a -a -a -a -a
+- **blog-other1**: ` on its own line
+- **nix-idioms**: ${!ref} to undefined string var is fatal, INCONSISTENT with array; export with dynamic var name +=
+- **ble-idioms**: shopt -u expand_aliases and eval; Issue #1069 [53] BUG: a[1 + 1]=2, etc. fails; Issue #1069 [59] - Assigning Str to BashArray/BashAssoc should not remove BashArray/BashAssoc
+- **ble-unset**: [bash_unset] dynamic-unset for nested tempenvs; [bash_unset] local-unset for nested tempenvs
+- **nocasematch-match**: [[ equality matching; [[ regex matching; case matching
+- **paren-ambiguity**: (( closed with ) ) after multiple lines is command - #2337; $(( closed with ) ) after multiple lines is command - #2337
+- **parse-errors**: Incomplete while; Incomplete for; Incomplete if; } is a parse error; { is its own word, needs a space; bad var name globally isn't parsed like an assignment; bad var name in export; bad var name in local; misplaced parentheses are not a subshell; incomplete command sub; incomplete backticks; misplaced ;;; interactive parse error (regression); array literal inside array is a parse error; array literal inside loop is a parse error; array literal in case; %foo=() is parse error (regression)
+- **unicode**: OSH source code doesn't have to be valid Unicode (like other shells); Unicode escapes \u03bc \U000003bc in $'', echo -e, printf
+- **nul-bytes**: printf - literal NUL in format string; printf - NUL byte in value (OSH and zsh agree); NUL bytes with echo $'\0' (OSH and zsh agree); NUL bytes and IFS splitting; NUL bytes with test -n; NUL bytes with test -f; NUL bytes with ${#s} (OSH and zsh agree); Compare \x00 byte versus \x01 byte - command sub; Compare \x00 byte versus \x01 byte - read builtin; Compare \x00 byte versus \x01 byte - read -n; Compare \x00 byte versus \x01 byte - mapfile builtin; Strip ops # ## % %% with NUL bytes; Issue 2269 Reduction; Issue 2269 - Do NUL bytes match ? in ${a#?}
+- **assign-deferred**: export a[7]=8; is 'builtin' prefix and array allowed?  OSH is smarter; is 'command' prefix and array allowed?  OSH is smarter
+- **vars-bash**: $SHELL is set to what is in /etc/passwd
+- **bool-parse**: test builtin: ( = ) is confusing: equality test or non-empty string test; test builtin: ( == ) is confusing: equality test or non-empty string test; [[ -f -f ]] and [[ -f == ]]
+- **serialize**: printf %q unprintable; printf %q unicode; printf %q invalid unicode; set; declare
+- **sh-usage**: Set LC_ALL LC_CTYPE LC_COLLATE LANG - affects glob ?; LC_CTYPE=invalid; weird flag parsing -oo errexit noglob
+- **arg-parse**: shift 1 extra; continue 1 extra, break, etc.
 
 </details>
 
@@ -369,7 +581,7 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in ta
 
 ## Syscalls: LTP under Blink (x86-64)
 
-Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel processes in the Blink engine; only tests that pass natively on the build host as an unprivileged user (uid 1000, like tabcomputer) are scored. Blink forks within one instance by default (patch 0048), so the child shares MAP_SHARED pages, where LTP keeps its result counts and checkpoints; with BLINK_SAME_INSTANCE_FORK=0 (snapshot fork) they are not shared, so when the Summary reads all zeros the TPASS/TFAIL/TBROK lines are counted instead (tests/conformance/lib/ltp.mjs). Trend: 146 (first run) → 172 → 148 (TBROK/TFAIL lines counted, snapshot fork) → 197 (same-instance fork opt-in, A/B against 155 without it) → 222 (same-instance fork the default, Blink 0034–0048, kernel O_PATH/locks/pipe sizes/epoll/errno fixes) → 229 (AF_UNIX DGRAM/SEQPACKET sockets, timeouts that never end early, unlinkat/wait4 errnos; bind04 now reaches its abstract-name cases, which Blink truncates) → 237 (Blink 0050–0054: same-instance children no longer stall each other, sleeps show S and end on signals, abstract AF_UNIX names keep their length) → 240/322 (Blink 0058–0070 and signalfd01/02 added to the scored set: nanosleep04 and signalfd pass; UDP over loopback, AF_UNIX datagram backpressure and socket errnos fix bind05, sendfile07, connect03, accept03 and epoll_wait05; ppoll01 and waitpid08/10 newly fail, both Blink regressions reported to perf-blink) → 272/322 (Blink 0080/0081, built locally until perf-blink folds them into its build: record locks, pipe sizes and RLIMIT_NOFILE are the kernel's, read-only output buffers are EFAULT, LTP errnos for clocks, rlimits, iovs, waitid, sendfile, O_PATH fds, personality; waitpid13 fails like waitpid08/10) → 280/322 (measured on integration a8bf453, perf-blink's build with 0080–0082 and its 0075–0077: ppoll takes its sigmask, a futex wake is no longer counted twice (waitpid08/10/13), /proc/self/maps is a memfd, pipes are writable by the page, nanosleep writes rem before the signal frame; futex_cmp_requeue01 now crashes the test worker).
+Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel processes in the Blink engine; only tests that pass natively on the build host as an unprivileged user (uid 1000, like tabcomputer) are scored. Blink forks within one instance by default (patch 0048), so the child shares MAP_SHARED pages, where LTP keeps its result counts and checkpoints; with BLINK_SAME_INSTANCE_FORK=0 (snapshot fork) they are not shared, so when the Summary reads all zeros the TPASS/TFAIL/TBROK lines are counted instead (tests/conformance/lib/ltp.mjs). Trend: 146 (first run) → 172 → 148 (TBROK/TFAIL lines counted, snapshot fork) → 197 (same-instance fork opt-in, A/B against 155 without it) → 222 (same-instance fork the default, Blink 0034–0048, kernel O_PATH/locks/pipe sizes/epoll/errno fixes) → 229 (AF_UNIX DGRAM/SEQPACKET sockets, timeouts that never end early, unlinkat/wait4 errnos; bind04 now reaches its abstract-name cases, which Blink truncates) → 237 (Blink 0050–0054: same-instance children no longer stall each other, sleeps show S and end on signals, abstract AF_UNIX names keep their length) → 240/322 (Blink 0058–0070 and signalfd01/02 added to the scored set: nanosleep04 and signalfd pass; UDP over loopback, AF_UNIX datagram backpressure and socket errnos fix bind05, sendfile07, connect03, accept03 and epoll_wait05; ppoll01 and waitpid08/10 newly fail, both Blink regressions reported to perf-blink) → 272/322 (Blink 0080/0081, built locally until perf-blink folds them into its build: record locks, pipe sizes and RLIMIT_NOFILE are the kernel's, read-only output buffers are EFAULT, LTP errnos for clocks, rlimits, iovs, waitid, sendfile, O_PATH fds, personality; waitpid13 fails like waitpid08/10) → 280/322 (measured on integration a8bf453, perf-blink's build with 0080–0082 and its 0075–0077: ppoll takes its sigmask, a futex wake is no longer counted twice (waitpid08/10/13), /proc/self/maps is a memfd, pipes are writable by the page, nanosleep writes rem before the signal frame; futex_cmp_requeue01 now crashes the test worker). → 282/322 measured on integration bab5481 (perf-blink's engine through 0110: futex requeue, copy-on-write fork): futex_cmp_requeue02/03 and waitpid01 pass; clock_gettime04 failed once on CLOCK_BOOTTIME jitter under load (8 ms > 6 ms). → 283/322 on integration dff2c0d (perf-blink's engine through 0114 with this branch's 0500–0504): execve06 passes.
 
 | Area | Before | Now | Failing |
 |---|---|---|---|
@@ -378,7 +590,7 @@ Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel
 | bind | — | 4/4 | 0 |
 | chdir | — | 2/2 | 0 |
 | chmod | — | 2/2 | 0 |
-| clock_gettime | — | 1/1 | 0 |
+| clock_gettime | — | 0/1 | 1 |
 | clock_nanosleep | — | 3/3 | 0 |
 | clone | — | 7/8 | 1 |
 | close | — | 2/2 | 0 |
@@ -391,7 +603,7 @@ Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel
 | epoll_create1 | — | 2/2 | 0 |
 | epoll_ctl | — | 7/7 | 0 |
 | epoll_wait | — | 14/15 | 1 |
-| execve | — | 0/2 | 2 |
+| execve | — | 1/2 | 1 |
 | faccessat | — | 2/2 | 0 |
 | fchdir | — | 2/2 | 0 |
 | fchmod | — | 1/1 | 0 |
@@ -399,7 +611,7 @@ Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel
 | fork | — | 8/9 | 1 |
 | fstat | — | 4/4 | 0 |
 | ftruncate | — | 4/4 | 0 |
-| futex | — | 8/18 | 10 |
+| futex | — | 10/18 | 8 |
 | getcwd | — | 4/4 | 0 |
 | getpid | — | 1/1 | 0 |
 | getppid | — | 2/2 | 0 |
@@ -441,19 +653,20 @@ Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel
 | vfork | — | 2/2 | 0 |
 | wait4 | — | 3/3 | 0 |
 | waitid | — | 11/11 | 0 |
-| waitpid | — | 8/11 | 3 |
+| waitpid | — | 9/11 | 2 |
 | write | — | 6/6 | 0 |
 | writev | — | 2/2 | 0 |
 
 <details><summary>Failing cases</summary>
 
 - **accept**: accept02 — accept02.c:116: TBROK: ioctl(3,SIOCGIFINDEX,...) failed: ENOTTY (25)
+- **clock_gettime**: clock_gettime04 — clock_gettime04.c:169: TFAIL: CLOCK_BOOTTIME(vDSO or syscall with libc spec): Difference between successive readings greater than 6 ms (0): 11
 - **clone**: clone08 — clone08.c:85: TBROK: CLONE_PARENT_SETTID clone() failed: EINVAL (22)
 - **epoll_wait**: epoll_wait02 — tst_timer_test.c:314: TFAIL: epoll_wait() slept for too long
-- **execve**: execve01 — tst_test.c:211: TBROK: Invalid shared memory region (bad magic); execve06 — tst_test.c:211: TBROK: Invalid shared memory region (bad magic)
+- **execve**: execve01 — execve01_child.c:32: TFAIL: PATH is in environment
 - **fcntl**: fcntl14 (hang/timeout) — no summary; fcntl14_64 (hang/timeout) — no summary; fcntl27 — fcntl27.c:37: TFAIL: fcntl(fd, F_SETLEASE, F_RDLCK) expected EAGAIN/EWOULDBLOCK: EINVAL (22); fcntl27_64 — fcntl27.c:37: TFAIL: fcntl(fd, F_SETLEASE, F_RDLCK) expected EAGAIN/EWOULDBLOCK: EINVAL (22); fcntl38 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl38_64 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl39 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl39_64 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl40 (hang/timeout) — skipped: hangs tabcomputer; fcntl40_64 — passed 0 failed 0 broken 0
 - **fork**: fork14 (hang/timeout) — no summary
-- **futex**: futex_cmp_requeue01 (hang/timeout) — skipped: hangs tabcomputer; futex_cmp_requeue02 — futex_cmp_requeue02.c:60: TFAIL: futex_cmp_requeue() failed unexpectedly, expected EAGAIN/EWOULDBLOCK: EINVAL (22); futex_cmp_requeue03 — futex_cmp_requeue03.c:71: TFAIL: uaddr unmapped expected EFAULT: EINVAL (22); futex_wait05 (hang/timeout) — skipped: hangs tabcomputer; futex_waitv01 — passed 0 failed 0 broken 0; futex_waitv02 — passed 0 failed 0 broken 0; futex_waitv03 — passed 0 failed 0 broken 0; futex_wake02 — futex_wake02.c:79: TFAIL: futex_wake() woken up 3 threads, expected 10: SUCCESS (0); futex_wake03 (hang/timeout) — skipped: hangs tabcomputer; futex_wake05 — futex_wake05.c:67: TFAIL: uaddr file truncated succeeded
+- **futex**: futex_cmp_requeue01 (hang/timeout) — skipped: hangs tabcomputer; futex_wait05 (hang/timeout) — skipped: hangs tabcomputer; futex_waitv01 — passed 0 failed 0 broken 0; futex_waitv02 — passed 0 failed 0 broken 0; futex_waitv03 — passed 0 failed 0 broken 0; futex_wake02 — futex_wake02.c:79: TFAIL: futex_wake() woken up 8 threads, expected 10: SUCCESS (0); futex_wake03 (hang/timeout) — skipped: hangs tabcomputer; futex_wake05 — futex_wake05.c:67: TFAIL: uaddr file truncated succeeded
 - **lseek**: lseek11 — passed 0 failed 0 broken 0
 - **lstat**: lstat02 — lstat02.c:66: TFAIL: lstat() returned 0, expected -1: SUCCESS (0); lstat02_64 — lstat02.c:66: TFAIL: lstat() returned 0, expected -1: SUCCESS (0)
 - **pipe**: pipe13 — tst_test.c:1969: TBROK: Test killed! (timeout?)
@@ -463,7 +676,7 @@ Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel
 - **select**: select02 — tst_timer_test.c:314: TFAIL: select() slept for too long
 - **sendfile**: sendfile02_64 (hang/timeout) — skipped: hangs tabcomputer; sendfile09 — passed 0 failed 0 broken 0; sendfile09_64 — passed 0 failed 0 broken 0
 - **setrlimit**: setrlimit06 — setrlimit06.c:117: TFAIL: Got no signal after reaching both limit
-- **waitpid**: waitpid01 (hang/timeout) — no summary; waitpid06 (hang/timeout) — skipped: hangs tabcomputer; waitpid07 (hang/timeout) — skipped: hangs tabcomputer
+- **waitpid**: waitpid06 (hang/timeout) — skipped: hangs tabcomputer; waitpid07 (hang/timeout) — skipped: hangs tabcomputer
 
 </details>
 
@@ -485,38 +698,38 @@ WebAssembly/wasi-testsuite prebuilt wasip1 modules (C, Rust, AssemblyScript) run
 
 ## POSIX: Open POSIX Test Suite under Blink (x86-64)
 
-The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scripts/conformance/build-openposix.sh) run as static x86-64 kernel processes in the Blink engine: signals, pthreads, semaphores, message queues, timers, clocks, mmap, scheduling. A test passes when it exits 0; only tests that pass natively on the build host as uid 1000 are scored (openposix/native-baseline.json). First run: 1173/1448, with Blink 0080–0084 built locally (raise(SIGKILL) and sigqueue/AIO fixed from this suite); the gaps are POSIX message queues (mq_*), POSIX timers (timer_*), sigwait/sigtimedwait, sched_* policies and shm_open. → 1326/1448 (kernel POSIX message queues and timers, Blink 0086–0092 built locally: mq_*, timer_*, sigtimedwait/sigwait, sched_*; sigqueue waits on siginfo in Blink's handler frames; fork_21-1 and pthread_attr_destroy_1-1 hit a Blink page-lock assertion).
+The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scripts/conformance/build-openposix.sh) run as static x86-64 kernel processes in the Blink engine: signals, pthreads, semaphores, message queues, timers, clocks, mmap, scheduling. A test passes when it exits 0; only tests that pass natively on the build host as uid 1000 are scored (openposix/native-baseline.json). First run: 1173/1448, with Blink 0080–0084 built locally (raise(SIGKILL) and sigqueue/AIO fixed from this suite); the gaps are POSIX message queues (mq_*), POSIX timers (timer_*), sigwait/sigtimedwait, sched_* policies and shm_open. → 1326/1448 (kernel POSIX message queues and timers, Blink 0086–0089 and 0093 built locally: mq_*, timer_*, sigtimedwait/sigwait, sched_*; sigqueue waits on siginfo in Blink's handler frames; fork_21-1 and pthread_attr_destroy_1-1 hit a Blink page-lock assertion, fixed in perf-blink's 0092). → 1353/1448 with perf-blink's Blink 0092 (fork keeps page lock counts) and 0095 (siginfo in SA_SIGINFO frames, real-time signals queue): sigqueue, sigwait/sigwaitinfo, fork_21-1, pthread_attr_destroy_1-1, lio_listio and aio_* now pass. Left: shm_open and mmap of shared objects, mlock*, pthread_cancel and cancellation points, process-shared pthread objects, pthread_kill interrupting another thread's call (mq_timedsend_12-1). → 1379/1448 (kernel: kill/sigqueue permissions, SIGCHLD's CLD_* siginfo and SA_NOCLDSTOP/SA_NOCLDWAIT, sigtimedwait taking unblocked waited signals, timer overruns, open() owner bits; Blink 0096–0099 built locally: raise of a blocked real-time signal queues, sigprocmask/sigaltstack modes, write-only pages readable, shared kernel-file maps written back before a new map and at exit, mlock/mmap errors). Left: mmap of shared objects across instances and SIGBUS past EOF, pthread_cancel and cancellation points, process-shared pthread objects, fork cases, pthread_kill interrupting another thread's call (mq_timedsend_12-1); sigqueue_1-1 is fixed by perf-blink's 0110. Measured on integration bab5481 (perf-blink's engine through 0110, which has 0096–0098 but not this branch's 0500/0501): 1370/1448, rerun on a quiet machine; 0500 (mlock/mmap errors) and 0501 (pthread_cancel) add 15 more when built (1379 + pthread_cancel's 9 locally). → 1375/1448 on integration dff2c0d (perf-blink's engine through 0114 with 0500–0504, quiet rerun of the failures): pthread_cancel and cancellation points, CPU clock ids, mlock/mmap errors, fsync, st_ctime and the process-shared mutexes/condition variables of perf-blink's 0112 pass; 26 named-semaphore and /dev/shm tests (sem_*, shm_open_5-1/28-1/28-3, mmap_11-5) abort in 0112's munmap (memorymalloc.c:834), and clock_getcpuclockid_1-2 (another process's CPU clock) is fixed by 0506.
 
 | Area | Before | Now | Failing |
 |---|---|---|---|
-| aio_cancel | — | 7/11 | 4 |
+| aio_cancel | — | 8/11 | 3 |
 | aio_error | — | 2/2 | 0 |
 | aio_fsync | — | 11/11 | 0 |
 | aio_read | — | 10/10 | 0 |
 | aio_return | — | 2/2 | 0 |
-| aio_suspend | — | 1/4 | 3 |
+| aio_suspend | — | 3/4 | 1 |
 | aio_write | — | 10/10 | 0 |
 | asctime | — | 1/1 | 0 |
 | clock | — | 2/2 | 0 |
-| clock_getcpuclockid | — | 4/4 | 0 |
-| clock_getres | — | 6/7 | 1 |
-| clock_gettime | — | 7/8 | 1 |
+| clock_getcpuclockid | — | 3/4 | 1 |
+| clock_getres | — | 7/7 | 0 |
+| clock_gettime | — | 8/8 | 0 |
 | clock_nanosleep | — | 12/12 | 0 |
 | clock_settime | — | 1/1 | 0 |
 | ctime | — | 1/1 | 0 |
 | difftime | — | 1/1 | 0 |
-| fork | — | 10/16 | 6 |
-| fsync | — | 2/3 | 1 |
+| fork | — | 11/16 | 5 |
+| fsync | — | 3/3 | 0 |
 | getpid | — | 1/1 | 0 |
 | gmtime | — | 2/2 | 0 |
 | kill | — | 3/3 | 0 |
 | killpg | — | 7/7 | 0 |
-| lio_listio | — | 8/15 | 7 |
+| lio_listio | — | 15/15 | 0 |
 | localtime | — | 1/1 | 0 |
 | mktime | — | 1/1 | 0 |
-| mlock | — | 2/3 | 1 |
-| mlockall | — | 2/5 | 3 |
-| mmap | — | 21/32 | 11 |
+| mlock | — | 3/3 | 0 |
+| mlockall | — | 3/5 | 2 |
+| mmap | — | 24/32 | 8 |
 | mq_close | — | 6/6 | 0 |
 | mq_getattr | — | 2/2 | 0 |
 | mq_notify | — | 6/6 | 0 |
@@ -526,12 +739,12 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 | mq_timedreceive | — | 1/1 | 0 |
 | mq_timedsend | — | 20/21 | 1 |
 | mq_unlink | — | 4/4 | 0 |
-| munlock | — | 2/3 | 1 |
+| munlock | — | 3/3 | 0 |
 | munlockall | — | 1/1 | 0 |
 | munmap | — | 7/7 | 0 |
 | nanosleep | — | 11/11 | 0 |
 | pthread_atfork | — | 6/7 | 1 |
-| pthread_attr_destroy | — | 2/3 | 1 |
+| pthread_attr_destroy | — | 3/3 | 0 |
 | pthread_attr_getdetachstate | — | 2/2 | 0 |
 | pthread_attr_getinheritsched | — | 1/1 | 0 |
 | pthread_attr_getschedparam | — | 1/1 | 0 |
@@ -554,35 +767,35 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 | pthread_barrierattr_getpshared | — | 1/2 | 1 |
 | pthread_barrierattr_init | — | 2/2 | 0 |
 | pthread_barrierattr_setpshared | — | 2/2 | 0 |
-| pthread_cancel | — | 4/9 | 5 |
+| pthread_cancel | — | 9/9 | 0 |
 | pthread_cleanup_pop | — | 3/3 | 0 |
-| pthread_cleanup_push | — | 2/3 | 1 |
-| pthread_cond_broadcast | — | 4/7 | 3 |
-| pthread_cond_destroy | — | 2/3 | 1 |
+| pthread_cleanup_push | — | 3/3 | 0 |
+| pthread_cond_broadcast | — | 5/7 | 2 |
+| pthread_cond_destroy | — | 3/3 | 0 |
 | pthread_cond_init | — | 5/5 | 0 |
-| pthread_cond_signal | — | 4/6 | 2 |
-| pthread_cond_timedwait | — | 8/12 | 4 |
-| pthread_cond_wait | — | 4/6 | 2 |
+| pthread_cond_signal | — | 5/6 | 1 |
+| pthread_cond_timedwait | — | 9/12 | 3 |
+| pthread_cond_wait | — | 5/6 | 1 |
 | pthread_condattr_destroy | — | 4/4 | 0 |
 | pthread_condattr_getclock | — | 2/2 | 0 |
 | pthread_condattr_getpshared | — | 3/3 | 0 |
 | pthread_condattr_init | — | 2/2 | 0 |
 | pthread_condattr_setclock | — | 4/4 | 0 |
 | pthread_condattr_setpshared | — | 3/3 | 0 |
-| pthread_create | — | 11/14 | 3 |
+| pthread_create | — | 13/14 | 1 |
 | pthread_detach | — | 7/7 | 0 |
 | pthread_equal | — | 2/3 | 1 |
 | pthread_exit | — | 10/10 | 0 |
 | pthread_getcpuclockid | — | 1/1 | 0 |
 | pthread_getschedparam | — | 1/1 | 0 |
 | pthread_getspecific | — | 2/2 | 0 |
-| pthread_join | — | 4/8 | 4 |
+| pthread_join | — | 7/8 | 1 |
 | pthread_key_create | — | 4/4 | 0 |
 | pthread_key_delete | — | 3/3 | 0 |
 | pthread_kill | — | 3/6 | 3 |
 | pthread_mutex_destroy | — | 6/6 | 0 |
-| pthread_mutex_getprioceiling | — | 3/4 | 1 |
-| pthread_mutex_init | — | 5/7 | 2 |
+| pthread_mutex_getprioceiling | — | 4/4 | 0 |
+| pthread_mutex_init | — | 7/7 | 0 |
 | pthread_mutex_lock | — | 5/5 | 0 |
 | pthread_mutex_setprioceiling | — | 1/1 | 0 |
 | pthread_mutex_timedlock | — | 6/6 | 0 |
@@ -598,12 +811,12 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 | pthread_mutexattr_setprotocol | — | 3/3 | 0 |
 | pthread_mutexattr_setpshared | — | 6/6 | 0 |
 | pthread_mutexattr_settype | — | 7/7 | 0 |
-| pthread_once | — | 4/6 | 2 |
+| pthread_once | — | 5/6 | 1 |
 | pthread_rwlock_destroy | — | 2/2 | 0 |
 | pthread_rwlock_init | — | 4/4 | 0 |
 | pthread_rwlock_rdlock | — | 6/6 | 0 |
 | pthread_rwlock_timedrdlock | — | 6/6 | 0 |
-| pthread_rwlock_timedwrlock | — | 5/6 | 1 |
+| pthread_rwlock_timedwrlock | — | 6/6 | 0 |
 | pthread_rwlock_tryrdlock | — | 1/1 | 0 |
 | pthread_rwlock_trywrlock | — | 1/1 | 0 |
 | pthread_rwlock_unlock | — | 2/2 | 0 |
@@ -613,14 +826,14 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 | pthread_rwlockattr_init | — | 2/2 | 0 |
 | pthread_rwlockattr_setpshared | — | 1/1 | 0 |
 | pthread_self | — | 1/1 | 0 |
-| pthread_setcancelstate | — | 2/4 | 2 |
-| pthread_setcanceltype | — | 2/3 | 1 |
+| pthread_setcancelstate | — | 4/4 | 0 |
+| pthread_setcanceltype | — | 3/3 | 0 |
 | pthread_setschedparam | — | 0/1 | 1 |
 | pthread_setspecific | — | 2/2 | 0 |
-| pthread_sigmask | — | 13/14 | 1 |
+| pthread_sigmask | — | 14/14 | 0 |
 | pthread_spin_destroy | — | 2/2 | 0 |
 | pthread_spin_init | — | 2/4 | 2 |
-| pthread_spin_lock | — | 2/4 | 2 |
+| pthread_spin_lock | — | 3/4 | 1 |
 | pthread_spin_trylock | — | 2/2 | 0 |
 | pthread_spin_unlock | — | 3/3 | 0 |
 | pthread_testcancel | — | 2/2 | 0 |
@@ -634,18 +847,18 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 | sched_yield | — | 1/1 | 0 |
 | sem_close | — | 3/4 | 1 |
 | sem_destroy | — | 2/2 | 0 |
-| sem_getvalue | — | 5/5 | 0 |
+| sem_getvalue | — | 1/5 | 4 |
 | sem_init | — | 9/9 | 0 |
-| sem_open | — | 11/12 | 1 |
-| sem_post | — | 6/6 | 0 |
+| sem_open | — | 10/12 | 2 |
+| sem_post | — | 0/6 | 6 |
 | sem_timedwait | — | 11/11 | 0 |
-| sem_unlink | — | 9/9 | 0 |
-| sem_wait | — | 8/8 | 0 |
-| shm_open | — | 18/27 | 9 |
+| sem_unlink | — | 5/9 | 4 |
+| sem_wait | — | 2/8 | 6 |
+| shm_open | — | 22/27 | 5 |
 | shm_unlink | — | 7/7 | 0 |
-| sigaction | — | 496/500 | 4 |
+| sigaction | — | 499/500 | 1 |
 | sigaddset | — | 5/5 | 0 |
-| sigaltstack | — | 9/11 | 2 |
+| sigaltstack | — | 11/11 | 0 |
 | sigdelset | — | 5/5 | 0 |
 | sigemptyset | — | 2/2 | 0 |
 | sigfillset | — | 2/2 | 0 |
@@ -655,14 +868,14 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 | signal | — | 6/6 | 0 |
 | sigpause | — | 5/5 | 0 |
 | sigpending | — | 4/4 | 0 |
-| sigprocmask | — | 11/12 | 1 |
-| sigqueue | — | 5/13 | 8 |
+| sigprocmask | — | 12/12 | 0 |
+| sigqueue | — | 13/13 | 0 |
 | sigrelse | — | 3/3 | 0 |
 | sigset | — | 10/10 | 0 |
 | sigsuspend | — | 4/4 | 0 |
 | sigtimedwait | — | 5/5 | 0 |
-| sigwait | — | 6/8 | 2 |
-| sigwaitinfo | — | 5/8 | 3 |
+| sigwait | — | 8/8 | 0 |
+| sigwaitinfo | — | 8/8 | 0 |
 | speculative | — | 17/17 | 0 |
 | strchr | — | 1/1 | 0 |
 | strcpy | — | 1/1 | 0 |
@@ -672,60 +885,43 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 | time | — | 1/1 | 0 |
 | timer_create | — | 8/8 | 0 |
 | timer_delete | — | 2/2 | 0 |
-| timer_getoverrun | — | 3/4 | 1 |
+| timer_getoverrun | — | 4/4 | 0 |
 | timer_gettime | — | 7/7 | 0 |
 | timer_settime | — | 14/14 | 0 |
 
 <details><summary>Failing cases</summary>
 
-- **aio_cancel**: aio_cancel_3-1 — exit 131: ; aio_cancel_5-1 (hang/timeout) — timeout: ; aio_cancel_6-1 (hang/timeout) — timeout: ; aio_cancel_7-1 (hang/timeout) — timeout: 
-- **aio_suspend**: aio_suspend_1-1 — UNRESOLVED: aio_suspend/1-1.c Error at write(): No such file or directory; aio_suspend_4-1 — exit 131: ; aio_suspend_9-1 — exit 131: 
-- **clock_getres**: clock_getres_6-2 — FAIL: At least one test FAILED -- see above
-- **clock_gettime**: clock_gettime_8-2 — FAIL: At least one test FAILED -- see above
-- **fork**: fork_13-1 — FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/13-1.c FAILED: Child exited abnormally; fork_18-1 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/18-1.c unresolved: got 22 (Invalid argument) on line 87 (Failed to create a ti; fork_21-1 — exit 134: 	<blink backtrace unavailable>; fork_22-1 — FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/22-1.c FAILED: Child exited abnormally; fork_7-1 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/7-1.c unresolved: got 2 (No such file or directory) on line 121 (Could not ope; fork_8-1 (hang/timeout) — timeout: 
-- **fsync**: fsync_7-1 — FAIL: fsync/7-1.c Test Fail: Expect EINVAL, get: Success
-- **lio_listio**: lio_listio_10-1 — exit 131: ; lio_listio_14-1 — exit 131: ; lio_listio_15-1 — exit 131: ; lio_listio_2-1 — exit 132: ; lio_listio_3-1 — exit 131: ; lio_listio_4-1 — exit 132: ; lio_listio_7-1 — exit 131: 
-- **mlock**: mlock_8-1 — UNRESOLVED: Unexpected error: Success
-- **mlockall**: mlockall_13-1 — FAIL: mlockall() return 0 instead of -1.; mlockall_3-6 — FAIL: The shared memory pages of the process are not locked.; mlockall_3-7 — FAIL: The mapped files pages of the process are not locked.
-- **mmap**: mmap_10-1 (hang/timeout) — timeout: ; mmap_11-2 — FAIL: Test FAILED: SIGBUS not triggered, while Memory Protection is enabled; mmap_11-3 — FAIL: Test FAILED: SIGBUS not triggered, while Memory Protection is enabled; mmap_11-4 — UNTESTED: From mmap(2) manpage, skip known bug on tmpfs; mmap_14-1 — FAIL: Test FAILED: st_ctime and st_mtime were not updated properly; mmap_21-1 — FAIL: Test FAILED; mmap_23-1 — FAIL: Text FAILED: mmap() succeded; mmap_24-1 (hang/timeout) — timeout: ; mmap_24-2 — FAIL: Test Fail: Did not get ENOMEM as expected; mmap_3-1 — FAIL: Test Fail: The file is not mapped correctly; mmap_7-4 — FAIL: mmap with MAP_SHARED failed to propagate change into the child
+- **aio_cancel**: aio_cancel_5-1 (hang/timeout) — timeout: ; aio_cancel_6-1 (hang/timeout) — timeout: ; aio_cancel_7-1 (hang/timeout) — timeout: 
+- **aio_suspend**: aio_suspend_1-1 — UNRESOLVED: aio_suspend/1-1.c Error at write(): No such file or directory
+- **clock_getcpuclockid**: clock_getcpuclockid_1-2 — UNRESOLVED: clock_getcpuclockid() failed: No such process
+- **fork**: fork_13-1 — FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/13-1.c FAILED: Child exited abnormally; fork_18-1 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/18-1.c unresolved: got 22 (Invalid argument) on line 87 (Failed to create a ti; fork_22-1 — FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/22-1.c FAILED: Child exited abnormally; fork_7-1 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/7-1.c unresolved: got 2 (No such file or directory) on line 121 (Could not ope; fork_8-1 (hang/timeout) — timeout: 
+- **mlockall**: mlockall_3-6 — FAIL: The shared memory pages of the process are not locked.; mlockall_3-7 — FAIL: The mapped files pages of the process are not locked.
+- **mmap**: mmap_10-1 (hang/timeout) — timeout: ; mmap_11-2 — FAIL: Test FAILED: SIGBUS not triggered, while Memory Protection is enabled; mmap_11-3 — FAIL: Test FAILED: SIGBUS not triggered, while Memory Protection is enabled; mmap_11-4 — UNTESTED: From mmap(2) manpage, skip known bug on tmpfs; mmap_11-5 — exit 134: 	<blink backtrace unavailable>; mmap_24-1 (hang/timeout) — timeout: ; mmap_3-1 — FAIL: Test Fail: The file is not mapped correctly; mmap_7-4 — FAIL: mmap with MAP_SHARED failed to propagate change into the child
 - **mq_timedsend**: mq_timedsend_12-1 (hang/timeout) — timeout: 
-- **munlock**: munlock_10-1 — UNRESOLVED: Unexpected error: Success
 - **pthread_atfork**: pthread_atfork_3-3 (hang/timeout) — timeout: 
-- **pthread_attr_destroy**: pthread_attr_destroy_1-1 — exit 134: 
-- **pthread_barrierattr_getpshared**: pthread_barrierattr_getpshared_2-1 — FAIL: Test Fail: block on pthread_barrier_wait()
-- **pthread_cancel**: pthread_cancel_1-1 — FAIL: Test FAILED: Cancel request timed out; pthread_cancel_2-1 — FAIL: Test FAILED: Timed out while waiting for cancelation cleanup handlers to execute; pthread_cancel_2-2 — FAIL: unexpected error: pthread_cancel 2-2: Test FAIL: Destructor was not executed.; pthread_cancel_2-3 — FAIL: unexpected error: pthread_cancel 2-3: Test FAIL: Cleanup handler was not executed.; pthread_cancel_3-1 (hang/timeout) — timeout: Error: cancel never arrived
-- **pthread_cleanup_push**: pthread_cleanup_push_1-2 — UNRESOLVED: Error: cancellation not correctly handled
-- **pthread_cond_broadcast**: pthread_cond_broadcast_1-2 (hang/timeout) — timeout:  MF  : 200809; pthread_cond_broadcast_2-3 (hang/timeout) — timeout: ; pthread_cond_broadcast_4-2 (hang/timeout) — timeout: 
-- **pthread_cond_destroy**: pthread_cond_destroy_2-1 (hang/timeout) — timeout: 
-- **pthread_cond_signal**: pthread_cond_signal_1-2 (hang/timeout) — timeout: ; pthread_cond_signal_4-2 (hang/timeout) — timeout: 
-- **pthread_cond_timedwait**: pthread_cond_timedwait_2-5 (hang/timeout) — timeout: ; pthread_cond_timedwait_2-6 (hang/timeout) — timeout: ; pthread_cond_timedwait_4-2 (hang/timeout) — timeout:  MF  : 200809; pthread_cond_timedwait_4-3 (hang/timeout) — timeout: 
-- **pthread_cond_wait**: pthread_cond_wait_2-3 (hang/timeout) — timeout: ; pthread_cond_wait_4-1 (hang/timeout) — timeout: 
-- **pthread_create**: pthread_create_1-3 (hang/timeout) — timeout: Test FAILED: Alarm fired while waiting for cancelation; pthread_create_11-1 (hang/timeout) — timeout: ; pthread_create_3-2 — UNRESOLVED: )
+- **pthread_barrierattr_getpshared**: pthread_barrierattr_getpshared_2-1 — exit 134: 	<blink backtrace unavailable>
+- **pthread_cond_broadcast**: pthread_cond_broadcast_1-2 (hang/timeout) — timeout:  MF  : 200809; pthread_cond_broadcast_4-2 (hang/timeout) — timeout: 
+- **pthread_cond_signal**: pthread_cond_signal_4-2 (hang/timeout) — timeout: 
+- **pthread_cond_timedwait**: pthread_cond_timedwait_2-5 (hang/timeout) — timeout: ; pthread_cond_timedwait_4-2 (hang/timeout) — timeout:  MF  : 200809; pthread_cond_timedwait_4-3 (hang/timeout) — timeout: 
+- **pthread_cond_wait**: pthread_cond_wait_4-1 (hang/timeout) — timeout: 
+- **pthread_create**: pthread_create_11-1 (hang/timeout) — timeout: 
 - **pthread_equal**: pthread_equal_2-1 (hang/timeout) — timeout: 
-- **pthread_join**: pthread_join_1-2 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/pthread_join/1-2.c unresolved: got 3 (No such process) on line 98 (Failed to create; pthread_join_3-1 (hang/timeout) — timeout: ; pthread_join_4-1 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/pthread_join/4-1.c unresolved: got 3 (No such process) on line 114 (Failed to creat; pthread_join_6-3 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/pthread_join/6-3.c unresolved: got 3 (No such process) on line 142 (Failed to creat
+- **pthread_join**: pthread_join_6-3 (hang/timeout) — timeout: 
 - **pthread_kill**: pthread_kill_2-1 — exit 139: ; pthread_kill_3-1 — exit 139: ; pthread_kill_8-1 — exit 139: 
-- **pthread_mutex_getprioceiling**: pthread_mutex_getprioceiling_3-3 — exit 134: The futex facility returned an unexpected error code.
-- **pthread_mutex_init**: pthread_mutex_init_1-2 (hang/timeout) — timeout: ; pthread_mutex_init_3-2 (hang/timeout) — timeout: 
 - **pthread_mutex_trylock**: pthread_mutex_trylock_4-3 (hang/timeout) — timeout: 
-- **pthread_once**: pthread_once_3-1 (hang/timeout) — timeout: : Interrupted system call; pthread_once_6-1 (hang/timeout) — timeout: 
-- **pthread_rwlock_timedwrlock**: pthread_rwlock_timedwrlock_6-1 — FAIL: Test FAILED: Timeout was for 5 seconds, but waited for 4.999750 seconds instead
-- **pthread_rwlockattr_getpshared**: pthread_rwlockattr_getpshared_2-1 (hang/timeout) — timeout: Test FAILED: Child expects EBUSY
-- **pthread_setcancelstate**: pthread_setcancelstate_1-1 — FAIL: Test FAILED: Thread of cancel type PTHREAD_CANCEL_ENABLE did not honor cancel request; pthread_setcancelstate_2-1 — FAIL: Test FAILED: Thread default cancel type is not PTHREAD_CANCEL_ENABLE, it did not honor cancel request
-- **pthread_setcanceltype**: pthread_setcanceltype_1-1 — FAIL: Test FAILED: Cancel request timed out
+- **pthread_once**: pthread_once_6-1 (hang/timeout) — timeout: 
+- **pthread_rwlockattr_getpshared**: pthread_rwlockattr_getpshared_2-1 — exit 134: 	<blink backtrace unavailable>
 - **pthread_setschedparam**: pthread_setschedparam_5-1 (hang/timeout) — timeout: 
-- **pthread_sigmask**: pthread_sigmask_10-1 — FAIL: Test FAILED
-- **pthread_spin_init**: pthread_spin_init_2-1 (hang/timeout) — timeout: ; pthread_spin_init_2-2 (hang/timeout) — timeout: 
-- **pthread_spin_lock**: pthread_spin_lock_1-1 (hang/timeout) — timeout: ; pthread_spin_lock_3-1 — exit 139: 
+- **pthread_spin_init**: pthread_spin_init_2-1 — exit 134: 	<blink backtrace unavailable>; pthread_spin_init_2-2 — exit 134: 	<blink backtrace unavailable>
+- **pthread_spin_lock**: pthread_spin_lock_1-1 (hang/timeout) — timeout: 
 - **sched_setparam**: sched_setparam_26-1 — FAIL: errno is not EPERM: Success
-- **sem_close**: sem_close_3-2 — FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/sem_close/3-2.c FAILED: The semaphore count has changed after sem_close
-- **sem_open**: sem_open_3-1 — UNRESOLVED: unexpected error: sem_open 3-1: sem_open: No such file or directory
-- **shm_open**: shm_open_1-1 — exit 139: ; shm_open_14-2 — exit 139: ; shm_open_15-1 (hang/timeout) — skipped: hangs tabcomputer; shm_open_23-1 (hang/timeout) — timeout: ; shm_open_28-1 — exit 139: ; shm_open_28-3 — exit 139: ; shm_open_32-1 — FAIL: shm_open success.; shm_open_34-1 — FAIL: shm_open success.; shm_open_5-1 — FAIL: Test FAILED
-- **sigaction**: sigaction_10-1 (hang/timeout) — timeout: ; sigaction_17-15 (hang/timeout) — skipped: hangs tabcomputer; sigaction_21-1 — FAIL: Test FAILED; sigaction_29-1 — exit 160: 
-- **sigaltstack**: sigaltstack_11-1 — FAIL: Test FAILED: Expected return value of -1.; sigaltstack_2-1 — FAIL: Test FAILED: ss_sp of the handler's stack changed even though SS_DISABLE was set
-- **sigprocmask**: sigprocmask_10-1 — FAIL: FAIL: SIGKILL was added to the signal mask
-- **sigqueue**: sigqueue_1-1 — FAIL: Test FAILED; sigqueue_12-1 — FAIL: sigqueue() did not return -1; sigqueue_3-1 — FAIL: Test FAILED: sigqueue() succeeded even though this program's user id did not match the recieving process's user id; sigqueue_4-1 — exit 130: ; sigqueue_5-1 — exit 130: ; sigqueue_6-1 — exit 130: ; sigqueue_7-1 — exit 160: ; sigqueue_8-1 — exit 130: 
-- **sigwait**: sigwait_2-1 — FAIL: Test FAILED; sigwait_6-2 — FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/sigwait/6-2.c FAILED: Unexpected number of threads awaken
-- **sigwaitinfo**: sigwaitinfo_3-1 — FAIL: Test FAILED; sigwaitinfo_7-1 — FAIL: Test FAILED: The queued value 0 was dequeued before the queued value 5 even though 5 was queued first.; sigwaitinfo_8-1 (hang/timeout) — timeout: 
-- **timer_getoverrun**: timer_getoverrun_2-3 — FAIL: FAIL:  0 overruns sent; expected 499
+- **sem_close**: sem_close_3-2 — exit 134: 	<blink backtrace unavailable>
+- **sem_getvalue**: sem_getvalue_1-1 — exit 134: 	<blink backtrace unavailable>; sem_getvalue_2-1 — exit 134: 	<blink backtrace unavailable>; sem_getvalue_4-1 — exit 134: 	<blink backtrace unavailable>; sem_getvalue_5-1 — exit 134: 	<blink backtrace unavailable>
+- **sem_open**: sem_open_1-3 — exit 134: 	<blink backtrace unavailable>; sem_open_1-4 — exit 134: 	<blink backtrace unavailable>
+- **sem_post**: sem_post_1-1 — exit 134: 	<blink backtrace unavailable>; sem_post_1-2 — exit 134: 	<blink backtrace unavailable>; sem_post_2-1 — exit 134: 	<blink backtrace unavailable>; sem_post_4-1 — exit 134: 	<blink backtrace unavailable>; sem_post_5-1 — exit 134: 	<blink backtrace unavailable>; sem_post_6-1 — exit 134: 	<blink backtrace unavailable>
+- **sem_unlink**: sem_unlink_2-1 — exit 134: 	<blink backtrace unavailable>; sem_unlink_6-1 — exit 134: 	<blink backtrace unavailable>; sem_unlink_7-1 — exit 134: blink: aborted:; sem_unlink_9-1 — exit 134: blink: aborted:
+- **sem_wait**: sem_wait_1-1 — exit 134: 	<blink backtrace unavailable>; sem_wait_1-2 — exit 134: 	<blink backtrace unavailable>; sem_wait_11-1 — exit 134: 	<blink backtrace unavailable>; sem_wait_12-1 — exit 134: 	<blink backtrace unavailable>; sem_wait_3-1 — exit 134: 	<blink backtrace unavailable>; sem_wait_5-1 — exit 134: 	<blink backtrace unavailable>
+- **shm_open**: shm_open_15-1 (hang/timeout) — skipped: hangs tabcomputer; shm_open_23-1 (hang/timeout) — timeout: ; shm_open_28-1 — exit 134: 	<blink backtrace unavailable>; shm_open_28-3 — exit 134: 	<blink backtrace unavailable>; shm_open_5-1 — exit 134: 	<blink backtrace unavailable>
+- **sigaction**: sigaction_17-15 (hang/timeout) — skipped: hangs tabcomputer
 
 </details>

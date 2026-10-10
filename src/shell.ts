@@ -171,6 +171,10 @@ export interface BackgroundJob {
   pids?: number[];
   /** Kernel jobs: tty modes saved when the job stopped */
   termios?: import('./kernel/pty').Termios;
+  /** In-page jobs: the child shell running it, its parent's pid and start time (its /proc/PID) */
+  shell?: Shell;
+  ppid?: number;
+  startMs?: number;
 }
 
 /** bash's shopt options, and those on by default in a non-interactive bash */
@@ -279,6 +283,37 @@ export function inPageJobForPid(pid: number): BackgroundJob | undefined {
   return inPageJobs.get(pid);
 }
 
+/** Newlines as `; `, except inside quotes ('…', "…", $'…'), where they are text */
+function newlinesToSemicolons(s: string): string {
+  if (!s.includes('\n')) return s;
+  let out = '';
+  let q = '';
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (q === "'") { out += c; if (c === "'") q = ''; continue; }
+    if (q === '"' || q === "$'") {
+      out += c;
+      if (c === '\\' && i + 1 < s.length) { out += s[++i]; continue; }
+      if ((q === '"' && c === '"') || (q === "$'" && c === "'")) q = '';
+      continue;
+    }
+    if (c === '\\' && i + 1 < s.length) { out += c + s[++i]; continue; }
+    if (c === '$' && s[i + 1] === "'") { q = "$'"; out += "$'"; i++; continue; }
+    if (c === "'" || c === '"') { q = c; out += c; continue; }
+    if (c === '`') {
+      // a `…` substitution keeps its lines (as_me=`…` in configure)
+      let j = i + 1;
+      while (j < s.length && s[j] !== '`') j += s[j] === '\\' ? 2 : 1;
+      out += s.slice(i, j + 1);
+      i = j;
+      continue;
+    }
+    if (c === '\r' && s[i + 1] === '\n') continue;
+    out += c === '\n' ? '; ' : c;
+  }
+  return out;
+}
+
 /** bash's ${x@Q}: '…' ('\\'' for a quote), or $'…' when the value has control characters */
 export function quoteReusable(v: string): string {
   if (!/[\x00-\x1f\x7f]/.test(v)) return `'${v.replace(/'/g, "'\\''")}'`;
@@ -327,6 +362,17 @@ let activeShell: WeakRef<Shell> | undefined;
 /** In-page shells in /proc: their own pids, the shell running in-page commands as /proc/self */
 addProcInfoSource({
   get(pid) {
+    const job = inPageJobs.get(pid);
+    if (job?.shell) {
+      // an in-page background job ($!): its command, run by a child shell
+      const argv = job.command.trim().split(/\s+/);
+      const comm = argv[0].slice(argv[0].lastIndexOf('/') + 1);
+      return {
+        pid, ppid: job.ppid ?? 1, pgid: pid, sid: job.ppid ?? pid, comm, state: 'S', cmdline: argv,
+        cwd: job.shell.cwd, environ: job.shell.exportedEnv(), exe: argv[0].startsWith('/') ? argv[0] : `/usr/bin/${comm}`,
+        startMs: job.startMs,
+      };
+    }
     const active = activeShell?.deref();
     const sh = shellForPid(pid) ?? (active?.shellPid === pid ? active : undefined);
     // A shell that is a kernel process: the kernel's table has its argv and fds
@@ -340,7 +386,7 @@ addProcInfoSource({
   },
   list() {
     const active = activeShell?.deref();
-    return [...shellsByPid.keys(), ...(active ? [active.shellPid] : [])];
+    return [...shellsByPid.keys(), ...(active ? [active.shellPid] : []), ...inPageJobs.keys()];
   },
 });
 setProcSelf(() => activeShell?.deref()?.shellPid);
@@ -527,6 +573,11 @@ export function splitFields(value: string, ifs: string | undefined): string {
   let cur = '';
   let i = 0;
   const n = value.length;
+  // Field breaks at the ends join the text around the expansion (/a$sep/b with sep=: is /a and /b):
+  // leading IFS whitespace breaks before; a leading separator ends the field before (an empty one
+  // here, which merges with that text); a trailing separator or blank breaks after
+  const lead = n > 0 && isWs(value[0]) ? ' ' : '';
+  const trail = n > 0 && (isWs(value[n - 1]) || isSep(value[n - 1])) ? ' ' : '';
   while (i < n && isWs(value[i])) i++;
   while (i < n) {
     const c = value[i];
@@ -544,7 +595,7 @@ export function splitFields(value: string, ifs: string | undefined): string {
     cur += c; i++;
   }
   if (cur !== '') fields.push(cur);
-  return fields.map((f) => (f === '' ? "''" : protect(f))).join(' ');
+  return lead + fields.map((f) => (f === '' ? "''" : protect(f))).join(' ') + trail;
 }
 export function protectExpansion(value: string): string {
   return /["'\\$`|<>&;\x01]/.test(value) ? value.replace(/["'\\$`|<>&;\x01]/g, (c) => EXPANSION_PROTECT[c]) : value;
@@ -615,8 +666,10 @@ export class Shell {
   /** Functions marked with `export -f`: the only ones a new shell process (sh -c, a script) gets */
   exportedFunctions = new Set<string>();
   backgroundJobs: Map<number, BackgroundJob> = new Map();
-  /** Shell options: errexit (-e), xtrace (-x), nounset (-u), verbose (-v) */
-  options: Set<string> = new Set(DEFAULT_OPTIONS);
+  /** Shell options: errexit (-e), xtrace (-x), nounset (-u), verbose (-v); $SHELLOPTS follows them */
+  private _options: Set<string> = this.watchOptions(new Set(DEFAULT_OPTIONS));
+  get options(): Set<string> { return this._options; }
+  set options(v: Set<string>) { this._options = this.watchOptions(v); this.syncOptionVars(); }
   /** $BASHPID: 1 (= $$) in the top shell, a new number in each subshell */
   bashPid = 1;
   /** $$ (a subshell keeps its parent's) and $PPID */
@@ -689,8 +742,30 @@ export class Shell {
   /** Readonly variable names */
   readonlyVars: Set<string> = new Set();
   /** Bash shopt options: extglob, nocaseglob, nullglob, dotglob, globstar, etc. */
-  /** shopt options that are on (bash's non-interactive defaults to start) */
-  shoptopts: Set<string> = new Set(SHOPT_DEFAULTS);
+  /** shopt options that are on (bash's non-interactive defaults to start); $BASHOPTS follows them */
+  private _shoptopts: Set<string> = this.watchOptions(new Set(SHOPT_DEFAULTS));
+  get shoptopts(): Set<string> { return this._shoptopts; }
+  set shoptopts(v: Set<string>) { this._shoptopts = this.watchOptions(v); this.syncOptionVars(); }
+
+  /** An option set whose changes update $SHELLOPTS and $BASHOPTS */
+  private watchOptions(set: Set<string>): Set<string> {
+    const add = Set.prototype.add, del = Set.prototype.delete, clear = Set.prototype.clear;
+    set.add = (v: string) => { add.call(set, v); this.syncOptionVars(); return set; };
+    set.delete = (v: string) => { const r = del.call(set, v); this.syncOptionVars(); return r; };
+    set.clear = () => { clear.call(set); this.syncOptionVars(); };
+    return set;
+  }
+
+  /** $SHELLOPTS (the set -o options that are on) and $BASHOPTS (shopt's): readonly, not exported */
+  private syncOptionVars(): void {
+    if (!this.env || !this._options || !this._shoptopts || !this.readonlyVars || !this.localVars) return;
+    const newVar = !('SHELLOPTS' in this.env);
+    this.env['SHELLOPTS'] = SET_O_OPTIONS.filter((o) => this._options.has(o)).join(':');
+    this.env['BASHOPTS'] = [...this._shoptopts].sort().join(':');
+    this.readonlyVars.add('SHELLOPTS');
+    this.readonlyVars.add('BASHOPTS');
+    if (newVar) { this.localVars.add('SHELLOPTS'); this.localVars.add('BASHOPTS'); }
+  }
   /** Programmable completion specs: command name → spec */
   completionSpecs: Map<string, CompletionSpec> = new Map();
   /** Builtins disabled via `enable -n` */
@@ -743,10 +818,12 @@ export class Shell {
       PWD: '/home/user',
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',
-      FORCE_COLOR: '3',
+      // (no FORCE_COLOR: programs colour when their stdout is a tty, and
+      // chalk, npm and python tracebacks put no escapes into pipes and files)
     };
     // Load history async (don't block construction)
     this.loadHistory();
+    this.syncOptionVars();
   }
 
   private historyFile = '/home/user/.bash_history';
@@ -1083,6 +1160,7 @@ export class Shell {
     this.localVars.add('OPTIND');
     this.env['BASH_SUBSHELL'] = '0';
     this.localVars.add('BASH_SUBSHELL');
+    this.syncOptionVars();
     for (const n of ['FUNCNAME', 'BASH_SOURCE', 'BASH_LINENO']) this.arrays.delete(n);
   }
 
@@ -1198,7 +1276,7 @@ export class Shell {
       if (action === '') continue;
       if (action !== undefined) {
         const saved = this.lastExitCode;
-        await this.execute(action, writeStdout, writeStderr, false, undefined, true);
+        await this.execute(stripComments(action), writeStdout, writeStderr, false, undefined, true);
         this.lastExitCode = saved;
         this.env['?'] = String(saved);
         continue;
@@ -1240,6 +1318,8 @@ export class Shell {
     child.shellPid = this.shellPid;
     child.parentPid = this.parentPid;
     child.localVars = new Set(this.localVars);
+    // A subshell of a function is still in it (local works there, as in bash)
+    child.localVarStack = this.localVarStack.map((f) => new Map(f));
     child.invokedAsSh = this.invokedAsSh;
     child.exportedUnset = new Set(this.exportedUnset);
     child.arrays = new Map(Array.from(this.arrays.entries()).map(([k, v]) => [k, copyArray(v)]));
@@ -1359,7 +1439,7 @@ export class Shell {
     }
     const abort = new AbortController();
     const outer = this.abortController ?? this.inheritedAbort;
-    outer?.signal.addEventListener('abort', () => abort.abort(), { once: true });
+    outer?.signal.addEventListener('abort', () => abort.abort(outer.signal.reason), { once: true });
     child.inheritedAbort = abort;
     const job: BackgroundJob = {
       id: jobId,
@@ -1367,6 +1447,9 @@ export class Shell {
       status: 'running',
       exitCode: 0,
       pid,
+      shell: child,
+      ppid: this.bashPid,
+      startMs: Date.now(),
       abortController: abort,
       ignoresIntQuit: this.scriptShell && !this.options.has('monitor'),
       // No tty for in-page background work: kernel programs inside it must not take the terminal
@@ -1662,7 +1745,7 @@ export class Shell {
     const depth = this.executeDepth;
     this.executeDepth++;
     try {
-      await this.execute(exitCmd, writeStdout, writeStderr, false, terminal, true);
+      await this.execute(stripComments(exitCmd), writeStdout, writeStderr, false, terminal, true);
     } catch (e) {
       if (!(e instanceof ExitSignal)) throw e;
       this.lastExitCode = e.code;
@@ -1713,7 +1796,7 @@ export class Shell {
     if (this.localVarStack.length > 0 && !this.options.has('errtrace')) return;
     this.inErrTrap = true;
     try {
-      await this.execute(this.traps.get('ERR')!, writeStdout, writeStderr, false, undefined, true);
+      await this.execute(stripComments(this.traps.get('ERR')!), writeStdout, writeStderr, false, undefined, true);
     } finally {
       this.inErrTrap = false;
     }
@@ -1727,7 +1810,7 @@ export class Shell {
     this.inTrapDebug = true;
     let code: number;
     try {
-      code = await this.execute(this.traps.get('DEBUG')!, writeStdout, writeStderr, false, undefined, true);
+      code = await this.execute(stripComments(this.traps.get('DEBUG')!), writeStdout, writeStderr, false, undefined, true);
     } finally {
       this.inTrapDebug = false;
     }
@@ -1875,6 +1958,8 @@ export class Shell {
         case 'dup': {
           const to = Number(r.target);
           if (this.fileDescriptors.has(to)) this.fileDescriptors.set(r.fd!, this.fileDescriptors.get(to)!);
+          // N<&0 (configure's `exec 7<&0 </dev/null` saving stdin): nothing of fd 0 to keep here
+          else if (to === 0 && r.fd !== 0) this.fileDescriptors.set(r.fd!, { content: '', offset: 0 });
           else {
             const e = this.resolveOutFd(to);
             if (!e) err = `${to}: Bad file descriptor`;
@@ -1916,6 +2001,14 @@ export class Shell {
       else if (inp) out.push({ fd: n, content: inp.content.slice(inp.offset) });
     }
     return out;
+  }
+
+  /** [[ -t FD ]]: is the descriptor a terminal (a kernel shell's own fds, else the page terminal) */
+  private fdIsTerminal(fd: number): boolean {
+    if (this.kernelStdio) return this.kernelStdio.file(fd)?.kind === 'pty';
+    const term = this.activeTerminal ?? this.terminal;
+    if (!term || fd > 2 || this.userFds.has(fd)) return false;
+    return fd !== 1 || !(term as { captureStdout?: boolean }).captureStdout;
   }
 
   /** Write command output to fd n's target */
@@ -2010,11 +2103,11 @@ export class Shell {
         if (si === 0 && injectedStdin !== null) this.injectedStdin = injectedStdin;
         lastExit = await this.execute(stmt, writeStdout, writeStderr, remote, terminalOverride, true);
       }
-      // Fire EXIT trap at end of top-level multi-line script
-      if (isTopLevel && this.traps.has('EXIT')) {
+      // Fire EXIT trap at end of top-level multi-line script (not at the end of a sourced file)
+      if (isTopLevel && !this.sourcing && this.traps.has('EXIT')) {
         const exitCmd = this.traps.get('EXIT')!;
         this.traps.delete('EXIT'); // prevent re-entry
-        await this.execute(exitCmd, writeStdout, writeStderr, false, terminalOverride, true);
+        await this.execute(stripComments(exitCmd), writeStdout, writeStderr, false, terminalOverride, true);
       }
       this.lastExitCode = lastExit;
       this.env['?'] = String(lastExit);
@@ -2440,15 +2533,15 @@ export class Shell {
             if (!this.liveStdin(i, heredocStdin, hereString, redirects)) child.kernelStdinLive = false;
             exitCode = await child.runScriptText(shellCmd, terminalOverride || this.terminal, writeStdout, stderrWriter);
           } else {
-            // /bin/sh script.sh or /bin/sh (no args)
-            const scripts = cmdArgs.filter(a => !a.startsWith('-'));
+            // /bin/sh [OPTIONS] script.sh ARGS… (its arguments are its own, -x or not) or /bin/sh (no args)
+            const scripts = parsedSh.rest;
             if (scripts.length > 0) {
               const scriptPath = this.fs.resolvePath(scripts[0], this.cwd);
               try {
                 const content = await this.fs.readFile(scriptPath, 'utf8') as string;
                 const shCtx: CommandContext = { args: scripts.slice(1), fs: this.fs, cwd: this.cwd, env: this.env, stdin: nestedStdin, stdout: '', stderr: '', shell: this, terminal: terminalOverride || this.terminal,
                   liveStdin: this.liveStdin(i, heredocStdin, hereString, redirects) };
-                exitCode = await this.executeShellScript(content, scripts.slice(1), shCtx, writeStdout, stderrWriter, scripts[0]);
+                exitCode = await this.executeShellScript(content, scripts.slice(1), shCtx, writeStdout, stderrWriter, scripts[0], parsedSh);
               } catch (e: any) {
                 stderrWriter(`tabcomputer: ${scripts[0]}: ${e.message}\r\n`);
                 exitCode = 1;
@@ -2511,9 +2604,10 @@ export class Shell {
         // Handle . as alias for source
         const effectiveCmdName = cmdName === '.' ? 'source' : cmdName;
 
-        // xtrace: echo command to stderr before executing
+        // xtrace: the command on the shell's stderr before it runs (not through the
+        // command's own redirections: `$(cmd 2>&1)` doesn't capture its trace)
         if (this.options.has('xtrace')) {
-          stderrWriter(`+ ${[effectiveCmdName, ...cmdArgs].join(' ')}\r\n`);
+          outerStderr(`+ ${[effectiveCmdName, ...cmdArgs].join(' ')}\r\n`);
         }
 
         // Handle array assignment: arr=(a b c) or arr[N]=val
@@ -4245,9 +4339,13 @@ export class Shell {
         }
         // A package installed with `pkg install` provides the real program in
         // place of a builtin of the same name (lua, sqlite3, jq, ...)
+        // (never bash's own builtins: bash runs its echo, true, printf, test, ...
+        // even with /usr/bin/echo there, and each would be an x86 process)
         let pkgShadowed = !_builtinDisabled && this.pkgShadowBypass !== effectiveCmdName &&
+          !SHELL_BUILTIN_NAMES.has(effectiveCmdName) &&
           !!this.commands.get(effectiveCmdName) &&
-          packageShadows(this.fs).has(effectiveCmdName);
+          packageShadows(this.fs).has(effectiveCmdName) &&
+          !this.commands.get(effectiveCmdName)!.keepOverPackage?.(cmdArgs);
         // A Debian program that is gone (apt remove) no longer shadows the builtin
         if (pkgShadowed && !pkgOwnShadows(this.fs).has(effectiveCmdName) && !(await this.findExecutableInPath(effectiveCmdName))) pkgShadowed = false;
         // /bin/NAME, /usr/bin/NAME, …: Shiro's NAME when no such file exists (the kernel stats them the same way)
@@ -5681,6 +5779,7 @@ export class Shell {
     let depth = 0; // track control structure nesting (do/done, then/fi, {/})
     let braceDepth = 0; // track only { } brace groups (not ${VAR})
     let parenDepth = 0; // track subshell ( ... ) nesting separately
+    const caseParens: number[] = []; // parenDepth at each open `case`: a ) there ends a pattern
     let cmdPos = true; // the next word starts a command, so it may be a reserved word
     let i = 0;
 
@@ -5730,7 +5829,7 @@ export class Shell {
           cmdPos = true; // a command (maybe `case`) starts inside ( or $(
           current += ch; i++; continue;
         }
-        if (ch === ')' && parenDepth > 0) {
+        if (ch === ')' && parenDepth > 0 && caseParens[caseParens.length - 1] !== parenDepth) {
           parenDepth--;
           cmdPos = true; // after a subshell or a `( pattern )`: a command or keyword
           current += ch; i++; continue;
@@ -5758,6 +5857,8 @@ export class Shell {
           if (cmdPos) {
             if (word === 'for' || word === 'while' || word === 'until' || word === 'select' || word === 'if' || word === 'case') depth++;
             else if (word === 'done' || word === 'fi' || word === 'esac') depth--;
+            if (word === 'case') caseParens.push(parenDepth);
+            else if (word === 'esac') caseParens.pop();
           }
           cmdPos = cmdPos && ['do', 'then', 'else', 'elif', 'if', 'while', 'until', '!', '{', 'time'].includes(word);
         } else if (ch === ';' || ch === '&' || ch === '|' || ch === '(' || ch === ')') {
@@ -6891,6 +6992,7 @@ export class Shell {
     let errSub: string | null = null;
     let captured = '';
     let capturedErr = '';
+    let fdWrites = Promise.resolve();
     // Descriptors 3-9 redirected for the compound: set with exec, put back after it
     const fdSaved = new Map<number, { inp: any; out: any }>();
     for (const r of redirects) {
@@ -6911,6 +7013,22 @@ export class Shell {
         continue;
       }
       const target = restoreExpansion(this.expandVars(r.target));
+      // >&N, 2>&N, > /dev/stdout, 2> /dev/stderr: a copy of another descriptor
+      const dup = /^&(\d+|-)$/.exec(target)?.[1] ?? (target === '/dev/stdout' ? '1' : target === '/dev/stderr' ? '2' : undefined);
+      if (dup !== undefined && r.op !== '<' && r.op !== '2>&1') {
+        let w: (s: string) => void;
+        if (dup === '-') w = () => {};
+        else if (dup === '1') w = out;
+        else if (dup === '2') w = err;
+        else {
+          const n = Number(dup);
+          if (!this.resolveOutFd(n)) { writeStderr(`tabcomputer: ${n}: Bad file descriptor\r\n`); restoreFds(); return 1; }
+          w = (s) => { fdWrites = fdWrites.then(() => this.writeToFd(n, s, writeStdout, writeStderr)).then(() => {}); };
+        }
+        if (r.op === '2>' || r.op === '2>>') err = w;
+        else { out = w; if (r.op === '&>') err = w; }
+        continue;
+      }
       if (r.op === '<') {
         try {
           stdin = await this.readInputRedirect(target);
@@ -6941,6 +7059,7 @@ export class Shell {
         ? await this.execControlStructureCore(compound, out, err)
         : await this.execControlStructureWithStdin(compound, stdin, out, err);
     } finally {
+      await fdWrites;
       restoreFds();
     }
     for (const [file, text] of [[outFile, captured], [errFile, capturedErr]] as const) {
@@ -7033,9 +7152,13 @@ export class Shell {
    * expansion is still an operand there (`if [[ -n ${ZSH_VERSION:-} ]]`),
    * not a word that disappears.
    */
-  private async conditionText(condition: string, writeStderr: (s: string) => void): Promise<string> {
-    if (condition.includes('[[')) return condition;
-    return this.expandVars(await this.expandCommandSubstitution(this.expandArithmetic(condition), writeStderr));
+  /**
+   * An if/while condition as it runs: as written. (It was expanded here first, in this
+   * shell, so `if ( set x; f y && test x = "$1" )` saw the outer $1, and $(…) ran
+   * before the commands before it in the condition.)
+   */
+  private async conditionText(condition: string, _writeStderr: (s: string) => void): Promise<string> {
+    return condition;
   }
 
   private async evalCondition(
@@ -7183,10 +7306,9 @@ export class Shell {
   private async execIf(
     input: string, writeStdout: (s: string) => void, writeStderr: (s: string) => void
   ): Promise<number> {
-    // Normalize to semicolons for easier parsing: a newline separates commands,
-    // except after a case item's terminator (;; ;& ;;&), which must survive
-    // whole (collapsing `;;` to `;` broke every case with two items in an if)
-    const joined = input.replace(/(;;&?|;&)?[ \t]*\r?\n/g, (_m, term) => (term ? `${term} ` : '; ')).replace(/;\s+;/g, ';');
+    // Normalize to semicolons for easier parsing; empty commands (`; ;`) go, but not
+    // a case's ;; / ;& / ;;& inside a branch
+    const joined = newlinesToSemicolons(input).replace(/;(\s+;)+(?![;&])/g, ';');
 
     // Parse if/elif/else/fi with depth tracking for nested if blocks
     interface IfBranch { condition: string; body: string; }
@@ -7260,8 +7382,8 @@ export class Shell {
    * Handles nested loops by tracking do/done depth.
    */
   private parseLoopConstruct(input: string, keyword: string): { condition: string; body: string } | null {
-    // Find '; do ' or standalone 'do' with depth tracking
-    const joined = input.replace(/\r?\n/g, '; ');
+    // Find '; do ' or standalone 'do' with depth tracking (newlines in quotes stay)
+    const joined = newlinesToSemicolons(input);
     // Scan for 'do' at depth 0 (not inside nested for/while/until)
     let depth = 0;
     let doPos = -1;
@@ -7526,6 +7648,7 @@ export class Shell {
         if (n.op === '-o') return this.options.has(v);
         if (n.op === '-R') return this.namerefs.has(v);
         if (n.op === '-a') return new TestEval([], this.fs, this.cwd).unary('-e', v);
+        if (n.op === '-t') return /^\d+$/.test(v) && this.fdIsTerminal(Number(v));
         return new TestEval([], this.fs, this.cwd).unary(n.op, v);
       }
       case 'binary': {
@@ -8045,10 +8168,10 @@ export class Shell {
     const { mayBeKernelProgram, resolveKernelProgram, builtinStage, runKernelPipeline } = _shellKernel ?? await loadShellKernel();
     const progress = (m: string) => writeStderr(`  ${m}\r\n`);
     const stageFor = async (n: string, a: string[]) =>
-      builtinStage(this, n, a) ?? (mayBeKernelProgram(this, n) ? await resolveKernelProgram(this, n, a, progress) : null);
+      builtinStage(this, n, a) ?? (mayBeKernelProgram(this, n, a) ? await resolveKernelProgram(this, n, a, progress) : null);
     // Cheap exit for the common case: neither a filter builtin nor something to look up on PATH
     const firstIsFilter = !!builtinStage(this, name, args);
-    if (!firstIsFilter && !mayBeKernelProgram(this, name)) return null;
+    if (!firstIsFilter && !mayBeKernelProgram(this, name, args)) return null;
     if (firstIsFilter && i === pipeline.length - 1) return null;
     const first = await stageFor(name, args);
     if (!first) return null;
@@ -8154,7 +8277,7 @@ export class Shell {
       const parsed = this.parseSegment(t);
       if (parsed.redirects.length || parsed.hereString !== undefined || parsed.args.length === 0) return false;
       const words = await this.expandGlobs(parsed.args);
-      if (!words || !mayBeKernelProgram(this, words[0])) return false;
+      if (!words || !mayBeKernelProgram(this, words[0], words.slice(1))) return false;
       const prog = await resolveKernelProgram(this, words[0], words.slice(1));
       if (!prog) return false;
       programs.push(prog);
@@ -8515,22 +8638,14 @@ export class Shell {
     // __dirname, relative requires, and per-package runtime tweaks see the package.
     try { filePath = await this.fs.realpath(filePath); } catch { /* keep as given */ }
 
-    const nodeCtx: CommandContext = {
-      args: [filePath, ...args],
-      fs: ctx.fs,
-      cwd: ctx.cwd,
-      env: ctx.env,
-      stdin: ctx.stdin,
-      stdout: '',
-      stderr: '',
-      shell: ctx.shell,
-      terminal: ctx.terminal,
-    };
-
-    const exitCode = await nodeCmd.exec(nodeCtx);
-    if (nodeCtx.stdout) writeStdout(nodeCtx.stdout.replace(/\n/g, '\r\n'));
-    if (nodeCtx.stderr) writeStderr(nodeCtx.stderr.replace(/\n/g, '\r\n'));
-    return exitCode;
+    // The command's own context, as `node FILE` gets it: its redirects and pipes (stdoutIsTTY,
+    // streamStdout…) with it; `./x.js > out` wrote to the terminal while the shell had one
+    ctx.args = [filePath, ...args];
+    // and its output as it comes, to the writers this command has (a server never ends:
+    // vite's dev server under `npm run dev` printed nothing)
+    ctx.streamStdout ??= (t) => writeStdout(t.replace(/\r?\n/g, '\r\n'));
+    ctx.streamStderr ??= (t) => writeStderr(t.replace(/\r?\n/g, '\r\n'));
+    return this.runCommand(nodeCmd, ctx);
   }
 
   /**
@@ -8547,11 +8662,15 @@ export class Shell {
     writeStdout: (s: string) => void,
     writeStderr: (s: string) => void,
     argv0?: string,
+    opts?: { on: string[]; off: string[] },
   ): Promise<number> {
     const child = this.fork();
     child.startProcess();
     child.setPositional(args, argv0);
     if (argv0 !== undefined) child.setScriptSource(argv0);
+    // sh -x / -e … SCRIPT
+    for (const o of opts?.on ?? []) child.options.add(o);
+    for (const o of opts?.off ?? []) child.options.delete(o);
     // Its first command reads the script's stdin, unless that is the shell's fd 0
     if (!ctx.liveStdin) child.setInjectedStdin(ctx.stdin);
     return child.runScriptText(content, ctx.terminal, writeStdout, writeStderr);
@@ -8664,7 +8783,7 @@ export function splitTopLevelPipes(cmd: string): string[] {
   const parts: string[] = [];
   let current = '';
   let paren = 0, brace = 0;
-  const blocks: string[] = []; // expected closers: done / fi / esac
+  const blocks: { closer: string; paren: number }[] = []; // expected closers (done / fi / esac) and the paren depth they opened at
   let inSingle = false, inDouble = false;
   let cmdPos = true; // at a position where a command (and so a keyword) can start
   let i = 0;
@@ -8688,10 +8807,14 @@ export function splitTopLevelPipes(cmd: string): string[] {
     }
     if (ch === '(') { paren++; current += ch; i++; cmdPos = true; continue; }
     // After `)` (a subshell, or a case pattern) a command or keyword can start
-    if (ch === ')') { if (paren > 0) paren--; current += ch; i++; cmdPos = true; continue; }
+    if (ch === ')') {
+      const top = blocks[blocks.length - 1];
+      if (paren > 0 && !(top?.closer === 'esac' && top.paren === paren)) paren--; // (not a case pattern's ))
+      current += ch; i++; cmdPos = true; continue;
+    }
     if (ch === '|' && cmd[i + 1] === '|') { current += '||'; i += 2; cmdPos = true; continue; }
     if (ch === '|' && cmd[i - 1] !== '>') {
-      if (paren === 0 && brace === 0 && blocks.length === 0) { parts.push(current); current = ''; }
+      if (paren === 0 && brace === 0 && !blocks.some((b) => b.paren === 0)) { parts.push(current); current = ''; }
       else current += ch;
       i++; cmdPos = true; continue;
     }
@@ -8702,12 +8825,10 @@ export function splitTopLevelPipes(cmd: string): string[] {
     while (j < cmd.length && !/[\s;&|()'"\\]/.test(cmd[j])) j++;
     const word = cmd.slice(i, j) || ch;
     if (j === i) j = i + 1;
-    if (paren === 0) {
-      if (cmdPos && OPEN[word]) blocks.push(OPEN[word]);
-      else if (cmdPos && blocks.length && word === blocks[blocks.length - 1]) blocks.pop();
-      else if (cmdPos && word === '{') brace++;
-      else if (cmdPos && word === '}' && brace > 0) brace--;
-    }
+    if (cmdPos && OPEN[word]) blocks.push({ closer: OPEN[word], paren });
+    else if (cmdPos && blocks.length && word === blocks[blocks.length - 1].closer && blocks[blocks.length - 1].paren === paren) blocks.pop();
+    else if (paren === 0 && cmdPos && word === '{') brace++;
+    else if (paren === 0 && cmdPos && word === '}' && brace > 0) brace--;
     cmdPos = ['do', 'then', 'else', 'elif', '{', '!', 'if', 'while', 'until', 'time'].includes(word);
     current += cmd.slice(i, j);
     i = j;

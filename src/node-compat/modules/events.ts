@@ -78,7 +78,8 @@ export function createEventsModule(): any {
   const mod: any = EventEmitter;
   mod.prototype = P;
   mod.EventEmitter = EventEmitter;
-  mod.default = EventEmitter;
+  // (not enumerable: node's events has no `default`)
+  Object.defineProperty(mod, 'default', { value: EventEmitter, writable: true, configurable: true, enumerable: false });
   // Static helpers used by some libraries
   mod.once = async (emitter: any, event: string) => {
     return new Promise<any[]>((resolve) => {

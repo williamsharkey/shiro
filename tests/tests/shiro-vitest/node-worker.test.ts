@@ -329,6 +329,61 @@ w.terminate();
     expect(tty.pty.termios.lflag & 0o12).toBe(0o12);
   }, 60_000);
 
+  for (const mode of ['1', '0']) {
+    it(`spawn() with stdio 'inherit' gives the child the terminal itself (codex's launcher), ${mode === '1' ? 'as a guest' : 'in the page'}`, async () => {
+      const { shell, fs } = await createTestShell();
+      await fs.mkdir('/tmp/inh', { recursive: true });
+      await fs.writeFile('/tmp/inh/child.js', 'console.log("tty", !!process.stdin.isTTY, !!process.stdout.isTTY, "ready"); process.stdin.once("data", (d) => { console.log("got-" + String(d).trim()); process.exit(0); });');
+      await fs.writeFile('/tmp/inh/parent.js', 'const c = require("child_process").spawn("node", ["/tmp/inh/child.js"], { stdio: "inherit" }); c.on("exit", (code) => console.log("child exit", code));');
+      const tty = new TtySession();
+      let screen = '';
+      // (colours off: a terminal's console.log colours its values)
+      const plain = (t: string) => t.replace(/\x1b\[[\d;]*m/g, '');
+      tty.pty.onOutput((b) => { screen += plain(new TextDecoder().decode(b)); });
+      shell.setTerminal({ tty, writeOutput: (s: string) => { screen += plain(s); }, write: (s: string) => { screen += plain(s); }, getSize: () => ({ cols: 80, rows: 24 }), onResize: () => () => {},
+        enterStdinPassthrough() {}, exitStdinPassthrough() {}, enterRawMode() {}, exitRawMode() {}, isRawMode: () => false, term: { buffer: { active: { type: 'normal' } } } } as any);
+      const until = async (cond: () => boolean) => { const t0 = Date.now(); while (!cond()) { if (Date.now() - t0 > 15_000) throw new Error(`timed out: ${JSON.stringify(screen)}`); await new Promise((r) => setTimeout(r, 10)); } };
+      const r = shell.execute(`export TABCOMPUTER_NODE_WORKER=${mode}; node /tmp/inh/parent.js`, () => {}, () => {});
+      await until(() => screen.includes('ready'));
+      expect(screen).toContain('tty true true ready');
+      tty.pty.input('hello\r');
+      await until(() => screen.includes('child exit'));
+      expect(await r).toBe(0);
+      expect(screen.replace(/\r\n/g, '\n')).toMatch(/got-hello\n[\s\S]*child exit 0/);
+    }, 60_000);
+  }
+
+  for (const mode of ['1', '0']) it(`a #!node script run by path (npm run dev's .bin/vite) streams its output while it runs, ${mode === '1' ? 'as a guest' : 'in the page'}`, async () => {
+    const { shell, fs } = await createTestShell();
+    await fs.mkdir('/tmp/ss/node_modules/.bin', { recursive: true });
+    await fs.writeFile('/tmp/ss/srv.js', '#!/usr/bin/env node\nconsole.log("ready"); setTimeout(() => console.log("bye"), 1500);\n');
+    await fs.chmod('/tmp/ss/srv.js', 0o755);
+    await fs.symlink('../../srv.js', '/tmp/ss/node_modules/.bin/srv');
+    await fs.writeFile('/tmp/ss/package.json', JSON.stringify({ name: 'ss', version: '1.0.0', scripts: { dev: 'srv' } }));
+    /** Run `cmd`; when "ready" showed up, and when it ended */
+    const timing = async (cmd: string, seen: () => string, run: (cmd: string) => Promise<number>) => {
+      let readyAt = 0;
+      const poll = setInterval(() => { if (!readyAt && seen().includes('ready')) readyAt = Date.now(); }, 5);
+      expect(await run(`export TABCOMPUTER_NODE_WORKER=${mode}; ${cmd}`)).toBe(0);
+      clearInterval(poll);
+      expect(seen()).toContain('bye');
+      return { readyAt, endAt: Date.now() };
+    };
+    // its output into the caller's writer, as it comes
+    let out = '';
+    let t = await timing('cd /tmp/ss && ./srv.js', () => out, (c) => shell.execute(c, (s) => { out += s; }, (s) => { out += s; }));
+    expect(t.endAt - t.readyAt).toBeGreaterThan(1000);
+    // npm run dev at a terminal: on the terminal, after npm's header
+    const tty = new TtySession();
+    let screen = '';
+    tty.pty.onOutput((b) => { screen += new TextDecoder().decode(b); });
+    shell.setTerminal({ tty, writeOutput: (s: string) => { screen += s; }, write: (s: string) => { screen += s; }, getSize: () => ({ cols: 80, rows: 24 }), onResize: () => () => {},
+      enterStdinPassthrough() {}, exitStdinPassthrough() {}, enterRawMode() {}, exitRawMode() {}, isRawMode: () => false, term: { buffer: { active: { type: 'normal' } } } } as any);
+    t = await timing('cd /tmp/ss && npm run dev', () => screen, (c) => shell.execute(c, () => {}, () => {}));
+    expect(t.endAt - t.readyAt).toBeGreaterThan(1000);
+    expect(screen.indexOf('> ss@1.0.0 dev')).toBeLessThan(screen.indexOf('ready'));
+  }, 60_000);
+
   it("spawn(): a fast child's output reaches listeners added after spawn() returns", async () => {
     const r = await sh(`node -e '
       const { spawn } = require("child_process");
@@ -372,5 +427,68 @@ w.terminate();
       });
     '`);
     expect(r.out).toBe('"a\\nb\\n" async\n');
+  }, 60_000);
+
+  it('fork(): an IPC channel both ways (jest-worker); the child sees disconnect; the env keeps no channel', async () => {
+    const r = await sh('cd /tmp/nf && node parent.js', async (fs) => {
+      await fs.mkdir('/tmp/nf', { recursive: true });
+      await fs.writeFile('/tmp/nf/child.js', `
+process.on('message', (m) => {
+  if (m.cmd === 'square') process.send({ n: m.n, sq: m.n * m.n, connected: process.connected, env: process.env.NODE_CHANNEL_FD === undefined });
+  if (m.cmd === 'bye') process.disconnect();
+});
+process.on('disconnect', () => require('fs').writeFileSync('/tmp/nf/child-disconnected', 'yes'));
+process.send({ ready: process.argv.slice(2) });`);
+      await fs.writeFile('/tmp/nf/parent.js', `
+const { fork } = require('child_process');
+const c = fork('child.js', ['a1'], { silent: true });
+const got = [];
+c.on('message', (m) => {
+  got.push(m);
+  if (m.ready) for (const n of [2, 3]) c.send({ cmd: 'square', n });
+  if (m.sq === 9) c.send({ cmd: 'bye' });
+});
+c.on('disconnect', () => got.push('disconnect'));
+c.on('exit', (code) => console.log(JSON.stringify(got), code, c.connected));`);
+    });
+    expect(r.err).toBe('');
+    expect(r.out).toBe('[{"ready":["a1"]},{"n":2,"sq":4,"connected":true,"env":true},{"n":3,"sq":9,"connected":true,"env":true},"disconnect"] 0 false\n');
+    expect(await r.fs.readFile('/tmp/nf/child-disconnected', 'utf8')).toBe('yes');
+  }, 60_000);
+
+  it("fork(): the child's output is the parent's unless silent; the parent's disconnect() ends a child that only listens", async () => {
+    const r = await sh('cd /tmp/nf2 && node parent.js', async (fs) => {
+      await fs.mkdir('/tmp/nf2', { recursive: true });
+      await fs.writeFile('/tmp/nf2/child.js', `console.log('child says hi'); process.on('message', () => {});`);
+      await fs.writeFile('/tmp/nf2/parent.js', `
+const c = require('child_process').fork('./child.js');
+setTimeout(() => c.disconnect(), 300);
+c.on('exit', (code) => console.log('exit', code, c.stdout === null));`);
+    });
+    expect(r.out).toBe('child says hi\nexit 0 true\n');
+  }, 60_000);
+
+  it('jest-worker in child_process mode: tasks go to forked workers over IPC, each its own process', async () => {
+    const r = await sh(`mkdir -p /home/user/jw && cd /home/user/jw && npm init -y > /dev/null && npm install jest-worker@29.7.0 > /dev/null 2>&1 && node main.js`, async (fs) => {
+      await fs.mkdir('/home/user/jw', { recursive: true });
+      await fs.writeFile('/home/user/jw/task.js', `exports.square = (n) => ({ sq: n * n, pid: process.pid, ppid: process.ppid, id: process.env.JEST_WORKER_ID });`);
+      await fs.writeFile('/home/user/jw/main.js', `const { Worker } = require('jest-worker');
+const w = new Worker(require.resolve('./task.js'), { numWorkers: 2, enableWorkerThreads: false });
+Promise.all([1, 2, 3, 4].map((n) => w.square(n))).then(async (r) => {
+  const pids = new Set(r.map((x) => x.pid));
+  console.log(JSON.stringify(r.map((x) => x.sq)), !pids.has(process.pid), r.every((x) => x.ppid === process.pid && /^[12]$/.test(x.id)));
+  await w.end();
+  console.log('ended');
+}, (e) => { console.log('ERR', e.stack); process.exit(1); });`);
+    });
+    expect(r.out).toBe('[1,4,9,16] true true\nended\n');
+  }, 240_000);
+
+  it("Claude Code as a guest starts onboarded: ~/.claude.json is seeded before it runs, as in the page", async () => {
+    const r = await sh('rm -f ~/.claude.json; node /tmp/nc/claude-code/cli.js', async (fs) => {
+      await fs.mkdir('/tmp/nc/claude-code', { recursive: true });
+      await fs.writeFile('/tmp/nc/claude-code/cli.js', `const c = JSON.parse(require('fs').readFileSync(require('os').homedir() + '/.claude.json', 'utf8')); console.log(c.hasCompletedOnboarding, typeof c.theme);`);
+    });
+    expect(r.out).toBe('true string\n');
   }, 60_000);
 });

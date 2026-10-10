@@ -369,6 +369,13 @@ export const F_OFD_SETLKW = 38;
 export const FLOCK_SIZE = 32;
 export const F_SETPIPE_SZ = 1031;
 export const F_GETPIPE_SZ = 1032;
+export const F_ADD_SEALS = 1033;
+export const F_GET_SEALS = 1034;
+export const F_SEAL_SEAL = 1;
+export const F_SEAL_SHRINK = 2;
+export const F_SEAL_GROW = 4;
+export const F_SEAL_WRITE = 8;
+export const F_SEAL_FUTURE_WRITE = 0x10;
 /** /proc/sys/fs/pipe-max-size: the largest F_SETPIPE_SZ an unprivileged process may ask for */
 export const PIPE_MAX_SIZE = 1048576;
 export const FD_CLOEXEC = 1;
@@ -429,6 +436,8 @@ export const SIGSEGV = 11;
 export const SIGUSR2 = 12;
 export const SIGPIPE = 13;
 export const SIGALRM = 14;
+export const SIGVTALRM = 26;
+export const SIGPROF = 27;
 export const SIGTERM = 15;
 export const SIGCHLD = 17;
 export const SIGCONT = 18;
@@ -442,6 +451,12 @@ export const SI_QUEUE = -1;
 export const SI_TIMER = -2;
 export const SI_MESGQ = -3;
 export const SI_TKILL = -6;
+/** si_code of SIGCHLD: what happened to the child */
+export const CLD_EXITED = 1;
+export const CLD_KILLED = 2;
+export const CLD_DUMPED = 3;
+export const CLD_STOPPED = 5;
+export const CLD_CONTINUED = 6;
 /** What a signal carries (struct siginfo's fields that apply to it) */
 export interface SigInfo {
   signo: number;
@@ -474,7 +489,10 @@ export function encodeSiginfo(info: SigInfo, out: Uint8Array): void {
 /** The fields of a struct siginfo in `data` */
 export function decodeSiginfo(data: Uint8Array): SigInfo {
   const dv = new DataView(data.buffer, data.byteOffset, SIGINFO_SIZE);
-  return { signo: dv.getInt32(0, true), code: dv.getInt32(8, true), pid: dv.getInt32(16, true), uid: dv.getUint32(20, true), value: dv.getBigInt64(24, true) };
+  const signo = dv.getInt32(0, true);
+  const info: SigInfo = { signo, code: dv.getInt32(8, true), pid: dv.getInt32(16, true), uid: dv.getUint32(20, true), value: dv.getBigInt64(24, true) };
+  if (signo === SIGCHLD) info.status = dv.getInt32(24, true); // (SIGCHLD's si_status is where si_value is for others)
+  return info;
 }
 /** The siginfo of the signal a guest handler was last given (SYS_shiro_siginfo 1030: signo → struct siginfo) */
 export const SYS_shiro_siginfo = 1030;

@@ -20,6 +20,7 @@ Blink engine.
 | node, npm, npx | builtin | works (commander, mocha, tsc 5, prettier); `node` alone is the REPL on a terminal (`let`/`const` persist, `...` continuation lines, `await`, .help/.exit, ^C/^D as node) and reads its program from a pipe; on a terminal process.stdin reads the pty as the foreground job (cooked lines with echo and ^D, `setRawMode` sets its termios, ^C is SIGINT) |
 | pnpm 9 | `npm install pnpm` | works (add, store, symlinks, run, exec, bins) |
 | yarn 1 | `npm install yarn` | works (add, lockfile, run, bins, offline) |
+| Next.js 16 (App Router, webpack) | `npx create-next-app`, then `next build` / `next start` with `TABCOMPUTER_NODE_WORKER=1` | builds (static pages prerendered) and serves; see "Next.js 16" below |
 | ruby, gem, rake | `pkg install ruby` (ruby.wasm 3.4.1) | works (no sockets) |
 | perl | `pkg install perl` (x86-64 in Blink) | works |
 | lua | `pkg install lua` | works |
@@ -203,7 +204,29 @@ Shell and platform fixes these needed (all with tests in the same file):
   memory, lightningcss's 16 MB module) and ArrayBuffers (file contents).
   Rolldown's shared memory used to start at 1 GB (16384 pages; the module
   needs 1001): it starts at 64 MB now and grows (−23 MB resident, and no
-  1 GB commit on a phone). What it took:
+  1 GB commit on a phone). Most of "after build" is the build's peak, which
+  V8 returns when idle: 20 s later the renderer is at 832 MB. Packages run as
+  browser builds are let go 30 s after the last process using them ends
+  (their Workers terminated, blob: URLs revoked; they run as a function, not
+  an import()ed module, which the page's module map would keep): with the dev
+  server stopped, rolldown's 8 workers go, and after a full GC the renderer
+  is at 477 MB (it was 727 MB with rolldown's 112 MB shared memory and the
+  page's esbuild still held). What's left is mostly the files npm installed.
+  An ended process used to stay reachable, and with it everything it loaded:
+  through the browser-package globals (`__shiroBuiltin` & co., now the
+  latest live requirer's), the 10-minute exit timer (now cleared), node's
+  `unhandledrejection` listener (removed on the page's timer: the global
+  `setTimeout` can be another script's, cleared when it ends), tty-stdin's
+  stand-in job left a zombie in the job table (now reaped), the preview
+  service worker's `statechange` listener holding a script's timer, and the
+  dev server's port and open WebSocket. A Chromium repro shows the browser
+  frees a 112 MB SharedArrayBuffer about a second after its worker is
+  terminated and the last reference dropped, so none of this was Chromium.
+  A process that exits (`process.exit()`, ^C, an error) closes its servers
+  and connections, as node does, and drops its module and file caches; one
+  that goes idle while serving keeps them (its servers still run its code).
+  The page's esbuild (bundling browser packages, `build`, `reload`) stops
+  after 60 s without a build and starts again on the next. What it took:
   - Rolldown runs as its browser build. `npm install` puts `@rolldown/browser`
     where `rolldown` goes (same API and versions); a process that imports it
     gets it bundled from the VFS with the page's esbuild
@@ -266,9 +289,109 @@ Shell and platform fixes these needed (all with tests in the same file):
   - On the terminal, `\n` is `\r\n` in every write, escape sequences or
     not (libuv keeps ONLCR in raw mode): output with colours or cursor moves
     (clack's prompts in create-vite 7) stepped down the screen.
+- Astro 5 (a minimal site; `APP=astro` in the same script): `npm i` 8.8 s
+  (277 packages), `astro dev` to ready 12.4 s, the preview 2.0 s, an edit to
+  `src/pages/index.astro` shown 0.4 s later (Astro reloads pages), `astro
+  build` 10.7 s; renderer resident 828 MB with dev up, 1088 MB after the
+  build. `npm create astro` itself fails in the test container: create-astro
+  fetches its template from codeload.github.com, which the container's relay
+  can't reach (api.github.com works). What it took, all general:
+  - npm: empty files in a tarball are installed (a 0-byte `types.js` that
+    @astrojs/markdown-remark's index re-exports was left out).
+  - ES modules: `/*` inside a template or string isn't a comment
+    (tsconfck's `` `**/*` `` hid every export after it); a method named
+    `import` (`import(id) { … }`) and `.import(` calls, also across a line
+    break, aren't dynamic imports (the bundled-module path's `\bimport\(`
+    rewrote `runner.import(…)`); `import { default as x }` is the default
+    import; exported function declarations exist from the start (hoisted);
+    named imports of a module still loading (a cycle) are read again once it
+    has loaded (Astro's render-context → middleware → sequence cycle); named
+    exports ahead of `export default` stay (zod's index.js); `import('./x.mjs?t=1')`
+    loads x.mjs afresh.
+  - Packages that load as their ESM node build: vite (its CommonJS entry is
+    deprecated and finds its package.json through esbuild's import.meta.url
+    shim, which takes the page's `document` for a browser) and
+    @astrojs/compiler (its browser build wants `initialize()`; its CommonJS
+    build reads astro.wasm at the page's URL the same way).
+  - Globals: a global a script defines on the page (it reaches the page:
+    bare identifiers resolve there) stays writable and redefinable
+    (@astrojs/compiler defines a read-only `fs`); `fs` and `require` set on
+    globalThis stay the process's own (two esbuild services wrote each
+    other's stdout through a shared `globalThis.fs`: "Invalid packet").
+  - fs takes file: URL objects in every call (`fs.promises.readFile(new
+    URL(…))`).
+  - A spawned child's output reaches the parent on a microtask, not inside
+    the child's write (an error in the parent's reader came back to Go's
+    fs.write and panicked esbuild).
+  - Requests to in-tab servers carry `Host: localhost:PORT` when the browser
+    gave none (vite 6+ refuses an unknown host).
   Not yet: node output into a pipe or file comes when the process exits
   (only the terminal streams), so `npm run dev > log &` shows nothing while
   it runs.
+- Next.js 16 (`create-next-app`, App Router, webpack): `next build` and
+  `next start` work in worker mode (`TABCOMPUTER_NODE_WORKER=1`).
+  - The build takes 54 s: compile 14 s, then page data and the static pages
+    in a worker thread. It writes `/` and `/_not-found` as static HTML and
+    RSC.
+  - `next start` serves the page, its CSS and JS chunks, the favicon, and
+    a 404 for an unknown path; the page renders in 75 ms.
+  - In the page, `next build` stops where it compiles SWC's wasm (Chromium
+    refuses a synchronous `WebAssembly.Module` over 8 MB on the main thread).
+  - Set `NEXT_TEST_WASM_DIR` to an installed `@next/swc-wasm-nodejs`: the
+    test container's relay can't fetch Next's own download.
+  - next.config needs `experimental: { webpackBuildWorker: false,
+    workerThreads: true, cpus: 1 }`: jest-worker's child processes would
+    need fork IPC (`child.send`) in a guest.
+  - Node output into a file comes when the process exits, so `next start >
+    log &` shows its log only then.
+
+  What it took, all general:
+  - AsyncLocalStorage carries its store across `await`, timers, `then`,
+    `nextTick` and `queueMicrotask` (src/node-compat/async-context.ts). The
+    page has no async hooks, so once a process makes an AsyncLocalStorage:
+    - each `await X` in the code it loads becomes
+      `__shiroAls.r(__shiroAls.c(), await X)`, so the frame before the await
+      is the frame after it;
+    - queued callbacks run in the frame they were queued from.
+    Next's work and request stores, and React's, live there. Concurrent
+    runs stay apart; an await on a string, template or regex literal, a
+    function or a class is left as it is.
+  - `stream`: `Readable.fromWeb`/`toWeb`, `Writable.fromWeb`/`toWeb` and
+    `Duplex.fromWeb`/`toWeb`. Uint8Array chunks become Buffers, with the
+    process's own Buffer: the page has none.
+  - `http.ServerResponse` has `_implicitHeader()`, `_header` and
+    `_headerSent` (the `compression` middleware in Next's server).
+  - builtins: `require.extensions` / `Module._extensions`, a directory
+    `require` using its package.json `main`, `stream/web`,
+    `process.prependOnceListener`, `fs.opendir` / `opendirSync` /
+    `promises.opendir`, a process-local `process.chdir`, `npm config`;
+  - `path`, `assert`, `events` and `stream` have no enumerable `default`
+    (node has none): @vercel/nft copies path's keys into a mock, took the
+    real module as its `default` and replaced `path.resolve` with a function
+    that called itself ("Maximum call stack size exceeded");
+  - Buffer has every fixed- and variable-width read/write (webpack's cache
+    serializer: `writeUInt32LE`, `writeDoubleLE`, `writeBigInt64LE`...);
+  - `require.resolve` finds any existing file (`app/favicon.ico`);
+  - `querystring` as node's: repeated keys are arrays both ways, `+` is a
+    space (Next's loaders pass `pageExtensions` that way);
+  - `vm.runInThisContext` gives the last expression's value (webpack's
+    `executeModule` takes the function it evaluates to), and a vm context
+    is its script's `globalThis` (Next's client-reference manifests);
+  - `AsyncLocalStorage.snapshot()` / `bind()`, `AsyncResource.bind`;
+  - `__dirname` text inside template literals left alone.
+- npm: an optional platform package for linux-x64 (glibc) is installed when it
+  ships an executable, which Blink runs: `npm i -g @openai/codex` gets
+  `@openai/codex-linux-x64`, `opencode-ai` gets `opencode-linux-x64` (and
+  `-baseline`, as npm does). Node addons (`main: *.node`: @next/swc-*,
+  @rollup/rollup-*), musl builds, other platforms, and natives of a package
+  that also offers a WebAssembly build (sharp, @tailwindcss/oxide) are still
+  left out. Install scripts (preinstall, install, postinstall) run after
+  extraction, dependencies first, in the package's directory with npm's
+  `npm_lifecycle_event`/`npm_package_*` variables; `--ignore-scripts` and
+  `ignore-scripts=true` skip them. Unlike npm, a failing script is a warning
+  (its last lines are shown) and the install goes on: a script that builds a
+  native addon can't succeed in the tab, and the package usually works
+  without it.
 - Node: a script's timers and intervals end with it. An interval left by a
   script that called `process.exit()` kept firing in the page, and its
   `setTimeout`s became the next script's timers, so that script never went
@@ -594,6 +717,19 @@ exit 1) instead of ignoring it. Combined short options (`-qb NAME`,
 `-qam MSG`) are split first. tig and lazygit only use what the built-in
 has (their tests check that nothing went to the full git).
 
+With the full git installed, `git clone` of an http(s) URL is still the
+built-in's (axios, 2,222 commits: 12 s, against 96 s for the full git in
+Blink; `builtinCloneHandles` in git.ts), with the full git's defaults: all
+history unless `--depth`, all branches as `origin/*` with `origin/HEAD`,
+tags, and the checked-out branch tracking its remote. Only with the options
+it has (`--depth`, `-b`/`--branch`, `--single-branch`, `--no-tags`, `-q`,
+`-o`/`--origin`, a directory); `--bare`, `--mirror`, `--recurse-submodules`,
+`--filter`, ssh://, git://, file:// and local paths are the full git's, and
+so is a clone the built-in fails at (other than for credentials). The full
+git then works on the repository as usual. Credentials for a private
+http(s) clone come from `GITHUB_TOKEN` or the GitHub sign-in (`gh auth
+login`), not git's credential helpers.
+
 | Command | Supported |
 | --- | --- |
 | global options | `-C DIR`, `-c k=v`, `--no-pager`/`-P`, `--no-optional-locks`, `--literal-pathspecs`, `--git-dir=`, `--work-tree=`; from a subdirectory (the nearest `.git` up) |
@@ -794,6 +930,27 @@ Popular AI coding-agent CLIs, run as tabcomputer would run them: native x86-64
 ELF builds in Blink as kernel processes, Node builds on tabcomputer's `node`. Run
 2026-10-09 with dummy API keys for the other vendors (a 401/400 from the
 vendor's API proves the network path).
+
+### On tabcomputer.com, 2026-10-10
+
+Re-checked on the live site (deploys 073944d…ed8a01c; Gemini on a local 102fc13 build) in headless Chromium,
+a fresh page per tool, with dummy keys. Times are wall time on that page.
+A real tool call (Bash `ls`, a file write) needs a model to ask for it, so it
+was not possible with dummy keys. Sign-in was checked up to the point where a
+real account takes over (the sign-in page opens and the CLI waits for the code).
+
+| Tool | Version | Install | `--version` | First screen | API with a dummy key | Sign-in | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Claude Code, native (default) | 2.1.296 | `claude install` 140 s | 3 s | 52 s | `-p`: "Invalid API key", ~100 s | `claude login` → `claude auth login`: the sign-in page opens in a tab (or an Open card), then "Paste code here" | Startup is ~48–52 s offline, mostly compiled guest code (perf-blink's profiles). With `TABCOMPUTER_NODE_WORKER=1`: same. |
+| Claude Code, `--npm` | 2.1.112 (reports 2.1.280) | installed at boot | 5–7 s | 14 s | `-p`: "Invalid API key", 4 s | `claude --npm login` → the in-session `/login` (URL, paste prompt) | 2.1.112's `auth login` has no paste prompt and could never finish here; fixed (ad91c0e). With `TABCOMPUTER_NODE_WORKER=1` it works but shows the first-run screens. |
+| OpenAI Codex | 0.162.1 | GitHub release tarball with the real curl (`pkg install curl`): 65 s; `npm i -g @openai/codex` 8–11 s (the `linux-x64` package installs since f86aded) | 4.7 s (tarball), 12 s (npm launcher) | — | `exec`: 401 on `wss://` then `https://api.openai.com`, ~40–50 s (tarball and, on ed8a01c, the npm launcher) | not tried (ChatGPT sign-in) | After the 401s, `exec` can hang in the HTTPS fallback until Ctrl-C (the npm launcher on ed8a01c; one of three tarball runs). Through npm, the terminal used to freeze after `codex --version` (fixed in 102fc13), and `exec` used to wait on stdin (compat-tools' stdio-inherit fix). |
+| Grok Build (xAI) | 1.0.50 | `x.ai/cli/install.sh` after `pkg install curl`: 118 s | 2.4 s | — | `-p`: 400 "Incorrect API key", 25 s (148 s on 2026-10-09) | not tried | The builtin `curl` can't fetch the binary (browser fetch); the real curl goes through the relay. |
+| Gemini CLI | 0.63.0 | `npm i -g` 2–6 s | 12 s, plus a harmless proper-lockfile "Lock is already released" trace | — | `-p` reaches `/api/gemini/` (400) and exits 1 in 41 s, but on a terminal it prints "An unexpected critical error occurred:[object Object]" rather than the API's message | not tried | On b2571fb `-p` froze the terminal: it printed, then called `process.exit()` from a timer, which cancelled xterm's pending write (fixed in 102fc13). `--version` also prints a bogus "critical error: process.exit(0)" after the prompt (Gemini catches the throw our `process.exit` uses to stop the script). |
+| Antigravity (`agy`) | 1.3.3 | `antigravity.google/cli/install.sh` 22 s (`set -euo pipefail` fixed in d505335) | 19 s after `debian install` | — | — | not tried (Google sign-in) | A glibc binary: without `debian install` (no `ld-linux-x86-64.so.2`) it exits 127 with no message. After `debian install`, `curl … \| bash` runs Debian's bash, which can't find tabcomputer's `grep` and `curl` (the overlay leaves `/usr/bin/grep` absent), so install agy first. |
+| opencode | 1.18.35 | `opencode.ai/install` (real curl): 40.5 s on ed8a01c; `npm i -g` 25 s | 160 s after `debian install` (a glibc build, `opencode-linux-x64-baseline`); without it: "cannot execute: required file not found (this program needs glibc: run `debian install`)" | — | — | — | The install script needed two shell fixes: `local` in a piped `{ }` group of a function (fa6b68a), and a `{ }` group after `cmd \| \<newline>` (f17cef32). |
+| aider | 0.86.2 | `debian install`, `pkg install curl`, `aider.chat/install.sh` (uv, Python 3.12): 609 s | 362 s | — | `--message`: litellm `AuthenticationError` "Incorrect API key", 776 s | not tried | Works end to end since the v4-mapped UDP fix (0a5e7e5); very slow (CPython under Blink). |
+
+### First pass (2026-10-09)
 
 | Tool | Version | Kind | Install | `--version` | Network | Timings | Blockers |
 | --- | --- | --- | --- | --- | --- | --- | --- |

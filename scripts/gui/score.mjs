@@ -35,13 +35,21 @@ mkdirSync(SHOTS, { recursive: true });
 const APPS = [
   ['mousepad', 'Editors & viewers'], ['gedit', 'Editors & viewers'], ['l3afpad', 'Editors & viewers'],
   ['evince', 'Editors & viewers'], ['eog', 'Editors & viewers'], ['ristretto', 'Editors & viewers'], ['gpicview', 'Editors & viewers'],
-  ['gimp', 'Graphics'], ['inkscape', 'Graphics'], ['krita', 'Graphics'], ['blender', 'Graphics'],
+  ['geany', 'Editors & viewers'], ['zathura', 'Editors & viewers'],
+  ['gimp', 'Graphics'], ['inkscape', 'Graphics'], ['krita', 'Graphics'], ['blender', 'Graphics'], ['shotwell', 'Graphics'], ['simple-scan', 'Graphics'],
   ['pcmanfm', 'Desktop'], ['thunar', 'Desktop'], ['xterm', 'Desktop'], ['galculator', 'Desktop'],
-  ['gnumeric', 'Office'], ['abiword', 'Office'], ['libreoffice-writer', 'Office'],
+  ['gnumeric', 'Office'], ['abiword', 'Office'], ['libreoffice-writer', 'Office'], ['xournalpp', 'Office'],
   ['firefox-esr', 'Internet & media'], ['netsurf', 'Internet & media'], ['dillo', 'Internet & media'],
-  ['vlc', 'Internet & media'], ['audacity', 'Internet & media'],
+  ['thunderbird', 'Internet & media'], ['pidgin', 'Internet & media'], ['hexchat', 'Internet & media'],
+  ['vlc', 'Internet & media'], ['audacity', 'Internet & media'], ['audacious', 'Internet & media'],
   ['featherpad', 'Qt'], ['qterminal', 'Qt'], ['qpdfview', 'Qt'], ['keepassxc', 'Qt'], ['kcalc', 'Qt'], ['lximage-qt', 'Qt'],
 ];
+
+/** Apps started with a file to show (an image), as people use them: a viewer with nothing open has no input to react to */
+const OPENS_IMAGE = new Set(['eog', 'ristretto', 'gpicview', 'lximage-qt', 'krita', 'shotwell']);
+/** Apps whose first window is a splash or a progress dialog: render and input are checked on the window whose title matches */
+const READY = { krita: /sample/, 'libreoffice-writer': /^LibreOffice$|Writer/, audacity: /^Audacity$/, gimp: /GNU Image Manipulation Program/ };
+const READY_S = 300;
 
 const manifest = JSON.parse(readFileSync(join(ROOT, 'public/gui/apps.json'), 'utf8'));
 const results = existsSync(RESULTS) ? JSON.parse(readFileSync(RESULTS, 'utf8')) : {};
@@ -86,24 +94,29 @@ const windowsOf = (page, id) => page.evaluate((id) => window.__tabcomputer.deskt
   return { title: w.title, x: r.x, y: r.y, width: r.width, height: r.height, bw: c.width, bh: c.height, spans: layer ? layer.children.length : 0 };
 }).sort((a, b) => b.width * b.height - a.width * a.height), id);
 
-/** Distinct colours on a coarse grid of the app's largest window, and a hash of them */
+/** Distinct colours on a coarse grid of the app's windows (the most any one has), and a hash of all of them */
 const sample = (page, id) => page.evaluate((id) => {
-  const w = window.__tabcomputer.desktop.windows().filter((w) => w.appId === id && w.surface).sort((a, b) => b.surface.canvas.width * b.surface.canvas.height - a.surface.canvas.width * a.surface.canvas.height)[0];
-  if (!w) return null;
-  const c = w.surface.canvas, d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
-  const colors = new Set();
-  let hash = 0;
-  for (let y = 0; y < c.height; y += 3) for (let x = 0; x < c.width; x += 3) {
-    const i = (y * c.width + x) * 4, v = (d[i] << 16) | (d[i + 1] << 8) | d[i + 2];
-    colors.add(v);
-    hash = (Math.imul(hash, 31) + v) | 0;
+  const ws = window.__tabcomputer.desktop.windows().filter((w) => w.appId === id && w.surface);
+  if (!ws.length) return null;
+  let colors = 0, hash = 0;
+  for (const w of ws) {
+    const c = w.surface.canvas;
+    if (!c.width || !c.height) continue;
+    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    const seen = new Set();
+    for (let y = 0; y < c.height; y += 3) for (let x = 0; x < c.width; x += 3) {
+      const i = (y * c.width + x) * 4, v = (d[i] << 16) | (d[i + 1] << 8) | d[i + 2];
+      seen.add(v);
+      hash = (Math.imul(hash, 31) + v) | 0;
+    }
+    colors = Math.max(colors, seen.size);
   }
-  return { colors: colors.size, hash };
+  return { colors, hash };
 }, id);
 
 async function scoreApp(browser, base, id) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  await context.addInitScript(() => { try { localStorage.setItem('tabcomputer-desktop-tour', '1'); } catch { /* none */ } });
+  await context.addInitScript(() => { try { localStorage.setItem('tabcomputer-desktop-tour', '1'); localStorage.setItem('tabcomputer-desktop-welcome', '1'); } catch { /* none */ } });
   const app = manifest.apps[id];
   const r = { id, toolkit: app.toolkit, mb: +(app.size / 1e6).toFixed(1), packages: app.packages.length, version: version(id), when: new Date().toISOString() };
   const page = await context.newPage();
@@ -127,7 +140,13 @@ async function scoreApp(browser, base, id) {
     if (!r.installed) throw new Error(`install: ${r.installNote}`);
     // 2. a window appears
     t = Date.now();
-    const run = await sh(`gui ${id}`);
+    let file = '';
+    if (OPENS_IMAGE.has(id)) {
+      file = ' /home/user/sample.png';
+      await sh(`curl -s -o /home/user/sample.png ${String(base).replace(/\/$/, '')}/gui/icons/gimp.png`);
+    }
+    t = Date.now();
+    const run = await sh(`gui ${id}${file}`);
     if (run.code) throw new Error(`launch: ${run.out.trim().slice(-200)}`);
     // (the app may exit instead: a missing library, a crash)
     await page.evaluate(() => { window.__guiExited = null; window.__guiLast?.exited.then((s) => { window.__guiExited = s; }); });
@@ -140,6 +159,13 @@ async function scoreApp(browser, base, id) {
     }
     r.windowMs = Date.now() - t;
     r.window = true;
+    if (READY[id]) {
+      // its main window, after the splash
+      const re = READY[id].source;
+      const ok = await page.waitForFunction(([id, re]) => window.__tabcomputer.desktop.windows().some((w) => w.appId === id && w.surface && new RegExp(re).test(w.title)),
+        [id, re], { timeout: READY_S * 1000, polling: 500 }).then(() => true, () => false);
+      if (ok) r.readyMs = Date.now() - t;
+    }
     // let it finish its first paint (and splash screens give way)
     await page.waitForTimeout(8000);
     // 3. renders something
@@ -150,6 +176,9 @@ async function scoreApp(browser, base, id) {
     const [main] = await windowsOf(page, id);
     r.windows = (await windowsOf(page, id)).map((w) => w.title).slice(0, 3);
     if (errorWindow(r.windows)) { r.window = false; r.note = `error window: “${errorWindow(r.windows)}”`; }
+    // what each input step left on screen (an app that quits or crashes on a key shows here)
+    r.trace = [];
+    const step = async (name) => r.trace.push(`${name}: ${(await windowsOf(page, id)).map((w) => w.title).join(' | ') || 'no windows'}`);
     if (main) {
       // focus it the way the desktop does (no click: a click can land on a menu or a dropdown)
       await page.evaluate((id) => {
@@ -161,6 +190,7 @@ async function scoreApp(browser, base, id) {
       await page.waitForTimeout(4000);
       const s1 = await sample(page, id);
       r.input = !!s1 && s1.hash !== s0?.hash;
+      await step('type');
       if (!r.input) {
         // the focus may need to be in a text field: click into the window, type again
         await page.mouse.click(main.x + main.width / 2, main.y + main.height / 2);
@@ -169,20 +199,40 @@ async function scoreApp(browser, base, id) {
         const s1b = await sample(page, id);
         r.input = !!s1b && s1b.hash !== s1?.hash;
         if (r.input) r.inputVia = 'click and type';
-        else await page.keyboard.press('Escape');
+        // (close a menu the click opened; viewers quit on Escape, as LXImage-Qt and Shotwell do)
+        else if (!file) await page.keyboard.press('Escape');
+        await step('click and type');
+      }
+      if (!r.input && file) {
+        // a viewer showing the file: zoom in (Ctrl+= in Qt and GTK viewers, + in others), next image
+        await page.keyboard.press('Control+Equal');
+        await page.keyboard.press('+');
+        await page.keyboard.press('ArrowRight');
+        await page.waitForTimeout(5000);
+        const s1c = await sample(page, id);
+        r.input = !!s1c && s1c.hash !== s1?.hash;
+        if (r.input) r.inputVia = 'zoom keys';
+        await step('zoom keys');
       }
       if (!r.input) {
-        // nothing to type into (viewers): the usual Open shortcut should change something
+        // nothing to type into: the usual Open shortcut should change something (GTK's file chooser takes a while)
         const before = (await windowsOf(page, id)).length;
         await page.keyboard.press('Control+o');
-        await page.waitForTimeout(6000);
+        await page.waitForTimeout(15000);
         const s2 = await sample(page, id);
         r.input = (await windowsOf(page, id)).length > before || (!!s2 && s2.hash !== s1?.hash);
         if (r.input) r.inputVia = 'Ctrl+O';
-        await page.keyboard.press('Escape');
+        await step('Ctrl+O');
+        // close the file chooser (only if one opened: a viewer would quit)
+        if ((await windowsOf(page, id)).length > before) await page.keyboard.press('Escape');
         await page.waitForTimeout(1500);
       }
 
+    }
+    // (a slow first paint counts if it lands during the input steps: Audacity's main window)
+    if (!r.rendered) {
+      const late = await sample(page, id);
+      if (late && late.colors >= 2) { r.colors = late.colors; r.rendered = true; r.renderedLate = true; }
     }
     // 5. the text layer sees its text
     const after = await windowsOf(page, id);
@@ -203,17 +253,10 @@ async function scoreApp(browser, base, id) {
 // ── Report ───────────────────────────────────────────────────────────────
 /** Known causes, shown with a row's own note (see "Failures and fixes" in the report) */
 const KNOWN = {
-  blender: 'OpenCV aborts: "SSE/SSE2 not available" (the x86 engine reports CPU family 0)',
-  'libreoffice-writer': 'soffice.bin is loaded as a flat binary (".bin" name; x86 engine)',
-  'firefox-esr': 'crashes itself (MOZ_CRASH) ~20 s into startup',
-  vlc: 'its window opens, then the Qt interface exits (status 0)',
-  'lximage-qt': 'single-instance check needs a D-Bus session bus',
-  eog: 'input: probably nothing open to type into (not investigated)',
-  gpicview: 'input: probably nothing open to type into (not investigated)',
-  qpdfview: 'input: probably nothing open to type into (not investigated)',
-  audacity: 'SysV shared memory (shmget) is ENOSYS in the x86 engine',
-  thunar: 'input not detected (not investigated)',
-  krita: 'input: passed in one of two runs (start screen, nothing open)',
+  blender: 'past the CPU check and PI futexes (engine fixes); needs OpenGL 3.3 over GLX, which Xshiro doesn\'t provide',
+  'libreoffice-writer': 'runs (via oosplash): its first window is the splash, the start center follows (~2 min)',
+  'firefox-esr': 'runs (~4.5 min to its window): content processes get the font list by message (an overlay pref) until shared mappings work across processes; its text isn\'t reported',
+  audacity: 'its first window is the first-run plugin scan; the main window follows (~70 s); wxWidgets text isn\'t reported',
   dillo: 'FLTK draws its text as pixels',
 };
 
@@ -243,7 +286,7 @@ function report() {
       md += `\n### ${g}\n\n| App | Toolkit | Download | Install | Window | First window | Renders | Input | Text | Notes |\n|---|---|---:|---:|:-:|---:|:-:|:-:|:-:|---|\n`;
       group = g;
     }
-    const note = [r.note || r.error, KNOWN[id]].filter(Boolean).join('; ').replace(/\|/g, '\\|');
+    const note = [r.readyMs ? `main window at ${secs(r.readyMs)}` : '', OPENS_IMAGE.has(id) ? 'opened with an image' : '', r.renderedLate ? 'first paint more than 8 s after its window' : '', r.note || r.error, KNOWN[id]].filter(Boolean).join('; ').replace(/\|/g, '\\|');
     md += `| ${id} | ${r.toolkit} | ${r.mb} MB | ${r.installed ? secs(r.installMs) : '✗'} | ${yes(r.window)} | ${r.window ? secs(r.windowMs) : '–'} | ${r.window ? yes(r.rendered) : '–'} | ${r.window ? yes(r.input) : '–'} | ${r.window ? yes(r.textLayer) : '–'}${r.window && r.spans ? ` (${r.spans})` : ''} | ${note} |\n`;
   }
   md += `\n${new Date().toISOString().slice(0, 10)}; per-app details (output tails, window titles) in .gui-score/results.json.\n`;

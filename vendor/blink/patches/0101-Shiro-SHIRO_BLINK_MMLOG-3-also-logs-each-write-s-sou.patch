@@ -1,0 +1,79 @@
+From 647944bf44c87df3dee8eb50bdbd1d5ed4f08e92 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 05:15:40 +0000
+Subject: [PATCH 101/111] Shiro: SHIRO_BLINK_MMLOG=3 also logs each write's
+ source and first bytes
+
+---
+ blink/shiro.inc | 20 +++++++++++++++++++-
+ 1 file changed, 19 insertions(+), 1 deletion(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index e999d72..52ba163 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -25,7 +25,7 @@
+ // Memory, threads, futexes, signal delivery and timing stay Blink's.
+ 
+ int g_shiro_pid;  // kernel pid; 0 = not running under Shiro
+-static int g_shiro_mmlog;  // SHIRO_BLINK_MMLOG=1: log the guest's mappings, 2: ring
++static int g_shiro_mmlog;  // SHIRO_BLINK_MMLOG=1: log the guest's mappings, 2: ring, 3: 1 + writes
+ static struct { int tid, nr; u64 a, b, c, r; } g_shiro_mmring[256];
+ static _Atomic(unsigned) g_shiro_mmringi;
+ static int g_shiro_chunk = 65536;
+@@ -367,6 +367,8 @@ static i64 ShiroRead(struct Machine *m, int fd, i64 addr, u64 len) {
+   return r;
+ }
+ 
++static void ShiroWriteLog(struct Machine *, int, i64, const u8 *, u64, i64);
++
+ static i64 ShiroWrite(struct Machine *m, int fd, i64 addr, u64 len) {
+   u64 done = 0;
+   i64 r;
+@@ -379,6 +381,7 @@ static i64 ShiroWrite(struct Machine *m, int fd, i64 addr, u64 len) {
+     if (CopyFromUserRead(m, buf, addr + done, n) == -1) {
+       return done ? (i64)done : -EFAULT_LINUX;
+     }
++    ShiroWriteLog(m, fd, addr + done, buf, n, -1);
+     r = ShiroCall(m, 1, A12(fd, n), buf, n, 0, true, !done);
+     if (r < 0) return done ? (i64)done : r;
+     done += r;
+@@ -387,6 +390,19 @@ static i64 ShiroWrite(struct Machine *m, int fd, i64 addr, u64 len) {
+   return done;
+ }
+ 
++// SHIRO_BLINK_MMLOG=3: each write's fd, source, length, offset and first
++// bytes as Blink gathered them, to stderr (is a file's data lost before or
++// after it leaves Blink?)
++static void ShiroWriteLog(struct Machine *m, int fd, i64 addr, const u8 *buf, u64 n, i64 off) {
++  char b[200];
++  int k, i;
++  if (g_shiro_mmlog != 3 || fd <= 2) return;
++  k = snprintf(b, sizeof(b), "wr %d fd %d %#" PRIx64 " len %#" PRIx64 " off %" PRId64 ":", m->tid, fd, addr, n, off);
++  for (i = 0; i < 16 && (u64)i < n; ++i) k += snprintf(b + k, sizeof(b) - k, " %02x", buf[i]);
++  b[k++] = '\n';
++  ShiroCall(m, 1, A12(2, k), b, k, 0, false, false);
++}
++
+ static i64 ShiroPread(struct Machine *m, int nr, int fd, i64 addr, u64 len,
+                       i64 off) {
+   i64 r;
+@@ -399,6 +415,7 @@ static i64 ShiroPread(struct Machine *m, int nr, int fd, i64 addr, u64 len,
+     while (done < len) {
+       n = MIN(len - done, (u64)g_shiro_chunk);
+       if (CopyFromUserRead(m, buf, addr + done, n) == -1) return -EFAULT_LINUX;
++      ShiroWriteLog(m, fd, addr + done, buf, n, off + done);
+       r = ShiroCall(m, 18, A12(fd, n, (int)(off + done), (int)((off + done) >> 32)),
+                     buf, n, 0, true, !done);
+       if (r < 0) return done ? (i64)done : r;
+@@ -439,6 +456,7 @@ static i64 ShiroIov(struct Machine *m, bool write, int fd, i64 iovaddr,
+       if (len && CopyFromUserRead(m, buf + done, Read64(iov + i * 16), len) == -1) return -EFAULT_LINUX;
+       done += len;
+     }
++    ShiroWriteLog(m, fd, Read64(iov + 0), buf, total, off);
+     for (done = 0; done < total; done += r) {
+       if (off >= 0) {
+         r = ShiroCall(m, 18, A12(fd, (int)(total - done), (int)(off + done), (int)((off + done) >> 32)),
+-- 
+2.43.0
+

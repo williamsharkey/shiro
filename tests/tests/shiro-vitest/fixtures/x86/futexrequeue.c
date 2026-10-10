@@ -10,7 +10,7 @@
 
 #define N 6
 static int f1, f2;
-static atomic_int woken;
+static atomic_int woken, ready;
 
 static long fx(int *u, int op, int val, long val2, int *u2, int val3) {
   return syscall(SYS_futex, u, op, val, val2, u2, val3);
@@ -18,6 +18,7 @@ static long fx(int *u, int op, int val, long val2, int *u2, int val3) {
 
 static void *waiter(void *arg) {
   (void)arg;
+  atomic_fetch_add(&ready, 1);
   if (!fx(&f1, FUTEX_WAIT, 0, 0, 0, 0)) atomic_fetch_add(&woken, 1);
   return 0;
 }
@@ -28,6 +29,8 @@ int main(void) {
   pthread_t t[N];
   long r;
   for (int i = 0; i < N; ++i) pthread_create(&t[i], 0, waiter, 0);
+  // every waiter has started (a loaded machine takes a while), then has time to block
+  while (atomic_load(&ready) < N) usleep(10000);
   settle();
   r = fx(&f1, FUTEX_CMP_REQUEUE, 0, 0, &f2, 1);
   printf("cmp mismatch %ld %d\n", r, r < 0 && errno == EAGAIN);

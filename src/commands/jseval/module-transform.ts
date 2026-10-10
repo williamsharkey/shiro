@@ -595,7 +595,7 @@ export function stripShebang(src: string): string {
  * Regex literals are told from division by the previous token; one that would
  * run past the end of its line is taken to be division instead.
  */
-export function codeMask(src: string): Uint8Array {
+export function codeMask(src: string, blockComments?: [number, number][]): Uint8Array {
   const len = src.length;
   const mask = new Uint8Array(len);
   const braceStack: number[] = []; // template nesting: brace depth at each `${`
@@ -631,7 +631,9 @@ export function codeMask(src: string): Uint8Array {
     }
     if (ch === '/' && src[i + 1] === '*') {
       const end = src.indexOf('*/', i + 2);
+      const start = i;
       i = end < 0 ? len : end + 2;
+      blockComments?.push([start, i]);
       continue;
     }
     if (ch === '"' || ch === "'") {
@@ -692,6 +694,30 @@ export function codeMask(src: string): Uint8Array {
 
 /** Source plus its codeMask, kept in step as replacements are made. */
 interface MaskedSource { src: string; mask: Uint8Array }
+
+/**
+ * import(x) → __dynamic_import(x), in code only, leaving alone a URL (the
+ * browser loads it), a member call (`runner.import(url)`, also across a line
+ * break: vite's module runner) and a method definition (`import(id) { … }`:
+ * Astro's module loader).
+ */
+function rewriteDynamicImports(ms: MaskedSource): void {
+  const mask = ms.mask;
+  replaceInCode(ms, /(?<![\w$.])import\s*\((?!\s*['"`](?:https?|data|blob):)/g, (m: string, off: number, text: string) => {
+    let k = off - 1;
+    while (k >= 0 && /\s/.test(text[k])) k--;
+    if (text[k] === '.') return m;
+    let depth = 0, i = off + m.length - 1;
+    for (; i < text.length; i++) {
+      if (!mask[i]) continue;
+      if (text[i] === '(') depth++;
+      else if (text[i] === ')' && --depth === 0) break;
+    }
+    let j = i + 1;
+    while (j < text.length && /\s/.test(text[j])) j++;
+    return text[j] === '{' ? m : '__dynamic_import(';
+  });
+}
 
 /** src.replace(re, replacer) for matches that start in code (see codeMask). */
 function replaceInCode(ms: MaskedSource, re: RegExp, replacer: string | ((...args: any[]) => string)): void {
@@ -845,7 +871,7 @@ export function transformBundledESM(src: string): string {
 
   // 3. Dynamic import() → __dynamic_import()
   //    Safe: just replaces the keyword with a function name, no quotes.
-  replaceInCode(ms, /\bimport\s*\(/g, '__dynamic_import(');
+  rewriteDynamicImports(ms);
 
   // 4. Transform remaining static imports globally.
   //    Minified bundles have imports scattered throughout (not just at the top)
@@ -1010,11 +1036,20 @@ export function transformESModules(src: string): string {
 
   // Preserve block comments to avoid transforming export/import keywords inside them
   // Note: We don't preserve line comments (//) as they can appear in strings (URLs)
+  // (the ones codeMask finds: `/*` inside a string or template, as tsconfck's
+  // `**/*`, isn't one, and taking it for one hid the code up to the next `*/`)
   const comments: string[] = [];
-  src = src.replace(/\/\*[\s\S]*?\*\//g, (match) => {
-    comments.push(match);
-    return `___COMMENT_${comments.length - 1}___`;
-  });
+  {
+    const ranges: [number, number][] = [];
+    codeMask(src, ranges);
+    let out = '', last = 0;
+    for (const [a, b] of ranges) {
+      comments.push(src.slice(a, b));
+      out += src.slice(last, a) + `___COMMENT_${comments.length - 1}___`;
+      last = b;
+    }
+    src = out + src.slice(last);
+  }
 
   // Dynamic import() → __dynamic_import() (must be before other import
   // transforms): resolved like require, relative to the module, giving a
@@ -1023,7 +1058,7 @@ export function transformESModules(src: string): string {
   // them, and a native import() of anything else resolves against the page.
   {
     const ms: MaskedSource = { src, mask: codeMask(src) };
-    replaceInCode(ms, /(?<![\w$.])import\s*\((?!\s*['"`](?:https?|data|blob):)/g, '__dynamic_import(');
+    rewriteDynamicImports(ms);
     src = ms.src;
   }
 
@@ -1032,6 +1067,19 @@ export function transformESModules(src: string): string {
   // spaced or minified alike (`import{a as b}from"x"`, identifiers with $)
   const ms: MaskedSource = { src, mask: codeMask(src) };
   const I = '(?<![\\w$.])';
+  // Named imports, read again once their module has loaded if it was still
+  // loading (a cycle: ESM bindings are live, and a copy made then is undefined;
+  // Astro's render-context → middleware/index → sequence → render-context)
+  // `{ default as x }` is the default import (Astro's `import { default as default2 }`):
+  // a module's default export is its exports here, as CommonJS's is in node
+  const namedImport = (pattern: string, mod: string) => {
+    const entries = pattern.split(',').map((e) => e.trim()).filter(Boolean);
+    const def = entries.map((e) => /^default\s*:\s*([\w$]+)$/.exec(e)).find(Boolean)?.[1];
+    const rest = entries.filter((e) => !/^default\s*:/.test(e)).join(', ');
+    const decl = [def ? `let ${def} = __shiro_require("${mod}");` : '', rest ? `let {${rest}} = __shiro_require("${mod}");` : ''].join(' ').trim();
+    const reread = [def ? `${def} = __shiro_m;` : '', rest ? `({${rest}} = __shiro_m);` : ''].join(' ').trim();
+    return `${decl} __shiro_require.relink?.("${mod}", (__shiro_m) => { ${reread} });`;
+  };
   const asColon = (list: string) => list.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/([\w$]+)\s+as\s+([\w$]+)/g, '$1: $2');
   const exportItems = (list: string) => list.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '')
     .split(',').map((x: string) => x.trim()).filter((x: string) => x && /^[\w$]/.test(x))
@@ -1050,7 +1098,7 @@ export function transformESModules(src: string): string {
   // import Default, { named } from 'y' → combined default + named import
   replaceInCode(ms, new RegExp(I + String.raw`import\s+([\w$]+)\s*,\s*\{([^}]+)\}\s*from\s*['"]([^'"]+)['"]\s*;?`, 'g'),
     (_: string, defaultName: string, namedImports: string, mod: string) =>
-      `const ${defaultName} = __shiro_require("${mod}"); const {${asColon(namedImports)}} = __shiro_require("${mod}");`);
+      `const ${defaultName} = __shiro_require("${mod}"); ${namedImport(asColon(namedImports), mod)}`);
 
   // import Default, * as ns from 'y'
   replaceInCode(ms, new RegExp(I + String.raw`import\s+([\w$]+)\s*,\s*\*\s*as\s+([\w$]+)\s+from\s*['"]([^'"]+)['"]\s*;?`, 'g'),
@@ -1062,7 +1110,7 @@ export function transformESModules(src: string): string {
 
   // import { a, b } from 'y' → const { a, b } = require('y'); a as b → a: b
   replaceInCode(ms, new RegExp(I + String.raw`import\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]\s*;?`, 'g'),
-    (_: string, imports: string, mod: string) => asColon(imports).trim() ? `const {${asColon(imports)}} = __shiro_require("${mod}");` : `__shiro_require("${mod}");`);
+    (_: string, imports: string, mod: string) => asColon(imports).trim() ? namedImport(asColon(imports), mod) : `__shiro_require("${mod}");`);
 
   // import * as x from 'y' → const x = require('y')
   replaceInCode(ms, new RegExp(I + String.raw`import\s*\*\s*as\s+([\w$]+)\s+from\s*['"]([^'"]+)['"]\s*;?`, 'g'),
@@ -1088,9 +1136,12 @@ export function transformESModules(src: string): string {
     'Object.assign(__shiro_module.exports, __shiro_require("$1"));');
 
   // export { x, y as z } → module.exports.x = x; module.exports.z = y;
+  const listExports: string[][] = [];
   replaceInCode(ms, new RegExp(I + String.raw`export\s*\{([^}]*)\}\s*;?`, 'g'),
-    (_: string, list: string) => exportItems(list).map(([local, exported]) =>
-      exported === '.default' ? `__shiro_module.exports = ${local};` : `__shiro_module.exports${exported} = ${local};`).join(' '));
+    (_: string, list: string) => exportItems(list).map(([local, exported]) => {
+      listExports.push([local, exported]);
+      return exported === '.default' ? `__shiro_module.exports = ${local};` : `__shiro_module.exports${exported} = ${local};`;
+    }).join(' '));
 
   // Track named exports to add module.exports at the end
   const namedExports: string[] = [];
@@ -1103,8 +1154,13 @@ export function transformESModules(src: string): string {
   replaceInCode(ms, new RegExp(I + String.raw`export\s+(var|let)\s+([\w$]+)\s*;`, 'g'),
     (_: string, decl: string, name: string) => { track(name); return `${decl} ${name};`; });
   // export [async] function[*] name / export class Name
+  const functionExports: string[] = [];
   replaceInCode(ms, new RegExp(I + String.raw`export\s+(async\s+function\s*\*?|function\s*\*?|class)\s*([\w$]+)`, 'g'),
-    (_: string, kind: string, name: string) => { track(name); return `${kind.replace(/\s+/g, ' ').replace(/function \*/, 'function*')} ${name}`; });
+    (_: string, kind: string, name: string) => {
+      track(name);
+      if (kind !== 'class') functionExports.push(name);
+      return `${kind.replace(/\s+/g, ' ').replace(/function \*/, 'function*')} ${name}`;
+    });
 
   // TypeScript's type-only forms
   replaceInCode(ms, new RegExp(I + String.raw`export\s+type\s+`, 'g'), '/* export type */ ');
@@ -1116,23 +1172,64 @@ export function transformESModules(src: string): string {
     src += '\n' + namedExports.map(n => `__shiro_module.exports.${n} = ${n};`).join('\n');
   }
 
+  // Exported function declarations are there from the start, as in ESM (hoisted):
+  // a module that imports this one back while this one is still loading its
+  // imports gets them (Astro's middleware: index.js imports sequence.js, which
+  // imports index.js's defineMiddleware). On the first line, after any
+  // directives, so line numbers stay.
+  {
+    // (top-level ones only: a nested function may share a name with an exported const)
+    const declared = new Set<string>();
+    const fm = codeMask(src);
+    const depthAt = new Int32Array(src.length + 1);
+    for (let i = 0, d = 0; i < src.length; i++) {
+      depthAt[i] = d;
+      if (fm[i]) { const c = src.charCodeAt(i); if (c === 123) d++; else if (c === 125) d--; }
+    }
+    for (const m of src.matchAll(/(?<![\w$.])(?:async\s+)?function\s*\*?\s*([\w$]+)\s*\(/g)) {
+      if (fm[m.index!] && depthAt[m.index!] === 0) declared.add(m[1]);
+    }
+    const hoist = [
+      ...functionExports.map((n) => `__shiro_module.exports.${n} = ${n};`),
+      ...listExports.filter(([local, exported]) => exported !== '.default' && declared.has(local)).map(([local, exported]) => `__shiro_module.exports${exported} = ${local};`),
+    ];
+    // A default export is the exports themselves here: named exports set before it
+    // (`export * from`, `export { z }` ahead of `export default z`: zod) are carried
+    // over to it at the end
+    const replacesExports = /__shiro_module\.exports\s*=(?!=)/.test(src);
+    if (replacesExports) {
+      hoist.unshift('const __shiro_exports0 = __shiro_module.exports;');
+      src += '\n;{ const __e = __shiro_module.exports; if (__e !== __shiro_exports0 && __e && (typeof __e === "object" || typeof __e === "function")) for (const __k of Object.keys(__shiro_exports0)) if (!(__k in __e)) try { __e[__k] = __shiro_exports0[__k]; } catch {} }';
+    }
+    if (hoist.length) {
+      const prologue = /^(?:\s*(?:(['"])use [\w ]+\1\s*;?))*/.exec(src)![0];
+      src = prologue + hoist.join(' ') + ' ' + src.slice(prologue.length);
+    }
+  }
+
   // Remove __filename/__dirname/Buffer declarations (we provide these as parameters)
   // Handles: const __filename = fileURLToPath(import.meta.url);
   //          const __dirname = dirname(__filename);
   //          const Buffer = require('buffer').Buffer;
-  src = src.replace(/(?:const|let|var)\s+__filename\s*=\s*[^;]+;?/g, '/* __filename provided */');
-  src = src.replace(/(?:const|let|var)\s+__dirname\s*=\s*[^;]+;?/g, '/* __dirname provided */');
-  // Handle: const Buffer = require('buffer').Buffer; or var Buffer = ...
-  // Use [^;,]+ to stop at comma (multi-line declarations) or semicolon
-  src = src.replace(/(?:const|let|var)\s+Buffer\s*=\s*[^;,]+;/g, '/* Buffer provided */');
-  // Handle multi-line: var Buffer = ...,\n    OtherVar = ...; -> var OtherVar = ...;
-  src = src.replace(/(const|let|var)\s+Buffer\s*=\s*[^,]+,\s*/g, '$1 ');
-  // Handle: const { Buffer } = require('buffer'); (destructuring)
-  src = src.replace(/(?:const|let|var)\s*\{\s*Buffer\s*\}\s*=\s*[^;]+;/g, '/* Buffer provided */');
-  // Handle: const { Buffer, ... } = require('buffer'); (Buffer in destructuring with others)
-  src = src.replace(/(\{\s*)Buffer(\s*,)/g, '$1/* Buffer */$2');
-  src = src.replace(/(,\s*)Buffer(\s*\})/g, '$1/* Buffer */$2');
-  src = src.replace(/(,\s*)Buffer(\s*,)/g, '$1/* Buffer */$2');
+  // (in code only, and within one statement: a template that carries such a line
+  // as text, as Next's build/utils.js does, ran on to a `;` far past it)
+  {
+    const cm: MaskedSource = { src, mask: codeMask(src) };
+    replaceInCode(cm, /(?:const|let|var)\s+__filename\s*=\s*[^;\n]+;?/g, '/* __filename provided */');
+    replaceInCode(cm, /(?:const|let|var)\s+__dirname\s*=\s*[^;\n]+;?/g, '/* __dirname provided */');
+    // Handle: const Buffer = require('buffer').Buffer; or var Buffer = ...
+    // Use [^;,]+ to stop at comma (multi-line declarations) or semicolon
+    replaceInCode(cm, /(?:const|let|var)\s+Buffer\s*=\s*[^;,]+;/g, '/* Buffer provided */');
+    // Handle multi-line: var Buffer = ...,\n    OtherVar = ...; -> var OtherVar = ...;
+    replaceInCode(cm, /(const|let|var)\s+Buffer\s*=\s*[^,]+,\s*/g, '$1 ');
+    // Handle: const { Buffer } = require('buffer'); (destructuring)
+    replaceInCode(cm, /(?:const|let|var)\s*\{\s*Buffer\s*\}\s*=\s*[^;]+;/g, '/* Buffer provided */');
+    // Handle: const { Buffer, ... } = require('buffer'); (Buffer in destructuring with others)
+    replaceInCode(cm, /(\{\s*)Buffer(\s*,)/g, '$1/* Buffer */$2');
+    replaceInCode(cm, /(,\s*)Buffer(\s*\})/g, '$1/* Buffer */$2');
+    replaceInCode(cm, /(,\s*)Buffer(\s*,)/g, '$1/* Buffer */$2');
+    src = cm.src;
+  }
 
   // Note: We removed aggressive catch-all transforms for import/export
   // as they were corrupting URLs in strings (//example.com) and other code.

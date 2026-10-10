@@ -16,6 +16,7 @@ import { FileSystem } from './filesystem';
 import { Shell } from './shell';
 import { CommandRegistry, Command } from './commands/index';
 import { registry } from './registry';
+import { builtinCloneHandles } from './commands/git-clone-route';
 import { lazyCommand } from './utils/lazy-command';
 import { shellBuiltins } from './commands/shell-builtins';
 import { shiroCmds } from './commands/shiro-cmds';
@@ -52,7 +53,7 @@ import { titleCmd } from './commands/title';
 
 import { mkTempCmd } from './commands/mktemp';
 import { tputCmd } from './commands/tput';
-import { sttyCmd } from './commands/stty';
+import { sttyCmd, resetCmd } from './commands/stty';
 import { gzipCmd, gunzipCmd, zcatCmd } from './commands/gzip';
 import { wgetCmd } from './commands/wget';
 import { pgrepCmd, pkillCmd } from './commands/pgrep';
@@ -141,6 +142,7 @@ async function main() {
 
   // Initialize filesystem
   const fs = new FileSystem();
+  fs.holdKeyIndex(); // until the first prompt (below)
   await fs.init();
   setActiveFileSystem(fs);
   // Persistent storage (no eviction under storage pressure) once the machine
@@ -267,7 +269,7 @@ async function main() {
   // These are registered in both CommandRegistry and ModuleRegistry for hot-reload
   // Lazy: git.ts pulls in isomorphic-git (~150 KB), reload.ts esbuild-wasm's JS API
   registerCommand(commands, lazyCommand('git', 'Version control system',
-    () => import('./commands/git').then(m => m.gitCmd)), 'src/commands/git.ts');
+    () => import('./commands/git').then(m => m.gitCmd), { keepOverPackage: builtinCloneHandles }), 'src/commands/git.ts');
   registerCommand(commands, grepCmd, 'src/commands/grep.ts');
   registerCommand(commands, sedCmd, 'src/commands/sed.ts');
   registerCommand(commands, fetchCmd, 'src/commands/fetch.ts');
@@ -361,6 +363,7 @@ async function main() {
     () => import('./commands/jq').then(m => m.jqCmd)), 'src/commands/jq.ts');
   registerCommand(commands, tputCmd, 'src/commands/tput.ts');
   registerCommand(commands, sttyCmd, 'src/commands/stty.ts');
+  registerCommand(commands, resetCmd, 'src/commands/stty.ts');
   registerCommand(commands, gzipCmd, 'src/commands/gzip.ts');
   registerCommand(commands, gunzipCmd, 'src/commands/gzip.ts');
   registerCommand(commands, zcatCmd, 'src/commands/gzip.ts');
@@ -735,6 +738,7 @@ async function main() {
   if (!desktop) initPanes(terminal, makeShell);
 
   await terminal.start();
+  fs.releaseKeyIndex();
 
   // Check for become mode (app mode) — restore full-screen app if configured
   if (becomeConfig) {
@@ -886,6 +890,14 @@ async function main() {
       void import('./commands/remote').then(m => m.startRemoteWithCode(persistedCode, terminal));
     }
   }
+
+  // Prebuilt packages installed at a build the index marks broken are
+  // upgraded in the background (pkg-manager.ts upgradeBrokenPackages)
+  setTimeout(() => {
+    void import('./pkg-manager').then((m) => m.upgradeBrokenPackages(fs, { env: shell.env, log: (l) => console.log(`[pkg] ${l}`) }))
+      .then((names) => { if (names?.length) console.log(`[pkg] upgraded known-broken packages: ${names.join(', ')}`); })
+      .catch((e) => console.warn('[pkg] upgrade of known-broken packages failed:', e?.message || e));
+  }, 2000);
 
   // Have Claude Code ready before anyone types `claude` (the profile's preinstall
   // list). Waits a few seconds so the 18 MB tarball download doesn't compete with boot.

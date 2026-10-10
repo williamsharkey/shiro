@@ -5,7 +5,7 @@
  * WASM guests run in Node worker_threads as kernel processes (sab mode), as
  * in kernel-shell.test.ts. Packages built here are read from public/pkg.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { Worker } from 'node:worker_threads';
 import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
@@ -85,8 +85,7 @@ async function sh(shell: Shell, cmd: string) {
   return { out: out.replace(/\r\n/g, '\n'), err: err.replace(/\r\n/g, '\n'), exitCode };
 }
 
-/** Without colour codes: Shiro's shell exports FORCE_COLOR, so chalk and
- *  supports-color colour even into a pipe */
+/** Without colour codes (a program that colours anyway) */
 const plain = (t: string) => t.replace(/\x1b\[[0-9;]*m/g, '');
 
 /** A download pinned by sha256, cached in tests/.pkg-cache. */
@@ -835,6 +834,25 @@ c.unref(); c.stdin.write('x'); console.log('parent done')`)).toBe('parent done\n
     expect(r.out).toBe('1 0\n');
   }, 60_000);
 
+  it("process.chdir is the process's own: its fs follows it, the shell that ran it doesn't move", async () => {
+    await fs.mkdir('/home/user/m/sub', { recursive: true });
+    await fs.writeFile('/home/user/m/sub/here.txt', 'in sub');
+    const r = await sh(shell, `cd /home/user/m && node -e "process.chdir('sub'); console.log(process.cwd(), require('fs').readFileSync('here.txt', 'utf8'))"; pwd`);
+    expect(r.out).toBe('/home/user/m/sub in sub\n/home/user/m\n');
+  }, 60_000);
+
+  it('fs.opendir: a Dir to read, close and `for await` (Next.js lists its pages so)', async () => {
+    await fs.mkdir('/home/user/m/od/sub', { recursive: true });
+    await fs.writeFile('/home/user/m/od/a.txt', 'a');
+    expect(await node(`const fs = require('fs');
+(async () => {
+  const names = [];
+  for await (const e of await require('fs/promises').opendir('od')) names.push(e.name + (e.isDirectory() ? '/' : '') + ':' + e.parentPath.endsWith('/od'));
+  const d = fs.opendirSync('od'); const first = d.readSync(); d.closeSync();
+  fs.opendir('od', (err, dir) => dir.read((e2, ent) => { console.log(names.sort().join(), !!first, !!ent); dir.close(); }));
+})();`)).toBe('a.txt:true,sub/:true true true\n');
+  }, 60_000);
+
   it('path follows Node (relative paths stay relative)', async () => {
     expect(await node(`const p = require('path');
 console.log(JSON.stringify([p.dirname('a'), p.dirname('/a'), p.dirname('a/b/'), p.join('a', '../b', './c'), p.join(''), p.normalize('./x/../y/'),
@@ -1195,6 +1213,11 @@ describe('node: real npm packages', () => {
     const r = await sh(shell, 'cd /home/user/app && npm init -y > /dev/null && npm install commander@12.1.0 chalk@4.1.2 dayjs@1.11.13 uuid@10.0.0 mocha@10.8.2 typescript@5.6.3 prettier@3.3.3');
     expect(r.exitCode).toBe(0);
   }, 300_000);
+
+  it('npm config get/set/delete, from ~/.npmrc and npm\'s defaults (Next.js asks for the registry)', async () => {
+    const r = await sh(shell, 'cd /home/user && npm config get registry && npm config set fund false && npm config get fund && npm get cache && npm config delete fund && npm config get fund');
+    expect(r.out).toBe('https://registry.npmjs.org/\nfalse\n/home/user/.npm\nundefined\n');
+  });
 
   it('npm install in a directory without package.json starts one, as npm does', async () => {
     const r = await sh(shell, 'mkdir -p /home/user/nopkg && cd /home/user/nopkg && npm install dayjs@1.11.13 > /dev/null; echo "e=$?"; cat package.json; node -e "console.log(typeof require(\'dayjs\'))"; npm install; echo "f=$?"');
@@ -1735,6 +1758,23 @@ describe('npm install: the node_modules tree (npm-tree.ts)', () => {
     expect(t.warnings).toEqual([]);
   });
 
+  it('extracts empty files from a package tarball (a 0-byte types.js that index.js re-exports)', async () => {
+    const { execSync } = await import('node:child_process');
+    const dir = mkdtempSync('/tmp/tgz-');
+    mkdirSync(`${dir}/package/dist`, { recursive: true });
+    writeFileSync(`${dir}/package/dist/types.js`, '');
+    writeFileSync(`${dir}/package/dist/index.js`, 'export * from "./types.js";\n');
+    execSync(`tar czf ${dir}/p.tgz -C ${dir} package`);
+    const { extractTarGzToFS } = await import('@shiro/utils/tar-utils');
+    const files = new Map<string, number>();
+    await extractTarGzToFS(new Uint8Array(readFileSync(`${dir}/p.tgz`)), '/x', {
+      writeFile: async (p: string, d: Uint8Array) => { files.set(p, d.length); },
+      mkdir: async () => {},
+    });
+    rmSync(dir, { recursive: true, force: true });
+    expect(Object.fromEntries(files)).toEqual({ '/x/dist/types.js': 0, '/x/dist/index.js': 28 });
+  });
+
   it('follows npm: aliases and dist-tags; npm create names the create- package', async () => {
     const t = await buildTree([{ name: 'old', range: 'npm:new@^2' }, { name: 'tagged', range: 'next' }], registry({
       new: { '2.1.0': {} },
@@ -1743,6 +1783,27 @@ describe('npm install: the node_modules tree (npm-tree.ts)', () => {
     expect(layout(t.nodes)).toEqual({ 'node_modules/old': 'new@2.1.0', 'node_modules/tagged': '2.0.0-beta.1' });
     expect(['vite@latest', 'vite', '@vue', '@vue@3', '@scope/app@1.2.0'].map(initializerPackage))
       .toEqual(['create-vite@latest', 'create-vite', '@vue/create', '@vue/create@3', '@scope/create-app@1.2.0']);
+  });
+
+  it('takes linux-x64 builds that ship an executable (codex, opencode), not Node addons, musl builds or ones with a WebAssembly build', async () => {
+    const t = await buildTree([{ name: 'cli', range: '1' }, { name: 'oc', range: '1' }, { name: 'tool', range: '1' }], registry({
+      cli: {
+        '1.0.0-linux-x64': { os: ['linux'], cpu: ['x64'] },
+        '1.0.0-darwin-arm64': { os: ['darwin'], cpu: ['arm64'] },
+        '1.0.0': { optionalDependencies: { 'cli-linux-x64': 'npm:cli@1.0.0-linux-x64', 'cli-darwin-arm64': 'npm:cli@1.0.0-darwin-arm64' } },
+      },
+      oc: { '1.0.0': { optionalDependencies: { 'oc-linux-x64': '1.0.0', 'oc-linux-x64-musl': '1.0.0', 'oc-windows-x64': '1.0.0' } } },
+      'oc-linux-x64': { '1.0.0': { os: ['linux'], cpu: ['x64'] } },
+      'oc-linux-x64-musl': { '1.0.0': { os: ['linux'], cpu: ['x64'], libc: ['musl'] } },
+      'oc-windows-x64': { '1.0.0': { os: ['win32'], cpu: ['x64'] } },
+      tool: { '1.0.0': { optionalDependencies: { 'tool-linux-x64-gnu': '1.0.0' } } },
+      'tool-linux-x64-gnu': { '1.0.0': { os: ['linux'], cpu: ['x64'], libc: ['glibc'], main: 'tool.linux-x64-gnu.node' } },
+    }));
+    expect(layout(t.nodes)).toEqual({
+      'node_modules/cli': '1.0.0', 'node_modules/oc': '1.0.0',
+      'node_modules/tool': '1.0.0', 'node_modules/cli-linux-x64': 'cli@1.0.0-linux-x64', 'node_modules/oc-linux-x64': '1.0.0',
+    });
+    expect(t.skipped.sort()).toEqual(['cli-darwin-arm64@1.0.0-darwin-arm64', 'oc-linux-x64-musl@1.0.0', 'oc-windows-x64@1.0.0', 'tool-linux-x64-gnu@1.0.0']);
   });
 });
 
@@ -1753,9 +1814,9 @@ describe('ES module transform: minified imports, and import text in strings left
     const src = 'import{createRequire as e}from"node:module";import t from"node:fs";import i,{styleText as a}from"node:util";import"./side.js";'
       + 'const tpl=`import react from \'@vitejs/plugin-react\'\nexport default defineConfig({})`;export{tpl as x,e};export{e as "module.exports"};export default 1;';
     const out = transformESModules(src);
-    expect(out).toContain('const {createRequire: e} = __shiro_require("node:module");');
+    expect(out).toContain('let {createRequire: e} = __shiro_require("node:module");');
     expect(out).toContain('const t = __shiro_require("node:fs");');
-    expect(out).toContain('const i = __shiro_require("node:util"); const {styleText: a} = __shiro_require("node:util");');
+    expect(out).toContain('const i = __shiro_require("node:util"); let {styleText: a} = __shiro_require("node:util");');
     expect(out).toContain('__shiro_require("./side.js");');
     expect(out).toContain("`import react from '@vitejs/plugin-react'\nexport default defineConfig({})`");
     expect(out).toContain('__shiro_module.exports.x = tpl; __shiro_module.exports.e = e;');
@@ -1767,6 +1828,53 @@ describe('ES module transform: minified imports, and import text in strings left
 import { liveEsbuildChunk } from '@shiro/commands/jseval/esm-live';
 
 describe('live bindings for code-split chunks: an import named like a member keyword', () => {
+  it('exported function declarations are there while a cyclic import is loading (Astro middleware)', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/cyc', { recursive: true });
+    await fs.writeFile('/home/user/cyc/index.mjs', `import { sequence } from './sequence.mjs';\nfunction defineMiddleware(fn) { return fn; }\nexport function other() { return 'o'; }\nconst late = 1;\nexport { defineMiddleware, sequence, late };\n`);
+    await fs.writeFile('/home/user/cyc/sequence.mjs', `import { defineMiddleware, other } from './index.mjs';\nexport function sequence() { return defineMiddleware(() => 'ok')() + other(); }\nexport const early = [typeof defineMiddleware, typeof other];\n`);
+    await fs.writeFile('/home/user/cyc/main.mjs', `import { sequence, late } from './index.mjs';\nimport { early } from './sequence.mjs';\nconsole.log(sequence(), late, early.join());\n`);
+    expect((await sh(shell, 'cd /home/user/cyc && node main.mjs')).out).toBe('oko 1 function,function\n');
+    // A re-exported import read through a three-module cycle: live once the module has loaded
+    await fs.writeFile('/home/user/cyc/i2.mjs', `import { seq } from './s2.mjs';\nexport { seq };\n`);
+    await fs.writeFile('/home/user/cyc/s2.mjs', `import { rc } from './r2.mjs';\nexport function seq() { return 'seq'; }\n`);
+    await fs.writeFile('/home/user/cyc/r2.mjs', `import { seq } from './i2.mjs';\nexport function rc() { return typeof seq === 'function' ? seq() : String(seq); }\n`);
+    await fs.writeFile('/home/user/cyc/m2.mjs', `import './i2.mjs';\nimport { rc } from './r2.mjs';\nconsole.log(rc());\n`);
+    expect((await sh(shell, 'cd /home/user/cyc && node m2.mjs')).out).toBe('seq\n');
+    // `import { default as x }` is the default import (Astro's core/dev/index.js re-exports one)
+    await fs.writeFile('/home/user/cyc/dev.mjs', `export default async function dev() { return 'dev'; }\n`);
+    await fs.writeFile('/home/user/cyc/devindex.mjs', `import { default as default2 } from "./dev.mjs";\nimport { other } from "./index.mjs";\nexport {\n  other,\n  default2 as default\n};\n`);
+    await fs.writeFile('/home/user/cyc/m3.mjs', `import d, { other } from './devindex.mjs';\nconsole.log(typeof d, typeof other, await d());\n`);
+    expect((await sh(shell, 'cd /home/user/cyc && node m3.mjs')).out).toBe('function function dev\n');
+    // Named exports ahead of `export default` stay (zod's index.js: `export * from`, `export { z }`, `export default z`)
+    await fs.writeFile('/home/user/cyc/ext.mjs', `export const string = () => 's';\nexport const number = () => 1;\n`);
+    await fs.writeFile('/home/user/cyc/zod.mjs', `import * as z from "./ext.mjs";\nexport * from "./ext.mjs";\nexport { z };\nexport default z;\n`);
+    await fs.writeFile('/home/user/cyc/m4.mjs', `const m = await import('./zod.mjs');\nimport { z, string } from './zod.mjs';\nimport zd from './zod.mjs';\nconsole.log('z' in m, typeof m.z.string, typeof string, typeof z.number, typeof zd.string);\n`);
+    expect((await sh(shell, 'cd /home/user/cyc && node m4.mjs')).out).toBe('true function function function function\n');
+  });
+
+  it('a method named import stays one; import() calls become dynamic imports', () => {
+    const out = transformESModules('const loader = {\n  import(id) { return id; },\n  async load() { return import("./x.js").then((m) => m); }\n};\nclass L { import (a, b) {} }\nconst r = runner\n  .import(url);\nexport { loader };\n');
+    expect(out).toContain('runner\n  .import(url)');
+    expect(out).toContain('import(id) { return id; }');
+    expect(out).toContain('import (a, b) {}');
+    expect(out).toContain('__dynamic_import("./x.js")');
+  });
+
+  it("`const __dirname = …` as template text is left alone (Next's build/utils.js generates such a file)", () => {
+    const src = 'const code = isEsm ? `import module from "node:module"\nconst __dirname = fileURLToPath(new URL(".", import.meta.url))\n` : `x`;\nfoo(code);\nmodule.exports = { code };\n';
+    const out = transformESModules(src);
+    expect(out).toContain('const __dirname = fileURLToPath(new URL(".", import.meta.url))\n`');
+    expect(() => new Function(out)).not.toThrow();
+  });
+
+  it("a `/*` inside a template or string isn't a comment (tsconfck's `**/*` hid the exports after it)", () => {
+    const out = transformESModules('const G = `**/*`;\nconst S = "/*";\n/** doc */\nexport function f() { return 1; }\nexport const x = 2;\n');
+    expect(out).not.toMatch(/^export /m);
+    expect(out).toContain('`**/*`');
+    expect(out).toContain('/** doc */');
+  });
+
   it("keeps `get name() {}` an accessor when `get` is an imported binding (vite 7's config chunk)", () => {
     const src = 'import { __toESM as t, get, set } from "./chunk.js";\n'
       + 'const o = { a: 1, get clients() { return get(1); }, set value(v) { set(v); }, get };\n'
@@ -1778,4 +1886,306 @@ describe('live bindings for code-split chunks: an import named like a member key
     expect(out).toContain('get y() { return 1; }');
     expect(out).toMatch(/get: __shiro_live\d+\.get \}/);
   });
+});
+
+describe('npm install: install scripts and platform packages', () => {
+  let shell: Shell;
+  let fs: FileSystem;
+  let saved: typeof fetch;
+  const tgz = new Map<string, Uint8Array>();
+  const meta = new Map<string, any>();
+  /** A fake registry package: files under package/, its package.json from `pkg` */
+  const publish = async (pkg: Record<string, any>, files: Record<string, string> = {}) => {
+    const { execSync } = await import('node:child_process');
+    const dir = mkdtempSync('/tmp/fakepkg-');
+    mkdirSync(`${dir}/package`, { recursive: true });
+    writeFileSync(`${dir}/package/package.json`, JSON.stringify(pkg));
+    for (const [f, c] of Object.entries(files)) { mkdirSync(path.dirname(`${dir}/package/${f}`), { recursive: true }); writeFileSync(`${dir}/package/${f}`, c); }
+    execSync(`tar czf ${dir}/p.tgz -C ${dir} package`);
+    const url = `https://registry.npmjs.org/${pkg.name}/-/fake-${pkg.version}.tgz`;
+    tgz.set(url, new Uint8Array(readFileSync(`${dir}/p.tgz`)));
+    rmSync(dir, { recursive: true, force: true });
+    const m = meta.get(pkg.name) ?? { name: pkg.name, 'dist-tags': {}, versions: {} };
+    m.versions[pkg.version] = { ...pkg, dist: { tarball: url } };
+    if (!/-/.test(pkg.version)) m['dist-tags'].latest = pkg.version;
+    meta.set(pkg.name, m);
+  };
+  beforeAll(async () => {
+    ({ fs, shell } = await createTestShell());
+    await bootFiles(fs);
+    saved = globalThis.fetch;
+    globalThis.fetch = (async (input: any, init?: any) => {
+      const url = String(input);
+      if (tgz.has(url)) return new Response(tgz.get(url));
+      const name = decodeURIComponent(url.replace('https://registry.npmjs.org/', ''));
+      if (meta.has(name)) return new Response(JSON.stringify(meta.get(name)), { headers: { 'content-type': 'application/json' } });
+      return saved(input, init);
+    }) as typeof fetch;
+    await publish({ name: 'zzfake-cli', version: '1.0.0-linux-x64', os: ['linux'], cpu: ['x64'] }, { 'vendor/cli': '#!/bin/sh\necho native\n' });
+    await publish({ name: 'zzfake-cli', version: '1.0.0-darwin-arm64', os: ['darwin'], cpu: ['arm64'] });
+    await publish({
+      name: 'zzfake-cli', version: '1.0.0', bin: { 'zzfake-cli': 'bin/cli.js' },
+      optionalDependencies: { 'zzfake-cli-linux-x64': 'npm:zzfake-cli@1.0.0-linux-x64', 'zzfake-cli-darwin-arm64': 'npm:zzfake-cli@1.0.0-darwin-arm64' },
+      dependencies: { 'zzfake-dep': '1' },
+      scripts: { postinstall: 'node post.js' },
+    }, {
+      'bin/cli.js': '#!/usr/bin/env node\nconsole.log("cli ok", require("fs").existsSync(require("path").join(__dirname, "../../zzfake-cli-linux-x64/vendor/cli")));\n',
+      'post.js': 'require("fs").writeFileSync("installed.txt", [process.env.npm_lifecycle_event, process.env.npm_package_name, require("fs").existsSync("../zzfake-dep/dep-ran") ].join(" "));\n',
+    });
+    await publish({ name: 'zzfake-dep', version: '1.0.0', scripts: { install: 'echo ran > dep-ran' } });
+    await publish({ name: 'zzfake-bad', version: '1.0.0', scripts: { postinstall: 'echo cannot build the addon >&2; exit 3' } }, { 'index.js': 'module.exports = 42;\n' });
+  }, 60_000);
+  afterAll(() => { globalThis.fetch = saved; });
+
+  it('npm i -g installs the linux-x64 build and runs install scripts, dependencies first', async () => {
+    const r = await sh(shell, 'npm i -g zzfake-cli; echo "e=$?"; cat /usr/local/lib/node_modules/zzfake-cli/installed.txt; echo; ls /usr/local/lib/node_modules | grep zzfake; zzfake-cli');
+    expect(r.out).toContain('e=0');
+    expect(r.out).toContain('postinstall zzfake-cli true');
+    expect(r.out).toContain('zzfake-cli\nzzfake-cli-linux-x64\nzzfake-dep\n');
+    expect(r.out).toContain('cli ok true');
+  }, 60_000);
+
+  it("a failing install script is a warning; --ignore-scripts and ignore-scripts=true skip them", async () => {
+    let r = await sh(shell, 'mkdir -p /home/user/scr && cd /home/user/scr && npm i zzfake-bad > /dev/null; echo "e=$?"; node -p "require(\'zzfake-bad\')"');
+    expect(r.out).toBe('e=0\n42\n');
+    expect(r.err).toContain('npm warn zzfake-bad@1.0.0 postinstall: `echo cannot build the addon >&2; exit 3` exited with 3');
+    expect(r.err).toContain('cannot build the addon');
+    r = await sh(shell, 'mkdir -p /home/user/scr2 && cd /home/user/scr2 && npm i --ignore-scripts zzfake-dep > /dev/null; ls node_modules/zzfake-dep; echo ignore-scripts=true > ~/.npmrc; cd /home/user/scr && rm -rf node_modules && npm i > /dev/null 2>&1; ls node_modules/zzfake-bad; rm ~/.npmrc');
+    expect(r.out).toBe('package.json\nindex.js\npackage.json\n');
+    expect(r.err).toBe('');
+  }, 60_000);
+});
+
+describe("the page's esbuild is let go when idle", () => {
+  it('stops after the idle time and starts again for the next build', async () => {
+    // The page's esbuild is esbuild-wasm's browser build (here in this thread, from esbuild.wasm)
+    vi.resetModules();
+    vi.doMock('esbuild-wasm', () => import(`${REPO}/node_modules/esbuild-wasm/esm/browser.js`));
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async (input: any, init?: any) => String(input).endsWith('/esbuild.wasm')
+      ? new Response(readFileSync(`${REPO}/node_modules/esbuild-wasm/esbuild.wasm`)) : saved(input, init)) as typeof fetch;
+    const { buildCmd, esbuildRunning, setEsbuildIdleMs } = await import('@shiro/commands/build');
+    const { fs, shell } = await createTestShell();
+    shell.commands.register(buildCmd);
+    await fs.mkdir('/home/user/eb', { recursive: true });
+    await fs.writeFile('/home/user/eb/a.ts', 'const n: number = 41;\nexport const v = n + 1;\n');
+    setEsbuildIdleMs(200);
+    try {
+      let r = await sh(shell, 'cd /home/user/eb && build a.ts --outfile=out1.js');
+      expect(r.exitCode).toBe(0);
+      expect(esbuildRunning()).toBe(true);
+      await new Promise((res) => setTimeout(res, 600));
+      expect(esbuildRunning()).toBe(false);
+      r = await sh(shell, 'cd /home/user/eb && build a.ts --outfile=out2.js && cat out2.js');
+      expect(r.exitCode).toBe(0);
+      expect(r.out).toContain('n + 1');
+      expect(esbuildRunning()).toBe(true);
+    } finally {
+      setEsbuildIdleMs(60_000);
+      globalThis.fetch = saved;
+      vi.doUnmock('esbuild-wasm');
+    }
+  }, 120_000);
+});
+
+describe('node: a process that exits closes its servers', () => {
+  it('process.exit() frees the port; a script that goes idle while serving leaves it up', async () => {
+    const { iframeServer } = await import('@shiro/iframe-server');
+    const { shell } = await createTestShell();
+    let r = await sh(shell, `node -e "require('http').createServer((q, s) => s.end('up')).listen(4811, () => setTimeout(() => process.exit(0), 50))"; echo "e=$?"`);
+    expect(r.out).toBe('e=0\n');
+    expect(iframeServer.isPortInUse(4811)).toBe(false);
+    r = await sh(shell, `node -e "require('http').createServer((q, s) => s.end('up')).listen(4812)"; echo "e=$?"`);
+    expect(r.out).toBe('e=0\n');
+    expect(iframeServer.isPortInUse(4812)).toBe(true);
+    expect((await iframeServer.fetch(4812, '/')).body).toBe('up');
+    iframeServer.close(4812);
+  }, 60_000);
+});
+
+describe('node builtins have no enumerable `default` (as in node)', () => {
+  it("a copy of path's keys into a mock leaves path.resolve alone (@vercel/nft, Next's build)", async () => {
+    const { shell } = await createTestShell();
+    const r = await sh(shell, `node -e "
+      const o = { default: require('path') };
+      const Y = { default: {} };
+      Object.keys(o.default).forEach((e) => { const t = o.default[e]; Y[e] = Y.default[e] = t; });
+      Y.resolve = Y.default.resolve = function (...e) { return o.default.resolve.apply(this, ['/x', ...e]); };
+      console.log(Y.resolve('a'), require('path').resolve('/b', 'c'));
+      console.log(['path', 'assert', 'events', 'stream'].map((m) => Object.keys(require(m)).includes('default')).join(' '));
+      import('path').then((p) => console.log(typeof p.default.join));
+    "`);
+    expect(r.out).toBe('/x/a /b/c\nfalse false false false\nfunction\n');
+  }, 60_000);
+});
+
+describe('Buffer: every fixed- and variable-width read/write node has', () => {
+  it('LE/BE ints, floats, doubles, BigInt64, readUIntLE/writeIntBE (webpack\'s cache serializer)', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/bo', { recursive: true });
+    await fs.writeFile('/home/user/bo/ops.js', `const b = Buffer.alloc(16);
+const out = [];
+out.push(b.writeUInt32LE(0xdeadbeef, 0), b.writeInt16LE(-2, 4), b.writeInt32BE(-5, 6), b.writeUInt16LE(513, 10), b.writeInt8(-1, 12), b.writeFloatLE(1.5, 12));
+out.push(b.toString('hex'));
+out.push(b.readUInt32LE(0), b.readInt16LE(4), b.readInt32BE(6), b.readUint16LE(10), b.readFloatLE(12), b.readInt32LE(0));
+const d = Buffer.alloc(8); d.writeDoubleBE(Math.PI); out.push(d.toString('hex'), d.readDoubleBE(0));
+const g = Buffer.alloc(8); g.writeBigInt64LE(-3n); out.push(g.toString('hex'), String(g.readBigInt64LE()), String(g.readBigUInt64LE()));
+const v = Buffer.alloc(6); out.push(v.writeUIntBE(0x123456789a, 0, 5), v.toString('hex'), v.readUIntLE(0, 5), v.readIntBE(0, 3), v.writeIntLE(-300, 0, 3), v.readIntLE(0, 3), v.toString('hex'));
+console.log(out.join(' '));
+`);
+    const r = await sh(shell, 'node /home/user/bo/ops.js');
+    // (node 22's output for the same script)
+    expect(r.out).toBe('4 6 10 12 13 16 efbeaddefefffffffffb01020000c03f 3735928559 -2 -5 513 1.5 -559038737 400921fb54442d18 3.141592653589793 fdffffffffffffff -3 18446744073709551613 5 123456789a00 663443878930 1193046 3 -300 d4feff789a00\n');
+  }, 60_000);
+});
+
+describe('require.resolve finds any existing file', () => {
+  it('a binary file by its path (Next resolves app/favicon.ico)', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/rr/app', { recursive: true });
+    await fs.writeFile('/home/user/rr/app/favicon.ico', new Uint8Array([0, 0, 1, 0, 0xff, 0xfe]));
+    const r = await sh(shell, `cd /home/user/rr && node -e "console.log(require.resolve('/home/user/rr/app/favicon.ico'), require.resolve('./app/favicon.ico')); try { require.resolve('./app/nope.ico') } catch (e) { console.log(e.code) }"`);
+    expect(r.out).toBe('/home/user/rr/app/favicon.ico /home/user/rr/app/favicon.ico\nMODULE_NOT_FOUND\n');
+  }, 60_000);
+});
+
+describe('node:querystring as node has it', () => {
+  it('repeated keys are arrays both ways, + is a space, separators, bad escapes (Next\'s loader options)', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/qs', { recursive: true });
+    await fs.writeFile('/home/user/qs/qs.js', `const qs = require('querystring');
+console.log(JSON.stringify(qs.parse('a=1&a=2&b=x&c=&d')), qs.stringify({ a: ['1', '2'], b: 'x y', c: '' }));
+console.log(JSON.stringify(qs.parse('a=1;a=2', ';')), qs.escape('ä &'), qs.unescape('%C3%A4+%20'), JSON.stringify(qs.decode('x=%E4')));
+const u = new URLSearchParams('a=1&a=2'); console.log(u.getAll('a').join());
+`);
+    const r = await sh(shell, 'node /home/user/qs/qs.js');
+    // (node 22's output for the same script)
+    expect(r.out).toBe('{"a":["1","2"],"b":"x","c":"","d":""} a=1&a=2&b=x%20y&c=\n{"a":["1","2"]} %C3%A4%20%26 \u00e4+  {"x":"\ufffd"}\n1,2\n');
+  }, 60_000);
+});
+
+describe('vm.runInThisContext', () => {
+  it("gives the value of the script's last expression (webpack's executeModule)", async () => {
+    const { shell } = await createTestShell();
+    const r = await sh(shell, `node -e "const vm=require('vm'); console.log(typeof vm.runInThisContext('(function(a){return a+1})'), vm.runInThisContext('1+2'), new vm.Script('var zzvm = 5; zzvm*2').runInThisContext(), typeof zzvm, vm.runInThisContext('(function(a){return a+1})', { filename: '/x/y.js' })(1))"`);
+    expect(r.out).toBe('function 3 10 number 2\n');
+  }, 60_000);
+});
+
+describe('vm contexts are their own global object', () => {
+  it('globalThis in runInNewContext is the context (Next\'s client-reference manifests); names read and write it', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/vmc', { recursive: true });
+    await fs.writeFile('/home/user/vmc/vm.js', `const vm = require('vm');
+const ctx = {};
+vm.runInNewContext('globalThis.__RSC_MANIFEST = (globalThis.__RSC_MANIFEST || {}); globalThis.__RSC_MANIFEST["/page"] = { a: 1 }; globalThis.x = 2', ctx);
+console.log(JSON.stringify(ctx.__RSC_MANIFEST), ctx.x);
+const c2 = vm.createContext({ n: 2, out: [] });
+console.log(vm.runInContext('out.push(n * 21); n = n + 1; out.length + n', c2), c2.n, c2.out.join());
+console.log(vm.runInNewContext('typeof Math.max + " " + JSON.stringify([a, b])', { a: 1, b: 'q' }));
+console.log(new vm.Script('k * 2').runInNewContext({ k: 4 }), vm.isContext(c2));
+`);
+    const r = await sh(shell, 'node /home/user/vmc/vm.js');
+    // (node 22's output for the same script)
+    expect(r.out).toBe('{"/page":{"a":1}} 2\n4 3 42\nfunction [1,"q"]\n8 true\n');
+  }, 60_000);
+});
+
+describe('AsyncLocalStorage carries its store across await, timers, then, nextTick', () => {
+  it('concurrent runs stay apart; snapshot, exit, AsyncResource, enterWith (Next\'s work and request stores)', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/als', { recursive: true });
+    await fs.writeFile('/home/user/als/als.js', `const { AsyncLocalStorage, AsyncResource } = require('async_hooks');
+const als = new AsyncLocalStorage();
+const other = new AsyncLocalStorage();
+const log = [];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function inner(tag) {
+  await sleep(5);
+  log.push(\`\${tag}:inner=\${als.getStore()?.id}\`);
+  return als.getStore()?.id;
+}
+async function job(id, ms) {
+  return als.run({ id }, async () => {
+    await sleep(ms);
+    log.push(\`\${id}:after-sleep=\${als.getStore()?.id}\`);
+    const v = await inner(id);
+    await Promise.resolve().then(() => log.push(\`\${id}:then=\${als.getStore()?.id}\`));
+    await new Promise((r) => setTimeout(() => { log.push(\`\${id}:timer=\${als.getStore()?.id}\`); r(); }, 1));
+    await new Promise((r) => process.nextTick(() => { log.push(\`\${id}:tick=\${als.getStore()?.id}\`); r(); }));
+    other.run('o' + id, () => log.push(\`\${id}:other=\${other.getStore()}\`));
+    log.push(\`\${id}:other-after=\${other.getStore()}\`);
+    return v;
+  });
+}
+(async () => {
+  const r = await Promise.all([job('A', 20), job('B', 5), job('C', 10)]);
+  log.push(\`results=\${r.join(',')} outside=\${als.getStore()}\`);
+  const snap = als.run({ id: 'S' }, () => AsyncLocalStorage.snapshot());
+  log.push(\`snapshot=\${snap(() => als.getStore().id)} exit=\${als.run({ id: 'E' }, () => als.exit(() => als.getStore()))}\`);
+  const res = als.run({ id: 'R' }, () => new AsyncResource('x'));
+  log.push(\`resource=\${res.runInAsyncScope(() => als.getStore().id)}\`);
+  als.enterWith({ id: 'W' });
+  await sleep(1);
+  log.push(\`enterWith=\${als.getStore().id}\`);
+  console.log(log.join('\\n'));
+})();
+`);
+    const r = await sh(shell, 'node /home/user/als/als.js');
+    // (node 22's lines for the same script; their order follows the timers)
+    expect(r.out.trim().split('\n').sort()).toEqual(["A:after-sleep=A", "A:inner=A", "A:other-after=undefined", "A:other=oA", "A:then=A", "A:tick=A", "A:timer=A", "B:after-sleep=B", "B:inner=B", "B:other-after=undefined", "B:other=oB", "B:then=B", "B:tick=B", "B:timer=B", "C:after-sleep=C", "C:inner=C", "C:other-after=undefined", "C:other=oC", "C:then=C", "C:tick=C", "C:timer=C", "enterWith=W", "resource=R", "results=A,B,C outside=undefined", "snapshot=S exit=undefined"]);
+  }, 60_000);
+});
+
+describe('stream: web streams to node streams and back', () => {
+  it('Readable.fromWeb/toWeb, Writable.fromWeb/toWeb, Duplex (Next\'s prerender)', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/ws', { recursive: true });
+    await fs.writeFile('/home/user/ws/web.js', `const { Readable, Writable, Duplex } = require('stream');
+(async () => {
+  const rs = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('ab')); c.enqueue(new TextEncoder().encode('cd')); c.close(); } });
+  const r = Readable.fromWeb(rs);
+  let s = ''; for await (const c of r) s += Buffer.from(c).toString();
+  const back = Readable.toWeb(Readable.from(['x', 'y', 'z']));
+  const parts = []; for await (const c of back) parts.push(typeof c === 'string' ? c : Buffer.from(c).toString());
+  const got = [];
+  const ws = new WritableStream({ write(c) { got.push(Buffer.from(c).toString()); } });
+  const w = Writable.fromWeb(ws);
+  await new Promise((res) => { w.write('1'); w.end('2', res); });
+  const sink = []; const nw = new Writable({ write(c, e, cb) { sink.push(c.toString()); cb(); } });
+  const writer = Writable.toWeb(nw).getWriter(); await writer.write(new TextEncoder().encode('q')); await writer.close();
+  console.log(s, parts.join(''), got.join(''), sink.join(''), typeof Duplex.fromWeb, typeof Duplex.toWeb);
+})();
+`);
+    const r = await sh(shell, 'node /home/user/ws/web.js');
+    // (node 22's output for the same script)
+    expect(r.out).toBe('abcd xyz 12 q function function\n');
+  }, 60_000);
+});
+
+describe('http: ServerResponse internals middleware uses', () => {
+  it('_implicitHeader(), _header and a gzip body piped into the response (compression, Next\'s server)', async () => {
+    const { iframeServer } = await import('@shiro/iframe-server');
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/gz', { recursive: true });
+    await fs.writeFile('/home/user/gz/s.js', `
+      const zlib = require('zlib');
+      require('http').createServer((req, res) => {
+        const before = res._header;
+        res.setHeader('content-type', 'text/plain');
+        res.setHeader('content-encoding', 'gzip');
+        res._implicitHeader();
+        res.setHeader('x-before', String(before));
+        const gz = zlib.createGzip();
+        gz.pipe(res);
+        gz.end('compressed hello');
+      }).listen(4813);
+    `);
+    await sh(shell, 'cd /home/user/gz && node s.js');
+    const r = await iframeServer.fetch(4813, '/');
+    const body = typeof r.body === 'string' ? new TextEncoder().encode(r.body) : new Uint8Array(r.body as Uint8Array);
+    const text = await new Response(new Blob([body]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+    expect([r.status, r.headers?.['x-before'], r.headers?.['content-encoding'], text]).toEqual([200, 'null', 'gzip', 'compressed hello']);
+    iframeServer.close(4813);
+  }, 60_000);
 });

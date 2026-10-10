@@ -13,6 +13,7 @@ import {
   O_ACCMODE, O_RDONLY, O_WRONLY, O_RDWR, O_APPEND, O_NONBLOCK, O_DSYNC, OPEN_MAX, NR_OPEN,
   POLLIN, POLLOUT, SEEK_SET, SEEK_CUR, SEEK_END,
   S_IFCHR, S_IFREG, S_IFDIR, S_IFIFO, FIONREAD, errnoFromError,
+  EPERM, F_SEAL_SEAL, F_SEAL_SHRINK, F_SEAL_GROW, F_SEAL_WRITE, F_SEAL_FUTURE_WRITE,
 } from './abi';
 
 export type OpenFileKind = 'file' | 'dir' | 'pipe' | 'pty' | 'socket' | 'dev' | 'epoll';
@@ -496,6 +497,7 @@ class Inode {
     if (!this.dirty) this.dirtySince = now;
     this.dirty = true;
     this.mtimeMs = this.lastWrite = now;
+    this.ctimeMs = now; // (a write changes st_ctime too: Open POSIX mmap_14-1's msync)
     this.mtimeNs = 0;
     // Each flush writes the whole file: wait for a burst of writes to pause (a
     // program writing 64 KiB at a time used to store the file after every write)
@@ -1083,6 +1085,11 @@ export class MemFile implements OpenFile {
   private ino = nextMemIno++;
   private mtimeMs = Date.now();
   private listeners = new ReadyListeners();
+  /**
+   * fcntl F_ADD_SEALS/F_GET_SEALS bits (F_SEAL_*). Without MFD_ALLOW_SEALING
+   * a memfd starts sealed against more seals, as Linux's does.
+   */
+  seals = F_SEAL_SEAL;
 
   constructor(public path: string, public flags = O_RDWR) {}
 
@@ -1129,6 +1136,8 @@ export class MemFile implements OpenFile {
 
   async pwrite(buf: Uint8Array, off: number): Promise<number> {
     if ((this.flags & O_ACCMODE) === O_RDONLY) return -EBADF;
+    if (this.seals & (F_SEAL_WRITE | F_SEAL_FUTURE_WRITE)) return -EPERM;
+    if (off + buf.length > this.len && this.seals & F_SEAL_GROW) return -EPERM;
     this.grow(off + buf.length);
     this.data.set(buf, off);
     this.len = Math.max(this.len, off + buf.length);
@@ -1157,6 +1166,7 @@ export class MemFile implements OpenFile {
 
   async truncate(len: number): Promise<number> {
     if (len < 0) return -EINVAL;
+    if ((len < this.len && this.seals & F_SEAL_SHRINK) || (len > this.len && this.seals & F_SEAL_GROW)) return -EPERM;
     this.grow(len);
     if (len > this.len) this.data.fill(0, this.len, len);
     this.len = len;

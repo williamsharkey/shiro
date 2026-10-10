@@ -551,6 +551,35 @@ describe('kernel processes', () => {
     kernel.kill(proc.pid, A.SIGKILL);
   });
 
+  it("the shell's cat, ls, grep and head read a kernel process's /proc as programs do (syscall, wchan, task/, stat)", async () => {
+    const proc = kernel.spawn({ path: '/usr/bin/prog', argv: ['prog', '-x'], cwd: '/tmp', run: () => new Promise<number>(() => {}) });
+    const data = new Uint8Array(64);
+    expect(await kernel.syscall(proc, A.SYS_pipe2, [0], data)).toBe(0);
+    const prd = new DataView(data.buffer).getInt32(0, true);
+    const pwr = new DataView(data.buffer).getInt32(4, true);
+    void kernel.syscall(proc, A.SYS_read, [prd, 16], new Uint8Array(16)); // blocks: a hung process
+    await new Promise((r) => setTimeout(r, 5));
+    const sh = async (cmd: string) => {
+      let out = '';
+      const code = await shell.execute(cmd, (t) => { out += t; }, (t) => { out += t; });
+      return { out: out.replace(/\r\n/g, '\n'), code };
+    };
+    const pid = proc.pid;
+    expect(await sh(`cat /proc/${pid}/syscall`)).toEqual({ out: `${A.SYS_read} 0x${prd.toString(16)} 0x10 0x0 0x0 0x0 0x0 0x0 0x0\n`, code: 0 });
+    expect((await sh(`cat /proc/${pid}/wchan; echo`)).out).toBe('do_syscall_64\n');
+    const ls = (await sh(`ls /proc/${pid}`)).out.split(/\s+/);
+    expect(ls).toEqual(expect.arrayContaining(['syscall', 'wchan', 'task', 'status', 'fd']));
+    expect((await sh(`ls /proc/${pid}/task`)).out.trim()).toBe(String(pid));
+    expect((await sh(`cat /proc/${pid}/task/${pid}/comm`)).out).toBe('prog\n');
+    expect((await sh(`grep -E '^(State|SigIgn)' /proc/${pid}/status`)).out).toMatch(/^State:\tS \(sleeping\)\nSigIgn:\t[0-9a-f]{16}\n$/);
+    expect((await sh(`head -c 5 /proc/${pid}/cmdline | tr '\\0' ' '`)).out).toBe('prog ');
+    expect((await sh(`ls /proc/${pid}/fd`)).out.split(/\s+/)).toEqual(expect.arrayContaining([String(prd), String(pwr)]));
+    expect((await sh('head -1 /proc/stat')).out).toMatch(/^cpu  \d+ 0 0 \d+ /);
+    expect((await sh('ls /proc')).out.split(/\s+/)).toEqual(expect.arrayContaining(['uptime', 'sysvipc', String(pid)]));
+    expect((await sh(`cat /proc/${pid}/nosuch`)).code).toBe(1);
+    kernel.kill(pid, A.SIGKILL);
+  });
+
   it('a fork child starts though its parent exited first (daemon: fork, then _exit at once)', async () => {
     const parent = kernel.spawn({ path: 'daemon', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
     const other = kernel.spawn({ path: 'other', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });

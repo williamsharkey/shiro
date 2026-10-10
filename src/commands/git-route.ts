@@ -38,7 +38,7 @@ const LOG = 'oneline format= pretty? abbrev-commit no-abbrev-commit decorate? no
 
 export const SPECS: Record<string, Spec> = {
   init: { flags: 'q', values: 'b', long: 'quiet initial-branch=' },
-  clone: { flags: 'q', values: 'b', long: 'depth= branch= single-branch no-tags quiet progress' },
+  clone: { flags: 'q', values: 'bo', long: 'depth= branch= single-branch no-single-branch no-tags quiet progress origin=' },
   config: { any: true },
   add: { flags: 'uAfv', long: 'update all force verbose' },
   commit: { flags: 'qan', values: 'mF', long: 'message= file= amend allow-empty all quiet no-verify no-edit no-gpg-sign' },

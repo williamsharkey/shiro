@@ -46,10 +46,12 @@ const isWasmBytes = (b: Uint8Array) => b.length >= 4 && b[0] === 0x00 && b[1] ==
 const isElfBytes = (b: Uint8Array) => b.length >= 4 && b[0] === 0x7f && b[1] === 0x45 && b[2] === 0x4c && b[3] === 0x46;
 
 /** Should `name` be looked up as a kernel program at all? (not a builtin, function, alias or JS command) */
-export function mayBeKernelProgram(shell: Shell, name: string): boolean {
+export function mayBeKernelProgram(shell: Shell, name: string, args?: string[]): boolean {
   if (!name || SHELL_BUILTINS.has(name) || shell.functions[name] || shell.aliases.has(name)) return false;
-  // An installed package's command replaces a builtin of the same name (pkg-manager.ts)
-  if (!shell.commands.get(name) || (shell.pkgShadowBypass !== name && packageShadows(shell.fs).has(name))) return true;
+  // An installed package's command replaces a builtin of the same name (pkg-manager.ts),
+  // except where the builtin keeps these arguments (Command.keepOverPackage)
+  const cmd = shell.commands.get(name);
+  if (!cmd || (shell.pkgShadowBypass !== name && packageShadows(shell.fs).has(name) && !(args && cmd.keepOverPackage?.(args)))) return true;
   // node as a kernel guest (TABCOMPUTER_NODE_WORKER=1)
   return !!nodeKernelProgram(shell.env, name, [], (shell as any).terminal);
 }
@@ -296,9 +298,17 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
     return { exitCode: code, statuses: pids.map(() => 0), stdout, stderr };
   }
 
-  // Aborts from the shell (timeout, a script's Ctrl-C) reach the whole job
+  // Aborts from the shell (timeout, a script's Ctrl-C) reach the whole job:
+  // SIGINT, or the signal the abort names (timeout -s SIG -k DURATION)
   const abort = shell.abortController;
-  const onAbort = () => { kernel.kill(-pgid, A.SIGINT); };
+  let killTimer: ReturnType<typeof setTimeout> | undefined;
+  const onAbort = () => {
+    const reason = abort?.signal.reason as { signal?: number; killAfter?: number } | undefined;
+    kernel.kill(-pgid, typeof reason?.signal === 'number' ? reason.signal : A.SIGINT);
+    if (typeof reason?.killAfter === 'number') {
+      killTimer = setTimeout(() => { if (procs.some((p) => p.alive)) kernel.kill(-pgid, A.SIGKILL); }, reason.killAfter);
+    }
+  };
   abort?.signal.addEventListener('abort', onAbort);
   let exitCode: number;
   try {
@@ -311,6 +321,7 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
     }
   } finally {
     abort?.signal.removeEventListener('abort', onAbort);
+    clearTimeout(killTimer);
   }
   const stopped = exitCode > 128 && procs.some((p) => p.state === 'stopped');
   const statuses = procs.map((p) => (p.exitStatus !== undefined ? shellStatus(p.exitStatus) : exitCode));

@@ -1,4 +1,5 @@
 import { LiveStdin } from './live-stdin';
+import { asyncContext } from './async-context';
 import type { CommandContext } from '../commands/index';
 import type { SharedState } from './types';
 import { ProcessExitError } from '../commands/jseval/utils';
@@ -28,8 +29,8 @@ export function createFakeProcess(
   const processEnv: Record<string, string> = {
     ...ctx.env,
     MCP_CONNECTION_NONBLOCKING: '1',
-    // Route API calls through CORS proxy when in browser
-    ...(typeof window !== 'undefined' && !ctx.env['ANTHROPIC_BASE_URL'] ? {
+    // Route API calls through CORS proxy when in browser (the page, or a guest's Worker)
+    ...((typeof window !== 'undefined' || (ctx as any).nodeGuest) && !ctx.env['ANTHROPIC_BASE_URL'] ? {
       ANTHROPIC_BASE_URL: `${getShiroOrigin()}/api/anthropic`,
     } : {}),
   };
@@ -67,14 +68,26 @@ export function createFakeProcess(
   const fp: any = {
     env: processEnv,
     cwd: () => ctx.shell.cwd,
-    chdir: (dir: string) => { ctx.shell.cwd = ctx.fs.resolvePath(dir, ctx.shell.cwd); ctx.shell.env['PWD'] = ctx.shell.cwd; },
+    // The process's own: its fs and the children it starts use it, and the shell
+    // that ran it is back where it was when it ends (create-next-app chdirs into
+    // the new app, and the shell was left there)
+    chdir: (dir: string) => {
+      const to = ctx.fs.resolvePath(dir, ctx.shell.cwd);
+      if (!_st.restoreCwd) {
+        const was = { cwd: ctx.shell.cwd, pwd: ctx.shell.env['PWD'] };
+        _st.restoreCwd = () => { ctx.shell.cwd = was.cwd; if (was.pwd === undefined) delete ctx.shell.env['PWD']; else ctx.shell.env['PWD'] = was.pwd; };
+      }
+      ctx.shell.cwd = to;
+      ctx.shell.env['PWD'] = to;
+      ctx.cwd = to;
+    },
     exit: (c?: number) => {
       if (_st.exitCalled) throw new ProcessExitError(_st.exitCode); // Prevent re-entrant exit
       _st.exitCode = c ?? 0;
       _st.exitCalled = true;
       // Fire 'exit' event handlers (CLI registers cleanup here)
       try { (processEvents['exit'] || []).forEach(fn => fn(_st.exitCode)); } catch (_) {}
-      if (!_st.isInteractiveMode) _st.outputClosed = true;
+      if (!_st.isInteractiveMode || _st.exitEnds) _st.outputClosed = true;
       _st.deferredExitResolve?.(_st.exitCode);
       throw new ProcessExitError(_st.exitCode);
     },
@@ -101,7 +114,7 @@ export function createFakeProcess(
     emit: (event: string, ...args: any[]) => {
       (processEvents[event] || []).forEach(fn => fn(...args));
     },
-    nextTick: (fn: Function, ...args: any[]) => { queueMicrotask(() => fn(...args)); },
+    nextTick: (fn: Function, ...args: any[]) => { const run = asyncContext.bind(() => fn(...args)); queueMicrotask(run); },
     hrtime: Object.assign(
       (prev?: [number, number]) => {
         const now = performance.now();
@@ -123,15 +136,37 @@ export function createFakeProcess(
     removeAllListeners: (event?: string) => { if (event) { delete processEvents[event]; } else { Object.keys(processEvents).forEach(k => delete processEvents[k]); } return fp; },
     addListener: (event: string, fn: Function) => fp.on(event, fn),
     prependListener: (event: string, fn: Function) => { (processEvents[event] ??= []).unshift(fn); return fp; },
+    // (Next.js wraps each of process's emitter methods and needs them all)
+    prependOnceListener: (event: string, fn: Function) => {
+      const w = (...a: any[]) => { fp.removeListener(event, w); return fn(...a); };
+      (w as any).listener = fn;
+      (processEvents[event] ??= []).unshift(w);
+      return fp;
+    },
     eventNames: () => Object.keys(processEvents),
     setMaxListeners: () => fp,
     getMaxListeners: () => 10,
     rawListeners: (event: string) => [...(processEvents[event] || [])],
-    pid: 1,
-    ppid: 0,
-    kill: (pid: number, signal?: string) => {
+    // (a kernel guest's are its process's; the page's node is one process, 1)
+    pid: nodeGuestOf(ctx)?.ids?.pid ?? 1,
+    ppid: nodeGuestOf(ctx)?.ids?.ppid ?? 0,
+    kill: (pid: number, signal?: string | number) => {
+      // Another process, from a kernel guest: the kernel's kill(2) (0 asks whether it exists)
+      const guestKill = nodeGuestOf(ctx)?.kill;
+      if (guestKill && Number(pid) !== fp.pid) {
+        const SIGS: Record<string, number> = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGKILL: 9, SIGUSR1: 10, SIGUSR2: 12, SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15, SIGCONT: 18, SIGSTOP: 19, SIGTSTP: 20, SIGWINCH: 28 };
+        const n = typeof signal === 'number' ? signal : signal === undefined ? 15 : SIGS[signal];
+        if (n === undefined) throw Object.assign(new TypeError(`Unknown signal: ${signal}`), { code: 'ERR_UNKNOWN_SIGNAL' });
+        const r = guestKill(Number(pid), n);
+        if (r < 0) {
+          const code = r === -3 ? 'ESRCH' : r === -1 ? 'EPERM' : r === -22 ? 'EINVAL' : `E${-r}`;
+          throw Object.assign(new Error(`kill ${code}`), { code, errno: r, syscall: 'kill' });
+        }
+        return true;
+      }
+      if (typeof signal === 'number') signal = Object.entries({ SIGINT: 2, SIGKILL: 9, SIGTERM: 15 }).find(([, v]) => v === signal)?.[0];
       // If killing our own process, treat as exit
-      if (pid === 1) {
+      if (Number(pid) === fp.pid) {
         // For SIGINT: emit event and let handlers decide (like real Node.js)
         if (signal === 'SIGINT' && processEvents['SIGINT']?.length) {
           try { (processEvents['SIGINT'] || []).forEach(fn => fn('SIGINT')); } catch (_) {}

@@ -22,6 +22,17 @@ export interface FsDeps {
   getProcess?: () => any;
 }
 
+/**
+ * A path argument as node takes one: a string, a file: URL object
+ * (`new URL('./x', import.meta.url)`: Astro reads its templates so) or a Buffer
+ */
+function pathArg(p: any): string {
+  if (typeof p === 'string') return p;
+  if (p && typeof p === 'object' && typeof p.href === 'string' && p.protocol === 'file:') return decodeURIComponent(p.pathname);
+  if (ArrayBuffer.isView(p)) return new TextDecoder().decode(p as Uint8Array);
+  return String(p);
+}
+
 /** Create a Node.js-style fs error with code, errno, syscall properties */
 function fsError(code: string, message: string, syscall?: string, path?: string): Error {
   const err: any = new Error(message);
@@ -203,7 +214,7 @@ function makeDirent(ctx: CommandContext, parent: string, name: string, isDir: bo
  */
 async function realpathAsync(deps: FsDeps, p: string): Promise<string> {
   const { ctx, fileCache } = deps;
-  const resolved = ctx.fs.resolvePath(String(p), ctx.cwd);
+  const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
   try {
     const real = await ctx.fs.realpath(resolved);
     if (await ctx.fs.exists(real)) return real;
@@ -510,7 +521,7 @@ export function createFsModule(deps: FsDeps): any {
     return fsShim.openSync(p, flags ?? 'r', mode);
   };
   const mkdirAsync = async (p: any, opts: any) => {
-    const resolved = ctx.fs.resolvePath(String(p), ctx.cwd);
+    const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
     const setModes = mkdirModes(resolved, opts);
     await ctx.fs.mkdir(resolved, typeof opts === 'object' ? opts : undefined);
     setModes();
@@ -628,7 +639,7 @@ export function createFsModule(deps: FsDeps): any {
     },
     readdirSync: (p: string, opts?: any) => {
       tickSyncOps();
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       const prefix = resolved === '/' ? '/' : resolved + '/';
       const entries = new Set<string>();
       const dirSet = new Set<string>();
@@ -699,7 +710,7 @@ export function createFsModule(deps: FsDeps): any {
       return sorted;
     },
     mkdirSync: (p: string, opts?: any) => {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       const setModes = mkdirModes(resolved, opts);
       // Mark directory in fileCache so existsSync/statSync can find it
       // Use a sentinel value to distinguish from files
@@ -720,7 +731,7 @@ export function createFsModule(deps: FsDeps): any {
       setModes();
     },
     unlinkSync: (p: string) => {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       fileCache.delete(resolved);
       fileMtimes.delete(resolved);
       // readdirSync/existsSync also consult the filesystem's cache; drop it there now,
@@ -730,7 +741,7 @@ export function createFsModule(deps: FsDeps): any {
     // No hard links in Shiro's filesystem: link() copies, which is what callers
     // (atomic-write helpers, lockfiles) need from it
     linkSync: (src: string, dst: string) => {
-      const resolvedDst = ctx.fs.resolvePath(dst, ctx.cwd);
+      const resolvedDst = ctx.fs.resolvePath(pathArg(dst), ctx.cwd);
       if (fileCache.has(resolvedDst) || ctx.fs.readBytesCached(resolvedDst) !== undefined) {
         const err: any = new Error(`EEXIST: file already exists, link '${src}' -> '${dst}'`);
         err.code = 'EEXIST'; err.errno = -17; err.syscall = 'link';
@@ -739,8 +750,8 @@ export function createFsModule(deps: FsDeps): any {
       fsShim.copyFileSync(src, dst);
     },
     copyFileSync: (src: string, dst: string) => {
-      const srcRes = ctx.fs.resolvePath(src, ctx.cwd);
-      const dstRes = ctx.fs.resolvePath(dst, ctx.cwd);
+      const srcRes = ctx.fs.resolvePath(pathArg(src), ctx.cwd);
+      const dstRes = ctx.fs.resolvePath(pathArg(dst), ctx.cwd);
       const cached = fileCache.get(srcRes);
       if (cached !== undefined) {
         fileCache.set(dstRes, cached);
@@ -768,8 +779,8 @@ export function createFsModule(deps: FsDeps): any {
       queueWrite(dstRes, () => Promise.allSettled(waitFor).then(() => ctx.fs.readFile(srcRes)).then((data: any) => ctx.fs.writeFile(dstRes, data)));
     },
     renameSync: (oldP: string, newP: string) => {
-      const oldRes = ctx.fs.resolvePath(oldP, ctx.cwd);
-      const newRes = ctx.fs.resolvePath(newP, ctx.cwd);
+      const oldRes = ctx.fs.resolvePath(pathArg(oldP), ctx.cwd);
+      const newRes = ctx.fs.resolvePath(pathArg(newP), ctx.cwd);
       if (writeNowToo) {
         // A kernel guest: one rename(2), at once; the cache reads both paths again
         (ctx.fs as any).renameSync(oldRes, newRes);
@@ -847,7 +858,7 @@ export function createFsModule(deps: FsDeps): any {
     },
     // Modes are kept (pnpm and cmd-shim make their bin shims executable)
     chmodSync: (p: string, mode: any) => {
-      const resolved = ctx.fs.resolvePath(String(p), ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       if (writeNowToo) { (ctx.fs as any).chmodSync(resolved, parseMode(mode)); return; } // a guest: chmod(2) now
       inflight.push(chmodAfterWrites(deps, resolved, mode).catch(() => {}));
     },
@@ -951,16 +962,16 @@ export function createFsModule(deps: FsDeps): any {
     fsyncSync: () => {},
     fdatasyncSync: () => {},
     utimesSync: (p: string, atime: any, mtime: any) => {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       fileMtimes.set(resolved, timeMs(mtime));
       pendingPromises.push(ctx.fs.utimes(resolved, timeMs(atime), timeMs(mtime)).catch(() => {}));
     },
     rmSync: (p: string, opts?: any) => {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       removePathFromCaches(resolved, !!opts?.recursive);
     },
     rmdirSync: (p: string) => {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       ctx.fs.rmdir(resolved).catch(() => {});
     },
     appendFileSync: (p: string | number, data: string | Uint8Array, opts?: any) => {
@@ -1000,7 +1011,7 @@ export function createFsModule(deps: FsDeps): any {
     createReadStream: (p: string, opts?: any) => {
       const s = getBuiltinModule('stream');
       const o = typeof opts === 'string' ? { encoding: opts } : (opts || {});
-      const resolved = ctx.fs.resolvePath(String(p), ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       const hwm = o.highWaterMark ?? 65536;
       let data: Uint8Array | null = null;
       let pos = 0;
@@ -1042,7 +1053,7 @@ export function createFsModule(deps: FsDeps): any {
     createWriteStream: (p: string, opts?: any) => {
       const s = getBuiltinModule('stream');
       const o = typeof opts === 'string' ? { encoding: opts } : (opts || {});
-      const resolved = ctx.fs.resolvePath(String(p), ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       const append = String(o.flags || 'w').includes('a');
       const parts: Uint8Array[] = [];
       if (append) { const prior = currentBytes(resolved); if (prior) parts.push(prior); }
@@ -1087,7 +1098,7 @@ export function createFsModule(deps: FsDeps): any {
       const opts2 = typeof optsOrCb === 'function' ? undefined : optsOrCb;
       const resolved = typeof p === 'number'
         ? ((globalThis as any).__shiroFds?.[p]?.path || '')
-        : ctx.fs.resolvePath(String(p), ctx.cwd);
+        : ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       // Check fileCache first — sync writes may have updated it
       const cached = fileCache.get(resolved);
       if (cached !== undefined) {
@@ -1115,7 +1126,7 @@ export function createFsModule(deps: FsDeps): any {
     readdir: (p: string, optsOrCb?: any, cb?: any) => {
       const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
       const opts = typeof optsOrCb === 'object' ? optsOrCb : {};
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       // Check fileCache first (matches readdirSync behavior)
       const prefix = resolved === '/' ? '/' : resolved + '/';
       const cacheEntries = new Set<string>();
@@ -1200,7 +1211,7 @@ export function createFsModule(deps: FsDeps): any {
       mkdirAsync(p, typeof optsOrCb === 'function' ? undefined : optsOrCb).then(() => callback?.(null), (e: any) => callback?.(e));
     },
     unlink: (p: string, cb?: any) => {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       fileCache.delete(resolved);
       fileMtimes.delete(resolved);
       ctx.fs.unlink(resolved)
@@ -1211,27 +1222,27 @@ export function createFsModule(deps: FsDeps): any {
       // rmdir removes directories (unlink only removes files; proper-lockfile
       // releases its lock with fs.rmdir and got EISDIR, so locks never released)
       const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       fileCache.delete(resolved + '/.');
       ctx.fs.rmdir(resolved)
         .then(() => callback?.(null))
         .catch((e: any) => callback?.(e));
     },
     rename: (oldP: string, newP: string, cb?: any) => {
-      const oldRes = ctx.fs.resolvePath(oldP, ctx.cwd);
-      const newRes = ctx.fs.resolvePath(newP, ctx.cwd);
+      const oldRes = ctx.fs.resolvePath(pathArg(oldP), ctx.cwd);
+      const newRes = ctx.fs.resolvePath(pathArg(newP), ctx.cwd);
       // Writes still in flight for the source land first (write-file-atomic:
       // write through an fd, then rename at once)
       renameAfterWrites(deps, oldRes, newRes).then(() => cb?.(null), (e: any) => cb?.(e));
     },
     access: (p: string, modeOrCb?: any, cb?: any) => {
       const callback = typeof modeOrCb === 'function' ? modeOrCb : cb;
-      ctx.fs.exists(ctx.fs.resolvePath(p, ctx.cwd))
+      ctx.fs.exists(ctx.fs.resolvePath(pathArg(p), ctx.cwd))
         .then((exists: boolean) => exists ? callback?.(null) : callback?.(fsError('ENOENT', `ENOENT: no such file or directory, access '${p}'`, 'access', p)))
         .catch((e: any) => callback?.(e));
     },
     chmod: (p: string, mode: any, cb?: any) => {
-      const resolved = ctx.fs.resolvePath(String(p), ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       chmodAfterWrites(deps, resolved, mode).then(() => cb?.(null), (e: any) => cb?.(e));
     },
     chown: (_p: string, _u: any, _g: any, cb?: any) => { cb?.(null); },
@@ -1242,7 +1253,7 @@ export function createFsModule(deps: FsDeps): any {
     },
     readlink: (p: string, optsOrCb?: any, cb?: any) => {
       const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
-      ctx.fs.readlink(ctx.fs.resolvePath(p, ctx.cwd))
+      ctx.fs.readlink(ctx.fs.resolvePath(pathArg(p), ctx.cwd))
         .then((target: string) => callback?.(null, target))
         .catch((e: any) => callback?.(e));
     },
@@ -1250,7 +1261,7 @@ export function createFsModule(deps: FsDeps): any {
     // must throw EINVAL for regular files (a missing readlinkSync used to return '',
     // which resolved to the parent directory and aimed every config save at ~).
     readlinkSync: (p: string) => {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       const target = ctx.fs.readlinkCached(resolved);
       if (typeof target === 'string') return target;
       const exists = target === null || fileCache.has(resolved);
@@ -1321,8 +1332,8 @@ export function createFsModule(deps: FsDeps): any {
     // were still in flight as empty (yarn's copy out of its cache)
     copyFile: (src: string, dst: string, flagsOrCb?: any, cb?: any) => {
       const callback = typeof flagsOrCb === 'function' ? flagsOrCb : cb;
-      const srcRes = ctx.fs.resolvePath(String(src), ctx.cwd);
-      const dstRes = ctx.fs.resolvePath(String(dst), ctx.cwd);
+      const srcRes = ctx.fs.resolvePath(pathArg(src), ctx.cwd);
+      const dstRes = ctx.fs.resolvePath(pathArg(dst), ctx.cwd);
       const known = fileCache.has(srcRes) || ctx.fs.readBytesCached(srcRes) !== undefined;
       (known ? Promise.resolve(true) : Promise.allSettled([...writeState.inflight]).then(() => ctx.fs.exists(srcRes))).then((exists: boolean) => {
         if (!exists) { callback?.(fsError('ENOENT', `ENOENT: no such file or directory, copyfile '${src}' -> '${dst}'`, 'copyfile', String(src))); return; }
@@ -1336,12 +1347,12 @@ export function createFsModule(deps: FsDeps): any {
     },
     truncate: (p: string, lenOrCb?: any, cb?: any) => {
       const callback = typeof lenOrCb === 'function' ? lenOrCb : cb;
-      ctx.fs.writeFile(ctx.fs.resolvePath(p, ctx.cwd), '')
+      ctx.fs.writeFile(ctx.fs.resolvePath(pathArg(p), ctx.cwd), '')
         .then(() => callback?.(null))
         .catch((e: any) => callback?.(e));
     },
     utimes: (p: string, atime: any, mtime: any, cb?: any) => {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       fileMtimes.set(resolved, timeMs(mtime));
       ctx.fs.utimes(resolved, timeMs(atime), timeMs(mtime)).then(() => cb?.(null), (e: any) => cb?.(e));
     },
@@ -1378,16 +1389,47 @@ export function createFsModule(deps: FsDeps): any {
     rm: (p: string, optsOrCb?: any, cb?: any) => {
       const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
       const opts = typeof optsOrCb === 'object' ? optsOrCb : undefined;
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       removePathFromCaches(resolved, !!opts?.recursive);
       queueMicrotask(() => callback?.(null));
     },
     opendir: (p: string, optsOrCb?: any, cb?: any) => {
       const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
-      callback?.(null, { read: (readCb: any) => { readCb(null, null); }, close: (closeCb: any) => { closeCb?.(null); } });
+      let dir: any;
+      try { dir = fsShim.opendirSync(p); } catch (e) { callback?.(e); return; }
+      callback?.(null, dir);
+    },
+    /** A Dir over the directory's entries: read()/readSync(), close(), `for await` (Next's page discovery) */
+    opendirSync: (p: any) => {
+      const path = pathArg(p);
+      const entries: any[] = fsShim.readdirSync(path, { withFileTypes: true });
+      const parent = ctx.fs.resolvePath(path, ctx.cwd);
+      for (const e of entries) { e.parentPath ??= parent; e.path ??= parent; }
+      let i = 0, closed = false;
+      const next = () => (closed ? null : entries[i++] ?? null);
+      const dir: any = {
+        path,
+        readSync: next,
+        read: (cb?: (e: any, d: any) => void) => {
+          const d = next();
+          if (cb) { queueMicrotask(() => cb(null, d)); return undefined; }
+          return Promise.resolve(d);
+        },
+        closeSync: () => { closed = true; },
+        close: (cb?: (e: any) => void) => {
+          closed = true;
+          if (cb) { queueMicrotask(() => cb(null)); return undefined; }
+          return Promise.resolve();
+        },
+        async *[Symbol.asyncIterator]() {
+          try { for (let d = next(); d; d = next()) yield d; } finally { closed = true; }
+        },
+        *[Symbol.iterator]() { for (let d = next(); d; d = next()) yield d; },
+      };
+      return dir;
     },
     exists: (p: string, cb?: any) => {
-      ctx.fs.exists(ctx.fs.resolvePath(p, ctx.cwd))
+      ctx.fs.exists(ctx.fs.resolvePath(pathArg(p), ctx.cwd))
         .then((exists: boolean) => cb?.(exists))
         .catch(() => cb?.(false));
     },
@@ -1397,10 +1439,11 @@ export function createFsModule(deps: FsDeps): any {
     // Async promises API
     promises: {
       link: async (src: string, dst: string) => { fsShim.linkSync(src, dst); },
+      opendir: async (p: any) => fsShim.opendirSync(p),
       readFile: async (p: string | number, opts?: any) => {
         const resolved = typeof p === 'number'
-          ? ((globalThis as any).__shiroFds?.[p]?.path || ctx.fs.resolvePath(String(p), ctx.cwd))
-          : ctx.fs.resolvePath(String(p), ctx.cwd);
+          ? ((globalThis as any).__shiroFds?.[p]?.path || ctx.fs.resolvePath(pathArg(p), ctx.cwd))
+          : ctx.fs.resolvePath(pathArg(p), ctx.cwd);
         const encoding = typeof opts === 'string' ? opts : opts?.encoding;
         // Check fileCache first (may have data from writeFileSync not yet flushed)
         const cached = fileCache.get(resolved);
@@ -1414,7 +1457,7 @@ export function createFsModule(deps: FsDeps): any {
         return FakeBuffer.from(data);
       },
       readdir: async (p: string, opts?: any) => {
-        const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+        const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
         // Merge fileCache + Shiro FS cache + IDB entries
         const prefix = resolved === '/' ? '/' : resolved + '/';
         const cacheEntries = new Set<string>();
@@ -1469,13 +1512,13 @@ export function createFsModule(deps: FsDeps): any {
         }
         return entries;
       },
-      unlink: async (p: string) => { const r = ctx.fs.resolvePath(p, ctx.cwd); fileCache.delete(r); fileMtimes.delete(r); return ctx.fs.unlink(r); },
+      unlink: async (p: string) => { const r = ctx.fs.resolvePath(pathArg(p), ctx.cwd); fileCache.delete(r); fileMtimes.delete(r); return ctx.fs.unlink(r); },
       rm: async (p: string, opts?: any) => {
-        const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+        const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
         removePathFromCaches(resolved, !!opts?.recursive);
       },
       access: async (p: string) => {
-        const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+        const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
         if (fileCache.has(resolved) || fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || ctx.fs.readCached(resolved) !== undefined || fsDirCached(resolved)) return;
         const exists = await ctx.fs.exists(resolved);
         if (!exists) throw fsError('ENOENT', `ENOENT: no such file or directory, access '${p}'`, 'access', p);
@@ -1535,10 +1578,11 @@ export function createFsPromisesModule(deps: FsDeps): any {
   const shared = () => getBuiltinModule('fs')[ASYNC];
   // Async fs promises API
   return {
+    opendir: async (p: any) => getBuiltinModule('fs').opendirSync(p),
     readFile: async (p: string | number, opts?: any) => {
       const resolved = typeof p === 'number'
-        ? ((globalThis as any).__shiroFds?.[p]?.path || ctx.fs.resolvePath(String(p), ctx.cwd))
-        : ctx.fs.resolvePath(String(p), ctx.cwd);
+        ? ((globalThis as any).__shiroFds?.[p]?.path || ctx.fs.resolvePath(pathArg(p), ctx.cwd))
+        : ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       // Check fileCache first (may have data from writeFileSync not yet flushed)
       const cached = fileCache.get(resolved);
       const encoding = typeof opts === 'string' ? opts : opts?.encoding;
@@ -1554,7 +1598,7 @@ export function createFsPromisesModule(deps: FsDeps): any {
     },
     writeFile: (p: any, data: any, opts?: any) => shared().writeFile(p, data, opts, false),
     readdir: async (p: string, opts?: any) => {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       // Check fileCache first (matches readdirSync)
       const prefix = resolved === '/' ? '/' : resolved + '/';
       const cacheEntries = new Set<string>();
@@ -1620,17 +1664,17 @@ export function createFsPromisesModule(deps: FsDeps): any {
     stat: (p: any) => shared().stat(p, false),
     mkdir: (p: any, opts?: any) => shared().mkdir(p, opts),
     unlink: async (p: string) => {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       fileCache.delete(resolved);
       fileMtimes.delete(resolved);
       await ctx.fs.unlink(resolved);
     },
     rm: async (p: string, opts?: any) => {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       removePathFromCaches(resolved, !!opts?.recursive);
     },
     access: async (p: string) => {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       // Check fileCache/dirs before going to IDB
       if (fileCache.has(resolved) || fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || ctx.fs.readCached(resolved) !== undefined || fsDirCached(resolved)) return;
       const exists = await ctx.fs.exists(resolved);
@@ -1638,23 +1682,23 @@ export function createFsPromisesModule(deps: FsDeps): any {
     },
     lstat: (p: any) => shared().stat(p, true),
     chmod: async (p: string, mode: any) => {
-      const resolved = ctx.fs.resolvePath(String(p), ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       await chmodAfterWrites(deps, resolved, mode);
     },
     rename: async (oldP: string, newP: string) => {
-      const oldRes = ctx.fs.resolvePath(oldP, ctx.cwd);
-      const newRes = ctx.fs.resolvePath(newP, ctx.cwd);
+      const oldRes = ctx.fs.resolvePath(pathArg(oldP), ctx.cwd);
+      const newRes = ctx.fs.resolvePath(pathArg(newP), ctx.cwd);
       await renameAfterWrites(deps, oldRes, newRes); // writes in flight land first
     },
     link: async (src: string, dst: string) => {
-      const exists = await ctx.fs.exists(ctx.fs.resolvePath(dst, ctx.cwd));
+      const exists = await ctx.fs.exists(ctx.fs.resolvePath(pathArg(dst), ctx.cwd));
       if (exists) {
         const err: any = new Error(`EEXIST: file already exists, link '${src}' -> '${dst}'`);
         err.code = 'EEXIST'; err.errno = -17; err.syscall = 'link';
         throw err;
       }
-      const data = await ctx.fs.readFile(ctx.fs.resolvePath(src, ctx.cwd));
-      await ctx.fs.writeFile(ctx.fs.resolvePath(dst, ctx.cwd), data);
+      const data = await ctx.fs.readFile(ctx.fs.resolvePath(pathArg(src), ctx.cwd));
+      await ctx.fs.writeFile(ctx.fs.resolvePath(pathArg(dst), ctx.cwd), data);
     },
     // fs.copyFile's (bytes, not text decoded: binary files came out mangled)
     copyFile: (src: string, dst: string) => new Promise<void>((resolve, reject) => {
@@ -1663,17 +1707,17 @@ export function createFsPromisesModule(deps: FsDeps): any {
     appendFile: (p: any, data: any, opts?: any) => shared().writeFile(p, data, opts, true),
     symlink: (target: any, path: any) => shared().symlink(target, path),
     readlink: async (p: string) => {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       return await ctx.fs.readlink(resolved);
     },
     realpath: async (p: string) => realpathAsync(deps, p),
     rmdir: async (p: string) => {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       fileCache.delete(resolved + '/.');
       await ctx.fs.rmdir(resolved);
     },
     utimes: async (p: string, atime: any, mtime: any) => {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       fileMtimes.set(resolved, timeMs(mtime));
       await ctx.fs.utimes(resolved, timeMs(atime), timeMs(mtime));
     },
@@ -1683,7 +1727,7 @@ export function createFsPromisesModule(deps: FsDeps): any {
       return dir;
     },
     open: async (p: string, flags?: any, mode?: any) => {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const resolved = ctx.fs.resolvePath(pathArg(p), ctx.cwd);
       // Register a real fd: Claude's Bash tool opens its output file here and
       // passes handle.fd as spawn stdio. With the old fd 0, spawn couldn't map
       // it to the file, so every command's output was dropped.

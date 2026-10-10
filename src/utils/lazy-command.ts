@@ -10,9 +10,12 @@ export function lazyCommand(
   name: string,
   description: string,
   loader: () => Promise<Command>,
+  /** Synchronous parts of the command needed before it loads (keepOverPackage) */
+  extra: Partial<Pick<Command, 'keepOverPackage'>> = {},
 ): Command {
   let loaded: Command | null = null;
   return {
+    ...extra,
     name,
     description,
     async exec(ctx) {
