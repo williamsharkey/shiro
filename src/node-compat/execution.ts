@@ -8,11 +8,11 @@ import { createActivity } from './activity';
 import type { CommandContext } from '../commands/index';
 import { iframeServer } from '../iframe-server';
 import { sha256sync, sha1sync, fnvHash } from '../commands/jseval/crypto';
-import { ProcessExitError, formatArg } from '../commands/jseval/utils';
+import { ProcessExitError } from '../commands/jseval/utils';
 import { transformESModules, transformTS, transformJSX } from '../commands/jseval/module-transform';
 import type { SharedState } from './types';
 import { createFakeBuffer } from './buffer';
-import { createFakeConsole } from './console';
+import { createFakeConsole, formatLog } from './console';
 import { createFakeProcess } from './process';
 import { createFileCache } from './file-cache';
 import { preloadEnvironment } from './preload';
@@ -911,7 +911,7 @@ export async function executeNodeScript(
     }
 
     if (printResult && !_st.exitCalled) {
-      ctx.stdout += formatArg(result) + '\n';
+      ctx.stdout += formatLog([result]) + '\n';
     }
 
     // Clean up
