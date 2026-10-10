@@ -106,6 +106,10 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
       netStack: net,
       busy: () => net.busy,
       onUnhandledRejection: (fn) => { rejection = fn; },
+      page: {
+        clipboard: (text) => post({ type: 'node-guest-clipboard', text }),
+        preview: (port) => { if (stdoutTTY) post({ type: 'node-guest-listen', port }); },
+      },
       ...(stdinTTY ? { ttyStdin: (on: ConstructorParameters<typeof GuestTtyStdin>[1]) => new GuestTtyStdin(sys, on) } : {}),
       // worker_threads: a thread of this process, a guest of its own; messages go by way of the page
       startThread(file, opts, events) {
