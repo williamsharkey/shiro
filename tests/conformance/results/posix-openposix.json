@@ -1,7 +1,7 @@
 {
  "suite": "Open POSIX Test Suite",
  "title": "POSIX: Open POSIX Test Suite under Blink (x86-64)",
- "note": "The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scripts/conformance/build-openposix.sh) run as static x86-64 kernel processes in the Blink engine: signals, pthreads, semaphores, message queues, timers, clocks, mmap, scheduling. A test passes when it exits 0; only tests that pass natively on the build host as uid 1000 are scored (openposix/native-baseline.json). First run: 1173/1448, with Blink 0080–0084 built locally (raise(SIGKILL) and sigqueue/AIO fixed from this suite); the gaps are POSIX message queues (mq_*), POSIX timers (timer_*), sigwait/sigtimedwait, sched_* policies and shm_open. → 1326/1448 (kernel POSIX message queues and timers, Blink 0086–0089 and 0093 built locally: mq_*, timer_*, sigtimedwait/sigwait, sched_*; sigqueue waits on siginfo in Blink's handler frames; fork_21-1 and pthread_attr_destroy_1-1 hit a Blink page-lock assertion, fixed in perf-blink's 0092).",
+ "note": "The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scripts/conformance/build-openposix.sh) run as static x86-64 kernel processes in the Blink engine: signals, pthreads, semaphores, message queues, timers, clocks, mmap, scheduling. A test passes when it exits 0; only tests that pass natively on the build host as uid 1000 are scored (openposix/native-baseline.json). First run: 1173/1448, with Blink 0080–0084 built locally (raise(SIGKILL) and sigqueue/AIO fixed from this suite); the gaps are POSIX message queues (mq_*), POSIX timers (timer_*), sigwait/sigtimedwait, sched_* policies and shm_open. → 1326/1448 (kernel POSIX message queues and timers, Blink 0086–0089 and 0093 built locally: mq_*, timer_*, sigtimedwait/sigwait, sched_*; sigqueue waits on siginfo in Blink's handler frames; fork_21-1 and pthread_attr_destroy_1-1 hit a Blink page-lock assertion, fixed in perf-blink's 0092). → 1353/1448 with perf-blink's Blink 0092 (fork keeps page lock counts) and 0095 (siginfo in SA_SIGINFO frames, real-time signals queue): sigqueue, sigwait/sigwaitinfo, fork_21-1, pthread_attr_destroy_1-1, lio_listio and aio_* now pass. Left: shm_open and mmap of shared objects, mlock*, pthread_cancel and cancellation points, process-shared pthread objects, pthread_kill interrupting another thread's call (mq_timedsend_12-1).",
  "files": {
   "aio_cancel": {
    "pass": 9,
@@ -167,15 +167,9 @@
    "failures": []
   },
   "lio_listio": {
-   "pass": 14,
+   "pass": 15,
    "total": 15,
-   "failures": [
-    {
-     "name": "lio_listio_1-1",
-     "reason": "timeout: ",
-     "timeout": true
-    }
-   ]
+   "failures": []
   },
   "localtime": {
    "pass": 1,
@@ -733,7 +727,8 @@
     },
     {
      "name": "pthread_kill_8-1",
-     "reason": "exit 139: "
+     "reason": "timeout: ",
+     "timeout": true
     }
    ]
   },
@@ -881,14 +876,9 @@
    "failures": []
   },
   "pthread_rwlock_timedwrlock": {
-   "pass": 5,
+   "pass": 6,
    "total": 6,
-   "failures": [
-    {
-     "name": "pthread_rwlock_timedwrlock_6-1",
-     "reason": "FAIL: Test FAILED: Timeout was for 5 seconds, but waited for 4.999872 seconds instead"
-    }
-   ]
+   "failures": []
   },
   "pthread_rwlock_tryrdlock": {
    "pass": 1,
