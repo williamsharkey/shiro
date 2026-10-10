@@ -1,8 +1,9 @@
 import { Command, CommandContext } from './index';
 
 /**
- * convert / magick: ImageMagick via magick-wasm (WebAssembly), loaded from
- * the CDN on first use.
+ * convert / magick: ImageMagick via magick-wasm (WebAssembly), loaded on
+ * first use from tabcomputer's own origin (the bundled package: it came from a
+ * CDN, so a blocked or slow one broke it).
  *
  * The command line is read the way ImageMagick reads it: left to right,
  * settings (-size, -background, -fill, -font, -pointsize, -gravity ...)
@@ -18,23 +19,30 @@ import { Command, CommandContext } from './index';
  *   magick identify input.png
  */
 
+/** The bundled @imagemagick/magick-wasm's version (package.json pins it) */
 const MAGICK_VERSION = '0.0.38';
-const MAGICK_BASE = `https://cdn.jsdelivr.net/npm/@imagemagick/magick-wasm@${MAGICK_VERSION}/dist`;
-/** Text needs a TrueType font: Debian's DejaVu Sans when it's there, else this copy */
+/** Text needs a TrueType font: Debian's DejaVu Sans when it's there, else the bundled copy */
 const FONT_PATHS = ['/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'];
-const FONT_URL = 'https://cdn.jsdelivr.net/npm/dejavu-fonts-ttf@2.37.3/ttf/DejaVuSans.ttf';
 const DEFAULT_FONT = 'DejaVuSans';
+
+/** A bundled asset's bytes (its URL from vite's `?url`) */
+async function assetBytes(url: string): Promise<Uint8Array> {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`${url}: HTTP ${resp.status}`);
+  return new Uint8Array(await resp.arrayBuffer());
+}
 
 type MagickModule = any;
 let loader: () => Promise<MagickModule> = async () => {
-  const mod = await import(/* @vite-ignore */ `${MAGICK_BASE}/index.js`);
-  const wasm = new Uint8Array(await (await fetch(`${MAGICK_BASE}/magick.wasm`)).arrayBuffer());
-  await mod.initializeImageMagick(wasm);
+  const [mod, { default: wasmUrl }] = await Promise.all([
+    import('@imagemagick/magick-wasm'), import('@imagemagick/magick-wasm/magick.wasm?url'),
+  ]);
+  await mod.initializeImageMagick(await assetBytes(wasmUrl));
   return mod;
 };
 let loading: Promise<MagickModule> | null = null;
 
-/** Tests load magick-wasm their own way (null restores the CDN) */
+/** Tests load magick-wasm their own way (null restores the bundled one) */
 export function setMagickLoader(f: (() => Promise<MagickModule>) | null): void {
   loading = null;
   fontsAdded.clear();
@@ -61,7 +69,7 @@ async function ensureFont(m: MagickModule, ctx: CommandContext, font: string | u
     try { const d = await ctx.fs.readFile(p); bytes = typeof d === 'string' ? new TextEncoder().encode(d) : d; break; } catch { /* next */ }
   }
   if (!bytes && path) throw new Error(`unable to read font \`${font}'`);
-  if (!bytes) bytes = new Uint8Array(await (await fetch(FONT_URL)).arrayBuffer());
+  if (!bytes) bytes = await assetBytes((await import('dejavu-fonts-ttf/ttf/DejaVuSans.ttf?url')).default);
   m.Magick.addFont(name, bytes);
   fontsAdded.add(name);
   return name;

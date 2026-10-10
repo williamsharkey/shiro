@@ -7,3 +7,6 @@ declare module '*?raw' {
 
 /** The git commit the page was built from ('' when unknown); vite.config.ts */
 declare const __BUILD_SHA__: string;
+
+/** sql.js ships no types; sqlite.ts uses its initSqlJs (the module's default) */
+declare module 'sql.js';

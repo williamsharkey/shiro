@@ -3,7 +3,7 @@ import { Command, CommandContext } from './index';
 /**
  * sqlite3: SQLite database engine via sql.js (WebAssembly)
  *
- * Downloads sql.js (~1MB WASM) on first use, caches in IndexedDB.
+ * sql.js (~1 MB WASM) loads on first use from tabcomputer's own origin.
  * Database files persist as blobs in Shiro's virtual filesystem.
  *
  * Usage:
@@ -14,7 +14,6 @@ import { Command, CommandContext } from './index';
  *   sqlite3 test.db < query.sql             # stdin piping
  */
 
-const SQLJS_CDN = 'https://cdn.jsdelivr.net/npm/sql.js@1.12.0/dist';
 
 let SQL: any = null;
 let loadPromise: Promise<any> | null = null;
@@ -26,25 +25,13 @@ async function ensureSQLjs(ctx: CommandContext): Promise<any> {
   loadPromise = (async () => {
     ctx.stdout += 'Loading SQLite (sql.js)... ';
 
-    // sql.js uses a UMD pattern: module.exports = initSqlJs
-    // Provide mock CommonJS objects so the UMD export works
-    let initSqlJs = (globalThis as any).initSqlJs;
-    if (!initSqlJs) {
-      const resp = await fetch(`${SQLJS_CDN}/sql-wasm.js`);
-      if (!resp.ok) throw new Error(`Failed to download sql.js: ${resp.status}`);
-      const code = await resp.text();
-      const mod: any = { exports: {} };
-      new Function('module', 'exports', code)(mod, mod.exports);
-      initSqlJs = mod.exports.default || mod.exports;
-      if (typeof initSqlJs === 'function') {
-        (globalThis as any).initSqlJs = initSqlJs;
-      }
-    }
-    if (typeof initSqlJs !== 'function') throw new Error('Failed to load initSqlJs from sql-wasm.js');
-
-    SQL = await initSqlJs({
-      locateFile: (file: string) => `${SQLJS_CDN}/${file}`,
-    });
+    // The bundled sql.js and its .wasm, from tabcomputer's own origin (they came from a CDN)
+    const [mod, { default: wasmUrl }] = await Promise.all([
+      import('sql.js'), import('sql.js/dist/sql-wasm.wasm?url'),
+    ]);
+    const initSqlJs = (mod as any).default ?? mod;
+    if (typeof initSqlJs !== 'function') throw new Error('sql.js: no initSqlJs');
+    SQL = await initSqlJs({ locateFile: () => wasmUrl });
 
     ctx.stdout += 'done.\n';
     return SQL;
