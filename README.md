@@ -132,8 +132,10 @@ Not here: hardware devices, kernel modules, and any access to your own machine.
   ([docs/research/OPPORTUNITIES.md](docs/research/OPPORTUNITIES.md)).
 - **Prebuilt packages.** 72 programs built for the page, WebAssembly or static x86-64, that
   install in about a second ([above](#tabcomputers-prebuilt-packages), [docs/PACKAGES.md](docs/PACKAGES.md)).
-- **Conformance.** Under Blink, LTP's syscall tests pass 283/322 and the Open POSIX Test Suite
-  1428/1448 (only tests that pass natively as uid 1000 are scored); the busybox testsuite
+- **Conformance.** Under Blink, LTP's syscall tests pass 431/534 and the Open POSIX Test Suite
+  1428/1448 (only tests that pass natively as uid 1000 are scored; the LTP set grew from 322
+  tests, of which 285 pass, to 534 with harder ones, so its percentage fell from 87.9% to 80.7%
+  without a regression); the busybox testsuite
   625/635; the oils shell spec tests 2105/2417; smoosh's POSIX shell tests 159/162; the
   wasi-testsuite 71/72 ([docs/CONFORMANCE.md](docs/CONFORMANCE.md)).
 - **GUI apps.** `gui` lists Debian X11 apps (xterm, GTK and Qt editors and viewers, GIMP,
