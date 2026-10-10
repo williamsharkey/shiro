@@ -2722,6 +2722,48 @@ export class FileSystem {
     this._emitChange('rename', oldPath, newPath);
   }
 
+  /**
+   * renameat2(RENAME_EXCHANGE): `a` and `b`, both existing (files or
+   * directories, with whatever is under them), swap names. Everything that
+   * moves is read into memory first, then the swap is made at once (one
+   * commit, so a crash leaves both or neither moved).
+   */
+  async exchange(a: string, b: string): Promise<void> {
+    a = await this._canon(a, false);
+    b = await this._canon(b, false);
+    const na = await this._get(a), nb = await this._get(b);
+    if (!na || !nb) throw fsError('ENOENT', `ENOENT: no such file or directory, rename '${na ? b : a}'`);
+    if (a === b || (na.link !== undefined && na.link === nb.link)) return; // one file
+    if (a === '/' || b === '/' || b.startsWith(a + '/') || a.startsWith(b + '/')) throw fsError('EINVAL', `EINVAL: invalid argument, rename '${a}' '${b}'`);
+    const keys = na.type === 'dir' || nb.type === 'dir' ? await this._getAllKeys() : [];
+    const tree = (root: string, node: FSNode) => [root, ...(node.type === 'dir' ? keys.filter((k) => k.startsWith(root + '/')) : [])];
+    const ta = tree(a, na), tb = tree(b, nb);
+    for (const k of [...ta, ...tb]) {
+      const n = await this._get(k);
+      if (n?.link !== undefined) await this._loadInode(n.link);
+    }
+    // From here on synchronous: a -> tmp, b -> a, tmp -> b
+    const tmp = `${a.slice(0, a.lastIndexOf('/'))}/.\u0001exchange-${newIno()}`;
+    this._moveTree(ta, a, tmp);
+    this._moveTree(tb, b, a);
+    this._moveTree(ta.map((k) => tmp + k.slice(a.length)), tmp, b);
+    this._canonDirs.clear();
+    this._emitChange('rename', a, b);
+    this._emitChange('rename', b, a);
+  }
+
+  /** Move the cached nodes `keys` (root `from` and what is under it) to under `to`, now. */
+  private _moveTree(keys: string[], from: string, to: string): void {
+    for (const key of [...keys].sort((x, y) => x.length - y.length)) {
+      const node = this.cache.get(key);
+      if (!node) continue;
+      const dest = to + key.slice(from.length);
+      if (node.link !== undefined && this._inodes.has(node.link)) { this._moveLinkName(key, dest, node.link); continue; }
+      this._putNow({ ...node, path: dest, ino: node.ino ?? pathIno(key) }, true);
+      this._deleteNow(key);
+    }
+  }
+
   async chmod(path: string, mode: number): Promise<void> {
     path = await this._canon(path, true);
     const node = await this._get(path);
