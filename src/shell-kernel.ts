@@ -247,10 +247,6 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
     delete env.COLUMNS;
     delete env.LINES;
   }
-  // chalk and supports-color colour even into a pipe when FORCE_COLOR is set,
-  // so the shell gives it only to programs writing to the terminal (an
-  // exported FORCE_COLOR is the user's and stays)
-  if (!('FORCE_COLOR' in env) && (lastOut as { kind?: string }).kind === 'pty') env.FORCE_COLOR = '3';
 
   // fds 3-9 of the shell, the same open files for every stage
   const extra: Record<number, OpenFile> = {};

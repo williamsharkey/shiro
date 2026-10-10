@@ -29,8 +29,6 @@ export function createFakeProcess(
   const processEnv: Record<string, string> = {
     ...ctx.env,
     MCP_CONNECTION_NONBLOCKING: '1',
-    // Colour on the terminal only; an exported FORCE_COLOR is the user's and stays
-    ...(_st.stdoutToTerminal && !('FORCE_COLOR' in ctx.env) ? { FORCE_COLOR: '3' } : {}),
     // Route API calls through CORS proxy when in browser (the page, or a guest's Worker)
     ...((typeof window !== 'undefined' || (ctx as any).nodeGuest) && !ctx.env['ANTHROPIC_BASE_URL'] ? {
       ANTHROPIC_BASE_URL: `${getShiroOrigin()}/api/anthropic`,

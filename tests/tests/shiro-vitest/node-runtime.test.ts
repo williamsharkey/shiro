@@ -456,11 +456,9 @@ describe('Node Runtime (jseval.ts)', () => {
     });
 
     // tabcomputer#16: FORCE_COLOR makes chalk colour even into a pipe
-    it('gives FORCE_COLOR only when stdout is the terminal', async () => {
+    it('gets no FORCE_COLOR from the shell; an exported one passes through', async () => {
       const probe = ['-e', 'require("fs").writeFileSync("/tmp/fc", String(process.env.FORCE_COLOR))'];
       const read = async () => String(await os.fs.readFile('/tmp/fc', 'utf8'));
-      await nodeCmd.exec(createCtx(os.shell, os.fs, probe, os.terminal));
-      expect(await read()).toBe('3');
       await nodeCmd.exec({ ...createCtx(os.shell, os.fs, probe, os.terminal), stdoutIsTTY: false });
       expect(await read()).toBe('undefined');
       await nodeCmd.exec({ ...createCtx(os.shell, os.fs, probe, os.terminal), stdoutIsTTY: false, env: { ...os.shell.env, FORCE_COLOR: '1' } });
