@@ -2239,7 +2239,15 @@ export class Kernel {
             else if (args[0] === A.SIG_UNBLOCK) set.forEach(s => next.delete(s));
             else if (args[0] === A.SIG_SETMASK) { next.clear(); set.forEach(s => next.add(s)); }
             else return -A.EINVAL;
+            // Blink (patch 0507) sends what all its threads block with
+            // args[3] = 1, and keeps their handlers' masks itself: a signal
+            // handed over meanwhile (takeSignal's frame, until host.mjs's
+            // rt_sigreturn) must not bring back the mask from before. (A
+            // signal this unblocks can be taken within setSigmask, adding
+            // itself to the mask until that rt_sigreturn: copy it first.)
+            const mask = args[3] & 1 ? [...next] : null;
             this.setSigmask(proc, next);
+            if (mask) proc.signalFrames = proc.signalFrames.map(() => new Set(mask));
           }
           if (args[2]) {
             const dv = new DataView(data.buffer, data.byteOffset + 8, 8);
