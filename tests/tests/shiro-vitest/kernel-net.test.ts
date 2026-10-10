@@ -217,6 +217,20 @@ describe('kernel sockets over the TCP relay', () => {
     await a.close(); await b.close();
   });
 
+  it('AF_UNIX datagrams wait only while the send buffer is full: two of half SO_SNDBUF fit, a third waits (Open POSIX aio_cancel_5-1)', async () => {
+    const stack = stackFor(P.relayA);
+    const [a, b] = stack.socketpair(SOCK_DGRAM) as [KSocket, KSocket];
+    const half = new Uint8Array((a.getsockopt(SOL_SOCKET, 7 /* SO_SNDBUF */) as number) / 2);
+    expect(await a.send(half, MSG_DONTWAIT)).toBe(half.length);
+    expect(a.poll(POLLOUT)).toBe(POLLOUT);
+    expect(await a.send(half, MSG_DONTWAIT)).toBe(half.length);
+    expect(a.poll(POLLOUT)).toBe(0);
+    expect(await a.send(half, MSG_DONTWAIT)).toBe(-EAGAIN);
+    expect(await b.recv(new Uint8Array(half.length), 0)).toBe(half.length);
+    expect(await a.send(half, MSG_DONTWAIT)).toBe(half.length);
+    await a.close(); await b.close();
+  });
+
   it('AF_UNIX message sockets: MSG_TRUNC gives the whole length, MSG_PEEK keeps the message, SCM_RIGHTS stay with their message', async () => {
     const stack = stackFor(P.relayA);
     for (const type of [SOCK_DGRAM, 5]) {

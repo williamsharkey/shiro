@@ -641,10 +641,21 @@ class Inode {
     this.dirtyPages.clear();
     this.zeroFrom = Infinity;
     this.data = view;
-    if (unwritten) {
-      this.dirty = true;
-      if (!this.flushTimer) this.armFlush(FLUSH_DELAY_MS);
-    }
+    if (unwritten) this.markDirty();
+  }
+
+  /** A big file no longer shared (its last mapping went): back to pages, all to be written back. */
+  pageIfBig(): void {
+    if (this.blob || this.shared || this.size < (this.fs.blobMin ?? Infinity)) return;
+    this.toPages();
+    this.markDirty();
+  }
+
+  /** To be written back, with the times it has (no new mtime). */
+  private markDirty(): void {
+    if (!this.dirty) this.dirtySince = Date.now();
+    this.dirty = true;
+    if (!this.flushTimer) this.armFlush(FLUSH_DELAY_MS);
   }
 
   // ── Pages ──
@@ -878,13 +889,17 @@ function useShared(ino: Inode, view: Uint8Array): void {
 }
 
 /** The shared object for the file at `path` turned remote: its fds use `sab`'s first `length` bytes. */
-export function attachInodeShared(fs: FileSystem, path: string, sab: SharedArrayBuffer, length: number): void {
+export function attachInodeShared(fs: FileSystem, path: string, sab: SharedArrayBuffer, length: number, file?: OpenFile): void {
   let m = sharedFiles.get(fs);
   if (!m) { m = new Map(); sharedFiles.set(fs, m); }
   const view = new Uint8Array(sab, 0, length);
   m.set(path, view);
   const ino = inodeTables.get(fs)?.get(path);
   if (ino) useShared(ino, view);
+  // the mapped fd's own inode too: once unlinked (shm_open then shm_unlink,
+  // Open POSIX mmap_7-4) it's no longer the path's
+  const own = file instanceof RegularFile ? file.inode : undefined;
+  if (own && own !== ino) useShared(own, view);
 }
 
 /** Its last mapping went: the inode keeps a private copy of the bytes it has now. */
@@ -896,6 +911,7 @@ function detachInodeShared(fs: FileSystem, path: string): void {
   ino.privateData = undefined;
   if (own && own.length >= ino.size) { own.set(ino.data.subarray(0, ino.size)); ino.data = own; }
   else ino.data = ino.data.slice(0, ino.size);
+  ino.pageIfBig();
 }
 
 function newInode(fs: FileSystem, path: string, ino: Inode): Inode {
@@ -1139,6 +1155,8 @@ export class RegularFile implements OpenFile {
   constructor(private ino: Inode, public flags: number) {}
 
   get path(): string { return this.ino.path; }
+  /** (attachInodeShared) */
+  get inode(): Inode { return this.ino; }
 
   async read(buf: Uint8Array): Promise<number> {
     if (!canRead(this.flags)) return -EBADF;
