@@ -929,8 +929,9 @@ function inodeClosed(ino: Inode): void {
  * /dev/shm files mapped remote (shmobj.ts): while mapped, the object's
  * SharedArrayBuffer holds the file's bytes, so the inode reads and writes
  * there (pread sees the mapping, the mapping sees pwrite), as a memfd does.
- * Kept by path so an inode opened while it is mapped (shm_open after a close)
- * uses the buffer too.
+ * Kept by inode key (the path, or the inode of a file with hard links) so
+ * an inode opened while it is mapped (shm_open after a close, or through
+ * another name) uses the buffer too.
  */
 const sharedFiles = new WeakMap<FileSystem, Map<string, Uint8Array>>();
 
@@ -952,14 +953,14 @@ export function attachInodeShared(fs: FileSystem, path: string, sab: SharedArray
   let m = sharedFiles.get(fs);
   if (!m) { m = new Map(); sharedFiles.set(fs, m); }
   const view = new Uint8Array(sab, 0, length);
-  m.set(path, view);
+  m.set(inodeKey(fs, path), view);
   const ino = findInode(fs, path);
   if (ino) useShared(ino, view);
 }
 
 /** Its last mapping went: the inode keeps a private copy of the bytes it has now. */
 function detachInodeShared(fs: FileSystem, path: string): void {
-  sharedFiles.get(fs)?.delete(path);
+  sharedFiles.get(fs)?.delete(inodeKey(fs, path));
   const ino = findInode(fs, path);
   if (!ino || !(ino.data.buffer instanceof SharedArrayBuffer)) return;
   const own = ino.privateData;
@@ -970,7 +971,7 @@ function detachInodeShared(fs: FileSystem, path: string): void {
 }
 
 function newInode(fs: FileSystem, path: string, ino: Inode): Inode {
-  const shared = sharedFiles.get(fs)?.get(path);
+  const shared = sharedFiles.get(fs)?.get(inodeKey(fs, path));
   if (shared) useShared(ino, shared);
   return ino;
 }
