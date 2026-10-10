@@ -12,6 +12,12 @@ export interface NodeGuestHooks {
   runChildSync(cmd: string, opts?: ChildOptions): ChildResult;
   /** child_process's async calls: the same, the event loop running meanwhile */
   runChild(cmd: string, opts?: ChildOptions): Promise<ChildResult>;
+  /** Write to fd 1 or 2 now (output streams to a pipe or file instead of waiting for exit) */
+  writeOut?(fd: 1 | 2, s: string): void;
+  /** node's net module's stack: sockets over socket syscalls (net.ts) */
+  netStack?: unknown;
+  /** Whether open handles (sockets, servers) keep the program running */
+  busy?(): boolean;
 }
 
 export function nodeGuestOf(ctx: unknown): NodeGuestHooks | undefined {

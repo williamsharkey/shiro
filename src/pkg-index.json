@@ -375,7 +375,7 @@
    "wants": [
     "blocking-stdin"
    ],
-   "notes": "The interactive REPL needs blocking stdin; scripts, -e and piped input work. No os.execute/io.popen (no child processes)."
+   "notes": "The REPL reads the terminal where processes have blocking stdin; scripts, -e and piped input work. No os.execute/io.popen (no child processes)."
   },
   {
    "name": "python3",
@@ -443,7 +443,7 @@
     "processes",
     "sockets"
    ],
-   "notes": "pip installs pure-Python wheels from PyPI (no native extensions, no sdists yet); python -m venv works. subprocess runs programs through os.posix_spawn (no preexec_fn or uid/gid changes); sockets, getaddrinfo and ssl (OpenSSL 3.5, CA bundle at /etc/ssl/cert.pem from ca-certificates) go through the kernel's sockets and the TCP relay, so urllib fetches http:// and https:// URLs. The REPL needs blocking stdin, and is the basic one (PYTHON_BASIC_REPL=1): the new one needs termios, which WASI lacks. pytest runs with --capture=sys -p no:faulthandler -p no:cacheprovider (PYTEST_ADDOPTS).",
+   "notes": "pip installs pure-Python wheels from PyPI (no native extensions, no sdists yet); python -m venv works. subprocess runs programs through os.posix_spawn (no preexec_fn or uid/gid changes); sockets, getaddrinfo and ssl (OpenSSL 3.5, CA bundle at /etc/ssl/cert.pem from ca-certificates) go through the kernel's sockets and the TCP relay, so urllib fetches http:// and https:// URLs. The REPL reads the terminal where processes have blocking stdin, and is the basic one (PYTHON_BASIC_REPL=1): the new one needs termios, which WASI lacks. pytest runs with --capture=sys -p no:faulthandler -p no:cacheprovider (PYTEST_ADDOPTS).",
    "deps": [
     "ca-certificates"
    ]
@@ -690,7 +690,7 @@
    "wants": [
     "blocking-stdin"
    ],
-   "notes": "Interactive mode needs blocking stdin; SQL as an argument or on stdin works. Single-threaded, no WAL, no extensions."
+   "notes": "Interactive mode reads the terminal where processes have blocking stdin; SQL as an argument or on stdin works. Single-threaded, no WAL, no extensions."
   },
   {
    "name": "jq",
@@ -933,8 +933,8 @@
       "dir": "bin"
      },
      "url": "/pkg/ruby/3.4.1/ruby-3.4.1-wasip1.tar.gz",
-     "sha256": "12f309412ea3b2c28d1e50e2970fba9ee812ecceb9f4a7d8b51adba79d781909",
-     "size": 15405839
+     "sha256": "2d997baf0fe9145c23d4b4b430d7b6742b76479073c36dec1c2dc8966ca84a37",
+     "size": 15406386
     },
     {
      "path": "lib",
@@ -943,8 +943,8 @@
       "dir": "lib"
      },
      "url": "/pkg/ruby/3.4.1/ruby-3.4.1-wasip1.tar.gz",
-     "sha256": "12f309412ea3b2c28d1e50e2970fba9ee812ecceb9f4a7d8b51adba79d781909",
-     "size": 15405839
+     "sha256": "2d997baf0fe9145c23d4b4b430d7b6742b76479073c36dec1c2dc8966ca84a37",
+     "size": 15406386
     }
    ],
    "bin": {
@@ -985,7 +985,7 @@
    "wants": [
     "blocking-stdin"
    ],
-   "notes": "Built with prefix /usr/local: the package mounts lib/ruby there for its processes. irb needs blocking stdin. No sockets: gem install from rubygems.org doesn't work; installing local .gem files does."
+   "notes": "Built with prefix /usr/local: the package mounts lib/ruby there for its processes. irb reads lines from the terminal in its cooked mode (io/console is a stub: WASI has no raw mode). No sockets: gem install from rubygems.org doesn't work; installing local .gem files does."
   },
   {
    "name": "perl",

@@ -77,6 +77,33 @@ describe('kernel syscalls found by LTP', () => {
     expect(await call(A.SYS_listen, [fd, 1])).toBe(-A.EBADF);
   });
 
+  it('epoll_wait06: a pipe is writable again only once a read empties a page, not after a partial read', async () => {
+    const [r, w] = await pipe(A.O_NONBLOCK);
+    expect(await call(A.SYS_fcntl, [w, A.F_SETPIPE_SZ, 4096])).toBe(4096);
+    expect(await kernel.syscall(proc, A.SYS_write, [w, 4096], new Uint8Array(4096))).toBe(4096);
+    const pollOut = async () => {
+      const pfd = new Uint8Array(8);
+      new DataView(pfd.buffer).setInt32(0, w, true);
+      new DataView(pfd.buffer).setInt16(4, A.POLLOUT, true);
+      await kernel.syscall(proc, A.SYS_poll, [1, 0], pfd);
+      return new DataView(pfd.buffer).getInt16(6, true) & A.POLLOUT;
+    };
+    expect(await pollOut()).toBe(0);
+    // an edge-triggered reader isn't woken by a read making room (only data arriving arms it)
+    const ep = await call(A.SYS_epoll_create1, [0]);
+    expect(await call(A.SYS_epoll_ctl, [ep, A.EPOLL_CTL_ADD, r, A.POLLIN | A.EPOLLET, r, 0])).toBe(0);
+    expect(await call(A.SYS_epoll_ctl, [ep, A.EPOLL_CTL_ADD, w, A.POLLOUT | A.EPOLLET, w, 0])).toBe(0);
+    const evs = new Uint8Array(64);
+    expect(await kernel.syscall(proc, A.SYS_epoll_wait, [ep, 4, 0], evs)).toBe(1); // the reader: data
+    expect(await kernel.syscall(proc, A.SYS_read, [r, 2048], new Uint8Array(2048))).toBe(2048);
+    expect(await pollOut()).toBe(0);
+    expect(await kernel.syscall(proc, A.SYS_epoll_wait, [ep, 4, 0], evs)).toBe(0);
+    expect(await kernel.syscall(proc, A.SYS_read, [r, 2048], new Uint8Array(2048))).toBe(2048);
+    expect(await pollOut()).toBe(A.POLLOUT);
+    expect(await kernel.syscall(proc, A.SYS_epoll_wait, [ep, 4, 0], evs)).toBe(1); // the writer: a page is free
+    for (const fd of [r, w, ep]) await call(A.SYS_close, [fd]);
+  });
+
   it('fcntl30/37: F_GETPIPE_SZ and F_SETPIPE_SZ resize a pipe (pipe-max-size 1 MiB)', async () => {
     const [r, w] = await pipe(A.O_NONBLOCK);
     expect(await call(A.SYS_fcntl, [w, A.F_GETPIPE_SZ])).toBe(65536);
@@ -168,6 +195,8 @@ describe('kernel syscalls found by LTP', () => {
     expect(await call(A.SYS_socketpair, [A.AF_INET, 2, 17])).toBe(-A.EOPNOTSUPP); // UDP
     const s = await call(A.SYS_socket, [A.AF_INET, A.SOCK_STREAM, 0]);
     expect(s).toBeGreaterThanOrEqual(0);
+    // sendfile07: a socket is O_RDWR to F_GETFL (Blink checks sendfile's out fd by it)
+    expect((await call(A.SYS_fcntl, [s, A.F_GETFL])) & A.O_ACCMODE).toBe(A.O_RDWR);
     const sun = new Uint8Array(110);
     sun[0] = A.AF_UNIX;
     sun.set(enc.encode('.'), 2);
@@ -204,6 +233,23 @@ describe('kernel syscalls found by LTP', () => {
     expect(kernel.procs.get(sib)!.ppid).toBe(proc.pid);
     for (const pid of [grandchild.pid, sib, child.pid]) kernel.kill(pid, A.SIGKILL);
     for (const pid of [sib, child.pid]) await kernel.syscall(proc, A.SYS_wait4, [pid, 0], new Uint8Array(8));
+  });
+
+  it('memfd_create: an in-memory regular file that seeks, truncates, and epoll refuses (epoll_ctl06 /proc/self/maps)', async () => {
+    const fd = await call(A.SYS_memfd_create, [L('maps'), A.MFD_CLOEXEC], 'maps');
+    expect(fd).toBeGreaterThanOrEqual(0);
+    expect(await kernel.syscall(proc, A.SYS_write, [fd, 5], enc.encode('hello'))).toBe(5);
+    expect(await call(A.SYS_lseek, [fd, 1, 0, A.SEEK_SET])).toBe(1);
+    const buf = new Uint8Array(8);
+    expect(await kernel.syscall(proc, A.SYS_read, [fd, 8], buf)).toBe(4);
+    expect(new TextDecoder().decode(buf.subarray(0, 4))).toBe('ello');
+    expect((await fstatMode(fd)) & A.S_IFMT).toBe(A.S_IFREG);
+    expect(await call(A.SYS_ftruncate, [fd, 2, 0])).toBe(0);
+    expect(await kernel.syscall(proc, A.SYS_pread64, [fd, 8, 0, 0], buf)).toBe(2);
+    const ep = await call(A.SYS_epoll_create1, [0]);
+    expect(await call(A.SYS_epoll_ctl, [ep, A.EPOLL_CTL_ADD, fd, A.POLLIN, 0, 0])).toBe(-A.EPERM);
+    expect(await call(A.SYS_memfd_create, [L('x'), 8], 'x')).toBe(-A.EINVAL);
+    for (const f of [fd, ep]) await call(A.SYS_close, [f]);
   });
 
   it('connect03: connecting to an AF_UNIX socket file takes write permission on it', async () => {

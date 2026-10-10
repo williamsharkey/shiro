@@ -32,7 +32,7 @@ import { SysvSem } from './sysvsem';
 import { SysvMsg } from './sysvmsg';
 import { EpollFile, waitReady } from './epoll';
 import { SignalFile, notifySignalPending } from './signalfd';
-import { EventFile, TimerFile } from './fd';
+import { EventFile, MemFile, TimerFile } from './fd';
 import { activeProfile, unameRelease, UNAME_VERSION } from '../profile';
 import { memoryInfo } from '../utils/sysinfo';
 
@@ -2187,6 +2187,12 @@ export class Kernel {
           v.setUint32(104, 1, true); // mem_unit
           return 0;
         }
+        case A.SYS_memfd_create: { // nameLen, flags; data = name → an fd on an anonymous in-memory file
+          const name = str(0, args[0]);
+          if (name.length > 249) return -A.EINVAL;
+          if (args[1] & ~(A.MFD_CLOEXEC | A.MFD_ALLOW_SEALING)) return -A.EINVAL;
+          return fds.alloc(new MemFile(`/memfd:${name} (deleted)`), 0, (args[1] & A.MFD_CLOEXEC) !== 0);
+        }
         case A.SYS_prlimit64: { // pid, resource, set → data: old {cur, max} (u64s); a new one first when set
           // RLIMIT_NOFILE only (the fd table's): engines keep the other limits
           if (args[1] !== A.RLIMIT_NOFILE) return -A.EINVAL;
@@ -2342,7 +2348,8 @@ export class Kernel {
       case A.F_DUPFD_CLOEXEC: return fds.dup(fd, arg, true);
       case A.F_GETFD: return fds.getCloexec(fd) ? A.FD_CLOEXEC : 0;
       case A.F_SETFD: return fds.setCloexec(fd, !!(arg & A.FD_CLOEXEC));
-      case A.F_GETFL: return f.flags;
+      // a socket is open for reading and writing (Linux reports O_RDWR)
+      case A.F_GETFL: return f.kind === 'socket' ? (f.flags & ~A.O_ACCMODE) | A.O_RDWR : f.flags;
       case A.F_SETFL: {
         const mask = A.O_NONBLOCK | A.O_APPEND;
         f.flags = (f.flags & ~mask) | (arg & mask);

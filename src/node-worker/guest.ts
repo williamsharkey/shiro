@@ -10,6 +10,7 @@ import { connectGuest, isStartMessage, ChannelClosed, type GuestStartMessage, ty
 import { decodeTermios, encodeTermios, decodeWinsize, makeRaw, TCSETS, TERMIOS_SIZE, WINSIZE_SIZE } from '../kernel/pty';
 import { SyscallFs } from './sys-fs';
 import { runChild, runChildSync } from './child';
+import { GuestNetStack, installGuestPorts } from './net';
 import type { NodeGuestHooks } from './hooks';
 
 const dec = new TextDecoder();
@@ -73,6 +74,10 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
     const fs = new SyscallFs(sys);
     const stdinTTY = isatty(sys, 0);
     const stdoutTTY = isatty(sys, 1);
+    // Networking over socket syscalls; servers listen on kernel ports (the page previews them)
+    const net = new GuestNetStack(sys);
+    const { iframeServer } = await import('../iframe-server');
+    installGuestPorts(iframeServer as any, net, (port) => { if (stdoutTTY) post({ type: 'node-guest-listen', port }); });
     const hooks: NodeGuestHooks = {
       readText(path) {
         const b = fs.readRaw(path);
@@ -82,6 +87,9 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
       // a child may change the tree: fs forgets the directories it knew
       runChildSync: (cmd, opts) => { try { return runChildSync(sys, cmd, opts); } finally { fs.invalidate(); } },
       runChild: (cmd, opts) => runChild(sys, cmd, opts).finally(() => fs.invalidate()),
+      writeOut: (fd, s) => { sys.write(fd, s); },
+      netStack: net,
+      busy: () => net.busy,
     };
     const env = { ...start.env };
     const shell: any = { cwd: start.cwd, env, abortController: null, fork() { throw new Error('no shell in a node guest'); } };

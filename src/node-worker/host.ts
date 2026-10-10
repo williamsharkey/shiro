@@ -29,9 +29,24 @@ export function nodeWorkerMode(env: Record<string, string | undefined>): boolean
   return !!factory || (typeof Worker !== 'undefined' && typeof window !== 'undefined');
 }
 
+/** A guest on a terminal started a server: its preview pane, as for node in the page */
+function openPreview(port: number): void {
+  if (typeof document === 'undefined') return;
+  setTimeout(() => {
+    import('../iframe-server').then(({ iframeServer }) => {
+      if (!iframeServer.isPortInUse(port)) return; // gone already (a script that starts a server, uses and closes it)
+      return import('../split-view').then(({ createSplitView }) => createSplitView({ port, direction: 'right', title: `Server :${port}` }));
+    }).catch(() => { /* no desktop to show it in */ });
+  }, 1000);
+}
+
 /** The kernel Runner: the process's program is a node guest worker */
 export function nodeWorkerRunner(): Runner {
-  return workerRunner(() => createNodeWorker(), { dataSize: 1 << 20 });
+  return workerRunner(() => {
+    const w = createNodeWorker();
+    w.onMessage((m: any) => { if (m?.type === 'node-guest-listen' && typeof m.port === 'number') openPreview(m.port); });
+    return w;
+  }, { dataSize: 1 << 20 });
 }
 
 /** `#!/usr/bin/env node`, `#!/usr/bin/env -S node --flag`, `#!/usr/local/bin/node`: the flags after node, or null */
@@ -58,6 +73,8 @@ const loaderInstalled = new WeakSet<Kernel>();
 export function installNodeLoader(kernel: Kernel): void {
   if (loaderInstalled.has(kernel)) return;
   loaderInstalled.add(kernel);
+  // the guest's sockets are kernel sockets (the page's kernel has them from boot)
+  void import('../kernel/net').then((n) => { if (!n.netStackOf(kernel)) n.installNet(kernel); });
   // `sh -c 'node ...'` (execSync, npm scripts) execs node in place, so this loader sees it
   kernel.execDirect.push((name, proc) => name === 'node' && proc.env.TABCOMPUTER_NODE_WORKER === '1' && nodeWorkerMode(proc.env));
   kernel.addLoader(async (path, proc, k) => {

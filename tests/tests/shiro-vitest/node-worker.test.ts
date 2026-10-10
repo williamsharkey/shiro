@@ -92,6 +92,84 @@ console.log(a[0], a[1] === me, b[0], b[1] === me);
     expect(r.out).toBe('x true y,z true\n');
   }, 60_000);
 
+  it('output to a pipe streams, and spawn() delivers it as it comes', async () => {
+    // inner node waits for a file its parent makes on seeing inner's first line:
+    // with output held until exit (either end) that never happens
+    const r = await sh(`node /tmp/ns/outer.js < /dev/null`, async (fs) => {
+      await fs.mkdir('/tmp/ns', { recursive: true });
+      await fs.writeFile('/tmp/ns/inner.js', `const fs = require('fs');
+console.log('early'); process.stderr.write('err-early\\n');
+const t0 = Date.now();
+const t = setInterval(() => {
+  if (fs.existsSync('/tmp/ns/go')) { clearInterval(t); console.log('late'); }
+  else if (Date.now() - t0 > 8000) { clearInterval(t); console.log('timed out'); }
+}, 20);
+`);
+      await fs.writeFile('/tmp/ns/outer.js', `const fs = require('fs'), cp = require('child_process');
+const c = cp.spawn('node', ['/tmp/ns/inner.js']);
+let out = '', err = '';
+c.stdout.on('data', (d) => { out += d; if (out.includes('early')) fs.writeFileSync('/tmp/ns/go', ''); });
+c.stderr.on('data', (d) => { err += d; });
+c.on('close', (code) => console.log(JSON.stringify(out), JSON.stringify(err), code));
+`);
+    });
+    expect(r.err).toBe('');
+    expect(r.out).toBe('"early\\nlate\\n" "err-early\\n" 0\n');
+  }, 60_000);
+
+  it('a ref\'d interval keeps the guest running until cleared; an unref\'d one does not', async () => {
+    const r = await sh(`node -e '
+      const t0 = Date.now(); let n = 0;
+      const t = setInterval(() => { if (++n === 30) { clearInterval(t); console.log("ticks", n, Date.now() - t0 >= 500); } }, 20);
+    ' < /dev/null; node -e 'setInterval(() => console.log("never"), 5000).unref(); console.log("bye")' < /dev/null`);
+    expect(r.out).toBe('ticks 30 true\nbye\n');
+  }, 60_000);
+
+  it('http and net over kernel sockets: a server, its client, and a child process as a client', async () => {
+    const r = await sh(`node /tmp/nh/s.js < /dev/null`, async (fs) => {
+      await fs.mkdir('/tmp/nh', { recursive: true });
+      await fs.writeFile('/tmp/nh/s.js', `const http = require('http'), net = require('net'), cp = require('child_process');
+const srv = http.createServer((req, res) => {
+  let body = '';
+  req.on('data', (d) => body += d).on('end', () => { res.setHeader('x-who', 'guest'); res.end(req.method + ' ' + req.url + ' ' + body); });
+});
+srv.listen(18491, () => {
+  http.get('http://localhost:18491/a?b=1', (res) => {
+    let t = ''; res.on('data', (d) => t += d).on('end', () => {
+      console.log(res.statusCode, res.headers['x-who'], t);
+      // another process (a child node guest) reaches this server through the kernel
+      cp.exec("node -e \\"require('http').get('http://127.0.0.1:18491/child', (r) => { let t = ''; r.on('data', (d) => t += d).on('end', () => console.log(t)); })\\"", (e, out) => {
+        console.log('child:', out.trim());
+        srv.close();
+        const echo = net.createServer((c) => c.pipe(c)).listen(18492, () => {
+          const c = net.connect(18492, '127.0.0.1', () => c.end('ping'));
+          let got = ''; c.on('data', (d) => got += d).on('close', () => { console.log('echo:', got); echo.close(); });
+        });
+      });
+    });
+  });
+});
+`);
+    });
+    expect(r.err).toBe('');
+    expect(r.out).toBe('200 guest GET /a?b=1 \nchild: GET /child\necho: ping\n');
+  }, 60_000);
+
+  it("a guest server is on the page's port table (previews reach it)", async () => {
+    const { iframeServer } = await import('@shiro/iframe-server');
+    const { shell, fs } = await createTestShell();
+    await fs.writeFile('/tmp/nh-page.js', `require('http').createServer((req, res) => { res.end('hi ' + req.url); this.done = true; setTimeout(() => process.exit(0), 50); }).listen(18493);`);
+    let out = '', err = '';
+    const run = shell.execute('export TABCOMPUTER_NODE_WORKER=1; node /tmp/nh-page.js < /dev/null', (s) => { out += s; }, (s) => { err += s; });
+    const t0 = Date.now();
+    while (!iframeServer.isPortInUse(18493) && Date.now() - t0 < 20_000) await new Promise((r) => setTimeout(r, 20));
+    const res = await iframeServer.fetch(18493, '/preview');
+    expect(res.status).toBe(200);
+    expect(typeof res.body === 'string' ? res.body : new TextDecoder().decode(res.body as Uint8Array)).toBe('hi /preview');
+    expect(await run).toBe(0);
+    expect(err).toBe('');
+  }, 60_000);
+
   it('stdin from a pipe; async exec', async () => {
     const r = await sh(`printf 'a\\nb\\n' | node -e '
       let t = ""; process.stdin.on("data", (d) => t += d).on("end", () => {
