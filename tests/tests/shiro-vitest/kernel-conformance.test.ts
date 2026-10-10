@@ -9,6 +9,7 @@ import { Kernel } from '@shiro/kernel/kernel';
 import type { Process } from '@shiro/kernel/process';
 import * as A from '@shiro/kernel/abi';
 import { NetStack, installNet, encodeSockaddr } from '@shiro/kernel/net';
+import { JobControl, attachKernel } from '@shiro/kernel/signals';
 
 describe('kernel syscalls found by LTP', () => {
   let fs: FileSystem;
@@ -380,6 +381,33 @@ describe('kernel syscalls found by LTP', () => {
     expect([ti.getInt32(8, true), ti.getInt32(16, true), ti.getBigInt64(24, true)]).toEqual([A.SI_TIMER, id, 77n]);
     kernel.kill(t.pid, A.SIGKILL);
     await kernel.syscall(proc, A.SYS_wait4, [t.pid, 0], new Uint8Array(8));
+  });
+
+  it('signals routed through job control keep their siginfo (sigwaitinfo sees kill as SI_USER, sigqueue values queue)', async () => {
+    const jc = new JobControl();
+    const detach = attachKernel(kernel, jc);
+    try {
+      const t = kernel.vfork(proc);
+      expect(t.signalHook).toBeTruthy();
+      const RT = A.SIGRTMIN + 3;
+      kernel.setSigmask(t, new Set([RT, A.SIGUSR1]));
+      expect(await kernel.syscall(t, A.SYS_kill, [t.pid, A.SIGUSR1], new Uint8Array(8))).toBe(0);
+      for (const v of [8, 9]) {
+        const si = new Uint8Array(A.SIGINFO_SIZE);
+        A.encodeSiginfo({ signo: RT, code: A.SI_QUEUE, pid: t.pid, uid: t.uid, value: BigInt(v) }, si);
+        expect(await kernel.syscall(t, A.SYS_rt_sigqueueinfo, [t.pid, RT], si)).toBe(0);
+      }
+      const take = async (signo: number) => {
+        const d = new Uint8Array(A.SIGINFO_SIZE);
+        new DataView(d.buffer).setUint32(signo > 32 ? 4 : 0, 1 << ((signo - 1) % 32), true);
+        const got = await kernel.syscall(t, A.SYS_rt_sigtimedwait, [0], d);
+        return got < 0 ? got : `${got}:${A.decodeSiginfo(d).code}:${A.decodeSiginfo(d).pid === t.pid}:${A.decodeSiginfo(d).value}`;
+      };
+      expect(await take(A.SIGUSR1)).toBe(`${A.SIGUSR1}:0:true:0`);
+      expect([await take(RT), await take(RT), await take(RT)]).toEqual([`${RT}:-1:true:8`, `${RT}:-1:true:9`, -A.EAGAIN]);
+      kernel.kill(t.pid, A.SIGKILL);
+      await kernel.syscall(proc, A.SYS_wait4, [t.pid, 0], new Uint8Array(8));
+    } finally { detach(); }
   });
 
   it('connect03: connecting to an AF_UNIX socket file takes write permission on it', async () => {

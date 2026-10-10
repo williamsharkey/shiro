@@ -19,6 +19,7 @@ import type { Kernel } from './kernel';
 import { Process } from './process';
 import { processTable } from '../process-table';
 import { notifySignalPending } from './signalfd';
+import { SI_USER, SIGRTMIN as KSIGRTMIN, type SigInfo } from './abi';
 
 // ── Linux signal numbers ────────────────────────────────────────────────────
 export const SIGHUP = 1;
@@ -744,10 +745,17 @@ class ProcessSignalState extends SignalState {
     return m;
   }
   set pending(v: bigint) {
-    const before = this.proc.deferredSignals.size;
-    this.proc.deferredSignals = new Set();
-    for (let s = 1; s < NSIG; s++) if (sigset.has(v, s)) this.proc.deferredSignals.add(s);
-    if (this.proc.deferredSignals.size > before) notifySignalPending(this.proc);
+    const p = this.proc, before = p.deferredSignals.size, was = p.deferredSignals;
+    p.deferredSignals = new Set();
+    for (let s = 1; s < NSIG; s++) if (sigset.has(v, s)) p.deferredSignals.add(s);
+    // what the signal going pending carries (kernel.deliver's, while it routes it here)
+    const info = p.data.sigInFlight as SigInfo | undefined;
+    for (const s of p.deferredSignals) {
+      if (!was.has(s)) p.queueSiginfo(info?.signo === s ? info : { signo: s, code: SI_USER });
+      else if (info?.signo === s && s >= KSIGRTMIN) p.queueSiginfo(info); // another real-time instance
+    }
+    for (const s of was) if (!p.deferredSignals.has(s) && !p.pendingSignals.has(s)) p.siginfo.delete(s);
+    if (p.deferredSignals.size > before) notifySignalPending(p);
   }
 
   get mask(): bigint {
@@ -814,6 +822,8 @@ function kernelTarget(kernel: Kernel, proc: Process, jc: JobControl): SignalTarg
       // The kernel's queue owns guest-bound signals: the channel flags them one at a time
       const t = jc.get(proc.pid);
       if (t) t.signals.pending = sigset.del(t.signals.pending, sig);
+      const info = proc.data.sigInFlight as SigInfo | undefined;
+      proc.queueSiginfo(info?.signo === sig ? info : { signo: sig, code: SI_USER });
       proc.pendingSignals.add(sig);
       proc.interruptSyscalls();
       (proc.data.onSignal as ((s: number) => void) | undefined)?.(sig);

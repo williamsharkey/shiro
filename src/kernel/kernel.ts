@@ -745,7 +745,11 @@ export class Kernel {
     if (sig === A.SIGKILL) { void this.exit(proc, A.W_TERMSIG(A.SIGKILL)); return; }
     if (sig === A.SIGSTOP) { proc.markStopped(sig); this.notify(); return; }
     if (sig === A.SIGCONT) { proc.markContinued(); this.notify(); }
-    if (proc.signalHook?.(proc, sig)) return;
+    if (proc.signalHook) {
+      // (job control routes it: signals.ts queues what it carries when it goes pending)
+      proc.data.sigInFlight = info;
+      try { if (proc.signalHook(proc, sig)) return; } finally { delete proc.data.sigInFlight; }
+    }
     const disp = proc.dispositions.get(sig) ?? 'default';
     // A blocked signal stays pending even when ignored (signalfd reads it; setSigmask drops it if still ignored)
     if (proc.sigmask.has(sig)) {
