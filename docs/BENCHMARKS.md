@@ -48,6 +48,11 @@ What a user waits for, end to end, in the isolated (production) page:
 Only compare these numbers with runs on the same machine id
 (`compare.mjs` prints it and refuses to flag across machines).
 
+The vite workflow (`workflow.vite.*`, `bench/suites/workflows.mjs`) creates
+its app with `npm create vite@7`, pinned since Build 942: `@latest` became
+Vite 8 (rolldown, whose wasm build asks for `node:wasi`), so runs before and
+after that change measure different templates.
+
 The cheap suite has 5 fresh-profile samples per metric. The slow suite has
 3 Debian rounds, each a fresh profile: install, update, cowsay, python3,
 python3 runs. It also has 3 git clones after one first clone. apt reads
