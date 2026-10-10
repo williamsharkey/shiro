@@ -126,7 +126,8 @@ Remote mode is per object, chosen at map time:
   what was mapped and stored). While an object is remote, `read`/`write`
   syscalls on that file go to the SAB too, so a mapping and `write()` stay
   coherent.
-- New calls (numbers from a reserved range, agreed with perf-blink):
+- New calls: 1020 map, 1021 unmap, 1022 published (1023 spare). perf-blink
+  agreed these on 2026-10-10; Blink keeps its own calls to 1015–1019.
   - `shiro_shmobj_map(fd|shmid, kind, len)`. Result: 0 for a fast mapping,
     or 1 for remote, with the SAB handed over once per instance by message
     (`{type: 'blink-shmobj', id, sab}`). The caller waits for it like
@@ -143,8 +144,13 @@ Remote mode is per object, chosen at map time:
 
 #### Blink side (perf-blink's patches)
 
-- A PTE kind for remote pages (there are spare bits, as `PAGE_GROW`
-  shows), handled in the MMU's slow path. The JIT emits no fast-path
+- A PTE kind for remote pages: bit 48, `PAGE_REMOTE 0x0001000000000000`,
+  agreed with perf-blink. It sits between PAGE_TA (bits 12–47) and
+  PAGE_GROW (bit 52); bits 49–51 are still free, e.g. for a publish marker.
+  It's handled in the MMU's slow path. Every access path has to check it:
+  the TLB fast paths, LookupAddress, CopyFromUser/CopyToUser, wjit.c's
+  inline loads and stores, and ShiroWalkTable's fork snapshot. A remote
+  page must never be cached in a TLB entry as a plain host pointer. The JIT emits no fast-path
   accesses for them: they fault into the interpreter path, the same way
   pages without host memory are handled.
 - Load, store and RMW helpers that call into JS (`EM_JS`) on the SAB view
