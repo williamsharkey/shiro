@@ -274,6 +274,8 @@ export class Kernel {
         };
       },
       list: () => [...this.procs.keys()],
+      // the rest of /proc/PID (syscall, wchan, task/ …) and /proc/stat as programs see them
+      node: (path) => this.procfs.fsNode(path),
     });
     this.registerDevice('/dev/null', (_p, f) => new DevNull(f));
     this.registerDevice('/dev/zero', (_p, f) => new DevZero(f));
