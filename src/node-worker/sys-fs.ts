@@ -357,12 +357,13 @@ export class SyscallFs {
     if (typeof r === 'number') throw sysError(-r, 'realpath', path);
     return r;
   }
-  async chmod(path: string, mode: number): Promise<void> {
+  chmodSync(path: string, mode: number): void {
     const b = enc.encode(path);
     this.sys.ch.data.set(b);
     const r = this.sys.ch.call(A.SYS_fchmodat, A.AT_FDCWD, b.length, mode);
     if (r < 0) throw sysError(-r, 'chmod', path);
   }
+  async chmod(path: string, mode: number): Promise<void> { this.chmodSync(path, mode); }
   async utimes(path: string, atimeMs: number, mtimeMs: number): Promise<void> {
     const r = this.sys.utimensat(A.AT_FDCWD, path, atimeMs, mtimeMs);
     if (r < 0) throw sysError(-r, 'utime', path);

@@ -183,7 +183,7 @@ export async function executeNodeScript(
     // File cache, module cache, and sync watchdog
     // As a kernel guest (node-worker), files come from blocking syscalls as they're needed
     const guest = nodeGuestOf(ctx);
-    const { fileCache, fileMtimes, moduleCache, tickSyncOps } = createFileCache(guest?.readText);
+    const { fileCache, fileMtimes, moduleCache, tickSyncOps } = createFileCache(guest?.readText, guest ? (p) => !!(ctx.fs as any).isDirCached?.(p) : undefined);
 
     // Pre-load environment (the page's: files into the cache, Claude's bootstrap)
     if (!guest) await preloadEnvironment(ctx, fileCache, fileMtimes, scriptPath);

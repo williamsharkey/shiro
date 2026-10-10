@@ -73,6 +73,26 @@ describe('node as a kernel guest', () => {
     expect(r.out).toBe('aaa ccc bbb /tmp/nc/o/f true\nfalse false\nback 4\n');
   }, 60_000);
 
+  it('a miss is not remembered; copies, modes and directories land before the next call', async () => {
+    const r = await sh(`node -e '
+      const fs = require("fs"), cp = require("child_process");
+      fs.mkdirSync("/tmp/nr/stage", { recursive: true });
+      const before = fs.existsSync("/tmp/nr/a.json");
+      fs.writeFileSync("/tmp/nr/a.json.tmp", "{\\"v\\":1}");
+      fs.renameSync("/tmp/nr/a.json.tmp", "/tmp/nr/a.json");
+      console.log(before, fs.readFileSync("/tmp/nr/a.json", "utf8"), require("/tmp/nr/a.json").v);
+      fs.writeFileSync("/tmp/nr/bin", Buffer.from([0, 255, 1]));          // binary: never in the text cache
+      cp.execSync("cp /tmp/nr/bin /tmp/nr/stage/x");                      // a copy the cache never saw
+      fs.copyFileSync("/tmp/nr/stage/x", "/tmp/nr/stage/y");
+      fs.renameSync("/tmp/nr/stage", "/tmp/nr/final");                   // stage, then rename (pnpm)
+      console.log(fs.readdirSync("/tmp/nr/final").join(","), fs.existsSync("/tmp/nr/stage"), [...fs.readFileSync("/tmp/nr/final/y")].join(" "));
+      fs.writeFileSync("/tmp/nr/run.sh", "#!/bin/sh\\necho ran\\n", { mode: 0o755 });
+      console.log(cp.execSync("/tmp/nr/run.sh").toString().trim(), fs.existsSync("/tmp/nr/final/"), fs.statSync("/tmp/nr/final").isDirectory());
+    ' < /dev/null`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('false {"v":1} 1\nx,y false 0 255 1\nran true true\n');
+  }, 60_000);
+
   it('node the kernel starts (sh -c, a #! script) is the guest itself', async () => {
     const r = await sh(`chmod +x /tmp/nk/inner.js && node /tmp/nk/outer.js < /dev/null`, async (fs) => {
       await fs.mkdir('/tmp/nk', { recursive: true });
