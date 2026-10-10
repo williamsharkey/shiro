@@ -63,14 +63,6 @@ export const KNOWN_ISSUES: { issue: string; workaround?: string }[] = [
     workaround: 'Reload the tab (this ends running agents, including you), or do node work such as `vitest` and `esbuild` in a checkout outside the tab.',
   },
   {
-    issue: 'Process odds and ends (tabcomputer#14): `/proc/self/fd/N` links say `/dev/pts/0` even for a pipe or file, and `stat -L` on them can disagree with the link; `/proc/PID/cmdline` holds only argv[0]; the built-in tmux fails `tmux new-session -d` with "not a terminal"; in-page background jobs (`node … &`) have a `/proc/$!` but `ps` doesn\'t list them; exited children of init linger as zombies; `/proc/loadavg` reads 0; `kill PID` on a `bash -c` blocked in a command can leave it running.',
-    workaround: 'Use `[ -t N ]` to ask whether an fd is a terminal (it works); for a detached job use `nohup cmd >log 2>&1 &` or `pkg install tmux` for the real tmux; find in-page jobs with `jobs -l` or `ls /proc`; use `kill -9` when `kill` doesn\'t take; ignore `Z` lines in `ps`.',
-  },
-  {
-    issue: '`js-eval` runs the code a second time when it throws, and it cannot run statements, only an expression (tabcomputer#17).',
-    workaround: 'Pass one expression: wrap statements in an async IIFE, `js-eval "(async () => { ...; return x; })()"`, and make any patch idempotent (check before you change), since a throw runs it twice.',
-  },
-  {
     issue: "Images can't be pasted into Claude Code: `xclip` and `xsel` here are text only.",
     workaround: 'Save the image to a file and give its path.',
   },
