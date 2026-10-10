@@ -948,6 +948,8 @@ export class DirFile implements OpenFile {
  * converts what the guest asked for.
  */
 export class TimerFile implements OpenFile {
+  /** /proc/PID/fd's anon_inode:[timerfd] */
+  readonly anonName = 'timerfd';
   kind: OpenFileKind = 'dev';
   private deadline = 0;  // 0: disarmed
   private interval = 0;
@@ -1027,6 +1029,8 @@ export class TimerFile implements OpenFile {
 
 /** eventfd(2): a 64-bit counter. Reads return and clear it (or take 1 with EFD_SEMAPHORE); writes add. */
 export class EventFile implements OpenFile {
+  /** /proc/PID/fd's anon_inode:[eventfd] */
+  readonly anonName = 'eventfd';
   kind: OpenFileKind = 'dev';
   private count: bigint;
   private listeners = new ReadyListeners();

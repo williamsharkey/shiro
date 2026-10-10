@@ -185,7 +185,11 @@ export const kill: Command = {
       // A shell started as its own process (its $$): handled before its next command
       const target = /^\d+$/.test(t) ? shellForPid(parseInt(t, 10)) : undefined;
       if (target) {
-        if (sig !== 0) target.queueSignal(sig);
+        // The job running that shell ends with 128+SIG when the signal ends the shell
+        if (sig !== 0 && target.queueSignal(sig)) {
+          const job = inPageJobForPid(parseInt(t, 10));
+          if (job) (job as { signal?: number }).signal = sig;
+        }
         continue;
       }
       if (t.startsWith('%')) {

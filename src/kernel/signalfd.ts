@@ -28,6 +28,8 @@ export function notifySignalPending(proc: Process): void {
 }
 
 export class SignalFile implements OpenFile {
+  /** /proc/PID/fd's anon_inode:[signalfd] */
+  readonly anonName = 'signalfd';
   kind: OpenFileKind = 'dev';
   path = 'anon_inode:[signalfd]';
   private mask = new Set<number>();

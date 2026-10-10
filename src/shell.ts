@@ -1154,8 +1154,20 @@ export class Shell {
   }
 
   /** `kill -SIG $$`: handled before the shell's next command (processSignals) */
-  queueSignal(sig: number): void {
+  /**
+   * A signal sent to this shell's pid. Returns true when it ends the shell now:
+   * a script shell's untrapped terminating signal (SIGKILL always) doesn't wait
+   * for the command it is blocked in (`bash -c 'sleep 30'`, a stuck builtin);
+   * that command is aborted. A trapped signal waits for it, as bash's does.
+   */
+  queueSignal(sig: number): boolean {
     this.pendingSignals.push(sig);
+    if (!this.scriptShell) return false;
+    if (sig !== 9 && this.traps.has(SIGNALS[sig])) return false;
+    // default action ignore (CHLD, URG, WINCH), continue (CONT) or stop (STOP, TSTP, TTIN, TTOU)
+    if ([17, 18, 19, 20, 21, 22, 23, 28].includes(sig)) return false;
+    (this.abortController ?? this.inheritedAbort)?.abort();
+    return true;
   }
 
   /**

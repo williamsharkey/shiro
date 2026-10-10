@@ -194,6 +194,60 @@ describe('kernel processes', () => {
   beforeEach(() => { kernel = new Kernel({ shell }); });
   afterEach(() => kernel.dispose());
 
+  it('tabcomputer#14: init reaps an orphan at once; its own children wait for their spawner', async () => {
+    const procs = (kernel as any).procs as Map<number, unknown>;
+    const parent = kernel.spawn({ path: 'parent', run: () => new Promise<number>(() => {}) });
+    const early = kernel.spawn({ path: 'early', parent, run: async () => 0 });
+    const late = kernel.spawn({ path: 'late', parent, run: () => new Promise<number>(() => {}) });
+    await early.wait(); // a zombie its parent never waits for
+    kernel.kill(parent.pid, A.SIGKILL);
+    await parent.wait();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(procs.has(early.pid)).toBe(false); // reparented as a zombie: reaped
+    expect(late.ppid).toBe(1);
+    kernel.kill(late.pid, A.SIGTERM);
+    await late.wait();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(procs.has(late.pid)).toBe(false); // an orphan that exits later: reaped too
+    expect(procs.has(parent.pid)).toBe(true); // init's own child: left for its spawner's waitpid
+    expect((await kernel.waitpid(parent.pid, A.WNOHANG)).pid).toBe(parent.pid);
+  });
+
+  it('tabcomputer#14: /proc/loadavg decays toward the running count like Linux; sysinfo has the same loads', async () => {
+    const busy = [0, 1, 2].map(() => kernel.spawn({ path: 'busy', run: () => new Promise<number>(() => {}) }));
+    // a guest that has made a syscall and isn't in one is running (R)
+    for (const p of busy) await kernel.syscall(p, A.SYS_getpid, [], new Uint8Array(8));
+    const pf = kernel.procfs as any;
+    for (let i = 0; i < 12; i++) pf.sampleLoad(); // one minute of 5 s samples
+    const [l1, l5, l15, rt] = (pf.loadavgText() as string).split(' ');
+    expect(Number(l1)).toBeCloseTo(3 * (1 - Math.exp(-1)), 1); // 1.90
+    expect(Number(l5)).toBeCloseTo(3 * (1 - Math.exp(-0.2)), 1); // 0.54
+    expect(Number(l15)).toBeCloseTo(3 * (1 - Math.exp(-1 / 15)), 1); // 0.19
+    expect(rt).toMatch(/^3\/\d+$/);
+    const data = new Uint8Array(A.SYSINFO_SIZE);
+    expect(await kernel.syscall(busy[0], A.SYS_sysinfo, [], data)).toBe(0);
+    expect(Number(new DataView(data.buffer).getBigUint64(8, true)) / 65536).toBeCloseTo(Number(l1), 1);
+    for (const p of busy) kernel.kill(p.pid, A.SIGKILL);
+  });
+
+  it('tabcomputer#14: /proc/PID/fd targets: both ends of a pipe share its pipe:[N]; eventfd is anon_inode:[eventfd]', async () => {
+    const p = kernel.spawn({ path: 'p', run: () => new Promise<number>(() => {}) });
+    const data = new Uint8Array(64);
+    expect(await kernel.syscall(p, A.SYS_pipe2, [0], data)).toBe(0);
+    const [r, w] = [new DataView(data.buffer).getInt32(0, true), new DataView(data.buffer).getInt32(4, true)];
+    const efd = await kernel.syscall(p, A.SYS_eventfd2, [0, 0], data);
+    const readlink = async (path: string) => {
+      const b = new TextEncoder().encode(path); data.set(b);
+      const n = await kernel.syscall(p, A.SYS_readlink, [b.length, 64], data);
+      return new TextDecoder().decode(data.subarray(0, n));
+    };
+    const rt = await readlink(`/proc/self/fd/${r}`);
+    expect(rt).toMatch(/^pipe:\[[1-9]\d*\]$/);
+    expect(await readlink(`/proc/self/fd/${w}`)).toBe(rt);
+    expect(await readlink(`/proc/self/fd/${efd}`)).toBe('anon_inode:[eventfd]');
+    kernel.kill(p.pid, A.SIGKILL);
+  });
+
   it('spawn/waitpid reports exit status in wait encoding', async () => {
     const p = kernel.spawn({ path: 'x', run: async () => 3 });
     expect(p.ppid).toBe(1);

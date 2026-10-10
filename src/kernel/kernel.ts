@@ -287,6 +287,7 @@ export class Kernel {
 
   /** Stop listing this kernel's processes in the page process table (tests). */
   dispose(): void {
+    this.procfs.stopLoadSampling();
     this.detachTable?.();
     this.detachWriteBack?.();
     this.detachWriteBack = undefined;
@@ -496,6 +497,7 @@ export class Kernel {
   // ── Process lifecycle ─────────────────────────────────────────────────────
 
   spawn(opts: SpawnOptions): Process {
+    this.procfs.startLoadSampling();
     const parent = opts.parent ?? this.init;
     const pid = this.allocPid();
     let fds: FdTable;
@@ -622,7 +624,9 @@ export class Kernel {
     this.sem.exited(proc);
     for (const child of this.procs.values()) {
       if (child.ppid === proc.pid) {
+        // Orphans go to init, which reaps them as soon as they exit (Linux's init does)
         child.ppid = 1;
+        child.data.orphaned = true;
         if (child.state === 'zombie') this.scheduleInitReap(child);
       }
     }
@@ -664,13 +668,18 @@ export class Kernel {
     }
   }
 
+  /**
+   * Reap a zombie child of init. An orphan goes at once; a process the page
+   * spawned as init's child waits initReapDelayMs for its spawner's waitpid
+   * (the shell, run-command and blink.ts reap their own).
+   */
   private scheduleInitReap(proc: Process): void {
     const t = setTimeout(() => {
       if (proc.ppid === 1 && this.procs.get(proc.pid) === proc && proc.state === 'zombie') {
         this.procs.delete(proc.pid);
         this.notify();
       }
-    }, this.initReapDelayMs);
+    }, proc.data.orphaned ? 0 : this.initReapDelayMs);
     (t as any)?.unref?.();
   }
 
@@ -2510,9 +2519,9 @@ export class Kernel {
           const v = new DataView(data.buffer, data.byteOffset, A.SYSINFO_SIZE);
           data.fill(0, 0, A.SYSINFO_SIZE);
           const mem = memoryInfo();
-          const load = BigInt(Math.round(this.procfs.running() * 65536));
+          const loads = this.procfs.loadAverages();
           v.setBigInt64(0, BigInt(Math.floor((Date.now() - bootMs) / 1000)), true); // uptime
-          for (let i = 0; i < 3; i++) v.setBigUint64(8 + i * 8, load, true); // loads[3], 1<<16 fixed point
+          for (let i = 0; i < 3; i++) v.setBigUint64(8 + i * 8, BigInt(Math.round(loads[i] * 65536)), true); // loads[3], 1<<16 fixed point
           v.setBigUint64(32, BigInt(mem.total), true); // totalram
           v.setBigUint64(40, BigInt(mem.free), true); // freeram
           v.setUint16(80, Math.min(0xffff, this.procs.size), true); // procs
@@ -3105,9 +3114,7 @@ function setCredentials(proc: Process, nr: number, args: ArrayLike<number>, data
   return -A.ENOSYS;
 }
 
-const SIG_NAMES = ['', 'HUP', 'INT', 'QUIT', 'ILL', 'TRAP', 'ABRT', 'BUS', 'FPE', 'KILL', 'USR1', 'SEGV', 'USR2', 'PIPE', 'ALRM', 'TERM',
-  'STKFLT', 'CHLD', 'CONT', 'STOP', 'TSTP', 'TTIN', 'TTOU', 'URG', 'XCPU', 'XFSZ', 'VTALRM', 'PROF', 'WINCH', 'IO', 'PWR', 'SYS'];
 /** SIGINT, SIGRTMIN+3, … for log lines */
 function sigName(sig: number): string {
-  return SIG_NAMES[sig] ? `SIG${SIG_NAMES[sig]}` : sig >= 32 ? `SIGRTMIN+${sig - 32}` : `signal ${sig}`;
+  return A.SIGNAL_NAMES[sig] ? `SIG${A.SIGNAL_NAMES[sig]}` : sig >= 32 ? `SIGRTMIN+${sig - 32}` : `signal ${sig}`;
 }

@@ -330,16 +330,38 @@ export class ProcFs {
     return lines.join('\n') + '\n';
   }
 
-  /** Running processes: the load average (it doesn't decay) */
+  /** Running processes now (what the load averages average) */
   running(): number {
     return this.live().filter((p) => this.stateLetter(p) === 'R').length;
+  }
+
+  /** 1, 5 and 15 minute load averages, decayed every LOAD_SAMPLE_MS like Linux's calc_load */
+  private load = [0, 0, 0];
+  private loadTimer: ReturnType<typeof setInterval> | null = null;
+
+  /** Start sampling the load (the kernel calls this when it spawns a process) */
+  startLoadSampling(): void {
+    if (this.loadTimer) return;
+    this.sampleLoad();
+    this.loadTimer = setInterval(() => this.sampleLoad(), LOAD_SAMPLE_MS);
+    (this.loadTimer as { unref?: () => void }).unref?.();
+  }
+  stopLoadSampling(): void {
+    if (this.loadTimer) clearInterval(this.loadTimer);
+    this.loadTimer = null;
+  }
+  /** The 1, 5 and 15 minute load averages (sysinfo(2), /proc/loadavg) */
+  loadAverages(): number[] { return [...this.load]; }
+  private sampleLoad(): void {
+    const n = this.running();
+    this.load = this.load.map((l, i) => l * LOAD_DECAY[i] + n * (1 - LOAD_DECAY[i]));
   }
 
   private loadavgText(): string {
     const procs = this.live();
     const running = this.running();
-    const l = running.toFixed(2);
-    return `${l} ${l} ${l} ${Math.max(1, running)}/${procs.length} ${this.kernel.lastPid}\n`;
+    const [a, b, c] = this.load.map((l) => l.toFixed(2));
+    return `${a} ${b} ${c} ${Math.max(1, running)}/${procs.length} ${this.kernel.lastPid}\n`;
   }
 
   // ── what the kernel calls ──
@@ -403,6 +425,10 @@ const VMSTAT_KEYS = [
   'pgscan_kswapd', 'pgscan_direct', 'pgalloc_normal', 'pgactivate', 'pgdeactivate',
 ];
 
+/** Linux samples the run queue every 5 s; each average decays by e^(-5s/period) per sample */
+const LOAD_SAMPLE_MS = 5000;
+const LOAD_DECAY = [60, 300, 900].map((period) => Math.exp(-LOAD_SAMPLE_MS / 1000 / period));
+
 const PID_ENTRIES = ['cmdline', 'comm', 'cwd', 'environ', 'exe', 'fd', 'io', 'mounts', 'root', 'stat', 'statm', 'status', 'syscall', 'task', 'wchan'];
 
 export function wchanText(p: Process): string {
@@ -421,11 +447,13 @@ export function syscallText(p: Process): string {
 /** What /proc/PID/fd/N points at. */
 export function fdTarget(f: OpenFile): string {
   if (f.path) return f.path;
-  const ino = (f as { ino?: number }).ino ?? 0;
+  // a pipe end's inode is its pipe's (both ends of one pipe show the same pipe:[N])
+  const ino = (f as { ino?: number }).ino ?? (f as { pipe?: { ino?: number } }).pipe?.ino ?? 0;
   switch (f.kind) {
     case 'pipe': return `pipe:[${ino}]`;
     case 'socket': return `socket:[${ino}]`;
     case 'epoll': return 'anon_inode:[eventpoll]';
-    default: return 'anon_inode:[shiro]';
+    // eventfd, timerfd, signalfd, …: their Linux anon_inode names
+    default: return `anon_inode:[${(f as { anonName?: string }).anonName ?? 'shiro'}]`;
   }
 }

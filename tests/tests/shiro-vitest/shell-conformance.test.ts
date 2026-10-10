@@ -724,6 +724,19 @@ describe('shell conformance regressions', () => {
     expect(r.out).toBe('argv0=echo2\nargv0=prog.wasm\n');
   });
 
+  it('tabcomputer#14: ls -a shows .. of /proc/self/fd as a directory, not the /proc/self link', async () => {
+    const r = await script('ls -la /proc/self/fd | awk \'$NF == ".." || $(NF-2) == ".." { print substr($1, 1, 1) }\'');
+    expect(r.out).toBe('d\n');
+  });
+
+  it('tabcomputer#14: kill PID ends a bash -c blocked in a command (143), kill -9 too (137)', async () => {
+    const r = await script([
+      'bash -c "sleep 30" & p=$!; sleep 0.2; kill $p; wait $p; echo term=$?',
+      'bash -c "sleep 30" & p=$!; sleep 0.2; kill -9 $p; wait $p; echo kill=$?',
+    ].join('\n'));
+    expect(r.out).toBe('term=143\nkill=137\n');
+  }, 20_000);
+
   it('tabcomputer#8: /proc/PID and /proc/self for in-page commands (fd/, environ, cwd, exe, stat, status)', async () => {
     const r = await script([
       'ls /proc | grep -qx "$$" && echo listed',
