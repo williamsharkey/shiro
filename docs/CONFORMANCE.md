@@ -10,7 +10,7 @@ conformance work started (fc0af54).
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1412/1567 (90.1%)** |
 | [Shell: smoosh POSIX tests](#shell-smoosh-posix-tests) | 111/162 (68.5%) | **159/162 (98.1%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **625/635 (98.4%)** |
-| [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **237/320 (74.1%)** |
+| [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **240/322 (74.5%)** |
 | [Syscalls: wasi-testsuite (wasm32-wasip1)](#syscalls-wasi-testsuite-wasm32-wasip1) | — | **71/72 (98.6%)** |
 
 How each suite runs, and what is and isn't scored, is described in
@@ -368,20 +368,20 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in ta
 
 ## Syscalls: LTP under Blink (x86-64)
 
-Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel processes in the Blink engine; only tests that pass natively on the build host as an unprivileged user (uid 1000, like tabcomputer) are scored. Blink forks within one instance by default (patch 0048), so the child shares MAP_SHARED pages, where LTP keeps its result counts and checkpoints; with BLINK_SAME_INSTANCE_FORK=0 (snapshot fork) they are not shared, so when the Summary reads all zeros the TPASS/TFAIL/TBROK lines are counted instead (tests/conformance/lib/ltp.mjs). Trend: 146 (first run) → 172 → 148 (TBROK/TFAIL lines counted, snapshot fork) → 197 (same-instance fork opt-in, A/B against 155 without it) → 222 (same-instance fork the default, Blink 0034–0048, kernel O_PATH/locks/pipe sizes/epoll/errno fixes) → 229 (AF_UNIX DGRAM/SEQPACKET sockets, timeouts that never end early, unlinkat/wait4 errnos; bind04 now reaches its abstract-name cases, which Blink truncates) → 237 (Blink 0050–0054: same-instance children no longer stall each other, sleeps show S and end on signals, abstract AF_UNIX names keep their length).
+Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel processes in the Blink engine; only tests that pass natively on the build host as an unprivileged user (uid 1000, like tabcomputer) are scored. Blink forks within one instance by default (patch 0048), so the child shares MAP_SHARED pages, where LTP keeps its result counts and checkpoints; with BLINK_SAME_INSTANCE_FORK=0 (snapshot fork) they are not shared, so when the Summary reads all zeros the TPASS/TFAIL/TBROK lines are counted instead (tests/conformance/lib/ltp.mjs). Trend: 146 (first run) → 172 → 148 (TBROK/TFAIL lines counted, snapshot fork) → 197 (same-instance fork opt-in, A/B against 155 without it) → 222 (same-instance fork the default, Blink 0034–0048, kernel O_PATH/locks/pipe sizes/epoll/errno fixes) → 229 (AF_UNIX DGRAM/SEQPACKET sockets, timeouts that never end early, unlinkat/wait4 errnos; bind04 now reaches its abstract-name cases, which Blink truncates) → 237 (Blink 0050–0054: same-instance children no longer stall each other, sleeps show S and end on signals, abstract AF_UNIX names keep their length) → 240/322 (Blink 0058–0070 and signalfd01/02 added to the scored set: nanosleep04 and signalfd pass; UDP over loopback, AF_UNIX datagram backpressure and socket errnos fix bind05, sendfile07, connect03, accept03 and epoll_wait05; ppoll01 and waitpid08/10 newly fail, both Blink regressions reported to perf-blink).
 
 | Area | Before | Now | Failing |
 |---|---|---|---|
-| accept | — | 1/3 | 2 |
+| accept | — | 2/3 | 1 |
 | alarm | — | 5/5 | 0 |
-| bind | — | 3/4 | 1 |
+| bind | — | 4/4 | 0 |
 | chdir | — | 2/2 | 0 |
 | chmod | — | 2/2 | 0 |
 | clock_gettime | — | 0/1 | 1 |
 | clock_nanosleep | — | 2/3 | 1 |
 | clone | — | 7/8 | 1 |
 | close | — | 2/2 | 0 |
-| connect | — | 1/2 | 1 |
+| connect | — | 2/2 | 0 |
 | creat | — | 2/3 | 1 |
 | dup | — | 5/7 | 2 |
 | dup2 | — | 6/7 | 1 |
@@ -389,7 +389,7 @@ Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel
 | epoll_create | — | 3/3 | 0 |
 | epoll_create1 | — | 2/2 | 0 |
 | epoll_ctl | — | 5/7 | 2 |
-| epoll_wait | — | 11/15 | 4 |
+| epoll_wait | — | 12/15 | 3 |
 | execve | — | 0/2 | 2 |
 | faccessat | — | 2/2 | 0 |
 | fchdir | — | 2/2 | 0 |
@@ -408,16 +408,16 @@ Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel
 | link | — | 2/2 | 0 |
 | lseek | — | 3/4 | 1 |
 | lstat | — | 2/4 | 2 |
-| nanosleep | — | 2/3 | 1 |
+| nanosleep | — | 3/3 | 0 |
 | open | — | 7/8 | 1 |
 | openat | — | 1/1 | 0 |
 | pause | — | 2/2 | 0 |
 | pipe | — | 8/12 | 4 |
 | pipe2 | — | 1/2 | 1 |
 | poll | — | 3/4 | 1 |
-| ppoll | — | 1/1 | 0 |
+| ppoll | — | 0/1 | 1 |
 | pread | — | 4/4 | 0 |
-| pselect | — | 5/6 | 1 |
+| pselect | — | 4/6 | 2 |
 | pwrite | — | 7/8 | 1 |
 | read | — | 4/4 | 0 |
 | readv | — | 1/2 | 1 |
@@ -426,6 +426,7 @@ Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel
 | sendfile | — | 7/16 | 9 |
 | setrlimit | — | 1/2 | 1 |
 | signal | — | 5/5 | 0 |
+| signalfd | — | 2/2 | 0 |
 | socket | — | 2/2 | 0 |
 | socketpair | — | 2/2 | 0 |
 | stat | — | 2/2 | 0 |
@@ -439,45 +440,43 @@ Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel
 | vfork | — | 1/2 | 1 |
 | wait4 | — | 3/3 | 0 |
 | waitid | — | 10/11 | 1 |
-| waitpid | — | 8/11 | 3 |
+| waitpid | — | 6/11 | 5 |
 | write | — | 6/6 | 0 |
 | writev | — | 1/2 | 1 |
 
 <details><summary>Failing cases</summary>
 
-- **accept**: accept02 — accept02.c:116: TBROK: ioctl(3,SIOCGIFINDEX,...) failed: ENOTTY (25); accept03 — accept03.c:46: TFAIL: accept() on O_PATH file expected EBADF: ENOTSOCK (88)
-- **bind**: bind05 — bind05.c:106: TBROK: write(5,0x80801214,4) failed: ENETUNREACH (101)
-- **clock_gettime**: clock_gettime04 — clock_gettime04.c:161: TFAIL: CLOCK_REALTIME: Time travelled backwards (3): -917937 ns
-- **clock_nanosleep**: clock_nanosleep01 — clock_nanosleep01.c:212: TFAIL: returned 0, expected -1, expected errno: EINVAL (22): SUCCESS (0)
+- **accept**: accept02 — accept02.c:116: TBROK: ioctl(3,SIOCGIFINDEX,...) failed: ENOTTY (25)
+- **clock_gettime**: clock_gettime04 — clock_gettime04.c:139: TFAIL: CLOCK_REALTIME_COARSE: clock_gettime() failed (0): EINVAL (22)
+- **clock_nanosleep**: clock_nanosleep01 — clock_nanosleep01.c:212: TFAIL: returned 0, expected -1, expected errno: EOPNOTSUPP (95): SUCCESS (0)
 - **clone**: clone08 — clone08.c:85: TBROK: CLONE_PARENT clone() failed: EINVAL (22)
-- **connect**: connect03 — connect03.c:89: TFAIL: write permission is denied on the socket file succeeded
 - **creat**: creat05 — creat05.c:55: TBROK: creat(creat05_1020,0666) failed: EMFILE (24)
 - **dup**: dup03 — dup03.c:36: TBROK: dup(3) failed: EMFILE (24); dup06 — dup06.c:58: TFAIL: Not enough files duped
 - **dup2**: dup205 — dup205.c:53: TFAIL: Not enough files duped
 - **epoll_ctl**: epoll_ctl02 — epoll_ctl02.c:85: TFAIL: epoll_ctl(...) if events is NULL succeeded; epoll_ctl06 — epoll_ctl06.c:69: TFAIL: epoll_ctl() on /proc/self/maps succeeded
-- **epoll_wait**: epoll_wait02 — tst_timer_test.c:314: TFAIL: epoll_wait() slept for too long; epoll_wait03 — epoll_wait03.c:63: TFAIL: epoll_wait() events has no write permissions invalid retval 1: SUCCESS (0); epoll_wait05 — epoll_wait05.c:81: TFAIL: Wrong number of events reported 0; epoll_wait06 — epoll_wait06.c:78: TFAIL: write() failed invalid retval 4096: SUCCESS (0)
+- **epoll_wait**: epoll_wait02 — tst_timer_test.c:314: TFAIL: epoll_wait() slept for too long; epoll_wait03 — epoll_wait03.c:63: TFAIL: epoll_wait() events has no write permissions invalid retval 1: SUCCESS (0); epoll_wait06 — epoll_wait06.c:78: TFAIL: write() failed invalid retval 4096: SUCCESS (0)
 - **execve**: execve01 — tst_test.c:211: TBROK: Invalid shared memory region (bad magic); execve06 — tst_test.c:211: TBROK: Invalid shared memory region (bad magic)
-- **fcntl**: fcntl13 — fcntl13.c:45: TFAIL: fcntl(1, F_SETLK, flock) succeeded; fcntl13_64 — fcntl13.c:45: TFAIL: fcntl(1, F_SETLK, flock) succeeded; fcntl14 — fcntl14.c:74: TFAIL: flock.l_pid (0) != parent_pid (153); fcntl14_64 — fcntl14.c:74: TFAIL: flock.l_pid (0) != parent_pid (160); fcntl15 — fcntl15.c:88: TFAIL: Succeeded to lock already locked region one; fcntl15_64 — fcntl15.c:88: TFAIL: Succeeded to lock already locked region one; fcntl27 — fcntl27.c:37: TFAIL: fcntl(fd, F_SETLEASE, F_RDLCK) expected EAGAIN/EWOULDBLOCK: EINVAL (22); fcntl27_64 — fcntl27.c:37: TFAIL: fcntl(fd, F_SETLEASE, F_RDLCK) expected EAGAIN/EWOULDBLOCK: EINVAL (22); fcntl30 — fcntl30.c:27: TFAIL: Expect: new pipe size (65536) >= requested size (1048576); fcntl30_64 — fcntl30.c:27: TFAIL: Expect: new pipe size (65536) >= requested size (1048576); fcntl34 — fcntl34.c:99: TBROK: Short read(3,0x4fffffffe880,4096) returned only 0; fcntl34_64 — fcntl34.c:99: TBROK: Short read(3,0x4fffffffe870,4096) returned only 0; fcntl37 — fcntl37.c:45: TFAIL: F_SETPIPE_SZ succeed and return 65536; fcntl37_64 — fcntl37.c:45: TFAIL: F_SETPIPE_SZ succeed and return 65536; fcntl38 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl38_64 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl39 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl39_64 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl40 (hang/timeout) — skipped: hangs tabcomputer; fcntl40_64 — passed 0 failed 0 broken 0
+- **fcntl**: fcntl13 — fcntl13.c:45: TFAIL: fcntl(1, F_SETLK, flock) succeeded; fcntl13_64 — fcntl13.c:45: TFAIL: fcntl(1, F_SETLK, flock) succeeded; fcntl14 — fcntl14.c:74: TFAIL: flock.l_pid (0) != parent_pid (153); fcntl14_64 — fcntl14.c:74: TFAIL: flock.l_pid (0) != parent_pid (166); fcntl15 — fcntl15.c:88: TFAIL: Succeeded to lock already locked region one; fcntl15_64 — fcntl15.c:88: TFAIL: Succeeded to lock already locked region one; fcntl27 — fcntl27.c:37: TFAIL: fcntl(fd, F_SETLEASE, F_RDLCK) expected EAGAIN/EWOULDBLOCK: EINVAL (22); fcntl27_64 — fcntl27.c:37: TFAIL: fcntl(fd, F_SETLEASE, F_RDLCK) expected EAGAIN/EWOULDBLOCK: EINVAL (22); fcntl30 — fcntl30.c:27: TFAIL: Expect: new pipe size (65536) >= requested size (1048576); fcntl30_64 — fcntl30.c:27: TFAIL: Expect: new pipe size (65536) >= requested size (1048576); fcntl34 — fcntl34.c:99: TBROK: Short read(3,0x4fffffffe880,4096) returned only 0; fcntl34_64 — fcntl34.c:99: TBROK: Short read(3,0x4fffffffe870,4096) returned only 0; fcntl37 — fcntl37.c:45: TFAIL: F_SETPIPE_SZ succeed and return 65536; fcntl37_64 — fcntl37.c:45: TFAIL: F_SETPIPE_SZ succeed and return 65536; fcntl38 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl38_64 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl39 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl39_64 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl40 (hang/timeout) — skipped: hangs tabcomputer; fcntl40_64 — passed 0 failed 0 broken 0
 - **fork**: fork14 (hang/timeout) — no summary
-- **futex**: futex_cmp_requeue01 — futex_cmp_requeue01.c:163: TFAIL: requeued 0 waiters, expected range: (7, 7); futex_cmp_requeue02 — futex_cmp_requeue02.c:60: TFAIL: futex_cmp_requeue() failed unexpectedly, expected EAGAIN/EWOULDBLOCK: EINVAL (22); futex_cmp_requeue03 — futex_cmp_requeue03.c:71: TFAIL: uaddr unmapped expected EFAULT: EINVAL (22); futex_wait05 (hang/timeout) — skipped: hangs tabcomputer; futex_waitv01 — passed 0 failed 0 broken 0; futex_waitv02 — passed 0 failed 0 broken 0; futex_waitv03 — passed 0 failed 0 broken 0; futex_wake02 — futex_wake02.c:79: TFAIL: futex_wake() woken up 7 threads, expected 10: SUCCESS (0); futex_wake03 (hang/timeout) — skipped: hangs tabcomputer; futex_wake05 — futex_wake05.c:67: TFAIL: uaddr file truncated succeeded
+- **futex**: futex_cmp_requeue01 — futex_cmp_requeue01.c:163: TFAIL: requeued 0 waiters, expected range: (7, 7); futex_cmp_requeue02 — futex_cmp_requeue02.c:60: TFAIL: futex_cmp_requeue() failed unexpectedly, expected EAGAIN/EWOULDBLOCK: EINVAL (22); futex_cmp_requeue03 — futex_cmp_requeue03.c:71: TFAIL: uaddr unmapped expected EFAULT: EINVAL (22); futex_wait05 (hang/timeout) — skipped: hangs tabcomputer; futex_waitv01 — passed 0 failed 0 broken 0; futex_waitv02 — passed 0 failed 0 broken 0; futex_waitv03 — passed 0 failed 0 broken 0; futex_wake02 — futex_wake02.c:79: TFAIL: futex_wake() woken up 2 threads, expected 10: SUCCESS (0); futex_wake03 (hang/timeout) — skipped: hangs tabcomputer; futex_wake05 — futex_wake05.c:67: TFAIL: uaddr file truncated succeeded
 - **getrlimit**: getrlimit02 — getrlimit02.c:36: TFAIL: getrlimit() with invalid resource type succeeded
 - **lseek**: lseek11 — passed 0 failed 0 broken 0
 - **lstat**: lstat02 — lstat02.c:66: TFAIL: lstat() returned 0, expected -1: SUCCESS (0); lstat02_64 — lstat02.c:66: TFAIL: lstat() returned 0, expected -1: SUCCESS (0)
-- **nanosleep**: nanosleep04 — nanosleep04.c:30: TFAIL: nanosleep() returned 0, expected -1
 - **open**: open13 — open13.c:76: TFAIL: fchown() on original FD succeeded
-- **pipe**: pipe06 — pipe06.c:29: TBROK: pipe({1022,1023}) failed: EMFILE (24); pipe07 — pipe07.c:76: TFAIL: exp_num_pipes (4092) != num_pipe_fds (1020); pipe13 — tst_test.c:1969: TBROK: Test killed! (timeout?); pipe15 — pipe15.c:72: TBROK: pipe({0,0}) failed: EMFILE (24)
+- **pipe**: pipe06 — pipe06.c:29: TBROK: pipe({1022,1023}) failed: EMFILE (24); pipe07 — pipe07.c:76: TFAIL: exp_num_pipes (4092) != num_pipe_fds (1020); pipe13 — passed 3 failed 0 broken 1; pipe15 — pipe15.c:72: TBROK: pipe({0,0}) failed: EMFILE (24)
 - **pipe2**: pipe2_04 — pipe2_04.c:82: TFAIL: Pipe size (65536) must be page size (4096)
 - **poll**: poll02 — tst_timer_test.c:314: TFAIL: poll() slept for too long
-- **pselect**: pselect01 — tst_timer_test.c:314: TFAIL: pselect() slept for too long
+- **ppoll**: ppoll01 — ppoll01.c:288: TFAIL: ret: 0, exp: -1, ret_errno: SUCCESS (0), exp_errno: EINTR (4)
+- **pselect**: pselect01 — tst_timer_test.c:314: TFAIL: pselect() slept for too long; pselect01_64 — tst_timer_test.c:314: TFAIL: pselect() slept for too long
 - **pwrite**: pwrite04 (hang/timeout) — skipped: hangs tabcomputer
 - **readv**: readv02 — readv02.c:72: TFAIL: readv(3, 0x5371c0, 1) succeeded
 - **select**: select02 — tst_timer_test.c:314: TFAIL: select() slept for too long
 - **sendfile**: sendfile02_64 (hang/timeout) — skipped: hangs tabcomputer; sendfile03 — sendfile03.c:51: TFAIL: sendfile(..) with out_fd=-1 succeeded; sendfile03_64 — sendfile03.c:51: TFAIL: sendfile(..) with out_fd=-1 succeeded; sendfile04 — sendfile04.c:60: TFAIL: sendfile(..) with pass_mapped_buffer, protection=1 succeeded; sendfile04_64 — sendfile04.c:60: TFAIL: sendfile(..) with pass_mapped_buffer, protection=1 succeeded; sendfile05 — sendfile05.c:39: TFAIL: sendfile(out, in, &offset, ..) with offset=-1 succeeded; sendfile05_64 — sendfile05.c:39: TFAIL: sendfile(out, in, &offset, ..) with offset=-1 succeeded; sendfile09 — passed 0 failed 0 broken 0; sendfile09_64 — passed 0 failed 0 broken 0
 - **setrlimit**: setrlimit06 — setrlimit06.c:117: TFAIL: Got no signal after reaching both limit
 - **uname**: uname04 — uname04.c:72: TBROK: persona(131072) failed: ENOSYS (38)
-- **vfork**: vfork02 — vfork02.c:26: TFAIL: sigismember(&signal, SIGUSR1) (1) != 0 (0)
+- **vfork**: vfork02 — vfork02.c:61: TBROK: SIGUSR1 is not on hold
 - **waitid**: waitid02 — waitid02.c:19: TFAIL: waitid(P_ALL, 0, infop, WNOHANG) expected EINVAL: ECHILD (10)
-- **waitpid**: waitpid01 (hang/timeout) — no summary; waitpid06 (hang/timeout) — skipped: hangs tabcomputer; waitpid07 (hang/timeout) — skipped: hangs tabcomputer
+- **waitpid**: waitpid01 (hang/timeout) — no summary; waitpid06 (hang/timeout) — skipped: hangs tabcomputer; waitpid07 (hang/timeout) — skipped: hangs tabcomputer; waitpid08 — waitpid_common.h:57: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); waitpid10 — waitpid10.c:106: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)
 - **writev**: writev01 — writev01.c:124: TFAIL: invalid iov_len, expected: -1 (EINVAL), got: 127 (SUCCESS)
 
 </details>
