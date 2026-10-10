@@ -135,6 +135,7 @@ function fileKey(f: object): number {
 const OPATH_FD_ARG: Record<number, number> = {
   0: 0, 1: 0, 16: 0, 17: 0, 18: 0, 19: 0, 20: 0, 74: 0, 75: 0, 77: 0, 91: 0, 93: 0, // read write ioctl pread pwrite readv writev fsync fdatasync ftruncate fchmod fchown
   190: 0, 193: 0, 196: 0, 199: 0, 217: 0, 285: 0, 233: 2, // f*xattr getdents64 fallocate epoll_ctl
+  42: 0, 43: 0, 44: 0, 45: 0, 46: 0, 47: 0, 48: 0, 49: 0, 50: 0, 51: 0, 52: 0, 54: 0, 55: 0, 288: 0, // the socket calls
 };
 
 /** An O_PATH description over `f`: same file and stat, no I/O */
