@@ -17,6 +17,8 @@ import { type OpenFile, type OpenFileKind, ReadyListeners, abortableWait } from 
 
 let nextPipeIno = 1;
 
+const PAGE = 4096;
+
 export class Pipe {
   private buf: Uint8Array;
   private head = 0;   // next byte to read
@@ -56,14 +58,24 @@ export class Pipe {
 
   get available(): number { return this.count; }
   get space(): number { return this.capacity - this.count; }
+  /**
+   * Linux keeps a pipe's data in page-sized buffers and calls it writable
+   * (POLLOUT) while a buffer is free: data from the middle of one page to
+   * the middle of the next holds two. A read frees a buffer only once it
+   * has emptied it (epoll_wait06: no EPOLLOUT edge after a partial read).
+   */
+  get writableForPoll(): boolean {
+    const used = this.count === 0 ? 0 : Math.ceil(((this.head % PAGE) + this.count) / PAGE);
+    return used < Math.max(1, this.capacity / PAGE);
+  }
 
   private wakeReaders() {
     for (const w of [...this.readWaiters]) w();
-    this.listeners.fire();
+    this.listeners.fire(POLLIN);
   }
   private wakeWriters() {
     for (const w of [...this.writeWaiters]) w();
-    this.listeners.fire();
+    this.listeners.fire(POLLOUT);
   }
 
   private take(out: Uint8Array): number {
@@ -144,14 +156,17 @@ export class Pipe {
     for (const w of [...this.openWaiters]) w();
   }
 
+  // (a hang-up concerns every watcher: no event mask)
   closeReader() {
     this.readers--;
-    this.wakeWriters();
+    for (const w of [...this.writeWaiters]) w();
+    this.listeners.fire();
     if (this.readers === 0 && this.writers === 0) this.onIdle?.();
   }
   closeWriter() {
     this.writers--;
-    this.wakeReaders();
+    for (const w of [...this.readWaiters]) w();
+    this.listeners.fire();
     if (this.readers === 0 && this.writers === 0) this.onIdle?.();
   }
 
@@ -202,7 +217,7 @@ export class PipeEnd implements OpenFile {
       if (p.writers === 0) r |= POLLHUP;
     } else {
       if (p.readers === 0) r |= POLLERR;
-      else if (p.space > 0) r |= POLLOUT;
+      else if (p.space > 0 && p.writableForPoll) r |= POLLOUT;
     }
     return r & (events | POLLHUP | POLLERR);
   }

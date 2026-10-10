@@ -585,6 +585,9 @@ export const OPEN_MAX = 1024;
 export const NR_OPEN = 1048576;
 export const RLIMIT_NOFILE = 7;
 export const SYS_prlimit64 = 302;
+export const SYS_memfd_create = 319;
+export const MFD_CLOEXEC = 1;
+export const MFD_ALLOW_SEALING = 2;
 
 // ── struct stat ─────────────────────────────────────────────────────────────
 export interface KStat {
