@@ -383,6 +383,32 @@ describe('kernel syscalls found by LTP', () => {
     await kernel.syscall(proc, A.SYS_wait4, [t.pid, 0], new Uint8Array(8));
   });
 
+  it('Open POSIX sigqueue_3-1/12-1, LTP kill05: signalling another user\'s process (or init) is EPERM', async () => {
+    const t = kernel.vfork(proc), other = kernel.vfork(proc);
+    other.uid = 0; other.ruid = 0; other.suid = 0;
+    const z = new Uint8Array(8);
+    const sq = (from: Process, pid: number, signo: number) => {
+      const si = new Uint8Array(A.SIGINFO_SIZE);
+      A.encodeSiginfo({ signo, code: A.SI_QUEUE, pid: from.pid, uid: from.uid }, si);
+      return kernel.syscall(from, A.SYS_rt_sigqueueinfo, [pid, signo], si);
+    };
+    // init stands in for Linux's root-owned pid 1
+    expect(await kernel.syscall(t, A.SYS_kill, [1, 0], z)).toBe(-A.EPERM);
+    expect(await sq(t, 1, 0)).toBe(-A.EPERM);
+    expect(await kernel.syscall(t, A.SYS_kill, [other.pid, 0], z)).toBe(-A.EPERM);
+    expect(await sq(t, other.pid, 0)).toBe(-A.EPERM);
+    // the same user's process, a saved uid that matches, root, and SIGCONT within a session
+    expect(await kernel.syscall(t, A.SYS_kill, [proc.pid, 0], z)).toBe(0);
+    expect(await kernel.syscall(other, A.SYS_kill, [t.pid, 0], z)).toBe(0);
+    other.suid = 1000;
+    expect(await kernel.syscall(t, A.SYS_kill, [other.pid, 0], z)).toBe(0);
+    other.suid = 0;
+    expect(await kernel.syscall(t, A.SYS_kill, [other.pid, A.SIGCONT], z)).toBe(other.sid === t.sid ? 0 : -A.EPERM);
+    // the kernel's own sends (from init) are always allowed
+    expect(kernel.kill(other.pid, 0)).toBe(0);
+    for (const p of [t, other]) { kernel.kill(p.pid, A.SIGKILL); await kernel.syscall(proc, A.SYS_wait4, [p.pid, 0], z); }
+  });
+
   it('signals routed through job control keep their siginfo (sigwaitinfo sees kill as SI_USER, sigqueue values queue)', async () => {
     const jc = new JobControl();
     const detach = attachKernel(kernel, jc);

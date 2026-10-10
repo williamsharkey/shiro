@@ -1,0 +1,27 @@
+From d4e6aec54a7fd246253a1236650e442c8b99b6de Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 05:26:07 +0000
+Subject: [PATCH] Shiro: MAP_HUGETLB is ENOMEM, as on Linux with no huge pages
+ reserved
+
+---
+ blink/syscall.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/blink/syscall.c b/blink/syscall.c
+index b477722..26aed18 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -1575,6 +1575,9 @@ static i64 SysMmapImpl(struct Machine *m, i64 virt, i64 size, int prot,
+   i64 newautomap;
+   if (!IsValidAddrSize(virt, size)) return einval();
+   if (flags & MAP_GROWSDOWN_LINUX) return enotsup();
++  // no huge pages are reserved (nr_hugepages is 0): ENOMEM as on Linux, so
++  // PostgreSQL's huge_pages=try falls back to ordinary pages
++  if (flags & MAP_HUGETLB_LINUX) return enomem();
+   if ((key = Prot2Page(prot)) == (u64)-1) return einval();
+   CleanseMemory(m->system, size);
+   if (m->system->rss >= GetMaxRss(m->system)) {
+-- 
+2.43.0
+

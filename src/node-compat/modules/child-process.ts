@@ -392,6 +392,11 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
     const bytesOf = (d: any, enc?: string): Uint8Array => typeof d === 'string' ? FakeBuffer.from(d, enc) : d instanceof Uint8Array ? d : FakeBuffer.from(d);
     let outOpen = true, errOpen = true;
     const proc = deps.getProcess?.();
+    // Delivered on a microtask, in order: the parent's listeners don't run inside the child's
+    // poll (an error there is the parent's: its 'error' listeners, else its stderr; as spawnNodeLive)
+    const deliver = (fn: () => void) => queueMicrotask(() => {
+      try { fn(); } catch (e: any) { (io.events['error'] || []).length ? (io.events['error'] || []).forEach((h) => h(e)) : proc?.stderr?.write(`${e?.stack ?? e}\n`); }
+    });
     let control: import('../../node-worker/child').ChildControl | null = null;
     const early: (Uint8Array | null)[] = []; // (writes before the child is there: null is end())
     const write = (b: Uint8Array) => { if (control) control.write(b); else early.push(b); };
@@ -435,20 +440,20 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
     deps.guest!.runChild(cmd, {
       cwd: opts?.cwd ? ctx.fs.resolvePath(String(opts.cwd), ctx.cwd) : ctx.cwd,
       ...(env ? { env } : {}),
-      onStdout: (b) => {
+      onStdout: (b) => deliver(() => {
         if (io.inheritOut) proc?.stdout?.write(b);
         else if (outOpen) (io.stdoutEvents['data'] || []).forEach((fn) => fn(FakeBuffer.from(b)));
-      },
-      onStderr: (b) => {
+      }),
+      onStderr: (b) => deliver(() => {
         if (io.inheritErr) proc?.stderr?.write(b);
         else if (errOpen) (io.stderrEvents['data'] || []).forEach((fn) => fn(FakeBuffer.from(b)));
-      },
+      }),
       control: (c) => {
         control = c;
         child.pid = c.pid;
         for (const b of early.splice(0)) if (b) c.write(b); else c.end();
       },
-    }).then((r) => {
+    }).then((r) => deliver(() => {
       exited = true;
       fileCache.clear(); // files it changed are read again
       const code = r.status ?? 128 + (r.signal ?? 0);
@@ -459,7 +464,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       (io.events['close'] || []).forEach((fn) => fn(r.status, child.signalCode));
       io.resolve({ stdout: '', stderr: '', exitCode: code });
       unhold();
-    });
+    }));
     return child;
   };
   /** The `input` option as text (a string, Buffer or typed array) */

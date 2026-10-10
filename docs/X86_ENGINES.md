@@ -796,6 +796,13 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    agent-clis' sampled profile of native Claude's startup shows such loops
    (0x434cffe: 461 k interpreted passes). BLINK_WJIT_STRADDLE=0 gives 57's
    behaviour. The x86 suite A/B is unchanged ("same" everywhere).
+101. SHIRO_BLINK_MMLOG=3 logs, besides the mappings, each write, pwrite
+   and pwritev to a file (fd > 2): source address, length, offset and the
+   first 16 bytes as Blink gathered them. It shows whether data a file
+   lost (PostgreSQL's zeroed WAL page) left Blink intact.
+102. MAP_HUGETLB is ENOMEM, as on Linux with no huge pages reserved.
+   PostgreSQL's huge_pages=try then maps ordinary pages; Blink used to
+   accept the flag silently. Test: fixtures/x86/hugetlb.c.
 
 The page compiles blink.wasm once and gives the `WebAssembly.Module` to every
 Blink worker (src/x86-engine/blink.ts `blinkWasmModule`, host.mjs

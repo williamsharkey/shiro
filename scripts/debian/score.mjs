@@ -24,7 +24,8 @@ const TOP = Number(opt('--top', '100'));
 const WORKERS = Number(opt('--workers', '2'));
 const ONLY = opt('--only', '') ? opt('--only', '').split(',') : null;
 const PORT = Number(opt('--port', '5397'));
-const INSTALL_TIMEOUT_S = Number(opt('--timeout', '1200'));
+// An engine abort mid-install costs apt-guard's recovery and a retry: big batches need the time
+const INSTALL_TIMEOUT_S = Number(opt('--timeout', '2400'));
 // --tag NAME: a variant run (its own results and report), e.g. with --env
 // BLINK_SAME_INSTANCE_FORK=1 (extra environment for every command, comma-separated)
 const TAG = opt('--tag', '');
@@ -196,6 +197,10 @@ async function smoke(m, pkg) {
       if (crashed) return { ok: false, how: `${bin} ${flagArg}`, category: r.code === 124 ? 'timeout' : 'engine-crash', error: firstError(r.out) || `exit ${r.code}` };
       const mod = /Can't locate (\S+\.pm) in @INC/.exec(r.out)?.[1];
       if (mod && !undeclared && !(await m.run(`dpkg -S '*/${mod}' 2>/dev/null`)).out.trim()) undeclared = { bin, mod };
+      // A launcher for another package's program (libreoffice-common's loffice runs
+      // libreoffice-core's soffice, which it doesn't depend on): exit 127 on Debian too
+      const exe = r.code === 127 && /(\/[\w./+-]+): (?:No such file or directory|not found)/.exec(r.out)?.[1];
+      if (exe && !undeclared && exe !== bin && !(await m.run(`dpkg -S '${exe}' 2>/dev/null`)).out.trim()) undeclared = { bin, mod: exe };
       // helpztags exits 0 printing nothing; select-editor wants a terminal
       if (!ran && !broken && (r.code === 0 || (r.code < 3 && r.out.trim()))) ran = { bin, flagArg, r };
     }
@@ -260,6 +265,15 @@ const installedStatus = async (m, names) => {
  * consistent system instead of failing on "Unmet dependencies".
  */
 async function recover(m) {
+  // A timed-out apt keeps running (apt ignores SIGINT while dpkg runs) and holds
+  // dpkg's lock: every later install would fail on it. Kill what's left first.
+  const killed = await m.page.evaluate(() => {
+    const k = window.__tabcomputer.kernel;
+    const left = [...k.procs.values()].filter((p) => p.state !== 'zombie' && /(^|\/)(apt-get|apt|dpkg)(\.debian)?$/.test(p.argv?.[0] ?? '') && p.pid > 1);
+    for (const p of left) k.kill(p.pid, 9);
+    return left.map((p) => p.pid);
+  }).catch(() => []);
+  if (killed.length) await new Promise((r) => setTimeout(r, 2000));
   const out = (await m.run(`dpkg-query -W -f='\${Package} \${db:Status-Abbrev}\\n' 2>/dev/null`)).out;
   const bad = out.split('\n').map((l) => l.trim().split(/\s+/)).filter(([n, st]) => n && st && /^[a-z][UHF]/.test(st)) /* unpacked, half-installed, half-configured; not trigger-pending (it, iW) */.map(([n]) => n);
   if (bad.length) await m.run(`dpkg --purge --force-all ${bad.join(' ')} 2>&1`, 600);
@@ -276,6 +290,7 @@ async function scoreBatch(m, batch, onResult) {
     const r = await m.run(`apt-get install -y ${todo.map((b) => b.p.name).join(' ')}`, INSTALL_TIMEOUT_S);
     writeFileSync(join(OUT_DIR, `batch-${todo[0].p.name}.log`), `exit ${r.code} after ${r.ms} ms\n` + r.out);
     for (const b of todo) { logs.set(b.p.name, r.out); timing.set(b.p.name, Math.round(r.ms / todo.length)); }
+    if (r.code === 124 && todo.length === 1) await recover(m);
     if (r.code !== 0 && todo.length > 1) {
       await recover(m);
       for (const b of todo) {

@@ -8576,22 +8576,10 @@ export class Shell {
     // __dirname, relative requires, and per-package runtime tweaks see the package.
     try { filePath = await this.fs.realpath(filePath); } catch { /* keep as given */ }
 
-    const nodeCtx: CommandContext = {
-      args: [filePath, ...args],
-      fs: ctx.fs,
-      cwd: ctx.cwd,
-      env: ctx.env,
-      stdin: ctx.stdin,
-      stdout: '',
-      stderr: '',
-      shell: ctx.shell,
-      terminal: ctx.terminal,
-    };
-
-    const exitCode = await nodeCmd.exec(nodeCtx);
-    if (nodeCtx.stdout) writeStdout(nodeCtx.stdout.replace(/\n/g, '\r\n'));
-    if (nodeCtx.stderr) writeStderr(nodeCtx.stderr.replace(/\n/g, '\r\n'));
-    return exitCode;
+    // The command's own context, as `node FILE` gets it: its redirects and pipes (stdoutIsTTY,
+    // streamStdout…) with it; `./x.js > out` wrote to the terminal while the shell had one
+    ctx.args = [filePath, ...args];
+    return this.runCommand(nodeCmd, ctx);
   }
 
   /**

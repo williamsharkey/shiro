@@ -277,6 +277,41 @@ untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
 
+### Harness: what `peak_rss` includes (DevTools response-body copies)
+
+perf-fs-shell noticed that under Playwright, DevTools keeps copies of
+response bodies in the renderer's PartitionAlloc buffer partition, and that
+counts in renderer RSS. Measured with a memory-infra dump
+(`h.bufferPartition()`), machine `e57125c23b92`:
+
+- The harness's own CDP session had `Network.enable` on for the whole
+  page (it counts boot requests and bytes). It now disables it right after
+  boot (`keepNetwork` keeps it). On its own this changed the npm/Vite peaks
+  by under 15 MiB.
+- Playwright's own Network/Fetch sessions (request events, the net-cache
+  routing) stay attached, and they can't be turned off. With them, the
+  buffer partition grows 3.8 → 29 MiB over an `npm install` with
+  typescript, and → 64 MiB after a first `claude --npm`.
+- Fetch-heavy steps now also record a `_net` twin: the peak minus the
+  buffer partition's growth over the step.
+
+| peak (MiB above pre-run) | raw | net | buffer growth |
+|---|---:|---:|---:|
+| `workload.peak_rss.claude_npm_first` | 414 | 385 | ~28 |
+| `workflow.peak_rss.vite_npm_i` | 187 | 139 | ~48 |
+| `workflow.peak_rss.vite_dev` | 332 | 332 | 0 |
+| `workload.peak_rss.ffmpeg_first` | 108 | 108 | 0 |
+| `workflow.peak_rss.go_run_first` | 488 | 488 | 0 |
+| `workflow.peak_rss.apt_update` | 656 | 656 | 0 |
+| `workflow.peak_rss.apt_install_hello` | 714 | 714 | 0 |
+
+So the inflation is real for npm (tens of MiB here, more in bigger
+installs) and absent for apt. apt fetches through the page's mirror route
+on the app origin, and Playwright doesn't intercept that. The apt and go
+peaks are the page's own memory. A/B deltas were never affected, because
+both sides carry the same overhead. Read the `_net` value for what a user's
+tab would use.
+
 ### Integration 073944d → 6e69776: pipe throughput, bisected (unix/bench)
 
 The hourly compare A/B-confirmed isolated `kernel.pipe_throughput` 667 →
