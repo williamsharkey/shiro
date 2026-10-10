@@ -1,4 +1,4 @@
-import git from 'isomorphic-git';
+import git from './git-cached';
 import { Command, CommandContext } from './index';
 import { ghApiHandler } from './gh-api';
 import { ghIssueHandler } from './gh-issue';
