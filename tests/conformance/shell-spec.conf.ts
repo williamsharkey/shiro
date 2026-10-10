@@ -30,7 +30,9 @@ type CaseResult = { i: number; name: string; ok: boolean; status: number; stdout
 const helperCommands = [
   { name: 'argv.py', description: 'print argv (oils spec helper)', async exec(ctx: any) { ctx.stdout += argvPy(ctx.args); return 0; } },
   { name: 'printenv.py', description: 'print env vars (oils spec helper)', async exec(ctx: any) {
-    for (const n of ctx.args) ctx.stdout += (ctx.env[n] ?? 'None') + '\n';
+    // (an external program: it sees the exported environment, not every shell variable)
+    const env = ctx.shell?.exportedEnv?.() ?? ctx.env;
+    for (const n of ctx.args) ctx.stdout += (env[n] ?? 'None') + '\n';
     return 0;
   } },
   { name: 'stdout_stderr.py', description: 'oils spec helper', async exec(ctx: any) {

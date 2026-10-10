@@ -613,6 +613,12 @@ composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts,
 a few MiB each. The terminal UI's +19 KiB is /dom, the sign-in hook and the
 other integration changes since db9f698, not desktop code.
 
+### unix/shell-stdio 7 — bash conformance: declare attributes, namerefs, call stack
+
+`node bench/ab.mjs HEAD~2 HEAD --suites shell,kernel --quick` (55e3426 →
+8709aa3, 3 rounds × 5 runs, alpha 0.01): all 24 metrics unchanged. setVar's
+attribute check and the call-stack frames on function calls cost nothing measurable.
+
 ### unix/shell-stdio 6 — REPLs: ctx.stdinIsTTY; node's REPL on a terminal
 
 `node bench/ab.mjs HEAD~1 HEAD --suites shell,kernel --quick` (cc254de →
