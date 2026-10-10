@@ -4,6 +4,42 @@
 
 All changes so far are additive; nothing below renames or removes an earlier name.
 
+- **2026-10-10 (unix/perf-kernel)** — additive: System V message queues (src/kernel/sysvmsg.ts), /proc/sysvipc.
+  - `msgget` 68 `(key, msgflg)` → msqid; keys, IPC_PRIVATE, IPC_CREAT,
+    IPC_EXCL, permissions as on Linux (MSGMAX 8192, MSGMNB 16384).
+  - `msgsnd` 69 `(msqid, msgsz, msgflg)`, data = `struct msgbuf` (i64 mtype,
+    then msgsz bytes). Blocks while the queue is full (bytes or count over
+    msg_qbytes); IPC_NOWAIT → EAGAIN, a signal → EINTR, IPC_RMID → EIDRM.
+  - `msgrcv` 70 `(msqid, msgsz, msgtypLo, msgtypHi, msgflg)` → bytes of text;
+    data = the received `struct msgbuf`. msgtyp 0 / > 0 / < 0 and
+    MSG_EXCEPT, MSG_NOERROR (else E2BIG), MSG_COPY (with IPC_NOWAIT);
+    nothing matching: IPC_NOWAIT → ENOMSG, else it blocks (EINTR, EIDRM).
+  - `msgctl` 71 `(msqid, cmd)`: IPC_STAT/MSG_STAT/MSG_STAT_ANY write a
+    120-byte x86-64 `struct msqid_ds` (msg_stime @48, rtime @56, ctime @64,
+    cbytes @72, qnum @80, qbytes @88, lspid @96, lrpid @100); IPC_SET reads
+    perm uid/gid/mode and msg_qbytes (raising it over MSGMNB needs root);
+    IPC_INFO/MSG_INFO write `struct msginfo`; IPC_RMID.
+  - `/proc/sysvipc/{shm,sem,msg}` in Linux's columns, for util-linux's ipcs.
+    Shiro's `ipcs` and `ipcrm` builtins (src/commands/ipcs.ts) read the
+    same tables.
+
+- **2026-10-10 (unix/perf-kernel)** — additive: System V semaphores (src/kernel/sysvsem.ts).
+  - `semget` 64 `(key, nsems, semflg)` → semid; IPC_PRIVATE, IPC_CREAT,
+    IPC_EXCL and the mode bits as on Linux (SEMMSL 32000, SEMMNI 32000).
+  - `semop` 65 `(semid, nsops)`, data = `struct sembuf[nsops]` (6 bytes each:
+    u16 sem_num, i16 sem_op, i16 sem_flg). All or nothing; blocks in the
+    kernel until it can apply. IPC_NOWAIT → EAGAIN, a signal → EINTR (never
+    restarted), IPC_RMID meanwhile → EIDRM. SEM_UNDO adjustments are applied
+    at exit; fork doesn't inherit them, exec keeps them.
+  - `semtimedop` 220 `(semid, nsops, hasTimeout, tv_sec, tv_nsec)`, data as
+    semop; the timeout ends it with EAGAIN.
+  - `semctl` 66 `(semid, semnum, cmd, val)`: SETVAL takes `val`;
+    GETVAL/GETPID/GETNCNT/GETZCNT return the value; GETALL writes and SETALL
+    reads `u16[nsems]` in data; IPC_STAT/SEM_STAT/SEM_STAT_ANY write a
+    104-byte x86-64 `struct semid_ds` (ipc64_perm, sem_otime @48, sem_ctime
+    @64, sem_nsems @80); IPC_SET reads one; IPC_INFO/SEM_INFO write
+    `struct seminfo` (10 ints); IPC_RMID.
+
 - **2026-10-09 (unix/perf-kernel)** — behavior fix, additive.
   - A path below `/proc/self/fd/N`, `/proc/PID/fd/N` or `/dev/fd/N` names
     an entry of the directory open as fd N (ENOTDIR if it isn't a

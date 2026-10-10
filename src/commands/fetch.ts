@@ -170,7 +170,15 @@ export const fetchCmd: Command = {
 
       let response: Response;
       try {
-        response = await fetch(url, fetchOpts);
+        try {
+          response = await fetch(url, fetchOpts);
+        } catch (e) {
+          // "Failed to fetch": most often a site without CORS headers. A terminal's curl has no such rule: over the TCP relay
+          const { relayAvailable, relayFetch } = await import('./relay-fetch');
+          const crossOrigin = typeof location !== 'undefined' && /^https?:/.test(url) && new URL(url).origin !== location.origin;
+          if (!(e instanceof TypeError) || !crossOrigin || !relayAvailable() || fetchOpts.signal?.aborted) throw e;
+          response = await relayFetch(url, fetchOpts);
+        }
       } finally {
         if (abortTimer) clearTimeout(abortTimer);
       }

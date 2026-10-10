@@ -273,8 +273,8 @@ describe('npm integration', () => {
     it('should print version string', async () => {
       const { output, exitCode } = await run(shell, 'npm --version');
       expect(exitCode).toBe(0);
-      expect(output).toContain('npm');
-      expect(output).toContain('shiro');
+      // a bare semver, as tools parse it (tabcomputer#6)
+      expect(output.trim()).toMatch(/^\d+\.\d+\.\d+$/);
     });
   });
 

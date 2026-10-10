@@ -58,6 +58,29 @@ APPS = {
               ['ca-certificates'], 'Tiny web browser (FLTK)', 'fltk'),
     'inkscape': (['inkscape'], ['/usr/bin/inkscape'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'],
                  ['libglib2.0-bin', 'shared-mime-info'], 'Vector graphics editor (GTK3)', 'gtk3'),
+    # scoreboard candidates (docs/GUI_SCORE.md)
+    'gedit': (['gedit'], ['/usr/bin/gedit'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'], ['libglib2.0-bin', 'shared-mime-info'], 'GNOME text editor (GTK3)', 'gtk3'),
+    'evince': (['evince'], ['/usr/bin/evince'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'], ['libglib2.0-bin', 'shared-mime-info'], 'GNOME document viewer (GTK3)', 'gtk3'),
+    'eog': (['eog'], ['/usr/bin/eog'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'], ['libglib2.0-bin', 'shared-mime-info'], 'GNOME image viewer (GTK3)', 'gtk3'),
+    'pcmanfm': (['pcmanfm'], ['/usr/bin/pcmanfm'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'], ['libglib2.0-bin', 'shared-mime-info'], 'LXDE file manager', 'gtk2'),
+    'thunar': (['thunar'], ['/usr/bin/thunar'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'], ['libglib2.0-bin', 'shared-mime-info'], 'Xfce file manager (GTK3)', 'gtk3'),
+    'galculator': (['galculator'], ['/usr/bin/galculator'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'], ['libglib2.0-bin', 'shared-mime-info'], 'Scientific calculator (GTK3)', 'gtk3'),
+    'gnumeric': (['gnumeric'], ['/usr/bin/gnumeric'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'], ['libglib2.0-bin', 'shared-mime-info'], 'Spreadsheet (GTK3)', 'gtk3'),
+    'abiword': (['abiword'], ['/usr/bin/abiword'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'], ['libglib2.0-bin', 'shared-mime-info'], 'Word processor (GTK3)', 'gtk3'),
+    'firefox-esr': (['firefox-esr'], ['/usr/lib/firefox-esr/firefox-esr'], ['usr/lib/firefox-esr/*.so', 'usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'],
+                    ['libglib2.0-bin', 'shared-mime-info'], 'Web browser (GTK3)', 'gtk3'),
+    'libreoffice-writer': (['libreoffice-writer', 'libreoffice-gtk3'], ['/usr/lib/libreoffice/program/soffice.bin'],
+                           ['usr/lib/libreoffice/program/*.so', 'usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'], ['libglib2.0-bin', 'shared-mime-info'], 'Word processor (LibreOffice)', 'gtk3'),
+    'vlc': (['vlc'], ['/usr/bin/vlc'], ['usr/lib/x86_64-linux-gnu/vlc/plugins/gui/libqt_plugin.so', 'usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so', 'usr/lib/x86_64-linux-gnu/qt5/plugins/imageformats/*.so'], [], 'Media player (Qt5)', 'qt5'),
+    'audacity': (['audacity'], ['/usr/bin/audacity'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'], ['libglib2.0-bin', 'shared-mime-info'], 'Audio editor (wxWidgets/GTK3)', 'gtk3'),
+    'blender': (['blender'], ['/usr/bin/blender'], [], [], '3D creation suite (OpenGL)', 'gl'),
+    # its resources live in an SQLite database: Qt's SQLite driver (a plugin, so not in the ELF closure)
+    'krita': (['krita', 'libqt5sql5-sqlite'], ['/usr/bin/krita'], ['usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so', 'usr/lib/x86_64-linux-gnu/qt5/plugins/imageformats/*.so',
+              'usr/lib/x86_64-linux-gnu/qt5/plugins/sqldrivers/libqsqlite.so'], [], 'Painting program (Qt5)', 'qt5'),
+    'qterminal': (['qterminal'], ['/usr/bin/qterminal'], ['usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so', 'usr/lib/x86_64-linux-gnu/qt5/plugins/imageformats/*.so'], [], 'Terminal emulator (Qt5)', 'qt5'),
+    'qpdfview': (['qpdfview'], ['/usr/bin/qpdfview'], ['usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so', 'usr/lib/x86_64-linux-gnu/qt5/plugins/imageformats/*.so'], [], 'PDF viewer (Qt5)', 'qt5'),
+    'kcalc': (['kcalc'], ['/usr/bin/kcalc'], ['usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so', 'usr/lib/x86_64-linux-gnu/qt5/plugins/imageformats/*.so'], [], 'KDE calculator (Qt5)', 'qt5'),
+    'keepassxc': (['keepassxc'], ['/usr/bin/keepassxc'], ['usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so', 'usr/lib/x86_64-linux-gnu/qt5/plugins/imageformats/*.so'], [], 'Password manager (Qt5)', 'qt5'),
 }
 
 # Kept whenever they are in the closure: glibc dlopens libgcc_s; fontconfig needs /etc/fonts.
@@ -65,9 +88,20 @@ ALWAYS = {'libgcc-s1', 'fontconfig-config'}
 
 # Plug-ins kept only when the startup set already has their libraries; the
 # others are deleted at install (GIMP queries every plug-in on first start).
-OPTIONAL = {'gimp': ['usr/lib/gimp/2.0/plug-ins/*/*', 'usr/lib/x86_64-linux-gnu/gegl-0.4/*.so']}
+# Settings written into the user's home before a launch, when the file isn't there
+# (the user's own settings win). GIMP: its PNG icon theme; the SVG ones (Symbolic,
+# Color) fill every icon with a gradient, which librsvg draws blank in the x86
+# engine for now (docs/GUI_SCORE.md). Its system gimprc's icon-theme isn't used.
+HOME_FILES = {'gimp': {'.config/GIMP/2.10/gimprc': '(icon-theme "Legacy")\n'}}
 
-LIBDIRS = ['lib/x86_64-linux-gnu', 'usr/lib/x86_64-linux-gnu', 'lib', 'usr/lib', 'lib64', 'usr/lib/x86_64-linux-gnu/inkscape']
+OPTIONAL = {'gimp': ['usr/lib/gimp/2.0/plug-ins/*/*', 'usr/lib/x86_64-linux-gnu/gegl-0.4/*.so'],
+            'vlc': ['usr/lib/x86_64-linux-gnu/vlc/plugins/*/*.so'],
+            'gnumeric': ['usr/lib/gnumeric/*/plugins/*/*.so', 'usr/lib/x86_64-linux-gnu/goffice/*/plugins/*/*.so'],
+            'abiword': ['usr/lib/x86_64-linux-gnu/abiword-3.0/plugins/*.so']}
+
+LIBDIRS = ['lib/x86_64-linux-gnu', 'usr/lib/x86_64-linux-gnu', 'lib', 'usr/lib', 'lib64', 'usr/lib/x86_64-linux-gnu/inkscape',
+           'usr/lib/firefox-esr', 'usr/lib/libreoffice/program', 'usr/lib/x86_64-linux-gnu/gedit', 'usr/lib/x86_64-linux-gnu/eog',
+           'usr/lib/x86_64-linux-gnu/thunar', 'usr/lib/gnumeric/1.12.55', 'usr/lib/x86_64-linux-gnu/blender']
 
 
 def load_index(path):
@@ -123,12 +157,42 @@ def unpack(deb, root):
     return files
 
 
-def needed(path):
+def elf_deps(path):
+    """An ELF's DT_NEEDED names and its RUNPATH/RPATH directories (as written, $ORIGIN unexpanded)"""
     try:
         out = subprocess.run(['readelf', '-d', path], capture_output=True, text=True).stdout
     except Exception:
-        return []
-    return [l.split('[')[1].split(']')[0] for l in out.splitlines() if '(NEEDED)' in l]
+        return [], []
+    needed = [l.split('[')[1].split(']')[0] for l in out.splitlines() if '(NEEDED)' in l]
+    runpath = [d for l in out.splitlines() if '(RUNPATH)' in l or '(RPATH)' in l for d in l.split('[')[1].split(']')[0].split(':')]
+    return needed, runpath
+
+
+def needed(path):
+    return elf_deps(path)[0]
+
+
+# Libraries Debian only puts on the search path with update-alternatives (a postinst
+# symlink /usr/lib/x86_64-linux-gnu/NAME -> DIR/NAME): found here, the link is recorded
+# in the app's `links` and made by the installer
+ALT_DIRS = ['usr/lib/x86_64-linux-gnu/blas', 'usr/lib/x86_64-linux-gnu/lapack', 'usr/lib/x86_64-linux-gnu/openblas-pthread']
+
+
+def resolve(root, elf_rel, lib, links):
+    """Where the dynamic linker finds `lib` for the ELF at `elf_rel` (relative to root): its
+    RUNPATH, the standard directories, then alternatives (recording the link). None if absent."""
+    _, runpath = elf_deps(os.path.join(root, elf_rel))
+    origin = os.path.dirname(elf_rel)
+    for d in runpath:
+        d = os.path.normpath(d.replace('$ORIGIN', '/' + origin).replace('${ORIGIN}', '/' + origin)).lstrip('/')
+        if os.path.lexists(os.path.join(root, d, lib)): return os.path.join(d, lib)
+    for d in LIBDIRS:
+        if os.path.lexists(os.path.join(root, d, lib)): return os.path.join(d, lib)
+    for d in ALT_DIRS:
+        if os.path.lexists(os.path.join(root, d, lib)):
+            links['/usr/lib/x86_64-linux-gnu/' + lib] = '/' + os.path.join(d, lib)
+            return os.path.join(d, lib)
+    return None
 
 
 def app_icon(root, binary, out_dir, app):
@@ -168,6 +232,8 @@ def main():
     packages = {}
     apps = {}
     for app, (roots, bins, plugins, extra, desc, kind) in APPS.items():
+        # GTK icon themes (Adwaita's symbolic icons, GIMP's theme) are SVG: their pixbuf loader comes too
+        if kind in ('gtk2', 'gtk3') and 'librsvg2-common' not in extra: extra = extra + ['librsvg2-common']
         names = closure(db, prov, roots + extra)
         root = os.path.join(work, app)
         shutil.rmtree(root, ignore_errors=True)
@@ -178,6 +244,7 @@ def main():
                 owner.setdefault(f, n)
         # ELF closure
         import glob
+        links = {}
         starts = [b.lstrip('/') for b in bins]
         for g in plugins:
             starts += [os.path.relpath(p, root) for p in glob.glob(os.path.join(root, g))]
@@ -191,10 +258,8 @@ def main():
             for p in (f, rel):
                 if p in owner: need.add(owner[p])
             for lib in needed(real):
-                for d in LIBDIRS:
-                    cand = os.path.join(d, lib)
-                    if os.path.lexists(os.path.join(root, cand)):
-                        todo.append(cand); break
+                hit = resolve(root, rel, lib, links)
+                if hit: todo.append(hit)
         # Data packages (Architecture: all) only when a kept package depends on them
         core = {n for n in names if n in need or n in roots or n in extra or n in ALWAYS}
         def deps(n):
@@ -224,7 +289,7 @@ def main():
                     o = owner.get(os.path.relpath(real, root)) or owner.get(f)
                     if o and o not in keep: ok = False; break
                     for lib in needed(real):
-                        hit = next((os.path.join(d, lib) for d in LIBDIRS if os.path.lexists(os.path.join(root, d, lib))), None)
+                        hit = resolve(root, os.path.relpath(real, root), lib, links)
                         if hit is None: ok = False; break
                         todo2.append(hit)
                 if not ok: remove.append('/' + os.path.dirname(rel) if g.endswith('/*/*') else '/' + rel)
@@ -236,6 +301,8 @@ def main():
             'dropped': dropped,
             **({'icon': icon} if (icon := app_icon(root, bins[0], os.path.join(os.path.dirname(out), 'icons'), app)) else {}),
             **({'remove': sorted(set(remove))} if remove else {}),
+            **({'links': sorted([k, v] for k, v in links.items())} if links else {}),
+            **({'home': HOME_FILES[app]} if app in HOME_FILES else {}),
         }
         for n in keep:
             d = db[n]
@@ -311,6 +378,14 @@ def main():
         h = hashlib.sha256(data).hexdigest()
         open(os.path.join(os.path.dirname(out), 'overlay', h), 'wb').write(data)
         overlays.append({'path': '/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders.cache', 'sha256': h, 'size': len(data), 'when': 'libgdk-pixbuf-2.0-0'})
+    # ... and with librsvg2-common's SVG loader too, applied after it when that package comes
+    # (same way: `gui install inkscape`, then copy the file)
+    lc = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'overlays', 'gdk-pixbuf-loaders-svg.cache')
+    if os.path.exists(lc) and any('librsvg2-common' in a['packages'] for a in apps.values()):
+        data = open(lc, 'rb').read()
+        h = hashlib.sha256(data).hexdigest()
+        open(os.path.join(os.path.dirname(out), 'overlay', h), 'wb').write(data)
+        overlays.append({'path': '/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders.cache', 'sha256': h, 'size': len(data), 'when': 'librsvg2-common'})
     json.dump({'suite': SUITE, 'overlays': overlays, 'arch': 'amd64', 'mirror': 'https://deb.debian.org/debian/',
                'snapshot': 'https://snapshot.debian.org/archive/debian/20260712T000000Z/',
                'packages': packages, 'apps': apps}, open(out, 'w'), indent=1, sort_keys=True)

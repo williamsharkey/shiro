@@ -79,6 +79,7 @@ if (!!base.env.quick !== !!next.env.quick) console.log('note: one run is --quick
 
 const candidates = rows.filter((x) => x.status === 'candidate' || x.status === 'broken?');
 let confirmed = new Map(); // key → reason
+const inconclusive = new Set(); // candidates the A/B produced no comparison for
 let verdict = null; // why nothing could be flagged, if so
 if (!sameMachine) verdict = 'different machines: informational only, nothing flagged';
 else if (!candidates.length) verdict = 'no candidates';
@@ -90,7 +91,8 @@ else {
     const abRows = new Map(ab.rows.map((x) => [x.metric, x]));
     for (const c of candidates) {
       const a = abRows.get(key(c.r));
-      if (!a) continue;
+      // A side without samples (a suite failed on that build) decides nothing
+      if (!a || (c.status === 'candidate' && ['new', 'gone', 'n/a'].includes(a.status))) { inconclusive.add(key(c.r)); continue; }
       if (c.status === 'candidate' && a.status === 'regressed') confirmed.set(key(c.r), a.ci ? `A/B ${fmtPct(a.shiftPct)}, CI ${fmtPct(a.ci[0])}…${fmtPct(a.ci[1])}, rounds ${a.rounds}` : `A/B exact ${fmtPct(a.shiftPct)}`);
       if (c.status === 'broken?' && (a.status === 'gone' || (a.nNew === 0 && a.nBase > 0))) confirmed.set(key(c.r), 'A/B: still no samples on the new commit');
     }
@@ -99,10 +101,11 @@ else {
 
 for (const x of rows) {
   if (confirmed.has(key(x.r))) { x.status = 'REGRESSED'; x.why = confirmed.get(key(x.r)); }
+  else if (inconclusive.has(key(x.r))) { x.status = 'unconfirmed'; x.why = 'A/B had no samples on one side'; }
   else if (x.status === 'candidate') x.status = sameMachine && !verdict ? 'noise' : 'candidate';
   else if (x.status === 'broken?' && sameMachine && !verdict) x.status = 'flaky';
 }
-const order = { REGRESSED: 0, candidate: 1, 'broken?': 2, noise: 3, flaky: 3, 'worse?': 4, improved: 5, fixed: 6, new: 7, gone: 8, same: 9, 'n/a': 10 };
+const order = { REGRESSED: 0, unconfirmed: 1, candidate: 1, 'broken?': 2, noise: 3, flaky: 3, 'worse?': 4, improved: 5, fixed: 6, new: 7, gone: 8, same: 9, 'n/a': 10 };
 rows.sort((x, y) => order[x.status] - order[y.status] || key(x.r).localeCompare(key(y.r)));
 console.log('');
 const fmt = (x) => (x == null ? '—' : String(x));
@@ -114,6 +117,7 @@ for (const { status, r, b, pct, why } of rows) {
 const counts = rows.reduce((a, x) => ((a[x.status] = (a[x.status] || 0) + 1), a), {});
 console.log('\n' + Object.entries(counts).map(([k, v]) => `${k}: ${v}`).join(', '));
 if (verdict) console.log(verdict);
+if (inconclusive.size) console.log(`A/B inconclusive for ${inconclusive.size} candidate(s): one side produced no samples (a suite failed on that build; see the raw runs ab.mjs printed). Not flagged, not cleared.`);
 console.log(confirmed.size ? `${confirmed.size} A/B-confirmed regression(s)` : 'no confirmed regressions');
 process.exit(confirmed.size ? 1 : 0);
 
@@ -139,7 +143,14 @@ function runAb(cands) {
   const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const suites = [...new Set(cands.map((c) => suiteOf(c.r)))];
   const modes = [...new Set(cands.map((c) => c.r.mode))];
-  const only = cands.map((c) => `^${esc(c.r.name)}$`).join('|');
+  // Suites gate whole groups with h.try(group) / h.wants(group) (kernel.spawn_throughput
+  // records .builtin and .wasm), so match the metric and each dotted parent of it
+  const names = new Set();
+  for (const c of cands) {
+    const parts = c.r.name.split('.');
+    for (let i = 2; i <= parts.length; i++) names.add(parts.slice(0, i).join('.'));
+  }
+  const only = [...names].map((n) => `^${esc(n)}$`).join('|');
   const dir = join(BENCH, '.cache', 'ab', 'compare');
   mkdirSync(dir, { recursive: true });
   const out = join(dir, `ab-${Date.now()}.json`);

@@ -129,6 +129,11 @@ ${bootSection(ctx, name)}
   45 s) and \`sudo apt install -y NAME\` (Debian's own apt and dpkg, x86-64 in the
   emulator: about a minute for a small package, python3 about 4 minutes). 496 of
   popcon's top 500 packages pass a smoke test.
+- Whole toolchains: \`toolchain install c\` (gcc, g++, make, gdb, cmake), \`python\`,
+  \`go\` (std precompiled), \`tex\`, \`classic\` (Fortran, COBOL, Pascal, Ada), \`node\`
+  or \`java\` puts the Debian packages in place in seconds instead of apt's minutes;
+  dpkg knows them, so apt keeps working. \`toolchain list\` shows the sets. The first run of each program
+  downloads it (gcc's hello world takes about 9 s from a fresh tab).
 - Prebuilt: \`pkg install NAME\` installs one of ${name}'s 72 prebuilt programs
   (WebAssembly or static x86-64: vim, htop, git, python3, jq, curl, make, clang,
   go, ...) in about a second, and they start faster than Debian's. \`pkg available\`

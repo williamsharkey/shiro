@@ -13,6 +13,7 @@
     "bench:compare": "node bench/compare.mjs",
     "conformance": "(sh scripts/conformance/fetch.sh || echo \"conformance: could not fetch external suites; they will be skipped\") && cd tests && npx vitest run --config vitest.conformance.config.ts; node ../scripts/conformance/report.mjs",
     "debian-score": "node scripts/debian/score.mjs",
+    "gui-score": "node scripts/gui/score.mjs",
     "debian-rootfs": "bash scripts/debian/build-rootfs.sh"
   },
   "dependencies": {
@@ -22,6 +23,7 @@
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-unicode11": "^0.8.0",
     "@xterm/xterm": "^5.5.0",
+    "acorn": "^8.19.0",
     "esbuild-wasm": "^0.27.2",
     "http-cache-semantics": "^4.1.1",
     "isomorphic-git": "^1.27.1",

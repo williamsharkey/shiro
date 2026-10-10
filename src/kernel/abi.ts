@@ -53,6 +53,9 @@ export const SYS_clock_gettime = 228;
 export const SYS_uname = 63;
 /** syslog(2): args [type, len]; the read actions write text to the data area (klog.ts). */
 export const SYS_syslog = 103;
+export const SYS_sysinfo = 99;
+/** sizeof(struct sysinfo) on x86-64 */
+export const SYSINFO_SIZE = 112;
 /** struct utsname: six NUL-padded 65-byte fields */
 export const UTSNAME_FIELD = 65;
 export const SYS_exit_group = 231;
@@ -174,6 +177,8 @@ export const SYS_getenv = 1001;
  * for it. Returns the child pid.
  */
 export const SYS_shiro_vfork = 1010;
+/** clone(2) flag: the child's parent is the caller's parent (SYS_shiro_vfork takes it in args[0]) */
+export const CLONE_PARENT = 0x8000;
 /**
  * Shiro: execve. Data area: JSON `{ path, argv, env: ["K=V", ...], inproc? }`.
  * For a SYS_shiro_vfork child the program starts in it and the result is 0.
@@ -196,6 +201,16 @@ export const SYS_shmget = 29;
 export const SYS_shmat = 30;
 export const SYS_shmctl = 31;
 export const SYS_shmdt = 67;
+/** SysV semaphores (src/kernel/sysvsem.ts) */
+export const SYS_semget = 64;
+export const SYS_semop = 65;
+export const SYS_semctl = 66;
+export const SYS_semtimedop = 220;
+/** SysV message queues (src/kernel/sysvmsg.ts) */
+export const SYS_msgget = 68;
+export const SYS_msgsnd = 69;
+export const SYS_msgrcv = 70;
+export const SYS_msgctl = 71;
 
 // ── errno (Linux) ──────────────────────────────────────────────────────────
 export const EPERM = 1;
@@ -228,6 +243,8 @@ export const ESPIPE = 29;
 export const EROFS = 30;
 export const EPIPE = 32;
 export const ERANGE = 34;
+export const ENOMSG = 42;
+export const EIDRM = 43;
 export const ENAMETOOLONG = 36;
 export const ENOSYS = 38;
 export const ENOTEMPTY = 39;
@@ -504,6 +521,7 @@ export const SOL_SOCKET = 1;
 export const IPPROTO_IP = 0;
 export const IPPROTO_TCP = 6;
 export const IPPROTO_UDP = 17;
+export const IPPROTO_UDPLITE = 136;
 export const IPPROTO_IPV6 = 41;
 export const SO_DEBUG = 1;
 export const SO_REUSEADDR = 2;
@@ -575,6 +593,10 @@ export const PIPE_CAPACITY = 65536;
 
 /** Most fds a process may hold. */
 export const OPEN_MAX = 1024;
+/** fs.nr_open: the most fds RLIMIT_NOFILE can allow (Linux's default) */
+export const NR_OPEN = 1048576;
+export const RLIMIT_NOFILE = 7;
+export const SYS_prlimit64 = 302;
 
 // ── struct stat ─────────────────────────────────────────────────────────────
 export interface KStat {

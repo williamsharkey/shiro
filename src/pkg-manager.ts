@@ -317,10 +317,19 @@ export function kernelFeatures(): Set<string> {
   return out;
 }
 
+/**
+ * What the x86 engine gives an x86-64 program by itself, whatever the WASM
+ * runtime's mode: Blink runs it in a worker over SharedArrayBuffer, with
+ * fork/exec, threads, blocking reads and the kernel's ttys and sockets
+ * (`pkg install perl` said "needs kernel support" in JSPI mode).
+ */
+const X86_PROVIDES: KernelFeature[] = ['processes', 'threads', 'blocking-stdin', 'tty', 'sockets', 'sync-fs'];
+
 /** Hard requirements the current kernel doesn't meet. */
 export function missingFeatures(entry: PkgEntry, features: KernelFeature[] = entry.needs || []): KernelFeature[] {
   const have = kernelFeatures();
-  return features.filter(f => !have.has(f));
+  const byX86 = entry.abi === 'x86_64-linux' && have.has('x86');
+  return features.filter(f => !have.has(f) && !(byX86 && X86_PROVIDES.includes(f)));
 }
 
 export function packageStatus(entry: PkgEntry): 'ok' | 'partial' | 'blocked' {

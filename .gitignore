@@ -12,3 +12,5 @@ bench/.cache/
 .bench-seeds/
 .debian-build/
 dist-dev
+.gui-score/
+.toolchain-build/

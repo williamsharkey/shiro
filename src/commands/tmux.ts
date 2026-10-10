@@ -45,9 +45,19 @@ export const tmuxCmd: Command = {
   description: 'Terminal multiplexer',
 
   async exec(ctx: CommandContext): Promise<number> {
+    // Questions that need no terminal
+    if (ctx.args[0] === '-V') {
+      ctx.stdout += 'tmux 3.4-lite (built in; `pkg install tmux` for the real tmux)\n';
+      return 0;
+    }
+    if (ctx.args[0] === '-h' || ctx.args[0] === '--help') {
+      ctx.stdout += 'usage: tmux [-V] [new [-s NAME] | attach [-t NAME] | ls | kill-server]\n' +
+        'Ctrl-B then: % split left/right, " split top/bottom, arrows move, c new window, n/p next/previous, d detach\n';
+      return 0;
+    }
     const terminal = ctx.terminal;
-    if (!terminal) {
-      ctx.stderr += 'tmux: requires a terminal\n';
+    if (!terminal && ctx.args[0] !== 'ls' && ctx.args[0] !== 'list-sessions' && ctx.args[0] !== 'kill-server') {
+      ctx.stderr += 'tmux: open terminal failed: not a terminal\n';
       return 1;
     }
 
@@ -71,6 +81,8 @@ export const tmuxCmd: Command = {
       ctx.stdout += 'tmux: server killed\n';
       return 0;
     }
+
+    if (!terminal) return 1; // (ls and kill-server returned above)
 
     // Create or attach to session
     const session = getOrCreateSession(

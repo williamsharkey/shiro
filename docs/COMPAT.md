@@ -389,7 +389,8 @@ Browser checks: `scripts/browser-tui.mjs` drives the built app in headless
 Chromium (cross-origin isolated) through xterm.js's own keyboard input and
 reads the rendered screen. Verified there on 2026-10-09: vim (insert, `:wq`,
 type-ahead), nano (`^O`, `^X`), less (paging, `/` search, type-ahead), htop,
-top, tmux (split, detach, `ls`), screen (detach), fzf (filter, pick), nvim
+top, tmux (split, detach, `ls`), screen (detach), fzf (filter, pick), tig and
+lazygit (stage, commit, on the built-in git), nvim
 (edit, `:help`), emacs -nw (edit, C-x C-s), man (through less), gpg
 (pinentry-curses dialog). Two bugs only the browser showed are fixed: keys
 typed while a command started were dropped, and AF_UNIX connect failed with
@@ -437,6 +438,8 @@ EIO (the browser's `TextDecoder` refuses the shared syscall buffer).
 | fd | 10.3.0 | pkg (Blink; upstream static musl release) | works | `-e`, `-t d`, `.gitignore` respected, `-u` | |
 | bat | 0.26.1 | pkg (Blink; upstream static musl release) | works | highlighting with the built-in themes (default and `--theme`), `-n`, plain output when piped, `--list-languages` | needed Blink patches 0017 (`pextrw`) and 0018 (`FUTEX_WAIT_BITSET`, `GRND_INSECURE`) and kernel `FIONBIO` on pipes |
 | fzf | 0.74.0 | pkg (Blink; upstream static Go release) | works | `-f` filter; the TUI with `--height` on the tty (cursor position report, typing narrows the list, Enter prints the pick) | Go runtime in Blink: start-up takes about a second |
+| tig | 2.5.12 | pkg (Blink; ncurses 6.5) | works on the built-in git | main view (graph, refs, "Unstaged changes"), stage view (`diff-files`), status view, `u` stages a file (`update-index`); in Chromium too | no `--with-readline` (tig's own prompt line); staging single hunks or lines (`git apply --cached`) not supported by the built-in git |
+| lazygit | 0.55.1 | pkg (Blink; upstream static Go release) | works on the built-in git | files, branches, commits and stash panels; the diff of a file; `space` stages, `c` commits; in Chromium too | Go runtime in Blink: start-up takes a few seconds. The first-run popups need a key each. Hunk staging (`git apply`), rebase, push/pull with remotes untested |
 | yq | 4.52.1 (mikefarah) | pkg (Blink; upstream static Go release) | works | path query, `-o json`, `-i` in-place edit | |
 
 tabcomputer changes these programs needed (tests in `x86-engine.test.ts`,
@@ -523,6 +526,40 @@ tabcomputer changes these programs needed (tests in `x86-engine.test.ts`,
   "echo: No such file or directory". `debian.test.ts`.
 - `systemctl` accepts what Debian's maintainer scripts run (`--root=/
   preset`, `daemon-reload`, `is-enabled`, ...).
+
+### The built-in git: plumbing for git UIs and agents
+
+`git` without `pkg install git` is the built-in (isomorphic-git,
+`src/commands/git.ts`; the plumbing in `src/commands/git-plumbing.ts`). It
+answers what git UIs (tig, lazygit) and agents call; tests in
+`git.test.ts` (plumbing) and `compat-tools.test.ts` (tig, lazygit).
+`pkg install git` replaces it with the real git (in Blink).
+
+What the built-in doesn't have goes to the real git: a subcommand it lacks
+(`blame`, `bisect`, `submodule`, `describe`, `restore`, `clean`,
+`worktree add`, ...), or an option it doesn't know (each subcommand lists
+its options in `src/commands/git-route.ts`), runs `/usr/bin/git` with the
+same command line, installing the package on first use (a note on stderr;
+`pkg remove git` goes back). `rebase`, `cherry-pick` and `revert` go to it
+too, as the built-in's versions replay whole files. Without the x86 engine
+or offline, the built-in says what it didn't understand as git does
+(`error: unknown option`, exit 129; `git: 'blame' is not a git command`,
+exit 1) instead of ignoring it. Combined short options (`-qb NAME`,
+`-qam MSG`) are split first. tig and lazygit only use what the built-in
+has (their tests check that nothing went to the full git).
+
+| Command | Supported |
+| --- | --- |
+| global options | `-C DIR`, `-c k=v`, `--no-pager`/`-P`, `--no-optional-locks`, `--literal-pathspecs`, `--git-dir=`, `--work-tree=`; from a subdirectory (the nearest `.git` up) |
+| `rev-parse` | `--show-toplevel --git-dir --absolute-git-dir --git-common-dir --is-inside-work-tree --is-bare-repository --show-cdup --show-prefix`, `--abbrev-ref`, `--symbolic-full-name`, `--verify -q`, `--short[=N]`; revisions `X~N X^N @ @{u} X^{commit}`; several in one call, in order |
+| `status` | `--porcelain[=v1\|v2]`, `-z`, `-b`/`-sb`, `-u[no\|normal\|all]` |
+| `log`, `show` | `--format`/`--pretty` (`%H %h %T %t %P %p %s %b %B %f %d %D %m %n %x00`, `%a*`/`%c*` with `n e d D i I t r s`, `%gd %gs`), oneline/short/medium/full/fuller/raw, `-z`, `--decorate`, `--date=`, `--parents`, ranges `A..B A...B ^A`, `--all --branches --tags`, `-n --skip --reverse --no-merges --first-parent --author --grep -- paths`, `--name-status --numstat --stat -p --patch-with-stat`; `log -g` reads `.git/logs/HEAD` (isomorphic-git keeps no reflog, so it is empty) |
+| `diff`, `diff-files`, `diff-index` | the patch (index lines, `@@ -1 +1,2 @@` hunks, binary files), `--cached`, revisions and ranges, `--name-status --name-only --numstat --stat --shortstat --raw --patch-with-stat`, `-z`, `--quiet --exit-code`; untracked files are not in a diff |
+| refs | `for-each-ref --format` (`refname[:short\|lstrip=N]`, `objectname[:short]`, `objecttype`, `HEAD`, `subject`, `body`, author/committer name/email/date, `upstream[:short\|track\|trackshort\|remotename]`), `--sort`, `--count`, `--points-at`; `show-ref`; `symbolic-ref`; `branch -v -vv --format --show-current` |
+| objects, index | `cat-file -t -s -p -e`, `REV:path`, `--batch[-check]`; `ls-files -z -m -o -d -s --exclude-standard`; `update-index --add --remove [--stdin -z]`; `merge-base [--is-ancestor\|--all]`; `rev-list [--count --left-right --parents]`; `worktree list [--porcelain]` |
+| `config` | `--get --get-all --get-regexp --list -z/--null --name-only --type=bool\|int --default`, `--global/--local/--system`, `/etc/gitconfig` and `-c` overrides |
+| porcelain fixes | `merge --no-ff --ff-only -m -q` (the work tree follows the merge); `log --graph` (topo order); `ls-remote URL` outside a repository; `fetch -q`; `push -f -u`; `clone --branch --depth=N`; `commit -am`/`-qam` (`-a` stages tracked changes), `-q`, `-F`; `checkout -q -b NAME [START]`, `-qb`, `-B`, `checkout REV -- paths` (HEAD stays on the branch), a remote branch, a commit; `switch`; `add -u`/`-A`/`--`/deletions; `stash -q`, `stash push -m`, `stash list --format/-z` (`%gd %gs %ct`), `stash@{N}` from the newest; `fetch --all` with no remotes |
+| the full git's | `apply` (hunk staging), `rebase`, `cherry-pick`, `revert`, `blame`, `bisect`, `describe`, `restore`, `clean`, `submodule`, `worktree add`, `notes`, signing, `log --since`, ...: run by `/usr/bin/git`, installed on first use |
 
 ### Popular CLI tools from Debian (apt)
 

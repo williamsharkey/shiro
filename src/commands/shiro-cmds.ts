@@ -6,7 +6,7 @@
  */
 import { Command } from './index';
 import { getAssociation } from '../file-associations';
-import { activeProfile } from '../profile';
+import { activeProfile, unameRelease, UNAME_VERSION } from '../profile';
 
 export const rmCmd: Command = {
   name: 'rm',
@@ -286,28 +286,37 @@ export const unameCmd: Command = {
   name: 'uname',
   description: 'Print system information',
   async exec(ctx) {
-    const flags = ctx.args.filter(a => a.startsWith('-')).join('');
-    const hasAll = flags.includes('a');
-    const hasS = flags.includes('s') || (!flags && ctx.args.length === 0);
-    const hasM = flags.includes('m');
-    const hasN = flags.includes('n');
-    const hasR = flags.includes('r');
-    const hasV = flags.includes('v');
-
-    const { name, hostname } = activeProfile();
-    if (hasAll) {
-      ctx.stdout = `${name} ${hostname} 0.1.0 ${name}/WASM browser wasm\n`;
-      return 0;
+    // GNU uname: the same names as uname(2), /proc/version and Blink's uname
+    const { hostname } = activeProfile();
+    const fields: [string, string, string][] = [
+      ['s', 'kernel-name', 'Linux'],
+      ['n', 'nodename', hostname],
+      ['r', 'kernel-release', unameRelease(hostname)],
+      ['v', 'kernel-version', UNAME_VERSION],
+      ['m', 'machine', 'x86_64'],
+      ['p', 'processor', 'unknown'],
+      ['i', 'hardware-platform', 'unknown'],
+      ['o', 'operating-system', 'GNU/Linux'],
+    ];
+    const want = new Set<string>();
+    let all = false;
+    for (const arg of ctx.args) {
+      if (arg === '--help') { ctx.stdout += 'Usage: uname [OPTION]...\nPrint system information (-a -s -n -r -v -m -p -i -o).\n'; return 0; }
+      if (arg === '--version') { ctx.stdout += 'uname (GNU coreutils) 9.1\n'; return 0; }
+      if (arg === '--all') { all = true; continue; }
+      const long = arg.startsWith('--') ? fields.find(f => f[1] === arg.slice(2)) : undefined;
+      if (long) { want.add(long[0]); continue; }
+      if (/^-[a-z]+$/.test(arg) && [...arg.slice(1)].every(c => c === 'a' || fields.some(f => f[0] === c))) {
+        for (const c of arg.slice(1)) c === 'a' ? (all = true) : want.add(c);
+        continue;
+      }
+      ctx.stderr += arg.startsWith('-') ? `uname: invalid option -- '${arg.replace(/^-+/, '')}'\n` : `uname: extra operand '${arg}'\n`;
+      ctx.stderr += "Try 'uname --help' for more information.\n";
+      return 1;
     }
-
-    const parts: string[] = [];
-    if (hasS) parts.push(name);
-    if (hasN) parts.push(hostname);
-    if (hasR) parts.push('0.1.0');
-    if (hasV) parts.push(`${name}/WASM`);
-    if (hasM) parts.push('wasm');
-
-    ctx.stdout = (parts.length > 0 ? parts.join(' ') : name) + '\n';
+    // -a prints every field but an unknown -p or -i
+    const out = fields.filter(([c, , v]) => all ? v !== 'unknown' || want.has(c) : want.has(c)).map(f => f[2]);
+    ctx.stdout += (out.length ? out : ['Linux']).join(' ') + '\n';
     return 0;
   },
 };

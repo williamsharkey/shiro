@@ -1,0 +1,157 @@
+From ff87455764bd3ec352b8af03f8f7fde59e820dfe Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 22:05:49 +0000
+Subject: [PATCH 67/67] Shiro: getcpu, the vsyscall page, a family 6 CPUID
+ signature, ELF over *.bin
+
+getcpu(2) reports CPU 0, node 0. An instruction fetch from the unmapped
+legacy vsyscall page (0xffffffffff600000) reads stubs that make the
+gettimeofday, time and getcpu syscalls, as Linux emulates them (HotSpot
+calls the page's getcpu when sched_getcpu fails). CPUID leaf 1 reports
+family 6 model 0x5e (OpenCV reads the family before the feature bits).
+An ELF whose name ends in .bin is loaded as an ELF, not a flat binary
+(LibreOffice's soffice.bin).
+---
+ blink/cpuid.c       |  7 +++++++
+ blink/instruction.c | 23 +++++++++++++++++++++++
+ blink/loader.c      |  9 +++++++--
+ blink/syscall.c     | 10 ++++++++++
+ blink/wjit.c        |  1 +
+ 5 files changed, 48 insertions(+), 2 deletions(-)
+
+diff --git a/blink/cpuid.c b/blink/cpuid.c
+index 9281cca..e15f1d2 100644
+--- a/blink/cpuid.c
++++ b/blink/cpuid.c
+@@ -129,6 +129,13 @@ void OpCpuid(P) {
+       dx = Read32((const u8 *)ARCH_NAME + 8);
+       break;
+     case 1:
++#ifdef __EMSCRIPTEN__
++      // family 6 model 0x5e stepping 3 (Skylake): programs read the family
++      // before the feature bits (OpenCV takes family 0 for no SSE at all);
++      // ebx: 64-byte clflush line, one logical processor
++      ax = 0x000506e3;
++      bx = 0x00010800;
++#endif
+       cx |= 1 << 0;    // sse3
+       cx |= 1 << 1;    // pclmulqdq
+       cx |= 1 << 9;    // ssse3
+diff --git a/blink/instruction.c b/blink/instruction.c
+index 82e8847..002e159 100644
+--- a/blink/instruction.c
++++ b/blink/instruction.c
+@@ -73,6 +73,27 @@ static int LoadInstructionSlow(struct Machine *m, u64 ip) {
+   }
+ }
+ 
++// The legacy vsyscall page (0xffffffffff600000) that old static binaries
++// and HotSpot's sched_getcpu fallback call: gettimeofday at +0, time at
++// +0x400, getcpu at +0x800, each `mov $nr,%eax; syscall; ret` as Linux
++// emulates them. Read-only code nobody maps; the rest is int3.
++#define kVsyscallPage 0xffffffffff600000ull
++static u8 *VsyscallPage(void) {
++  static u8 page[4096];
++  static const u8 stub[] = {0xb8, 0, 0, 0, 0, 0x0f, 0x05, 0xc3};
++  static const u16 nr[3] = {96, 201, 309};
++  int i;
++  if (!page[0]) {
++    memset(page, 0xcc, sizeof(page));
++    for (i = 0; i < 3; ++i) {
++      memcpy(page + i * 0x400, stub, sizeof(stub));
++      page[i * 0x400 + 1] = nr[i] & 255;
++      page[i * 0x400 + 2] = nr[i] >> 8;
++    }
++  }
++  return page;
++}
++
+ int LoadInstruction2(struct Machine *m, u64 pc) {
+   unsigned key;
+   u8 *addr, *page;
+@@ -90,6 +111,8 @@ int LoadInstruction2(struct Machine *m, u64 pc) {
+       m->opcache->codevirt = pc - (pc & 4095);
+       m->opcache->codehost = page;
+       addr = page + (pc & 4095);
++    } else if (pc - (pc & 4095) == kVsyscallPage) {
++      addr = VsyscallPage() + (pc & 4095);
+     } else {
+       return kMachineSegmentationFault;
+     }
+diff --git a/blink/loader.c b/blink/loader.c
+index fe624e6..2f475eb 100644
+--- a/blink/loader.c
++++ b/blink/loader.c
+@@ -301,6 +301,11 @@ static void ExplainWhyItCantBeEmulated(const char *path, const char *reason) {
+   LOGF("%s: can't emulate: %s", path, reason);
+ }
+ 
++// An ELF named *.bin is still an ELF (LibreOffice's soffice.bin)
++static bool IsElfImage(const void *image, size_t size) {
++  return size >= 4 && !memcmp(image, "\177ELF", 4);
++}
++
+ static bool IsBinFile(const char *prog) {
+   return EndsWith(prog, ".bin") ||  //
+          EndsWith(prog, ".BIN") ||  //
+@@ -312,7 +317,7 @@ static bool IsBinFile(const char *prog) {
+ 
+ bool IsSupportedExecutable(const char *path, void *image, size_t size) {
+   Elf64_Ehdr_ *ehdr;
+-  if (IsBinFile(path)) {
++  if (IsBinFile(path) && !IsElfImage(image, size)) {
+     return true;
+   }
+   if (size >= sizeof(Elf64_Ehdr_) && READ32(image) == READ32("\177ELF")) {
+@@ -780,7 +785,7 @@ error: unsupported executable; we need:\n\
+     m->flags = SetFlag(m->flags, FLAGS_IF, 1);
+     m->system->cr0 = CR0_PE | CR0_MP | CR0_ET | CR0_PG;
+     m->system->cr3 = AllocatePageTable(m->system);
+-    if (IsBinFile(prog)) {
++    if (IsBinFile(prog) && !IsElfImage(map, mapsize)) {
+       elf->base = 0x400000;
+       LoadFlatExecutable(m, elf->base, prog, map, mapsize, fd);
+       execstack = true;
+diff --git a/blink/syscall.c b/blink/syscall.c
+index e1d13a6..19dda60 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -1031,6 +1031,15 @@ static int SysSchedSetaffinity(struct Machine *m,  //
+ #endif
+ }
+ 
++// getcpu(2): one CPU, one node (glibc's sched_getcpu; HotSpot calls the
++// vsyscall page's getcpu when this fails)
++static int SysGetcpu(struct Machine *m, i64 cpuaddr, i64 nodeaddr) {
++  u8 zero[4] = {0};
++  if (cpuaddr && CopyToUserWrite(m, cpuaddr, zero, 4) == -1) return -1;
++  if (nodeaddr && CopyToUserWrite(m, nodeaddr, zero, 4) == -1) return -1;
++  return 0;
++}
++
+ static int SysSchedGetaffinity(struct Machine *m,  //
+                                i32 pid,            //
+                                u64 cpusetsize,     //
+@@ -6221,6 +6230,7 @@ void OpSyscall(P) {
+     SYSCALL(5, 0x10F, "ppoll", SysPpoll, STRACE_5);
+     SYSCALL(5, 0x13C, "renameat2", SysRenameat2, STRACE_RENAMEAT2);
+     SYSCALL(3, 0x13E, "getrandom", SysGetrandom, STRACE_GETRANDOM);
++    SYSCALL(2, 0x135, "getcpu", SysGetcpu, STRACE_2);
+     SYSCALL(5, 0x147, "preadv2", SysPreadv2, STRACE_PREADV2);
+     SYSCALL(5, 0x148, "pwritev2", SysPwritev2, STRACE_PWRITEV2);
+     SYSCALL(3, 0x1B4, "close_range", SysCloseRange, STRACE_3);
+diff --git a/blink/wjit.c b/blink/wjit.c
+index 7e0579c..067eb22 100644
+--- a/blink/wjit.c
++++ b/blink/wjit.c
+@@ -3587,6 +3587,7 @@ bool WjExecute(struct Machine *m) {
+   }
+   if (e->fn || ++e->count < g_wj_thresh) return false;
+   if ((g_wj_max >= 0 && g_wj_blocks >= g_wj_max) ||
++      m->ip >= 0xffffffffff600000ull ||  // the vsyscall page (instruction.c)
+       (g_wj_lo >= 0 && !(g_wj_lo <= m->ip && m->ip < g_wj_hi))) {
+     e->fn = -1;
+     return false;
+-- 
+2.43.0
+

@@ -386,12 +386,18 @@ describe('fetch over TLS 1.3 in JS (subtls) with keep-alive', () => {
     srv.on('stream', (stream: any, headers: any) => {
       const p = headers[':path'];
       if (p === '/big') { stream.respond({ ':status': 200 }); stream.end(Buffer.alloc(3 * 1024 * 1024, 0x61)); return; }
+      if (p === '/slow' || p === '/tag') {
+        // Node indexes x-tag in its HPACK table: the second response refers back to the first
+        setTimeout(() => { if (!stream.destroyed) { stream.respond({ ':status': 200, 'x-tag': 'tag-value-1234567890' }); stream.end('t'); } }, p === '/slow' ? 150 : 0);
+        stream.on('error', () => {});
+        return;
+      }
       if (p === '/headers') { stream.respond({ ':status': 200, 'x-long': 'v'.repeat(40000), 'set-cookie': ['a=1', 'b=2'] }); stream.end('ok'); return; }
       let body = '';
       stream.on('data', (d: Buffer) => { body += d; });
       stream.on('end', () => {
         stream.respond({ ':status': 201, 'content-type': 'text/plain', 'x-proto': 'h2' });
-        stream.end(`${headers[':method']} ${p} ${headers['user-agent'] ?? ''} ${headers.cookie ?? ''} ${body}`);
+        stream.end(`${headers[':method']} ${p} ${headers['user-agent'] ?? ''} ${headers.cookie ?? ''} ${headers['content-length'] ?? ''} ${body}`);
       });
     });
     await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
@@ -403,11 +409,12 @@ describe('fetch over TLS 1.3 in JS (subtls) with keep-alive', () => {
         f.fetch({ url: `https://tls.test:${port}${p}`, method: init.method ?? 'GET', headers: init.headers ?? [['User-Agent', 'tc']], body: init.body ?? null });
       const rs = await Promise.all(Array.from({ length: 12 }, (_, i) => get(`/n${i}`)));
       const texts = await Promise.all(rs.map((r) => new Response(r.body).text()));
-      expect(texts[3]).toBe('GET /n3 tc  ');
+      expect(texts[3]).toBe('GET /n3 tc   ');
       expect(rs[0].status).toBe(201);
       expect(rs[0].headers).toContainEqual(['x-proto', 'h2']);
       const post = await get('/p', { method: 'POST', body: te.encode('x'.repeat(100000)), headers: [['User-Agent', 'tc'], ['Cookie', 'a=1; b=2']] });
-      expect(await new Response(post.body).text()).toBe(`POST /p tc a=1; b=2 ${'x'.repeat(100000)}`);
+      expect(await new Response(post.body).text()).toBe(`POST /p tc a=1; b=2 100000 ${'x'.repeat(100000)}`);
+      expect(await new Response((await get('/e', { method: 'POST' })).body).text()).toBe('POST /e tc  0 ');
       const big = await get('/big');
       expect((await new Response(big.body).arrayBuffer()).byteLength).toBe(3 * 1024 * 1024);
       expect(big.wireBytes()).toBeGreaterThan(3 * 1024 * 1024);
@@ -415,8 +422,51 @@ describe('fetch over TLS 1.3 in JS (subtls) with keep-alive', () => {
       expect(h.headers.find(([k]) => k === 'x-long')?.[1].length).toBe(40000);
       expect(h.headers.filter(([k]) => k === 'set-cookie').map(([, v]) => v)).toEqual(['a=1', 'b=2']);
       await new Response(h.body).text();
+      // A stream we reset still gets its HEADERS decoded, so the table stays in step
+      const ac = new AbortController();
+      const slow = f.fetch({ url: `https://tls.test:${port}/slow`, method: 'GET', headers: [], body: null, signal: ac.signal });
+      setTimeout(() => ac.abort(), 20);
+      await expect(slow).rejects.toThrow();
+      await new Promise((r) => setTimeout(r, 300));
+      const tag = await get('/tag');
+      expect(tag.headers).toContainEqual(['x-tag', 'tag-value-1234567890']);
+      await new Response(tag.body).text();
+      // Bodies dropped unread give their bytes back to the connection window (15 MiB): 8 × 3 MiB would stall it
+      for (let i = 0; i < 8; i++) {
+        const r = await get('/big');
+        await new Promise((res) => setTimeout(res, 150));
+        await r.body.cancel();
+      }
+      expect((await new Response((await get('/big')).body).arrayBuffer()).byteLength).toBe(3 * 1024 * 1024);
       expect(sessions).toBe(1);
       expect(f.stats.h2Sessions).toBe(1);
+      expect(f.stats.connects).toBe(1);
+    } finally { f.closeAll(); srv.close(); }
+  }, 30000);
+
+  it('HTTP/2: requests beyond the server’s stream limit wait for a stream instead of opening connections', async () => {
+    if (!haveOpenssl) return;
+    const http2 = nodeRequire('node:http2');
+    const ecdsaDir = (globalThis as any).__ecdsaDir as string;
+    let sessions = 0, open = 0, most = 0;
+    const srv = http2.createSecureServer({ key: readFileSync(path.join(ecdsaDir, 'leaf.key')), cert: readFileSync(path.join(ecdsaDir, 'leaf.pem')), settings: { maxConcurrentStreams: 2 } });
+    srv.on('session', () => { sessions++; });
+    srv.on('stream', (stream: any, headers: any) => {
+      most = Math.max(most, ++open);
+      setTimeout(() => { open--; stream.respond({ ':status': 200 }); stream.end(headers[':path']); }, 30);
+    });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+    const port = (srv.address() as NetT.AddressInfo).port;
+    setTrustRoots(async () => '', caPem);
+    const f = new NetFetcher({ dial: (_h, q) => nodeDial('127.0.0.1', q) });
+    try {
+      // The first request learns the limit from the server's SETTINGS
+      await new Response((await f.fetch({ url: `https://tls.test:${port}/first`, method: 'GET', headers: [], body: null })).body).text();
+      const rs = await Promise.all(Array.from({ length: 10 }, (_, i) => f.fetch({ url: `https://tls.test:${port}/r${i}`, method: 'GET', headers: [], body: null })
+        .then((r) => new Response(r.body).text())));
+      expect(rs[7]).toBe('/r7');
+      expect(most).toBe(2);
+      expect(sessions).toBe(1);
       expect(f.stats.connects).toBe(1);
     } finally { f.closeAll(); srv.close(); }
   }, 30000);

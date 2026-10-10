@@ -22,6 +22,9 @@ import { buildTree, binDirOf, binEntries, WASM_ALTERNATES, type BuildResult, typ
  */
 
 // Metadata cache: maps package name -> { data, timestamp }
+/** What `npm -v` says: the npm that node 20 ships with (tools parse a bare semver) */
+export const NPM_VERSION = '10.8.2';
+
 const metadataCache = new Map<string, { data: NpmPackageMetadata; timestamp: number }>();
 const METADATA_CACHE_TTL = 60 * 60 * 1000; // 1 hour in milliseconds
 
@@ -93,7 +96,8 @@ export const npmCmd: Command = {
     }
 
     if (subcommand === '--version' || subcommand === '-v') {
-      ctx.stdout += 'npm v1.0.0-shiro (browser-native)\n';
+      // a bare semver, as tools parse it (npm 10 is what node 20 ships with)
+      ctx.stdout += `${NPM_VERSION}\n`;
       return 0;
     }
 

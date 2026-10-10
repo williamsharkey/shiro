@@ -21,7 +21,7 @@ import { installNet } from '../kernel/net';
 import { workerRunner, webWorker, type GuestWorker } from '../kernel/worker-host';
 import { BufferFile, DevNull } from '../kernel/fd';
 import { type KStat, S_IFIFO, shellExitCode, SIGKILL, CH_DATA, CH_STATE, CH_SYSNO, CH_ARGS, CH_NARGS, CH_RESULT, CH_SIGNAL, STATE_REQUEST, STATE_REPLY, ESRCH } from '../kernel/abi';
-import { createChannelBuffer } from '../kernel/channel';
+import { createChannelBuffer, KernelChannel, canWatch as canWatchChannels } from '../kernel/channel';
 import type { Process } from '../kernel/process';
 
 export interface BlinkRunOptions {
@@ -64,6 +64,7 @@ export function blinkAssetUrl(name: string): string {
  * plain name. Looked up once per page.
  */
 let wasmUrl: Promise<string | undefined> | null = null;
+let wasmModule: Promise<WebAssembly.Module | undefined> | null = null;
 function blinkWasmUrl(): Promise<string | undefined> {
   if (isNode()) return Promise.resolve(undefined);
   return (wasmUrl ??= (async () => {
@@ -71,6 +72,30 @@ function blinkWasmUrl(): Promise<string | undefined> {
       const r = await fetch(new URL('../manifest.json', defaultAssetBase()).href, { cache: 'no-cache' });
       const hashed = r.ok ? (await r.json())['blink/blink.wasm'] : undefined;
       return typeof hashed === 'string' ? new URL('../' + hashed, defaultAssetBase()).href : undefined;
+    } catch {
+      return undefined;
+    }
+  })());
+}
+
+/**
+ * blink.wasm compiled once for the page and handed to every Blink worker.
+ * Holding the Module keeps V8's optimized code: without it, each time the
+ * last Blink worker ended the code went too, and the next process compiled
+ * blink.wasm again and started on Liftoff's (go_hello 163 -> 235 ms in
+ * Chromium once workers ended promptly, Blink patch 0053).
+ */
+function blinkWasmModule(url: string | undefined): Promise<WebAssembly.Module | undefined> {
+  return (wasmModule ??= (async () => {
+    try {
+      if (isNode()) {
+        const p = nodeProcess();
+        const file = p.getBuiltinModule('url').fileURLToPath(defaultAssetBase() + 'blink.wasm');
+        return await WebAssembly.compile(p.getBuiltinModule('fs').readFileSync(file));
+      }
+      const r = await fetch(url ?? defaultAssetBase() + 'blink.wasm');
+      if (!r.ok) return undefined;
+      return await WebAssembly.compile(await r.arrayBuffer());
     } catch {
       return undefined;
     }
@@ -148,13 +173,14 @@ export function blinkRunner(path: string, restore?: ArrayBuffer): Runner {
     const mounts = kernel.fs ? (await kernel.fs.readdir('/')).map((n) => '/' + n) : [];
     const pool = Array.from({ length: POOL_CHANNELS }, () => createChannelBuffer(POOL_DATA));
     const wasm = await blinkWasmUrl();
+    const wasmModule = proc.env?.TABCOMPUTER_BLINK_SHARED_MODULE === '0' ? undefined : await blinkWasmModule(wasm);
     const runner = workerRunner((p) => {
       const w = create();
       wireWorker(p, w, kernel, pool);
       return w;
     }, {
       // TABCOMPUTER_BLINK_DEBUG=1: the worker logs kernel syscalls and Blink's own messages to the console
-      startData: { path, moduleUrl: defaultAssetBase() + 'blink.mjs', wasmUrl: wasm, mounts, pool, restore, debug: proc.env?.TABCOMPUTER_BLINK_DEBUG === '1' },
+      startData: { path, moduleUrl: defaultAssetBase() + 'blink.mjs', wasmUrl: wasm, wasmModule, mounts, pool, restore, debug: proc.env?.TABCOMPUTER_BLINK_DEBUG === '1' },
     });
     return runner(proc, kernel);
   };
@@ -201,13 +227,41 @@ async function servePoolChannel(kernel: Kernel, proc: Process, sab: SharedArrayB
  * readiness change posts one coalesced `blink-ready`, so a guest parked in
  * poll()/epoll wakes at once. Signals the kernel delivers to the process
  * (the worker installs handlers for them) are posted as `blink-signal`.
+ * (Exported for tests.)
  */
-function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: SharedArrayBuffer[]): void {
+export function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: SharedArrayBuffer[]): void {
   const busy = new Set<SharedArrayBuffer>();
+  const direct: KernelChannel[] = [];
   // Same-instance fork children (Blink): kernel processes this worker runs
   // too. The worker outlives its own process until the last of them ends.
   const hosted = new Set<number>();
-  const terminate = w.terminate.bind(w);
+  // Direct channels' views keep Blink's whole wasm memory alive: let go of
+  // them when this worker ends (an exec's new worker brings its own) or the process does
+  const stopDirect = () => { for (const ch of direct) ch.stop(); direct.length = 0; };
+  const end = w.terminate.bind(w);
+  // Fork children this engine never got to start (it aborted mid-fork, or
+  // between vfork and exec) can't run any more; they would hold the parent's
+  // fds open for good (apt waited forever on dpkg's --status-fd pipe), so they
+  // die as killed. A blink-fork already queued is handled first.
+  const sweep = () => setTimeout(() => {
+    for (const c of kernel.procs.values()) {
+      if (c.data.embryo && c.data.forkParent === proc.pid && !c.exiting) void kernel.exit(c, SIGKILL);
+    }
+  }, 1000);
+  const terminate = () => { stopDirect(); end(); sweep(); };
+  // The engine crashed (an abort or a wasm trap ends the whole instance): the
+  // children it hosted died with it.
+  let crashed = false;
+  const crash = () => {
+    if (crashed) return;
+    crashed = true;
+    for (const pid of [...hosted]) {
+      const c = kernel.procs.get(pid);
+      if (c && !c.exiting) void kernel.exit(c, SIGKILL);
+    }
+    sweep();
+  };
+  w.onError(() => crash());
   let ownGone = false;
   w.terminate = () => {
     ownGone = true;
@@ -233,6 +287,21 @@ function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: SharedA
     if (m?.type === 'blink-sys') {
       const sab = pool[m.ch];
       if (sab) void servePoolChannel(kernel, proc, sab, m.as | 0, busy).then((ok) => { if (ok) w.postMessage({ type: 'blink-done', ch: m.ch }); });
+    } else if (m?.type === 'blink-direct') {
+      // Channels in Blink's wasm memory that its threads use themselves
+      // (Blink patch 0065): served here by watching their state words, with
+      // no message through host.mjs either way
+      if (!canWatchChannels()) return;
+      for (let i = 0; i < m.n; i++) {
+        const ch = new KernelChannel(m.buffer, kernel, proc, { offset: m.base + i * m.stride, size: m.size, listen: false });
+        direct.push(ch);
+        void ch.watch();
+      }
+    } else if (m?.type === 'blink-kick') {
+      // A guest thread waits on a direct channel with a signal to take (it
+      // came between the call's start and the kernel's interrupt): end the
+      // process's blocking calls with EINTR, as a signal would
+      if (direct.some(ch => ch.pending)) proc.interruptSyscalls();
     } else if (m?.type === 'blink-grow') {
       // every channel is busy (blocked calls): one more, shared by this
       // process's workers like the rest (indices match host.mjs's order)
@@ -256,11 +325,17 @@ function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: SharedA
       });
     } else if (m?.type === 'blink-abort') {
       kernel.reportFatal(proc, `blink ${String(m.text)}`);
+      crash();
     } else if (m?.type === 'blink-watch') watch(m.fd);
     else if (m?.type === 'blink-unwatch') { subs.get(m.fd)?.(); subs.delete(m.fd); }
   });
   const unlisten = proc.addSignalListener((sig: number) => { if (sig > 0) w.postMessage({ type: 'blink-signal', sig }); });
-  proc.onTerminate(() => { unlisten(); for (const off of subs.values()) off(); subs.clear(); });
+  proc.onTerminate(() => {
+    unlisten();
+    for (const off of subs.values()) off();
+    subs.clear();
+    stopDirect();
+  });
 }
 
 /** True when the file at `path` starts with the ELF magic. */
@@ -305,6 +380,10 @@ function kernelFor(fs: FileSystem, shell?: Shell): Kernel {
 class OutputSink extends DevNull {
   constructor(private sink: (data: Uint8Array) => void) { super(1); }
   async write(buf: Uint8Array): Promise<number> {
+    return this.tryWrite(buf);
+  }
+  // The synchronous path (KernelChannel.serveSync) too: DevNull's discards
+  tryWrite(buf: Uint8Array): number {
     this.sink(buf.slice());
     return buf.length;
   }

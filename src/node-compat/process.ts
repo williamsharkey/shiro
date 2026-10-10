@@ -85,7 +85,7 @@ export function createFakeProcess(
     versions: { node: '22.12.0', v8: '12.4.254.21-node.21', modules: '127', openssl: '3.0.13', uv: '1.46.0', zlib: '1.3.0.1-motley-71660e1', brotli: '1.1.0', napi: '9', llhttp: '8.1.1', unicode: '15.1', icu: '74.1', cldr: '44.1', tz: '2024a' },
     stdout: createStdout(ctx, stdoutBuf, _st),
     stderr: createStderr(ctx, stderrBuf, _st),
-    stdin: createStdin(ctx, _st, processEvents),
+    stdin: createStdin(ctx, _st, processEvents, pendingPromises),
     on: (event: string, fn: Function) => {
       (processEvents[event] ??= []).push(fn);
       return fp;
@@ -354,8 +354,20 @@ function createStderr(ctx: CommandContext, stderrBuf: string[], _st: SharedState
 }
 
 /** Create process.stdin stream */
-function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Record<string, Function[]>): any {
+function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Record<string, Function[]>, pendingPromises: Promise<any>[]): any {
   const stdinEvents: Record<string, Function[]> = {};
+  // Whether stdin is the terminal (a kernel guest knows it apart from stdout's: `echo x | node` on a terminal)
+  const stdinTTY: boolean = (ctx as any).stdinIsTTY ?? !!ctx.terminal;
+  // A live stdin (ctx.readStdin) is read only once the program listens for it;
+  // until then the program may finish without it (williamsharkey/tabcomputer#2)
+  let loaded: Promise<void> | null = ctx.readStdin ? null : Promise.resolve();
+  const loadStdin = (): Promise<void> => {
+    if (!loaded) {
+      loaded = ctx.readStdin!().then((t) => { ctx.stdin = t; }, () => {});
+      pendingPromises.push(loaded);
+    }
+    return loaded;
+  };
   let stdinEnded = false;
   let stdinRawMode = false;
   let stdinEncoding: string | null = null;
@@ -363,9 +375,9 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
   const stdinReadBuffer: string[] = [];
   /** Deliver piped input (once): 'data', 'readable', then 'end' and 'close' */
   const flow = () => {
-    if (ctx.terminal || stdinEnded) return;
+    if (stdinTTY || stdinEnded) return;
     stdinEnded = true;
-    queueMicrotask(() => {
+    void loadStdin().then(() => {
       if (ctx.stdin) {
         stdinReadBuffer.push(ctx.stdin);
         if (stdinEvents['data']?.length) stdinDataTaken = true;
@@ -377,14 +389,14 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
     });
   };
   const stdinObj: any = {
-    isTTY: !!ctx.terminal,
+    isTTY: stdinTTY,
     fd: 0,
     on: (event: string, fn: Function) => {
       (stdinEvents[event] ??= []).push(fn);
       // Piped input flows (and then ends) once something reads it, as in
-      // node: a 'data' or 'readable' listener, resume(). An 'end' listener
-      // alone reads nothing (vite exits on stdin 'end', its parent's exit)
-      if (!ctx.terminal && (event === 'data' || event === 'readable')) flow();
+      // node: a 'data' or 'readable' listener (readline), resume(). An 'end'
+      // listener alone reads nothing (vite exits on stdin 'end', its parent's exit)
+      if (event === 'data' || event === 'readable') flow();
       return stdinObj;
     },
     once: (event: string, fn: Function) => {
@@ -406,7 +418,7 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
     emit: (event: string, ...args: any[]) => { (stdinEvents[event] || []).forEach(f => f(...args)); return false; },
     resume: () => {
       flow();
-      if (ctx.terminal && !stdinEnded) {
+      if (ctx.terminal && stdinTTY && !stdinEnded) {
         const forceExit = () => {
           if (!_st.exitCalled) { _st.exitCode = 130; _st.exitCalled = true; }
           _st.deferredExitResolve?.(_st.exitCode);
@@ -429,7 +441,7 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
     },
     setRawMode: (mode: boolean) => {
       stdinRawMode = mode;
-      if (mode && ctx.terminal && !stdinEnded) {
+      if (mode && ctx.terminal && stdinTTY && !stdinEnded) {
         _st.isInteractiveMode = true;
         _st.ownsStdinPassthrough = true;
         if (_st.scriptTimeoutId) { clearTimeout(_st.scriptTimeoutId); _st.scriptTimeoutId = null; }
@@ -471,11 +483,14 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
         wake?.();
       };
       const onEnd = () => { done = true; wake?.(); };
-      if (!ctx.terminal && stdinEnded) {
+      if (!stdinTTY && stdinEnded) {
         // piped input that an earlier 'end' listener set flowing: what no
-        // 'data' listener took is still unread
-        if (ctx.stdin && !stdinDataTaken) { stdinDataTaken = true; stdinReadBuffer.length = 0; onData(ctx.stdin); }
-        done = true;
+        // 'data' listener took is still unread (once a live stdin has arrived)
+        void loadStdin().then(() => {
+          if (ctx.stdin && !stdinDataTaken) { stdinDataTaken = true; stdinReadBuffer.length = 0; onData(ctx.stdin); }
+          done = true;
+          wake?.();
+        });
       } else {
         stdinObj.on('data', onData);
         stdinObj.on('end', onEnd);

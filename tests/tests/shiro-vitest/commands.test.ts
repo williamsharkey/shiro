@@ -394,9 +394,9 @@ describe('Commands', () => {
       expect(output.replace(/\r/g, '').trim()).toBe('tabcomputer');
     });
 
-    it('uname returns the product name', async () => {
+    it('uname is Linux, as uname(2) and /proc/version (tabcomputer#8)', async () => {
       const { output } = await run(shell, 'uname');
-      expect(output.replace(/\r/g, '').trim()).toBe('tabcomputer');
+      expect(output.replace(/\r/g, '').trim()).toBe('Linux');
     });
 
     it('date returns a date string', async () => {

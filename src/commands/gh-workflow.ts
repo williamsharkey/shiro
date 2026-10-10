@@ -38,6 +38,7 @@ Related:
       return 1;
     }
     const workflows = data.workflows || [];
+    if (flags['json']) { ctx.stdout = JSON.stringify(workflows) + '\n'; return 0; }
     if (workflows.length === 0) {
       ctx.stdout = 'No workflows found\n';
       return 0;
@@ -88,6 +89,7 @@ Commands:
         return 1;
       }
       const runs = data.workflow_runs || [];
+      if (flags['json']) { ctx.stdout = JSON.stringify(runs) + '\n'; return 0; }
       if (runs.length === 0) {
         ctx.stdout = 'No runs found\n';
         return 0;

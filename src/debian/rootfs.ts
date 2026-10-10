@@ -331,9 +331,13 @@ export async function noServicesFromPackages(fs: FileSystem): Promise<void> {
 /**
  * Packages installed from now on keep their English man pages (`man` is no
  * use without them); translations stay out. Images built before this had
- * all of /usr/share/man excluded (scripts/debian/build-rootfs.sh).
+ * all of /usr/share/man excluded (scripts/debian/build-rootfs.sh). The
+ * section directories exist either way.
  */
 export async function keepManPages(fs: FileSystem): Promise<void> {
+  // update-alternatives makes man-page slave links in these: openjdk's postinst
+  // failed on a missing /usr/share/man/man1 (the slim-image problem)
+  for (let i = 1; i <= 8; i++) await fs.mkdir(`/usr/share/man/man${i}`, { recursive: true }).catch(() => {});
   const p = '/etc/dpkg/dpkg.cfg.d/90shiro-slim';
   const text = await fs.readFile(p, 'utf8').catch(() => null);
   if (typeof text !== 'string' || text.includes('path-include /usr/share/man/')) return;

@@ -94,29 +94,41 @@ the same pages in 1 to 2 seconds, with everything the host browser can do.
 
 ## Reading the results
 
-Summary of the 2026-10-09 run: the Browser app **loads 50 of 52 pages**
-(direct: 49), **renders 37** (direct: 41) and is **interactive on 29**
-(direct: 33). It runs the Speedometer subset at **84% of a real tab** (10.7
-vs 12.7). Median time to load is 1.3 s against 0.9 s. The server-side fetch
-does *not* do better (46/33/28): the extra round trip buys nothing, and
-Node's TLS fingerprint meets the same bot walls.
+Summary of the 2026-10-09 run (Chrome-shaped TLS, HTTP/2 and `location`
+rewriting): the Browser app **loads 49 of 52 pages** (direct: 50),
+**renders 38** (direct: 43) and is **interactive on 32** (direct: 35). Before
+this round it was 50 / 37 / 29. It runs the Speedometer subset at **86% of
+a real tab** (10.8 vs 12.5). Median time to load is 1.5 s against 0.8 s. The
+tab-server column and the WPT tables are from the previous run (HTTP/1.1, no
+script rewriting) and weren't rerun.
 
-Where the Browser loses to the direct tab, and why:
+What changed since the previous run:
+
+- Microsoft sign-in (`live-login`) and Zoom now work: both read their own
+  hostname through `location`, which rewritten scripts now see as the real
+  one (BROWSER.md, "Scripts: location and top").
+- Craigslist, OpenStreetMap, gov.uk and DuckDuckGo became interactive. The
+  harness now compares links with `document.URL` (real in both columns) and
+  submits a search form when a narrow layout hides its box.
+- Reddit no longer says "blocked by network security". It now serves its
+  JavaScript challenge page, which doesn't get past it in this run.
+
+Where the Browser still loses to the direct tab:
 
 | site | cause | fix |
 |---|---|---|
-| reddit | "blocked by network security": bot detection on our TLS ClientHello | a Chrome-shaped ClientHello (rustls/WASM: X25519, ALPN, GREASE) |
-| duckduckgo | this sandbox's path to DuckDuckGo drops handshakes intermittently, OpenSSL's included; in this run both TLS versions failed | none needed (retry) |
-| weather, zoom | their requests now succeed (the TLS 1.2 fallback fixed weather.com's CDN), but the apps' own scripts give up after load: weather.com shows "This page couldn't load" and Zoom an empty body. Likely `location`/origin checks | `location` rewriting; investigate |
-| live-login | Microsoft's sign-in script checks its own hostname and shows "Something went wrong" | `location` rewriting |
+| reddit | its JS challenge page (`js_challenge=1`) after the TLS check passes | the rest of Chrome's hello (X25519MLKEM768, certificate compression); investigate the challenge |
+| amazon | a bot check in both columns; in the tab its captcha page's script fails a request (`Network response was not ok`) | investigate |
+| spotify, booking, cloudflare | blank or timed out in this run; each loads on its own afterwards (spotify, cloudflare: title, 3 MB, 40–150 requests) | variance; rerun |
+| walmart | loads and renders; the search box didn't navigate | investigate |
 | google-signin | by design: the fallback offers a real tab | — |
-| tiktok, craigslist | the clicked link didn't change the address within 15 s (client-side routing / the harness) | investigate |
 
-Sites that fail in *both* columns (Amazon, CNN, NYTimes, eBay, IMDb, PayPal,
-Booking, Etsy, X, Instagram) serve headless Chromium a bot check or nothing.
-The Browser gets the same page, so they say nothing about it. The Browser
-does better than direct on archive.org, Yahoo and Medium, where the direct
-tab tripped on bot checks or the harness's timing.
+The tab does better than direct on Yahoo, X and Instagram, where the direct
+tab tripped on bot checks or the harness's timing. Sites that fail in *both*
+columns (CNN, NYTimes, eBay, IMDb, PayPal, Etsy) serve headless Chromium a
+bot check or nothing, so they say nothing about the Browser. PayPal's page
+was a hang until this round (a duplicate `Upgrade-Insecure-Requests` header
+over HTTP/2); it now shows its security check.
 
 The WPT totals differ between columns because testharness reports subtests
 from more than one completion in some files. Compare files, not exact
@@ -127,77 +139,77 @@ modes (the broker follows redirects itself), and CORS basics.
 ## Results
 
 <!-- web-score:begin -->
-Run 2026-10-09 17:38 UTC, Chromium 141.0.7390.37, app http://localhost:5299.
+Run 2026-10-09 20:54 UTC, Chromium 141.0.7390.37, app http://localhost:5299.
 
 | | direct | tab | tab-server |
 |---|---:|---:|---:|
-| loads | 49/52 | 50/52 | 46/52 |
-| renders | 41/52 | 37/52 | 33/52 |
-| interactive | 33/52 | 29/52 | 28/52 |
-| median time to load | 940 ms | 1317 ms | 1195 ms |
-| median download per page | 1.5 MB | 1.6 MB | 1.5 MB |
-| median JS heap per tab | 10.9 MB | 10.2 MB | 8.5 MB |
+| loads | 50/52 | 49/52 | 46/52 |
+| renders | 43/52 | 38/52 | 33/52 |
+| interactive | 35/52 | 32/52 | 28/52 |
+| median time to load | 804 ms | 1454 ms | 1195 ms |
+| median download per page | 1.6 MB | 1.5 MB | 1.5 MB |
+| median JS heap per tab | 13.6 MB | 12.1 MB | 8.5 MB |
 
 | site | kind | direct L R I | tab L R I | tab-server L R I | direct load | tab load | tab-server load | direct MB | tab MB | tab-server MB | notes |
 |---|---|:---:|:---:|:---:|---:|---:|---:|---:|---:|---:|---|
-| [google](https://www.google.com/) | search | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 0.8 s | 1.1 s | 0.5 s | 0.8 | 0.8 | 0.8 |  |
-| [youtube](https://www.youtube.com/) | search | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 2.1 s | 3.3 s | 2.3 s | 3.6 | 4.5 | 4.4 |  |
-| [wikipedia](https://en.wikipedia.org/wiki/Main_Page) | search | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 0.6 s | 1.1 s | 0.8 s | 0.7 | 0.4 | 0.4 |  |
-| [amazon](https://www.amazon.com/) | search | ✓ ✗ ✗ | ✓ ✗ ✗ | ✓ ✓ ✓ | 0.9 s | 0.9 s | 1.6 s | 0.3 | 0.3 | 10.1 | render: {"text":0,"imgs":0,"svgs":0,"canvases":0,"sheets":1,"h":632,"styled":true}; interactive: no #twotabsearchtextbox,input[type=search], |
-| [reddit](https://www.reddit.com/) | link | ✓ ✓ ✗ | ✓ ✗ ✗ | ✗ – – | 0.9 s | 0.9 s | – | 0.9 | 0.2 | – | render: {"text":143,"imgs":1,"svgs":0,"canvases":0,"sheets":1,"h":632,"styled":true}; interactive: no link |
-| [github](https://github.com/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 1.5 s | 2.1 s | 3.7 s | 3.7 | 4.1 | 4.0 |  |
-| [stackoverflow](https://stackoverflow.com/questions) | link | ✓ ✓ ✗ | ✓ ✓ ✗ | ✗ – – | 0.5 s | 0.7 s | – | 1.5 | 0.1 | – | interactive: no link |
-| [bing](https://www.bing.com/) | search | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 1.2 s | 1.7 s | 3.1 s | 3.2 | 3.1 | 1.5 |  |
-| [duckduckgo](https://duckduckgo.com/) | search | ✓ ✓ ✓ | ✗ – – | ✓ ✓ ✓ | 8.1 s | – | 2.8 s | 1.6 | – | 1.5 | fallback: tls; fallback: tls |
-| [yahoo](https://www.yahoo.com/) | search | ✓ ✓ ✗ | ✓ ✓ ✓ | ✓ ✓ ✓ | 0.8 s | 2.0 s | 1.4 s | 3.7 | 3.7 | 2.8 |  |
-| [bbc](https://www.bbc.com/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✗ – – | 1.3 s | 1.3 s | – | 3.2 | 1.7 | – |  |
+| [google](https://www.google.com/) | search | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 0.8 s | 1.5 s | 0.5 s | 0.8 | 0.8 | 0.8 |  |
+| [youtube](https://www.youtube.com/) | search | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 1.9 s | 1.7 s | 2.3 s | 3.6 | 3.2 | 4.4 |  |
+| [wikipedia](https://en.wikipedia.org/wiki/Main_Page) | search | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 0.5 s | 1.1 s | 0.8 s | 0.7 | 0.5 | 0.4 |  |
+| [amazon](https://www.amazon.com/) | search | ✓ ✗ ✗ | ✗ – – | ✓ ✓ ✓ | 0.9 s | – | 1.6 s | 0.3 | – | 10.1 | timeout |
+| [reddit](https://www.reddit.com/) | link | ✓ ✓ ✗ | ✓ ✗ ✗ | ✗ – – | 0.8 s | 0.9 s | – | 0.9 | 0.2 | – | render: {"text":143,"imgs":1,"svgs":0,"canvases":0,"sheets":1,"h":632,"styled":true}; interactive: no link |
+| [github](https://github.com/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 1.4 s | 2.7 s | 3.7 s | 3.7 | 4.1 | 4.0 |  |
+| [stackoverflow](https://stackoverflow.com/questions) | link | ✓ ✓ ✗ | ✓ ✓ ✗ | ✗ – – | 0.4 s | 0.7 s | – | 1.4 | 1.5 | – | interactive: click https://stackoverflow.com/help did not navigate |
+| [bing](https://www.bing.com/) | search | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 1.1 s | 1.5 s | 3.1 s | 4.3 | 3.0 | 1.5 |  |
+| [duckduckgo](https://duckduckgo.com/) | search | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 0.6 s | 1.0 s | 2.8 s | 1.6 | 1.7 | 1.5 |  |
+| [yahoo](https://www.yahoo.com/) | search | ✓ ✓ ✗ | ✓ ✓ ✓ | ✓ ✓ ✓ | 1.1 s | 3.2 s | 1.4 s | 3.6 | 3.8 | 2.8 |  |
+| [bbc](https://www.bbc.com/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✗ – – | 1.4 s | 1.4 s | – | 3.2 | 1.7 | – |  |
 | [cnn](https://www.cnn.com/) | link | ✓ ✗ ✗ | ✓ ✗ ✗ | ✓ ✗ ✗ | 0.2 s | 0.6 s | 0.6 s | 0.0 | 0.0 | 0.0 | render: {"text":13,"imgs":0,"svgs":0,"canvases":0,"sheets":0,"h":632,"styled":false}; interactive: no link |
-| [nytimes](https://www.nytimes.com/) | link | ✓ ✗ ✗ | ✓ ✗ ✗ | ✗ – – | 0.5 s | 0.6 s | – | 0.3 | 0.0 | – | render: {"text":0,"imgs":0,"svgs":0,"canvases":0,"sheets":1,"h":632,"styled":true}; interactive: no link |
-| [theguardian](https://www.theguardian.com/international) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✗ – – | 1.0 s | 0.9 s | – | 2.4 | 2.3 | – |  |
+| [nytimes](https://www.nytimes.com/) | link | ✓ ✗ ✗ | ✓ ✗ ✗ | ✗ – – | 0.6 s | 0.9 s | – | 0.3 | 0.0 | – | render: {"text":0,"imgs":0,"svgs":0,"canvases":0,"sheets":1,"h":632,"styled":true}; interactive: no link |
+| [theguardian](https://www.theguardian.com/international) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✗ – – | 0.7 s | 1.1 s | – | 2.4 | 2.6 | – |  |
 | [x](https://x.com/) | link | ✗ – – | ✓ ✗ ✗ | ✓ ✗ ✗ | – | 0.6 s | 0.4 s | – | 0.0 | – | render: {"text":0,"imgs":0,"svgs":0,"canvases":0,"sheets":0,"h":632,"styled":false}; interactive: no link |
-| [facebook](https://www.facebook.com/) | login | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 0.9 s | 1.2 s | 0.9 s | 2.0 | 2.2 | 2.2 |  |
+| [facebook](https://www.facebook.com/) | login | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 0.7 s | 1.9 s | 0.9 s | 2.0 | 2.3 | 2.2 |  |
 | [instagram](https://www.instagram.com/accounts/login/) | login | ✗ – – | ✓ ✗ ✗ | ✓ ✗ ✗ | – | 0.4 s | 0.4 s | – | 0.0 | – | render: {"text":0,"imgs":0,"svgs":0,"canvases":0,"sheets":0,"h":632,"styled":false}; interactive: no sign-in form |
-| [linkedin](https://www.linkedin.com/login) | login | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 1.5 s | 1.8 s | 0.9 s | 1.3 | 1.7 | 1.7 |  |
-| [netflix](https://www.netflix.com/login) | login | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 1.7 s | 2.2 s | 1.8 s | 3.0 | 2.9 | 2.9 |  |
-| [microsoft](https://www.microsoft.com/en-us/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 3.2 s | 2.1 s | 4.6 s | 9.0 | 5.3 | 4.7 |  |
-| [apple](https://www.apple.com/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 1.3 s | 1.8 s | 2.1 s | 1.6 | 1.6 | 1.5 |  |
-| [ebay](https://www.ebay.com/) | search | ✓ ✗ ✗ | ✓ ✗ ✗ | ✓ ✗ ✗ | 0.5 s | 0.9 s | 0.9 s | 0.1 | 0.1 | 0.1 | render: {"text":194,"imgs":0,"svgs":0,"canvases":0,"sheets":1,"h":692,"styled":true}; interactive: no #gh-ac,input[name=_nkw],input[type=sea |
-| [craigslist](https://sfbay.craigslist.org/) | link | ✓ ✓ ✓ | ✓ ✓ ✗ | ✓ ✓ ✗ | 1.0 s | 1.5 s | 1.1 s | 0.4 | 0.4 | 0.4 | interactive: click http://www-craigslist-org.localhost:5299/subarea/sfc did not navigate |
-| [imdb](https://www.imdb.com/) | search | ✓ ✗ ✗ | ✓ ✗ ✗ | ✓ ✗ ✗ | 0.4 s | 0.6 s | 0.6 s | 0.0 | 0.0 | 0.0 | render: {"text":13,"imgs":0,"svgs":0,"canvases":0,"sheets":0,"h":632,"styled":false}; interactive: no #suggestion-search,input[name=q],input |
-| [twitch](https://www.twitch.tv/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 2.0 s | 2.8 s | 3.5 s | 3.6 | 3.3 | 3.1 |  |
-| [espn](https://www.espn.com/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✗ ✗ | 2.2 s | 2.1 s | 1.4 s | 3.6 | 3.0 | 0.3 |  |
-| [weather](https://weather.com/) | link | ✓ ✓ ✓ | ✓ ✗ ✗ | ✓ ✗ ✗ | 0.8 s | 1.5 s | 1.0 s | 3.1 | 2.5 | 2.8 | render: {"text":70,"imgs":0,"svgs":1,"canvases":0,"sheets":7,"h":632,"styled":true}; interactive: no link |
-| [paypal](https://www.paypal.com/signin) | login | ✓ ✗ ✗ | ✓ ✗ ✗ | ✓ ✗ ✗ | 0.6 s | 1.2 s | 0.6 s | 0.1 | 0.0 | 0.0 | render: {"text":43,"imgs":0,"svgs":0,"canvases":0,"sheets":1,"h":632,"styled":true}; interactive: no sign-in form |
-| [hackernews](https://news.ycombinator.com/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 0.6 s | 1.4 s | 0.9 s | 0.0 | 0.0 | 0.0 |  |
-| [mdn](https://developer.mozilla.org/en-US/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 0.4 s | 0.6 s | 0.3 s | 0.5 | 0.5 | 0.5 |  |
-| [npm](https://www.npmjs.com/) | search | ✓ ✓ ✗ | ✓ ✓ ✗ | ✓ ✓ ✗ | 0.4 s | 0.6 s | 0.4 s | 0.9 | 0.1 | 0.1 | interactive: no input[name=q],input[type=search],input[name=q],textarea[name=q],input[name=p],input[aria-label*=earch i],input[placeholder*= |
-| [archive](https://archive.org/) | link | ✗ – – | ✓ ✓ ✓ | ✓ ✓ ✓ | – | 0.7 s | 0.6 s | – | 0.6 | 0.4 |  |
-| [openstreetmap](https://www.openstreetmap.org/) | search | ✓ ✓ ✗ | ✓ ✓ ✗ | ✓ ✓ ✗ | 0.7 s | 1.9 s | 1.2 s | 0.8 | 0.8 | 0.8 | interactive: no navigation (text 565→565) |
-| [booking](https://www.booking.com/) | link | ✓ ✗ ✗ | ✓ ✗ ✗ | ✓ ✗ ✗ | 1.4 s | 0.9 s | 1.1 s | 0.3 | 0.3 | 0.3 | render: {"text":0,"imgs":0,"svgs":0,"canvases":0,"sheets":1,"h":632,"styled":true}; interactive: no link |
-| [airbnb](https://www.airbnb.com/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 1.3 s | 2.7 s | 2.4 s | 3.9 | 4.3 | 3.1 |  |
-| [spotify](https://open.spotify.com/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 1.4 s | 2.3 s | 1.7 s | 5.0 | 4.8 | 4.5 |  |
-| [zoom](https://zoom.us/) | link | ✓ ✓ ✓ | ✓ ✗ ✗ | ✓ ✗ ✗ | 2.3 s | 2.2 s | 1.8 s | 3.9 | 3.1 | 2.1 | render: {"text":0,"imgs":0,"svgs":0,"canvases":0,"sheets":0,"h":632,"styled":false}; interactive: no link |
-| [dropbox](https://www.dropbox.com/login) | login | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 1.7 s | 3.5 s | 3.1 s | 3.1 | 2.1 | 2.1 |  |
-| [medium](https://medium.com/) | link | ✓ ✓ ✗ | ✓ ✓ ✓ | ✓ ✓ ✗ | 0.5 s | 1.3 s | 0.6 s | 0.0 | 2.4 | 0.0 |  |
-| [pinterest](https://www.pinterest.com/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 0.5 s | 0.9 s | 0.6 s | 5.0 | 5.7 | 3.4 |  |
-| [tiktok](https://www.tiktok.com/) | link | ✓ ✓ ✓ | ✓ ✓ ✗ | ✓ ✗ ✗ | 1.5 s | 1.2 s | 1.6 s | 3.8 | 3.0 | 2.7 | interactive: no link |
-| [walmart](https://www.walmart.com/) | search | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 1.3 s | 1.3 s | 0.6 s | 2.8 | 3.8 | 2.0 |  |
-| [cloudflare](https://www.cloudflare.com/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 1.0 s | 2.3 s | 1.3 s | 2.2 | 2.8 | 1.9 |  |
-| [w3schools](https://www.w3schools.com/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 0.7 s | 2.1 s | 1.2 s | 1.3 | 1.2 | 1.1 |  |
-| [nasa](https://www.nasa.gov/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 1.2 s | 1.6 s | 0.9 s | 10.0 | 1.7 | 7.7 |  |
-| [govuk](https://www.gov.uk/) | search | ✓ ✓ ✗ | ✓ ✓ ✗ | ✓ ✓ ✗ | 0.4 s | 0.7 s | 31.2 s | 0.2 | 0.1 | 0.2 | interactive: no navigation (text 3697→3697) |
-| [etsy](https://www.etsy.com/) | search | ✓ ✗ ✗ | ✓ ✗ ✗ | ✓ ✗ ✗ | 0.8 s | 1.1 s | 0.6 s | 0.3 | 0.0 | 0.3 | render: {"text":0,"imgs":0,"svgs":0,"canvases":0,"sheets":1,"h":632,"styled":true}; interactive: no input[name=search_query],input[type=sear |
-| [live-login](https://login.live.com/) | login | ✓ ✓ ✓ | ✓ ✓ ✗ | ✓ ✓ ✗ | 1.5 s | 2.3 s | 1.7 s | 0.8 | 0.8 | 0.8 | interactive: no sign-in form |
-| [discord-login](https://discord.com/login) | login | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✗ ✓ | 2.3 s | 7.9 s | 25.8 s | 6.6 | 7.1 | 5.4 |  |
-| [google-signin](https://accounts.google.com/) | login | ✓ ✓ ✓ | ✗ – – | ✗ – – | 0.7 s | – | – | 0.2 | – | – | fallback: google-signin; fallback: google-signin |
-| [video](https://commons.wikimedia.org/wiki/File:Big_Buck_Bunny_4K.webm) | video | ✓ ✓ ✗ | ✓ ✓ ✗ | ✓ ✓ ✓ | 0.4 s | 1.2 s | 2.6 s | 1.2 | 1.2 | 1.1 | interactive: ebm/Big_Buck_Bunny_4K.webm.240p.vp9.webm: t=0.0 rs=0 err=-; ebm/Big_Buck_Bunny_4K.webm.240p.vp9.webm: t=0.0 rs=0 err=- |
-| [websocket](https://echo.websocket.org/.ws) | ws | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 0.8 s | 0.9 s | 0.6 s | 0.0 | 0.0 | 0.0 |  |
+| [linkedin](https://www.linkedin.com/login) | login | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 1.4 s | 2.4 s | 0.9 s | 1.3 | 1.7 | 1.7 |  |
+| [netflix](https://www.netflix.com/login) | login | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 1.4 s | 2.8 s | 1.8 s | 3.0 | 2.9 | 2.9 |  |
+| [microsoft](https://www.microsoft.com/en-us/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 2.6 s | 2.7 s | 4.6 s | 9.9 | 9.0 | 4.7 |  |
+| [apple](https://www.apple.com/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 0.8 s | 1.6 s | 2.1 s | 1.6 | 1.6 | 1.5 |  |
+| [ebay](https://www.ebay.com/) | search | ✓ ✗ ✗ | ✓ ✗ ✗ | ✓ ✗ ✗ | 0.3 s | 0.9 s | 0.9 s | 0.1 | 0.1 | 0.1 | render: {"text":194,"imgs":0,"svgs":0,"canvases":0,"sheets":1,"h":692,"styled":true}; interactive: no #gh-ac,input[name=_nkw],input[type=sea |
+| [craigslist](https://sfbay.craigslist.org/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✗ | 0.5 s | 1.5 s | 1.1 s | 0.4 | 0.4 | 0.4 |  |
+| [imdb](https://www.imdb.com/) | search | ✓ ✗ ✗ | ✓ ✗ ✗ | ✓ ✗ ✗ | 0.5 s | 0.9 s | 0.6 s | 0.0 | 0.0 | 0.0 | render: {"text":13,"imgs":0,"svgs":0,"canvases":0,"sheets":0,"h":632,"styled":false}; interactive: no #suggestion-search,input[name=q],input |
+| [twitch](https://www.twitch.tv/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 1.7 s | 3.3 s | 3.5 s | 3.4 | 3.4 | 3.1 |  |
+| [espn](https://www.espn.com/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✗ ✗ | 1.3 s | 1.8 s | 1.4 s | 3.4 | 3.6 | 0.3 |  |
+| [weather](https://weather.com/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✗ ✗ | 0.7 s | 2.7 s | 1.0 s | 3.1 | 2.8 | 2.8 |  |
+| [paypal](https://www.paypal.com/signin) | login | ✓ ✗ ✗ | ✓ ✗ ✗ | ✓ ✗ ✗ | 0.7 s | 0.6 s | 0.6 s | 0.3 | 0.0 | 0.0 | render: {"text":43,"imgs":0,"svgs":0,"canvases":0,"sheets":1,"h":632,"styled":true}; interactive: no sign-in form |
+| [hackernews](https://news.ycombinator.com/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 0.8 s | 0.9 s | 0.9 s | 0.0 | 0.0 | 0.0 |  |
+| [mdn](https://developer.mozilla.org/en-US/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 0.4 s | 0.8 s | 0.3 s | 0.5 | 0.5 | 0.5 |  |
+| [npm](https://www.npmjs.com/) | search | ✓ ✓ ✗ | ✓ ✓ ✗ | ✓ ✓ ✗ | 0.4 s | 1.7 s | 0.4 s | 1.0 | 0.1 | 0.1 | interactive: no input[name=q],input[type=search],input[name=q],textarea[name=q],input[name=p],input[aria-label*=earch i],input[placeholder*= |
+| [archive](https://archive.org/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 0.9 s | 0.6 s | 0.6 s | 0.7 | 0.7 | 0.4 |  |
+| [openstreetmap](https://www.openstreetmap.org/) | search | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✗ | 0.9 s | 1.8 s | 1.2 s | 0.8 | 0.8 | 0.8 |  |
+| [booking](https://www.booking.com/) | link | ✓ ✓ ✗ | ✓ ✗ ✗ | ✓ ✗ ✗ | 0.8 s | 4.9 s | 1.1 s | 3.8 | 0.3 | 0.3 | render: {"text":0,"imgs":0,"svgs":0,"canvases":0,"sheets":1,"h":632,"styled":true}; interactive: no link |
+| [airbnb](https://www.airbnb.com/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 1.0 s | 2.7 s | 2.4 s | 4.6 | 4.1 | 3.1 |  |
+| [spotify](https://open.spotify.com/) | link | ✓ ✓ ✓ | ✓ ✗ ✗ | ✓ ✓ ✓ | 1.4 s | 3.6 s | 1.7 s | 4.8 | 3.2 | 4.5 | render: {"text":0,"imgs":0,"svgs":0,"canvases":0,"sheets":4,"h":632,"styled":true}; interactive: no link |
+| [zoom](https://zoom.us/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✗ ✗ | 1.9 s | 2.6 s | 1.8 s | 4.0 | 3.8 | 2.1 |  |
+| [dropbox](https://www.dropbox.com/login) | login | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 1.6 s | 3.9 s | 3.1 s | 3.1 | 2.3 | 2.1 |  |
+| [medium](https://medium.com/) | link | ✓ ✓ ✗ | ✓ ✓ ✗ | ✓ ✓ ✗ | 0.5 s | 0.7 s | 0.6 s | 0.0 | 0.0 | 0.0 | interactive: no link |
+| [pinterest](https://www.pinterest.com/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 0.4 s | 0.9 s | 0.6 s | 5.3 | 4.3 | 3.4 |  |
+| [tiktok](https://www.tiktok.com/) | link | ✓ ✓ ✗ | ✓ ✓ ✗ | ✓ ✗ ✗ | 1.0 s | 2.9 s | 1.6 s | 2.9 | 3.1 | 2.7 | interactive: no link |
+| [walmart](https://www.walmart.com/) | search | ✓ ✓ ✓ | ✓ ✓ ✗ | ✓ ✓ ✓ | 1.2 s | 0.9 s | 0.6 s | 3.4 | 3.2 | 2.0 | interactive: no navigation (text 4466→4554) |
+| [cloudflare](https://www.cloudflare.com/) | link | ✓ ✓ ✓ | ✗ – – | ✓ ✓ ✓ | 1.1 s | – | 1.3 s | 2.2 | – | 1.9 | timeout |
+| [w3schools](https://www.w3schools.com/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 0.8 s | 1.7 s | 1.2 s | 1.3 | 1.2 | 1.1 |  |
+| [nasa](https://www.nasa.gov/) | link | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 1.4 s | 2.6 s | 0.9 s | 9.1 | 6.0 | 7.7 |  |
+| [govuk](https://www.gov.uk/) | search | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✗ | 0.3 s | 0.7 s | 31.2 s | 0.2 | 0.2 | 0.2 |  |
+| [etsy](https://www.etsy.com/) | search | ✓ ✗ ✗ | ✓ ✗ ✗ | ✓ ✗ ✗ | 0.6 s | 1.2 s | 0.6 s | 0.0 | 0.0 | 0.3 | render: {"text":0,"imgs":0,"svgs":0,"canvases":0,"sheets":1,"h":632,"styled":true}; interactive: no input[name=search_query],input[type=sear |
+| [live-login](https://login.live.com/) | login | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✗ | 1.7 s | 2.9 s | 1.7 s | 0.8 | 0.8 | 0.8 |  |
+| [discord-login](https://discord.com/login) | login | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✗ ✓ | 2.2 s | 6.5 s | 25.8 s | 6.6 | 7.4 | 5.4 |  |
+| [google-signin](https://accounts.google.com/) | login | ✓ ✓ ✓ | ✗ – – | ✗ – – | 0.6 s | – | – | 0.2 | – | – | fallback: google-signin; fallback: google-signin |
+| [video](https://commons.wikimedia.org/wiki/File:Big_Buck_Bunny_4K.webm) | video | ✓ ✓ ✗ | ✓ ✓ ✗ | ✓ ✓ ✓ | 0.7 s | 0.6 s | 2.6 s | 1.2 | 1.2 | 1.1 | interactive: no src: t=0.0 rs=0 err=-; no src: t=0.0 rs=0 err=- |
+| [websocket](https://echo.websocket.org/.ws) | ws | ✓ ✓ ✓ | ✓ ✓ ✓ | ✓ ✓ ✓ | 0.5 s | 1.2 s | 0.6 s | 0.0 | 0.0 | 0.0 |  |
 
 **Speedometer 3.1 subset** (TodoMVC-JavaScript-ES5, TodoMVC-Preact-Complex-DOM, NewsSite-Next; 3 iterations):
 
 | | direct | tab | tab-server |
 |---|---:|---:|---:|
-| score | 12.7 | 10.7 | – |
+| score | 12.5 | 10.8 | – |
 
 **Web Platform Tests** (wpt.live; passed/total subtests):
 

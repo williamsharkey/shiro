@@ -45,6 +45,28 @@ The benchmark suite's numbers for the same paths are in [docs/BENCHMARKS.md](doc
 smoke test ([docs/DEBIAN_SCORE.md](docs/DEBIAN_SCORE.md)). Some work but are too slow to enjoy:
 Debian's `nodejs` takes 26 s for `node -e`. Use tabcomputer's built-in `node` instead.
 
+### Whole toolchains in seconds
+
+`toolchain install` puts a whole Debian toolchain in place without running apt: the same Debian
+packages, prebuilt as layers on the server, recorded in dpkg's database so `apt` keeps working
+on top. Each program's files download the first time it runs.
+
+```bash
+toolchain list                   # the sets, their size, which are installed
+toolchain install c              # build-essential (gcc, g++, make), gdb, cmake, pkg-config
+printf '#include <stdio.h>\nint main(void){puts("hi");}\n' > hi.c && gcc hi.c && ./a.out
+toolchain install python         # also: go, tex, classic (Fortran, COBOL, Pascal, Ada), node, java
+```
+
+From a fresh tab to the first working program: `c` 8.9 s (`gcc hi.c && ./a.out`), `python` 6.6 s,
+`tex` 7.0 s (`pdflatex`), `classic` 10.5 s, `node` 24.3 s. The same python3 set through apt took
+17.8 minutes, and the `c` set through apt didn't finish in an hour (docs/BENCHMARKS.md
+"Toolchain layers", from the unix/toolchains branch; [docs/DEBIAN.md](docs/DEBIAN.md) "Toolchain
+layers"). `java` works but is slow: `javac Hello.java && java Hello` took about 2 minutes in a
+test shell (Node, under load), and each JVM start prints a harmless CDS warning. Settings →
+Toolchains lists the same sets with Install buttons. Until the server has built a set's layer,
+`toolchain install` falls back to apt and says so.
+
 ### tabcomputer's prebuilt packages
 
 Before `debian install`, `apt` and `pkg` install from tabcomputer's own index instead: 72

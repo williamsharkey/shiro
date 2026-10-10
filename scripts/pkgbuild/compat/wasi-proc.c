@@ -37,6 +37,8 @@ WASIX(fd_dup)
 int32_t __shiro_fd_dup(uint32_t fd, uint32_t *ret);
 WASIX(getcwd)
 int32_t __shiro_getcwd(char *buf, uint32_t *len);
+WASIX(proc_signal)
+int32_t __shiro_proc_signal(int32_t pid, int32_t sig);
 
 extern char **environ;
 
@@ -114,6 +116,8 @@ int posix_spawnattr_getflags(const posix_spawnattr_t *a, short *f) { *f = (short
 int posix_spawnattr_setpgroup(posix_spawnattr_t *a, pid_t g) { a->pgroup = g; return 0; }
 int posix_spawnattr_setsigmask(posix_spawnattr_t *a, const sigset_t *m) { (void)a; (void)m; return 0; }
 int posix_spawnattr_setsigdefault(posix_spawnattr_t *a, const sigset_t *m) { (void)a; (void)m; return 0; }
+int posix_spawnattr_setschedpolicy(posix_spawnattr_t *a, int p) { (void)a; (void)p; return ENOSYS; }
+int posix_spawnattr_setschedparam(posix_spawnattr_t *a, const struct sched_param *p) { (void)a; (void)p; return ENOSYS; }
 
 int posix_spawn_file_actions_init(posix_spawn_file_actions_t *fa) { memset(fa, 0, sizeof *fa); return 0; }
 
@@ -342,8 +346,9 @@ int pclose(FILE *f) {
 
 /* ── identity and signals (single user, no signal delivery to others) ── */
 
-int kill(pid_t pid, int sig) { (void)pid; (void)sig; return set_errno(ENOSYS); }
-int killpg(pid_t pg, int sig) { (void)pg; (void)sig; return set_errno(ENOSYS); }
+/* kill through WASIX proc_signal (the kernel's kill: pid > 0, 0 or -pgid) */
+int kill(pid_t pid, int sig) { int r = __shiro_proc_signal(pid, sig); return r ? set_errno(r) : 0; }
+int killpg(pid_t pg, int sig) { return pg > 1 ? kill(-pg, sig) : set_errno(EINVAL); }
 pid_t getppid(void) { return 1; }
 pid_t getpgrp(void) { return getpid(); }
 pid_t setsid(void) { return getpid(); }

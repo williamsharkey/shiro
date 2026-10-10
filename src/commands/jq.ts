@@ -61,6 +61,24 @@ function tokenize(expr: string): string[] {
       let s = '"';
       i++;
       while (i < expr.length && expr[i] !== '"') {
+        if (expr[i] === '\\' && expr[i + 1] === '(') {
+          // string interpolation: \( ... ) up to its matching paren, strings inside it and all
+          s += '\\(';
+          i += 2;
+          let depth = 1, inStr = false;
+          while (i < expr.length && depth > 0) {
+            const ch = expr[i];
+            if (inStr) {
+              if (ch === '\\') { s += ch + (expr[i + 1] ?? ''); i += 2; continue; }
+              if (ch === '"') inStr = false;
+            } else if (ch === '"') inStr = true;
+            else if (ch === '(') depth++;
+            else if (ch === ')') depth--;
+            s += ch;
+            i++;
+          }
+          continue;
+        }
         if (expr[i] === '\\') { s += expr[i++]; }
         s += expr[i++];
       }
@@ -341,10 +359,45 @@ function parseAtom(tokens: string[]): { filter: JqFilter; rest: string[] } {
     return { filter: (input) => [input], rest: tokens.slice(1) };
   }
 
-  // String literal
+  // String literal, with \(expr) interpolated (strings as they are, other values as JSON)
   if (t.startsWith('"')) {
-    const s = JSON.parse(t);
-    return { filter: () => [s], rest: tokens.slice(1) };
+    if (!t.includes('\\(')) {
+      const s = JSON.parse(t);
+      return { filter: () => [s], rest: tokens.slice(1) };
+    }
+    const parts: (string | JqFilter)[] = [];
+    const body = t.slice(1, -1);
+    let lit = '';
+    for (let k = 0; k < body.length;) {
+      if (body[k] === '\\' && body[k + 1] === '(') {
+        let depth = 1, inStr = false, j = k + 2;
+        for (; j < body.length && depth > 0; j++) {
+          const ch = body[j];
+          if (inStr) { if (ch === '\\') j++; else if (ch === '"') inStr = false; }
+          else if (ch === '"') inStr = true;
+          else if (ch === '(') depth++;
+          else if (ch === ')') depth--;
+        }
+        if (lit) parts.push(JSON.parse('"' + lit + '"'));
+        lit = '';
+        parts.push(parse(tokenize(body.slice(k + 2, j - 1))).filter);
+        k = j;
+        continue;
+      }
+      if (body[k] === '\\') { lit += body[k] + body[k + 1]; k += 2; continue; }
+      lit += body[k++];
+    }
+    if (lit) parts.push(JSON.parse('"' + lit + '"'));
+    const filter: JqFilter = (input) => {
+      let outs = [''];
+      for (const p of parts) {
+        if (typeof p === 'string') { outs = outs.map((o) => o + p); continue; }
+        const vals = p(input).map((v) => (typeof v === 'string' ? v : JSON.stringify(v)));
+        outs = outs.flatMap((o) => vals.map((v) => o + v));
+      }
+      return outs;
+    };
+    return { filter, rest: tokens.slice(1) };
   }
 
   // Number literal
@@ -969,13 +1022,13 @@ function formatOutput(value: JqValue, raw: boolean, compact: boolean): string {
   return JSON.stringify(value, null, 2);
 }
 
-export function evaluateJq(data: any, expr: string, raw = false): string {
+export function evaluateJq(data: any, expr: string, raw = false, compact = false): string {
   const tokens = tokenize(expr);
   const { filter } = parse(tokens);
   const results = filter(data);
   const parts: string[] = [];
   for (const result of results) {
-    const formatted = formatOutput(result, raw, false);
+    const formatted = formatOutput(result, raw, compact);
     if (formatted !== '') parts.push(formatted);
   }
   return parts.join('\n') + (parts.length > 0 ? '\n' : '');
@@ -991,6 +1044,7 @@ export const jqCmd: Command = {
     let nullInput = false;
     let exitStatus = false;
     let filterExpr = '.';
+    let haveFilter = false;
     const jqArgs: Record<string, string> = {};
     const files: string[] = [];
 
@@ -1012,8 +1066,10 @@ export const jqCmd: Command = {
         jqArgs['$' + ctx.args[i + 1]] = JSON.parse(ctx.args[i + 2]);
         i += 2;
       } else if (!arg.startsWith('-') || i === 0 || (ctx.args[i - 1] !== '--arg' && ctx.args[i - 1] !== '--argjson')) {
-        if (filterExpr === '.' && !arg.startsWith('-')) {
+        // (the first word is the filter, even `.`; the rest are files)
+        if (!haveFilter && !arg.startsWith('-')) {
           filterExpr = arg;
+          haveFilter = true;
         } else if (!arg.startsWith('-')) {
           files.push(arg);
         }
@@ -1022,7 +1078,8 @@ export const jqCmd: Command = {
     }
 
     // Read input
-    let inputText = ctx.stdin;
+    // stdin only when it is the input: not with files or -n (a live stdin may never end)
+    let inputText = files.length > 0 || nullInput ? '' : ctx.stdin;
     if (files.length > 0) {
       const parts: string[] = [];
       for (const file of files) {

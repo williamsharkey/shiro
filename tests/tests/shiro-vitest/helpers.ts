@@ -19,6 +19,7 @@ import { sttyCmd } from '@shiro/commands/stty';
 import { gzipCmd, gunzipCmd, zcatCmd } from '@shiro/commands/gzip';
 import { wgetCmd } from '@shiro/commands/wget';
 import { pgrepCmd, pkillCmd } from '@shiro/commands/pgrep';
+import { psCmd } from '@shiro/commands/ps';
 import { nprocCmd } from '@shiro/commands/nproc';
 import { getconfCmd } from '@shiro/commands/getconf';
 import { edCmd } from '@shiro/commands/ed';
@@ -48,7 +49,11 @@ import { dmesgCmd } from '@shiro/commands/dmesg';
 import { sshCmd } from '@shiro/commands/ssh';
 import { scpCmd } from '@shiro/commands/scp';
 import { sudoCmd } from '@shiro/commands/sudo';
-import { debianCmd, shiroAlternativesCmd, shiroAptMethodCmd } from '@shiro/commands/debian';
+import { debianCmd, shiroAlternativesCmd, shiroAptCmd, shiroAptMethodCmd } from '@shiro/commands/debian';
+import { toolchainCmd } from '@shiro/commands/toolchain';
+
+/** Variables every createTestShell() shell starts with (node-worker-suites.test.ts sets TABCOMPUTER_NODE_WORKER) */
+export const testShellEnv: Record<string, string> = {};
 
 export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell }> {
   const fs = new FileSystem();
@@ -87,6 +92,7 @@ export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell 
   commands.register(gunzipCmd);
   commands.register(wgetCmd);
   commands.register(pgrepCmd);
+  commands.register(psCmd);
   commands.register(pkillCmd);
   commands.register(nprocCmd);
   commands.register(getconfCmd);
@@ -124,9 +130,10 @@ export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell 
   commands.register(dmesgCmd);
   commands.register(sshCmd);
   commands.register(scpCmd);
-  commands.registerAll([sudoCmd, debianCmd, shiroAlternativesCmd, shiroAptMethodCmd]);
+  commands.registerAll([sudoCmd, debianCmd, shiroAlternativesCmd, shiroAptCmd, shiroAptMethodCmd, toolchainCmd]);
 
   const shell = new Shell(fs, commands);
+  Object.assign(shell.env, testShellEnv);
   return { fs, shell };
 }
 

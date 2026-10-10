@@ -10,7 +10,7 @@
 import type { FileSystem } from '../filesystem';
 import {
   type KStat, EBADF, EMFILE, EINVAL, EISDIR, ESPIPE, ENOTTY, EAGAIN, EINTR,
-  O_ACCMODE, O_RDONLY, O_WRONLY, O_APPEND, O_NONBLOCK, O_DSYNC, OPEN_MAX,
+  O_ACCMODE, O_RDONLY, O_WRONLY, O_APPEND, O_NONBLOCK, O_DSYNC, OPEN_MAX, NR_OPEN,
   POLLIN, POLLOUT, SEEK_SET, SEEK_CUR, SEEK_END,
   S_IFCHR, S_IFREG, S_IFDIR, S_IFIFO, FIONREAD, errnoFromError,
 } from './abi';
@@ -115,6 +115,9 @@ interface FdEntry { file: OpenFile; cloexec: boolean }
 
 export class FdTable {
   private fds = new Map<number, FdEntry>();
+  /** RLIMIT_NOFILE: fds are below `limit` (the soft limit); `hardLimit` caps raising it (prlimit64) */
+  limit = OPEN_MAX;
+  hardLimit = NR_OPEN;
 
   get(fd: number): OpenFile | undefined {
     return this.fds.get(fd)?.file;
@@ -126,7 +129,8 @@ export class FdTable {
 
   /** Lowest free fd ≥ minFd, or -EMFILE. Takes a reference to `file`. */
   alloc(file: OpenFile, minFd = 0, cloexec = false): number {
-    for (let fd = minFd; fd < OPEN_MAX; fd++) {
+    if (minFd >= this.limit) return -EINVAL; // F_DUPFD past RLIMIT_NOFILE
+    for (let fd = minFd; fd < this.limit; fd++) {
       if (!this.fds.has(fd)) {
         this.fds.set(fd, { file: retain(file), cloexec });
         return fd;
@@ -137,7 +141,7 @@ export class FdTable {
 
   /** Install `file` at exactly `fd`, closing what was there. */
   async set(fd: number, file: OpenFile, cloexec = false): Promise<number> {
-    if (fd < 0 || fd >= OPEN_MAX) return -EBADF;
+    if (fd < 0 || fd >= this.limit) return -EBADF;
     retain(file);
     const old = this.fds.get(fd);
     this.fds.set(fd, { file, cloexec });
@@ -155,7 +159,7 @@ export class FdTable {
   async dup2(oldFd: number, newFd: number, cloexec = false): Promise<number> {
     const e = this.fds.get(oldFd);
     if (!e) return -EBADF;
-    if (newFd < 0 || newFd >= OPEN_MAX) return -EBADF;
+    if (newFd < 0 || newFd >= this.limit) return -EBADF;
     if (oldFd === newFd) return newFd;
     return this.set(newFd, e.file, cloexec);
   }
@@ -192,6 +196,7 @@ export class FdTable {
   /** A copy sharing every open file description (fork). */
   fork(): FdTable {
     const t = new FdTable();
+    t.limit = this.limit; t.hardLimit = this.hardLimit;
     for (const [fd, e] of this.fds) t.fds.set(fd, { file: retain(e.file), cloexec: e.cloexec });
     return t;
   }
@@ -203,6 +208,7 @@ export class FdTable {
    */
   inherit(overrides: Record<number, OpenFile> = {}): FdTable {
     const t = new FdTable();
+    t.limit = this.limit; t.hardLimit = this.hardLimit;
     for (const [fd, e] of this.fds) {
       if (!e.cloexec && !(fd in overrides)) t.fds.set(fd, { file: retain(e.file), cloexec: false });
     }
@@ -448,6 +454,8 @@ export class BufferFile implements OpenFile {
  */
 const FLUSH_DELAY_MS = 25;
 const FLUSH_MAX_DELAY_MS = 1000;
+/** Uncommitted bytes in the FileSystem beyond which a close waits for the commit (Inode.flush). */
+const WRITE_BACKLOG_BYTES = 16 << 20;
 
 class Inode {
   data: Uint8Array;
@@ -503,25 +511,36 @@ class Inode {
       const pause = Math.max(FLUSH_DELAY_MS, mb * 20);
       const most = Math.max(FLUSH_MAX_DELAY_MS, mb * 500);
       if (this.dirty && quiet < pause && now - this.dirtySince < most) this.armFlush(pause - quiet);
-      else void this.flush();
+      else void this.flush(true);
     }, ms);
   }
 
   /** A write-back is in progress. */
   get busy(): boolean { return !!this.flushing; }
 
-  async flush(): Promise<void> {
+  /**
+   * Write the data back to the FileSystem. `paced` (the write-back timer, a
+   * file still being written) also waits for the IndexedDB commit, so a
+   * growing file isn't snapshotted again before the last copy is stored.
+   * close, rename and the like don't wait for the commit, as close(2) doesn't
+   * wait for the disk (dpkg closed ~1700 files per python3 install, ~4 ms each);
+   * fsync does (RegularFile.sync).
+   */
+  async flush(paced = false): Promise<void> {
     if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null; }
     while (this.flushing) await this.flushing;
     if (!this.dirty || this.unlinked) return;
     this.dirty = false;
     const snapshot = this.data.slice(0, this.size);
-    // Paced by the IndexedDB commit: writes made meanwhile go into one later snapshot
     // With the times this inode reports (the last write's, or utimensat's), not the write-back's
     const times = { mtime: this.mtimeMs, mtimeNs: this.mtimeNs, ...(this.atimeMs === null ? {} : { atime: this.atimeMs, atimeNs: this.atimeNs }) };
     // Refused (storage full: ENOSPC): the data stays here for a retry by fsync or close
-    this.flushing = this.fs.writeFile(this.path, snapshot, { times }).catch((e) => { this.dirty = true; throw e; })
-      .then(() => this.fs.flushed()).finally(() => { this.flushing = null; });
+    const written = this.fs.writeFile(this.path, snapshot, { times }).catch((e) => { this.dirty = true; throw e; });
+    // Paced: writes made meanwhile go into one later snapshot. Past a backlog of
+    // uncommitted data a close waits too, or a fast writer (dpkg unpacking)
+    // holds it all in memory (python3's install peaked 150 MiB higher)
+    const wait = paced || this.fs.pendingBytes > WRITE_BACKLOG_BYTES;
+    this.flushing = (wait ? written.then(() => this.fs.flushed()) : written).finally(() => { this.flushing = null; });
     await this.flushing;
   }
 }
@@ -559,6 +578,12 @@ export function openInodeSync(fs: FileSystem, path: string, node: {
   }
   ino.opens++;
   return ino;
+}
+
+/** Write back every open file of `fs` holding data not yet in it (the page going away: FileSystem.flushAll). */
+export async function writeBackAll(fs: FileSystem): Promise<void> {
+  const table = inodeTables.get(fs);
+  if (table) await Promise.all([...table.values()].filter((ino) => ino.dirty).map((ino) => ino.flush()));
 }
 
 /** closeInode when nothing needs to be written back; false = use closeInode. */

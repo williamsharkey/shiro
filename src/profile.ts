@@ -27,8 +27,12 @@ export interface ProfileShims {
   binCommandStat: boolean;
   /** Debian mode diverts programs to Shiro builtins by default (src/debian/overlay-policy.json) */
   debianOverlay: boolean;
-  /** `python`/`python3` without a package: Pyodide, or nothing (pkg/apt python3 only) */
-  python: 'pyodide' | 'package';
+  /**
+   * `python`/`python3`/`pip` without a package: Pyodide; CPython, the python3
+   * package installed on first use; or nothing (pkg/apt python3 only).
+   * Pyodide is `pyodide` in every case.
+   */
+  python: 'pyodide' | 'cpython' | 'package';
 }
 
 export interface Profile {

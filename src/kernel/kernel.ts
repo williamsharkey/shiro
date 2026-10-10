@@ -13,7 +13,7 @@ import type { Shell } from '../shell';
 import type { Command, CommandContext } from '../commands/index';
 import { KernelStdio, execLazyStdin } from '../shell-stdio';
 import { parseShellArgs } from '../shell-args';
-import { ProcFs, bootMs } from './procfs';
+import { ProcFs, bootMs, fdTarget } from './procfs';
 import { klog, KmsgFile, LOG_ERR, LOG_INFO, SYSLOG_ACTION_READ_ALL, SYSLOG_ACTION_SIZE_BUFFER, SYSLOG_ACTION_SIZE_UNREAD } from './klog';
 import { processTable, type ShiroProcess } from '../process-table';
 import { packageShadows, pkgOwnShadows, packageArgsForPath, PKG_BIN_DIR } from '../pkg-manager';
@@ -21,17 +21,20 @@ import * as A from './abi';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
   RegularFile, DirFile, abortableWait, openInode, openInodeSync, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
-  shareInodeNumber, forgetInodeNumber, renameLinkName, linkCount,
+  shareInodeNumber, forgetInodeNumber, renameLinkName, linkCount, writeBackAll,
 } from './fd';
 import { createPipe, Pipe, PipeEnd, FifoRdWr } from './pipe';
 import type { PtyFile } from './pty';
 import { LockTable, F_RDLCK, F_WRLCK, F_UNLCK } from './locks';
 import { Process } from './process';
 import { SysvShm } from './sysvshm';
+import { SysvSem } from './sysvsem';
+import { SysvMsg } from './sysvmsg';
 import { EpollFile, waitReady } from './epoll';
 import { SignalFile, notifySignalPending } from './signalfd';
 import { EventFile, TimerFile } from './fd';
 import { activeProfile, unameRelease, UNAME_VERSION } from '../profile';
+import { memoryInfo } from '../utils/sysinfo';
 
 /** Runs a process to completion; resolves with its exit code (or nothing if it exited through the kernel). */
 export type Runner = (proc: Process, kernel: Kernel) => Promise<number | void>;
@@ -134,6 +137,7 @@ function fileKey(f: object): number {
 const OPATH_FD_ARG: Record<number, number> = {
   0: 0, 1: 0, 16: 0, 17: 0, 18: 0, 19: 0, 20: 0, 74: 0, 75: 0, 77: 0, 91: 0, 93: 0, // read write ioctl pread pwrite readv writev fsync fdatasync ftruncate fchmod fchown
   190: 0, 193: 0, 196: 0, 199: 0, 217: 0, 285: 0, 233: 2, // f*xattr getdents64 fallocate epoll_ctl
+  42: 0, 43: 0, 44: 0, 45: 0, 46: 0, 47: 0, 48: 0, 49: 0, 50: 0, 51: 0, 52: 0, 54: 0, 55: 0, 288: 0, // the socket calls
 };
 
 /** An O_PATH description over `f`: same file and stat, no I/O */
@@ -186,15 +190,23 @@ export class Kernel {
   readonly procfs = new ProcFs(this);
   /** System V shared memory segments (the engine maps them). */
   readonly shm = new SysvShm();
+  /** SysV semaphore sets (semget, semop, semctl) */
+  readonly sem = new SysvSem();
+  /** SysV message queues (msgget, msgsnd, msgrcv, msgctl) */
+  readonly msg = new SysvMsg();
   /** fcntl record locks (F_SETLK, F_OFD_SETLK) */
   readonly locks = new LockTable();
   private detachTable?: () => void;
   /** How long an unreaped child of init stays a zombie before it is reaped automatically. */
   initReapDelayMs = 30_000;
+  private detachWriteBack?: () => void;
 
   constructor(opts: { fs?: FileSystem; shell?: Shell; allocPid?: () => number; registerWithProcessTable?: boolean } = {}) {
     this.fs = opts.fs ?? opts.shell?.fs;
     this.shell = opts.shell;
+    // Open files' buffered writes reach storage when the page goes away
+    const wfs = this.fs;
+    if (wfs?.addWriteBackHook) this.detachWriteBack = wfs.addWriteBackHook(() => writeBackAll(wfs));
     const alloc = opts.allocPid ?? (() => processTable.allocatePid());
     this.allocPid = () => (this.lastPid = alloc());
     this.init = new Process({
@@ -204,11 +216,19 @@ export class Kernel {
     });
     this.procs.set(1, this.init);
     // /proc/PID/stat and status for kernel processes
-    addProcInfoSource((pid) => {
-      const p = this.procs.get(pid);
-      if (!p || pid === 1) return undefined;
-      const state = p.state === 'zombie' ? 'Z' : p.state === 'stopped' ? 'T' : p.sleeping() ? 'S' : 'R';
-      return { pid, ppid: p.ppid, pgid: p.pgid, sid: p.sid, comm: p.comm, state, cmdline: p.argv };
+    addProcInfoSource({
+      get: (pid) => {
+        const p = this.procs.get(pid);
+        if (!p) return undefined;
+        const state = p.state === 'zombie' ? 'Z' : p.state === 'stopped' ? 'T' : p.sleeping() ? 'S' : 'R';
+        return {
+          pid, ppid: p.ppid, pgid: p.pgid, sid: p.sid, comm: p.comm, state, cmdline: p.argv,
+          cwd: p.cwd, environ: p.env, exe: typeof p.data.exe === 'string' ? p.data.exe : p.path,
+          fds: p.fds.entries().map(([fd, f]) => [fd, fdTarget(f)] as [number, string]),
+          startMs: p.startTime, uid: p.uid, gid: p.gid,
+        };
+      },
+      list: () => [...this.procs.keys()],
     });
     this.registerDevice('/dev/null', (_p, f) => new DevNull(f));
     this.registerDevice('/dev/zero', (_p, f) => new DevZero(f));
@@ -241,6 +261,8 @@ export class Kernel {
   /** Stop listing this kernel's processes in the page process table (tests). */
   dispose(): void {
     this.detachTable?.();
+    this.detachWriteBack?.();
+    this.detachWriteBack = undefined;
     this.detachTable = undefined;
   }
 
@@ -250,6 +272,12 @@ export class Kernel {
   addLoader(loader: Loader): void {
     this.loaders.unshift(loader);
   }
+
+  /**
+   * Builtins that `sh -c 'NAME args'` should exec in place (findProgram)
+   * rather than run in the forked shell, when `claim(NAME, process)` says so.
+   */
+  readonly execDirect: ((name: string, proc: Process) => boolean)[] = [];
 
   registerDevice(path: string, opener: DeviceOpener): void {
     this.devices.set(path, opener);
@@ -418,6 +446,8 @@ export class Kernel {
       if (typeof p === 'string' && (await this.fs?.exists(p))) path = p;
     } else if (this.fs && this.shell?.commands.get(name) && packageShadows(this.fs).has(name)) {
       path = `${PKG_BIN_DIR}/${name}`; // an installed package replaces the builtin
+    } else if (this.shell?.commands.get(name) && this.execDirect.some(f => f(name, probe))) {
+      path = name; // a loader runs this builtin as the process itself (node as a guest)
     } else if (!this.shell?.commands.get(name)) {
       for (const dir of (probe.env.PATH ?? '/usr/local/bin:/usr/bin:/bin').split(':')) {
         if (!dir) continue;
@@ -562,6 +592,7 @@ export class Kernel {
     await proc.fds.closeAll();
     this.locks.release(proc.pid);
     this.shm.detachAll(proc);
+    this.sem.exited(proc);
     for (const child of this.procs.values()) {
       if (child.ppid === proc.pid) {
         child.ppid = 1;
@@ -767,6 +798,7 @@ export class Kernel {
       promise: p.wait().then(A.shellExitCode),
       kill: () => { this.kill(p.pid, A.SIGKILL); },
       abortController: null,
+      zombie: p.state === 'zombie',
     };
   }
 
@@ -1292,6 +1324,8 @@ export class Kernel {
     // Its fds are the process's (KernelStdio, adoptFds), not whatever exec did in the page's shell
     shell.userFds = new Map();
     shell.fileDescriptors = new Map();
+    // A new process: only the page shell's `export -f` functions come along
+    shell.dropUnexportedFunctions();
     proc.onTerminate(() => shell.abortController?.abort());
     return shell;
   }
@@ -1610,6 +1644,19 @@ export class Kernel {
         case A.SYS_shmctl: return this.shm.shmctl(proc, args[0], args[1], data);
         case A.SYS_shiro_shmat: return this.shm.attach(proc, args[0], args[1], data);
         case A.SYS_shiro_shmdt: return this.shm.detach(proc, args[0]);
+        case A.SYS_semget: return this.sem.semget(proc, args[0], args[1], args[2]);
+        case A.SYS_semop: return await this.sem.semop(proc, args[0], args[1], data, -1, sig);
+        case A.SYS_semtimedop: {
+          // (semid, nsops, hasTimeout, tv_sec, tv_nsec): no timeout is semop
+          if (!args[2]) return await this.sem.semop(proc, args[0], args[1], data, -1, sig);
+          if (args[3] < 0 || args[4] < 0 || args[4] >= 1e9) return -A.EINVAL;
+          return await this.sem.semop(proc, args[0], args[1], data, args[3] * 1000 + Math.floor(args[4] / 1e6), sig);
+        }
+        case A.SYS_semctl: return this.sem.semctl(proc, args[0], args[1], args[2], args[3], data);
+        case A.SYS_msgget: return this.msg.msgget(proc, args[0], args[1]);
+        case A.SYS_msgsnd: return await this.msg.msgsnd(proc, args[0], args[1], args[2], data, sig);
+        case A.SYS_msgrcv: return await this.msg.msgrcv(proc, args[0], args[1], i64(args[2], args[3]), args[4], data, sig);
+        case A.SYS_msgctl: return this.msg.msgctl(proc, args[0], args[1], data);
         case A.SYS_setuid: case A.SYS_setgid: case A.SYS_setreuid: case A.SYS_setregid:
         case A.SYS_setresuid: case A.SYS_setresgid: case A.SYS_getresuid: case A.SYS_getresgid:
         case A.SYS_getgroups: case A.SYS_setgroups: case A.SYS_setfsuid: case A.SYS_setfsgid:
@@ -1672,7 +1719,7 @@ export class Kernel {
         }
         case A.SYS_close_range: {
           const first = args[0] >>> 0;
-          const last = Math.min(args[1] >>> 0, A.OPEN_MAX - 1);
+          const last = args[1] >>> 0;
           if (first > (args[1] >>> 0)) return -A.EINVAL;
           for (const [fd] of fds.entries()) {
             if (fd < first || fd > last) continue;
@@ -1682,8 +1729,9 @@ export class Kernel {
           return 0;
         }
         case A.SYS_shiro_vfork: {
-          // the child is running code (its engine's), not idle like a builtin that makes no syscalls
-          const child = this.vfork(proc);
+          // the child is running code (its engine's), not idle like a builtin that makes no syscalls;
+          // args[0] CLONE_PARENT: the child is the caller's sibling (its parent's child)
+          const child = this.vfork(proc, (args[0] & A.CLONE_PARENT) !== 0);
           child.syscalls = 1;
           return child.pid;
         }
@@ -2125,9 +2173,44 @@ export class Kernel {
           if (!open && proc.uid !== 0) return -A.EPERM;
           return await klog.syslogAction(type, data, args[1] | 0, sig);
         }
+        case A.SYS_sysinfo: { // → struct sysinfo: the memory free and /proc/meminfo report (src/utils/sysinfo.ts)
+          if (data.length < A.SYSINFO_SIZE) return -A.EFAULT;
+          const v = new DataView(data.buffer, data.byteOffset, A.SYSINFO_SIZE);
+          data.fill(0, 0, A.SYSINFO_SIZE);
+          const mem = memoryInfo();
+          const load = BigInt(Math.round(this.procfs.running() * 65536));
+          v.setBigInt64(0, BigInt(Math.floor((Date.now() - bootMs) / 1000)), true); // uptime
+          for (let i = 0; i < 3; i++) v.setBigUint64(8 + i * 8, load, true); // loads[3], 1<<16 fixed point
+          v.setBigUint64(32, BigInt(mem.total), true); // totalram
+          v.setBigUint64(40, BigInt(mem.free), true); // freeram
+          v.setUint16(80, Math.min(0xffff, this.procs.size), true); // procs
+          v.setUint32(104, 1, true); // mem_unit
+          return 0;
+        }
+        case A.SYS_prlimit64: { // pid, resource, set → data: old {cur, max} (u64s); a new one first when set
+          // RLIMIT_NOFILE only (the fd table's): engines keep the other limits
+          if (args[1] !== A.RLIMIT_NOFILE) return -A.EINVAL;
+          const target = args[0] ? this.procs.get(args[0]) : proc;
+          if (!target) return -A.ESRCH;
+          if (data.length < 16) return -A.EFAULT;
+          const dv = new DataView(data.buffer, data.byteOffset, 16);
+          const t = target.fds;
+          const old = [t.limit, t.hardLimit];
+          if (args[2]) {
+            const big = (o: number) => { const v = dv.getBigUint64(o, true); return v > BigInt(A.NR_OPEN) ? Infinity : Number(v); };
+            const cur = big(0), max = big(8);
+            if (cur > max) return -A.EINVAL;
+            // nothing above fs.nr_open; raising the hard limit takes root
+            if (max > A.NR_OPEN || (max > t.hardLimit && proc.uid !== 0)) return -A.EPERM;
+            t.limit = cur; t.hardLimit = max;
+          }
+          dv.setBigUint64(0, BigInt(old[0]), true);
+          dv.setBigUint64(8, BigInt(old[1]), true);
+          return 0;
+        }
         case A.SYS_uname: { // → struct utsname (engines that report their own machine take the names from here)
           if (data.length < A.UTSNAME_FIELD * 6) return -A.EFAULT;
-          const fields = ['Linux', this.hostname, unameRelease(this.hostname), UNAME_VERSION, 'wasm32', '(none)'];
+          const fields = ['Linux', this.hostname, unameRelease(this.hostname), UNAME_VERSION, 'x86_64', '(none)'];
           data.fill(0, 0, A.UTSNAME_FIELD * 6);
           fields.forEach((f, i) => data.set(enc.encode(f).subarray(0, A.UTSNAME_FIELD - 1), i * A.UTSNAME_FIELD));
           return 0;
@@ -2280,7 +2363,7 @@ export class Kernel {
 
   /** poll(2) over `nfds` struct pollfd entries at the start of `data`. timeout < 0 waits forever. */
   async poll(proc: Process, data: Uint8Array, nfds: number, timeoutMs: number): Promise<number> {
-    if (nfds < 0 || nfds * A.POLLFD_SIZE > data.length) return -A.EINVAL;
+    if (nfds < 0 || nfds > Math.max(A.OPEN_MAX, proc.fds.limit) || nfds * A.POLLFD_SIZE > data.length) return -A.EINVAL;
     const dv = new DataView(data.buffer, data.byteOffset, nfds * A.POLLFD_SIZE);
     const files: OpenFile[] = [];
     for (let i = 0; i < nfds; i++) {
@@ -2314,7 +2397,7 @@ export class Kernel {
    */
   private async select(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): Promise<number> {
     const nfds = args[0];
-    if (nfds < 0 || nfds > A.OPEN_MAX) return -A.EINVAL;
+    if (nfds < 0 || nfds > Math.max(A.OPEN_MAX, proc.fds.limit)) return -A.EINVAL;
     const setBytes = Math.ceil(nfds / 64) * 8;
     if (setBytes * 3 > data.length) return -A.EINVAL;
     const present = args[1];
@@ -2400,10 +2483,10 @@ export class Kernel {
    * program starts at SYS_shiro_execve; until then the parent's engine makes
    * syscalls on its behalf.
    */
-  vfork(parent: Process): Process {
+  vfork(parent: Process, cloneParent = false): Process {
     const pid = this.allocPid();
     const child = new Process({
-      pid, ppid: parent.pid, pgid: parent.pgid, sid: parent.sid,
+      pid, ppid: cloneParent ? parent.ppid : parent.pid, pgid: parent.pgid, sid: parent.sid,
       path: parent.path, argv: [...parent.argv], env: { ...parent.env }, cwd: parent.cwd,
       fds: parent.fds.fork(), umask: parent.umask,
     });
@@ -2412,6 +2495,7 @@ export class Kernel {
     child.gid = parent.gid;
     copyCredentials(parent, child);
     this.shm.forked(parent, child);
+    this.sem.forked(parent, child);
     child.data.embryo = true;
     child.data.forkParent = parent.pid; // startForkChild: the parent may have exited (and the child been reparented) by then
     this.procs.set(pid, child);

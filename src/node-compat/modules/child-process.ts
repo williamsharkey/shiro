@@ -10,6 +10,8 @@ export interface ChildProcessDeps {
   FakeBuffer: any;
   /** The parent's process: inherited stdio writes to its stdout/stderr */
   getProcess?: () => any;
+  /** As a kernel guest (node-worker): children are real processes, the sync calls really block */
+  guest?: import('../../node-worker/hooks').NodeGuestHooks;
 }
 
 export function createChildProcessModule(deps: ChildProcessDeps): any {
@@ -183,7 +185,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
   };
   // execAsync is the underlying impl — returns a Promise
   // Shell natively handles setopt (no-op), eval (builtin), >| (clobber), /dev/null (virtual file)
-  const execAsync = async (cmd: string, env?: Record<string, unknown>): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
+  const execAsync = async (cmd: string, env?: Record<string, unknown>, input?: string): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
     let normalized = stripShellPrefix(cmd);
     // Strip leading shell flags (-l, -i, -e) that leak through from spawn args
     normalized = normalized.replace(/^(-[a-zA-Z]+\s+)+/, '');
@@ -201,6 +203,13 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       normalized = `rg ${rgArgs}`;
     }
 
+    if (deps.guest) {
+      // A real child process; files it changed are read again afterwards
+      const r = await deps.guest.runChild(normalized, { input, cwd: ctx.cwd, ...(env ? { env: Object.fromEntries(Object.entries(env).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)])) } : {}) });
+      fileCache.clear();
+      const dec = new TextDecoder();
+      return { stdout: dec.decode(r.stdout), stderr: dec.decode(r.stderr), exitCode: r.status ?? 128 + (r.signal ?? 0) };
+    }
     // Drain pending IDB writes so shell commands can see files written by
     // writeFileSync (which only updates fileCache + queues async IDB write).
     if (pendingPromises.length > 0) {
@@ -221,7 +230,10 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       sh.env = {};
       for (const [k, v] of Object.entries(env)) if (v !== undefined && v !== null) sh.env[k] = String(v);
     }
-    const exitCode = await sh.execute(normalized, (s) => { stdout += s; }, (s) => { stderr += s; }, false, undefined, true);
+    // { input }: the child's stdin (execSync, spawnSync, execFileSync)
+    const exitCode = input !== undefined
+      ? await sh.executeWithStdin(normalized, input, (s) => { stdout += s; }, (s) => { stderr += s; })
+      : await sh.execute(normalized, (s) => { stdout += s; }, (s) => { stderr += s; }, false, undefined, true);
 
     // Refresh fileCache from Shiro FS cache — shell commands may have created,
     // modified, or deleted files that fileCache still has stale entries for.
@@ -242,6 +254,39 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
 
     return { stdout, stderr, exitCode };
   };
+  /** The `input` option as text (a string, Buffer or typed array) */
+  const inputOf = (opts: any): string | undefined => {
+    const v = opts?.input;
+    if (v === undefined || v === null) return undefined;
+    if (typeof v === 'string') return v;
+    if (v instanceof Uint8Array || ArrayBuffer.isView(v)) return new TextDecoder().decode(v as Uint8Array);
+    return String(v);
+  };
+  /**
+   * The *Sync calls as a kernel guest: the child runs to the end before this
+   * returns (the worker blocks), so the result is the real one, not a thenable.
+   */
+  const guestSync = (cmd: string, opts: any) => {
+    const r = deps.guest!.runChildSync(cmd, {
+      input: opts?.input === undefined || opts?.input === null ? undefined : typeof opts.input === 'string' ? opts.input : new Uint8Array(opts.input),
+      cwd: opts?.cwd ? String(opts.cwd) : ctx.cwd,
+      ...(opts?.env ? { env: Object.fromEntries(Object.entries(opts.env).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)])) } : {}),
+    });
+    fileCache.clear();
+    const wantString = opts?.encoding && opts.encoding !== 'buffer';
+    const wrap = (b: Uint8Array) => (wantString ? new TextDecoder().decode(b) : FakeBuffer.from(b));
+    // stdio: 'inherit' → the parent's own stdout/stderr
+    const proc = deps.getProcess?.();
+    if (opts?.stdio === 'inherit' || (Array.isArray(opts?.stdio) && opts.stdio[1] === 'inherit')) { if (r.stdout.length) proc?.stdout?.write(new TextDecoder().decode(r.stdout)); r.stdout = new Uint8Array(0); }
+    if (opts?.stdio === 'inherit' || (Array.isArray(opts?.stdio) && opts.stdio[2] === 'inherit')) { if (r.stderr.length) proc?.stderr?.write(new TextDecoder().decode(r.stderr)); r.stderr = new Uint8Array(0); }
+    return { r, stdout: wrap(r.stdout), stderr: wrap(r.stderr) };
+  };
+  const guestThrow = (cmd: string, g: ReturnType<typeof guestSync>) => {
+    if (g.r.status === 0) return;
+    const err: any = new Error(`Command failed: ${cmd}${g.r.stderr.length ? '\n' + new TextDecoder().decode(g.r.stderr) : ''}`);
+    Object.assign(err, { status: g.r.status, signal: g.r.signal, stdout: g.stdout, stderr: g.stderr, pid: g.r.pid, output: [null, g.stdout, g.stderr] });
+    throw err;
+  };
   const cpModule: any = {
     execSync: (cmd: string, opts?: any) => {
       // In browser, execSync cannot truly block. We return a placeholder
@@ -252,8 +297,9 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       if (opts?.cwd) {
         effectiveCmd = `cd ${shellQuoteArg(String(opts.cwd))} && ${cmd}`;
       }
+      if (deps.guest) { const g = guestSync(cmd, opts); guestThrow(cmd, g); return g.stdout; }
       // Synchronous fast-path for detection commands
-      const syncResponse = getSyncResponse(effectiveCmd);
+      const syncResponse = inputOf(opts) === undefined ? getSyncResponse(effectiveCmd) : null;
       if (syncResponse) {
         // Throw on non-zero exit (bash semantics)
         if (syncResponse.status !== 0) {
@@ -271,7 +317,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       let resultErr = '';
       let resultCode = 0;
       const wantString = opts?.encoding && opts.encoding !== 'buffer';
-      const p = execAsync(effectiveCmd).then(r => { result = r.stdout; resultErr = r.stderr; resultCode = r.exitCode; });
+      const p = execAsync(effectiveCmd, undefined, inputOf(opts)).then(r => { result = r.stdout; resultErr = r.stderr; resultCode = r.exitCode; });
       if (wantString) {
         const str: any = new String('');
         str.then = (resolve: any, reject: any) => p.then(() => {
@@ -311,11 +357,15 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
         const cwdPath = String(opts.cwd);
         fullCmd = `cd ${shellQuoteArg(cwdPath)} && ${fullCmd}`;
       }
+      if (deps.guest) {
+        const g = guestSync(fullCmd, opts);
+        return { pid: g.r.pid, output: [null, g.stdout, g.stderr], stdout: g.stdout, stderr: g.stderr, status: g.r.status, signal: g.r.signal === null ? null : (['', 'SIGHUP', 'SIGINT', 'SIGQUIT', 'SIGILL', 'SIGTRAP', 'SIGABRT', 'SIGBUS', 'SIGFPE', 'SIGKILL', 'SIGUSR1', 'SIGSEGV', 'SIGUSR2', 'SIGPIPE', 'SIGALRM', 'SIGTERM'][g.r.signal] || `SIG${g.r.signal}`) };
+      }
       const wantString = opts?.encoding && opts.encoding !== 'buffer';
       const wrap = (s: string) => wantString ? s : FakeBuffer.from(s);
       // Synchronous fast-paths for version/detection checks that the CLI reads
       // without awaiting. Without this, stdout is '' when read synchronously.
-      const syncResponse = getSyncResponse(fullCmd);
+      const syncResponse = inputOf(opts) === undefined ? getSyncResponse(fullCmd) : null;
       if (syncResponse) {
         const out = wrap(syncResponse.stdout);
         const err = wrap(syncResponse.stderr);
@@ -325,20 +375,23 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
           get stderr() { return err; },
           get status() { return st; },
           error: st !== 0 ? new Error(`spawnSync exited with ${st}`) : undefined as any,
-          then: (resolve: any) => resolve({ stdout: out, stderr: err, status: st }),
+          then: (resolve: any) => resolve({ pid: 0, output: [null, out, err], stdout: out, stderr: err, status: st, signal: null }),
         };
       }
       let stdout = '';
       let stderr = '';
       let status = 0;
-      const p = execAsync(fullCmd).then(r => { stdout = r.stdout; stderr = r.stderr; status = r.exitCode; });
+      const p = execAsync(fullCmd, undefined, inputOf(opts)).then(r => { stdout = r.stdout; stderr = r.stderr; status = r.exitCode; });
       pendingPromises.push(p);
       return {
         get stdout() { return wrap(stdout); },
         get stderr() { return wrap(stderr); },
         get status() { return status; },
         get error() { return status !== 0 ? new Error(`spawnSync exited with ${status}`) : undefined; },
-        then: (resolve: any, reject: any) => p.then(() => resolve({ stdout: wrap(stdout), stderr: wrap(stderr), status })).catch(reject),
+        // awaited (sync-await.ts): the whole result, as node's spawnSync returns it
+        then: (resolve: any, reject: any) => p.then(() => resolve({
+          pid: 0, output: [null, wrap(stdout), wrap(stderr)], stdout: wrap(stdout), stderr: wrap(stderr), status, signal: null,
+        })).catch(reject),
       };
     },
     exec: (cmd: string, opts: any, cb?: any) => {
@@ -586,15 +639,16 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       } else {
         fullCmd = args ? `${file} ${shellQuoteArgs(args)}` : file;
       }
+      if (deps.guest) { const g = guestSync(fullCmd, opts); guestThrow(fullCmd, g); return g.stdout; }
       // Synchronous fast-path for detection commands
-      const syncResponse = getSyncResponse(fullCmd);
+      const syncResponse = inputOf(opts) === undefined ? getSyncResponse(fullCmd) : null;
       if (syncResponse) {
         const buf: any = FakeBuffer.from(syncResponse.stdout);
         buf.then = (resolve: any) => resolve(FakeBuffer.from(syncResponse.stdout));
         return buf;
       }
       let result = '';
-      const p = execAsync(fullCmd).then(r => { result = r.stdout; });
+      const p = execAsync(fullCmd, undefined, inputOf(opts)).then(r => { result = r.stdout; });
       pendingPromises.push(p);
       // Return thenable Buffer so await resolves to actual result
       const buf: any = FakeBuffer.from('');

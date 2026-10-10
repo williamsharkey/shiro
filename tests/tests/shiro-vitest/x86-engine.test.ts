@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, onTestFinished, beforeAll, afterAll } from 'vitest';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import type { Server } from 'node:http';
 import { join, resolve } from 'node:path';
@@ -19,6 +19,8 @@ import * as Abi from '@shiro/kernel/abi';
 const NATIVE_STROPS = 'size 1 4255477d8be3a17c\nsize 2 5ec6f1695a3da52b\nsize 4 98b24faa8cdc2e47\nsize 8 0ecf036ebe70d8d0\n';
 // fixtures/x86/sse4.c on an x86-64 host (Intel)
 const NATIVE_SSE4 = 'blendv     e4abc65e766ee19d\nptest      7ba00a6efd7a4874\npmovx      b625e06221fbec95\nint        9681ac88d1b48510\nround      15342966be7d2f10\nblend      1772b0668d5f0605\ninsext     1ed641595d55738e\ninsertps   07a824bc4eee852a\ndp         b92c2b618267d645\nmpsadbw    732e9d86324c3735\ncrc32      ed946d3299e3b67d\npcmpestr   f9d8e2fd9893018c\npcmpistr   97a98d5fb234df8d\npcmpstr64  1141d2a07ff9295d\npinsrq 1\npcmpestri 5\ncrc32 0x1900b8ca\n';
+// fixtures/x86/sse2d.c on an x86-64 host
+const NATIVE_SSE2D = "addsd      bc96350c210f6409\nsubsd      d917cbb966d42e7b\nmulsd      3fc132eaff3380e7\ndivsd      da92576571a8713f\nminsd      f9edb2f454baccc7\nmaxsd      00c42aefef0516ad\nsqrtsd     c58c80ca8efb5c23\nandpd      570233f7972d8c9e\nandnpd     e37627f65999c92e\norpd       1b152a8da83eee96\nxorpd      943724281f612f63\nunpcklpd   1a7e5547a45b561f\nunpckhpd   3b83ee4d02793243\ncmpeqsd    1659b97b6dc7d134\ncmpltsd    83e72d67db829775\ncmplesd    1a1fc4724cd7db2a\ncmpunordsd 3606b7dc1538bd86\ncmpneqsd   4f877dd0634ebd94\ncmpnltsd   6b74f23ca2872331\ncmpnlesd   e31769f1d4309796\ncmpordsd   3e45ed274a09c94a\naddpd      bc96350c210f6409\nmulpd      3fc132eaff3380e7\nminpd      f9edb2f454baccc7\nmaxpd      00c42aefef0516ad\ndivpd      da92576571a8713f\nsubpd      d917cbb966d42e7b\nsqrtpd     c58c80ca8efb5c23\nshufpd     3b83ee4d02793243\nucomisd    7ac10c2aa4d7c9ba\ncomisd     7ac10c2aa4d7c9ba\ncvt        a59b8a8c4454cb60\n";
 // fixtures/x86/bitscan.c on an x86-64 host
 const NATIVE_BITSCAN = 'bsf  zero64   reg dst=0x1122334455667788 zf=1\nbsf  zero64   mem dst=0x1122334455667788 zf=1\nbsr  zero64   reg dst=0x1122334455667788 zf=1\nbsr  zero64   mem dst=0x1122334455667788 zf=1\nbsf  val64    reg dst=0x8 zf=0\nbsf  val64    mem dst=0x8 zf=0\nbsr  val64    reg dst=0x34 zf=0\nbsr  val64    mem dst=0x34 zf=0\nbsf  zero32   reg dst=0x1122334455667788 zf=1\nbsf  zero32   mem dst=0x1122334455667788 zf=1\nbsr  zero32   reg dst=0x1122334455667788 zf=1\nbsr  zero32   mem dst=0x1122334455667788 zf=1\nbsf  val32    reg dst=0x8 zf=0\nbsf  val32    mem dst=0x8 zf=0\nbsr  val32    reg dst=0x14 zf=0\nbsr  val32    mem dst=0x14 zf=0\nbsf  zero16   reg dst=0x1122334455667788 zf=1\nbsf  zero16   mem dst=0x1122334455667788 zf=1\nbsr  zero16   reg dst=0x1122334455667788 zf=1\nbsr  zero16   mem dst=0x1122334455667788 zf=1\nbsf  val16    reg dst=0x1122334455660004 zf=0\nbsf  val16    mem dst=0x1122334455660004 zf=0\nbsr  val16    reg dst=0x1122334455660008 zf=0\nbsr  val16    mem dst=0x1122334455660008 zf=0\nclz64(0)=64 clz64(1)=63 clz64(1<<40)=23\nloop sum=5953906\n';
 
@@ -34,6 +36,8 @@ function tryBuild(cmd: string, args: string[], env: Record<string, string> = {})
 }
 
 const out = mkdtempSync(join(tmpdir(), 'shiro-x86-engine-'));
+// the fixture builds (~160 MB with Go's cache) go with the file's last test
+afterAll(() => rmSync(out, { recursive: true, force: true }));
 const goBin = join(out, 'hello-go');
 const httpBin = join(out, 'nethttp');
 const glibcBin = join(out, 'hello-glibc');
@@ -98,6 +102,14 @@ const niceBin = join(out, 'nice');
 const haveNice = tryBuild('gcc', ['-static', '-O1', '-o', niceBin, 'nice.c']);
 const idsBin = join(out, 'ids');
 const haveIds = 'SYS_setresuid' in Abi && tryBuild('gcc', ['-static', '-O1', '-o', idsBin, 'ids.c']);
+const sigchldBin = join(out, 'sigchldwait');
+const haveSigchld = tryBuild('gcc', ['-static', '-O1', '-o', sigchldBin, 'sigchldwait.c']);
+const getcpuBin = join(out, 'getcpu');
+const haveGetcpu = tryBuild('gcc', ['-static', '-O1', '-o', getcpuBin, 'getcpu.c']);
+const sysvshmBin = join(out, 'sysvshm');
+const haveSysvshm = 'SYS_shmget' in Abi && tryBuild('gcc', ['-static', '-O1', '-o', sysvshmBin, 'sysvshm.c']);
+const sse2dBin = join(out, 'sse2d');
+const haveSse2d = tryBuild('gcc', ['-static', '-O1', '-o', sse2dBin, 'sse2d.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -137,6 +149,11 @@ const haveFuzz = tryBuild('gcc', ['-static', '-O1', '-o', fuzzBin, 'jitfuzz.c'])
 const signalfdBin = join(out, 'signalfd');
 const blinkForwardsSignalfd = readdirSync(resolve(__dirname, '../../../vendor/blink/patches')).some((f) => /signalfd/i.test(f));
 const haveSignalfd = blinkForwardsSignalfd && tryBuild('gcc', ['-static', '-O1', '-o', signalfdBin, 'signalfd.c']);
+// LTP conformance (Blink 0080/0081): errnos, clocks, personality, and locks/pipe sizes/RLIMIT_NOFILE from the kernel
+const ltpErrnosBin = join(out, 'ltp-errnos');
+// (the built engine, not the patch file: perf-blink folds the patches in and rebuilds; 0081 exports blink_shiro_conformance)
+const blinkHasLtpErrnos = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_conformance');
+const haveLtpErrnos = blinkHasLtpErrnos && tryBuild('gcc', ['-static', '-O1', '-w', '-o', ltpErrnosBin, 'ltp-errnos.c']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -182,6 +199,23 @@ describe('Blink engine: static C (musl)', () => {
     const { shell } = await setup(readFileSync(join(FIX, 'hello-musl')));
     const r = await run(shell, './prog fail < /dev/null; echo "status=$?"');
     expect(r.output).toContain('status=7');
+  }, 60_000);
+
+  // The shell's executeScript path (a builtin Debian's program shadows): the
+  // guest's stdout/stderr are OutputSinks, whose writes Blink's direct
+  // channels (patch 0065, opt-in) serve synchronously, not through write()
+  it('runElf delivers stdout and stderr to the callbacks', async () => {
+    const { fs, shell } = await setup(readFileSync(join(FIX, 'hello-musl')));
+    const { runElf } = await import('@shiro/x86-engine');
+    let out = '', err = '';
+    const code = await runElf('/home/user/work/prog', ['a'], {
+      fs, cwd: '/home/user/work', args: ['a'], env: { ...shell.env, TABCOMPUTER_BLINK_DIRECT: '1' }, shell, stdin: 'in\n',
+      writeStdout: (s: string) => { out += s; }, writeStderr: (s: string) => { err += s; },
+    });
+    expect(code).toBe(0);
+    expect(out).toContain('hello from c\narg1=a\n');
+    expect(out).toContain('stdin=in\n');
+    expect(err).toBe('to stderr\n');
   }, 60_000);
 });
 
@@ -597,6 +631,13 @@ it.skipIf(!haveSignalfd)('signalfd reads blocked signals; poll sees it readable'
   expect(r.output.replace(/\r\n/g, '\n')).toBe('empty 1 poll 1 read 256 signo 10 23 pid-ok 1 again-empty 1\n');
 }, 60_000);
 
+// LTP getrlimit02, writev01, fcntl30/37, epoll_wait03, waitid02, clock_gettime04, uname04, vfork02, fcntl14/15
+it.skipIf(!haveLtpErrnos)('errnos Linux gives; record locks, pipe sizes and RLIMIT_NOFILE are the kernel\'s', async () => {
+  const { shell } = await setup(readFileSync(ltpErrnosBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toContain('rlimit-bad 1 nofile 1024/1048576 writev-len 1 pipe-sz 1 read-ro 1 waitid-opts 1 clocks 1 uname26 1 1 pending 1 locks 3\n');
+}, 60_000);
+
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
 // (busybox picks its applet by it; Debian's redis-server -> redis-check-rdb)
 describe('argv[0] through a symlink', () => {
@@ -817,6 +858,50 @@ describe('Blink engine: CPU and syscall fixes', () => {
       'setresgid 0 setresuid 0: uid 65534 euid 65534 saved 0 gid 65534 egid 65534\n' +
       'seteuid(0) via saved 0: euid 0 uid 65534\n' +
       'dropped 0: setuid(0) -1 EPERM\n');
+  }, 60_000);
+
+  // cmake hung in epoll_wait: SIGCHLD reached the kernel before the call did
+  it.skipIf(!haveSigchld)('a SIGCHLD that races epoll_wait still ends the wait', async () => {
+    const { shell } = await setup(readFileSync(sigchldBin));
+    const r = await run(shell, 'TABCOMPUTER_BLINK_DIRECT=1 ./prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('rounds 60 timeouts 0\n');
+  }, 120_000);
+
+  // HotSpot's sched_getcpu fallback calls the vsyscall page (java -version)
+  it.skipIf(!haveGetcpu)('getcpu, the vsyscall page and a family 6 CPUID signature', async () => {
+    const { shell } = await setup(readFileSync(getcpuBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('sched_getcpu 0\nvsyscall getcpu 0 cpu 0 node 0\nvsyscall time ok 1\n' +
+      'vsyscall gettimeofday 0 ok 1\ncpuid family 6 sse2 1\n');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  // LibreOffice's soffice.bin: Blink took *.bin for a flat binary
+  it('an ELF named *.bin runs as an ELF', async () => {
+    const { fs, shell } = await setup(readFileSync(join(FIX, 'hello-musl')));
+    await fs.writeFile('/home/user/work/prog.bin', readFileSync(join(FIX, 'hello-musl')), { mode: 0o755 });
+    const r = await run(shell, './prog.bin x < /dev/null');
+    expect(r.output).toContain('hello from c');
+    expect(r.output).toContain('arg1=x');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  // PostgreSQL's initdb: a SysV segment shared across fork, shm_nattch, IPC_RMID
+  it.skipIf(!haveSysvshm)('System V shared memory across fork, and POSIX shm', async () => {
+    const { shell } = await setup(readFileSync(sysvshmBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('shmget ok\nshmat ok\nnattch 1 size 56\n' +
+      'child sees "parent" nattch 2\nchild second attach sees "child"\nparent sees "child" nattch 1\n' +
+      'shmdt 0\nshmdt again -1 Invalid argument\nrmid 0\nattach after rmid Invalid argument\nposix shm "from child"\n');
+  }, 60_000);
+
+  // librsvg's gradients came out transparent: sqrtpd and float -> int conversions
+  it.skipIf(!haveSse2d)('SSE2 double ops match native, in the JIT and the interpreter', async () => {
+    const { shell } = await setup(readFileSync(sse2dBin));
+    for (const cmd of ['./prog', 'BLINK_WJIT=0 ./prog']) {
+      const r = await run(shell, cmd);
+      expect(r.output.replace(/\r\n/g, '\n')).toBe(NATIVE_SSE2D);
+    }
   }, 60_000);
 
   // vim's typeahead check blocked for a key when two reads straddled a ms tick
