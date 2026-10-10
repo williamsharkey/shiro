@@ -521,6 +521,16 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
     }));
     return child;
   };
+  /** stdio 'inherit' (all three: the child gets the terminal, as spawn's does) */
+  const inheritOf = (opts: any): [boolean, boolean, boolean] => [0, 1, 2].map((i) => inherits(opts?.stdio, i)) as [boolean, boolean, boolean];
+  /** An inherited stream's output is this process's (on its stdout/stderr), not the result's */
+  const inherited = (r: { stdout: string; stderr: string; exitCode: number }, opts: any) => {
+    const [, out, err] = inheritOf(opts);
+    const proc = deps.getProcess?.();
+    if (out && r.stdout) { proc?.stdout?.write(r.stdout); r = { ...r, stdout: '' }; }
+    if (err && r.stderr) { proc?.stderr?.write(r.stderr); r = { ...r, stderr: '' }; }
+    return r;
+  };
   /** The `input` option as text (a string, Buffer or typed array) */
   const inputOf = (opts: any): string | undefined => {
     const v = opts?.input;
@@ -585,7 +595,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       let resultErr = '';
       let resultCode = 0;
       const wantString = opts?.encoding && opts.encoding !== 'buffer';
-      const p = execAsync(effectiveCmd, undefined, inputOf(opts)).then(r => { result = r.stdout; resultErr = r.stderr; resultCode = r.exitCode; });
+      const p = execAsync(effectiveCmd, undefined, inputOf(opts), undefined, inheritOf(opts)).then(r => { r = inherited(r, opts); result = r.stdout; resultErr = r.stderr; resultCode = r.exitCode; });
       if (wantString) {
         const str: any = new String('');
         str.then = (resolve: any, reject: any) => p.then(() => {
@@ -649,7 +659,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       let stdout = '';
       let stderr = '';
       let status = 0;
-      const p = execAsync(fullCmd, undefined, inputOf(opts)).then(r => { stdout = r.stdout; stderr = r.stderr; status = r.exitCode; });
+      const p = execAsync(fullCmd, undefined, inputOf(opts), undefined, inheritOf(opts)).then(r => { r = inherited(r, opts); stdout = r.stdout; stderr = r.stderr; status = r.exitCode; });
       pendingPromises.push(p);
       return {
         get stdout() { return wrap(stdout); },
