@@ -821,6 +821,12 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    alignment check. OpenSSL's SSSE3 SHA-1 runs 5x faster (3300 → 650 ms
    for 16 MB); see BENCHMARKS.md "unix/perf-blink 11". Tests:
    fixtures/x86/rotates.c and ssei.c, identical to native.
+108. comisd/ucomisd/comiss/ucomiss clear AF along with OF and SF, as x86
+   does (Blink left AF alone). Found by fixtures/x86/ssefloat.c: scalar
+   double ops (arithmetic, min/max, the eight cmpsd predicates, sqrt,
+   cvt* to 32/64-bit, roundsd in all modes, movmskpd) over NaN, ±inf, ±0,
+   denormals and integer limits. Now identical to native in the
+   interpreter and in compiled code.
 
 The page compiles blink.wasm once and gives the `WebAssembly.Module` to every
 Blink worker (src/x86-engine/blink.ts `blinkWasmModule`, host.mjs
