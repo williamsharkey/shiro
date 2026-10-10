@@ -5,6 +5,7 @@ import { ProcessExitError } from '../commands/jseval/utils';
 import { getShiroOrigin } from '../utils/shiro-origin';
 import { CLAUDE_CODE_DEFAULT_MODEL } from '../claude-code-version';
 import { TtyStdin, ttySessionOf } from './tty-stdin';
+import { nodeGuestOf } from '../node-worker/hooks';
 
 /**
  * Create the fake process object for the Node.js compat layer.
@@ -397,11 +398,14 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
   };
   // A terminal with a pty session: node reads the pty as its foreground job (tty-stdin.ts)
   const session = stdinTTY ? ttySessionOf(ctx.terminal) : undefined;
-  let ttyIn: TtyStdin | null = null;
+  // (a kernel guest is the process on the pty: it reads its own fd 0, node-worker/tty.ts)
+  const guestTty = stdinTTY ? nodeGuestOf(ctx)?.ttyStdin : undefined;
+  const readsPty = !!session || !!guestTty;
+  let ttyIn: Pick<TtyStdin, 'reading' | 'start' | 'pause' | 'setRaw' | 'close'> | null = null;
   let lastCtrlC = 0;
-  const ttyReader = (): TtyStdin => {
+  const ttyReader = (): NonNullable<typeof ttyIn> => {
     if (ttyIn) return ttyIn;
-    ttyIn = new TtyStdin(session!, {
+    const handlers: ConstructorParameters<typeof TtyStdin>[1] = {
       data: (data) => {
         // Raw mode as the page's passthrough had it: ^C also reaches 'SIGINT'
         // listeners, and twice within a second ends the script
@@ -431,7 +435,8 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
         if (listeners.length) { try { listeners.forEach(fn => fn(name)); } catch (_) {} return; }
         forceExit(128 + sig);
       },
-    });
+    };
+    ttyIn = guestTty ? guestTty(handlers) : new TtyStdin(session!, handlers);
     _st.ttyStdin = ttyIn;
     return ttyIn;
   };
@@ -496,7 +501,7 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
     on: (event: string, fn: Function) => {
       (stdinEvents[event] ??= []).push(fn);
       // A 'data' or 'readable' listener sets a tty flowing, as in node
-      if (session && (event === 'data' || event === 'readable') && !stdinEnded) holdTerminal();
+      if (readsPty && (event === 'data' || event === 'readable') && !stdinEnded) holdTerminal();
       // Piped input flows (and then ends) once something reads it, as in
       // node: a 'data' or 'readable' listener (readline), resume(). An 'end'
       // listener alone reads nothing (vite exits on stdin 'end', its parent's exit)
@@ -522,7 +527,7 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
     emit: (event: string, ...args: any[]) => { (stdinEvents[event] || []).forEach(f => f(...args)); return false; },
     resume: () => {
       flow();
-      if (session) { if (!stdinEnded) holdTerminal(); return stdinObj; }
+      if (readsPty) { if (!stdinEnded) holdTerminal(); return stdinObj; }
       if (ctx.terminal && stdinTTY && !stdinEnded) {
         const forceExit = () => {
           if (!_st.exitCalled) { _st.exitCode = 130; _st.exitCalled = true; }
@@ -546,7 +551,7 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
     },
     setRawMode: (mode: boolean) => {
       stdinRawMode = mode;
-      if (session) {
+      if (readsPty) {
         ttyReader().setRaw(mode);
         if (mode && !stdinEnded) holdTerminal();
         // back to cooked with nothing listening: the script may end (ink's cleanup)

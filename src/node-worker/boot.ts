@@ -46,8 +46,10 @@ export function installNodeWorkerBoot(kernel: Kernel): void {
  * own fds work as they do for WASM and x86 programs, and node is the
  * child of the shell that runs it. Null otherwise (the builtin runs).
  */
-export function nodeKernelProgram(env: Record<string, string | undefined>, name: string, args: string[]): { argv: string[]; run: Runner } | null {
+export function nodeKernelProgram(env: Record<string, string | undefined>, name: string, args: string[], terminal?: unknown): { argv: string[]; run: Runner } | null {
   if (name !== 'node' || !nodeWorkerMode(env)) return null;
+  // A terminal with no pty behind it (a stand-in that takes text) isn't a kernel program's: the builtin's
+  if (terminal && !(terminal as { tty?: unknown }).tty) return null;
   return {
     argv: ['node', ...args],
     run: async (proc, kernel) => {
