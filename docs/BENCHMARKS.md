@@ -1719,8 +1719,23 @@ The coordinator's `ab.mjs a5e66fb 7382bdc` showed `kernel.epoll_wakeup`
   are in the write-behind cache:
   - creating an empty file, truncating an existing one, and EEXIST/ELOOP;
   - unlinking a file that no fd has open and that isn't a socket or fifo.
-  Anything else still takes the async path. Not yet measured end to end;
-  compat-tools' harness is the one that shows it.
+  Anything else still takes the async path. compat-tools measured it in
+  Chromium (node.worker fs_200, per-call time inside the guest around
+  ch.call, three runs on a warm pooled worker), on unix/compat-tools merged
+  with integration. That build also has perf-fs-shell's sync close, rename,
+  mkdir and rmdir and its longer channel spin, so the rows are the combined
+  effect:
+
+  | syscall | before | run 1 | run 2 | run 3 |
+  |---|---|---|---|---|
+  | openat O_WRONLY\|O_CREAT\|O_TRUNC ×202 | ~75 µs | 47 | 20 | 25 µs |
+  | unlinkat ×200 | ~25 µs | 23 | 9 | 19 µs |
+  | close ×202 | ~20 µs | 23 | 13 | 17 µs |
+  | newfstatat ×602 | 15–30 µs | 24 | 19 | 10 µs |
+
+  Create is about 3× faster and unlink 1.5–2×. Whole script:
+  200 → 110 → 110 → 83 ms. A warm sync call is now 10–25 µs round trip,
+  mostly the channel itself.
 
 ### unix/perf-fs-shell 7 — 1d9582a → bb39a38 regressions: shell-stdio's per-command pass; ab.mjs decides on rounds
 

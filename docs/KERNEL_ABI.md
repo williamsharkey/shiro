@@ -4,6 +4,14 @@
 
 All changes so far are additive; nothing below renames or removes an earlier name.
 
+- **2026-10-10 (unix/perf-kernel)** — behavior fix, additive.
+  - exec of a dynamic ELF whose PT_INTERP loader doesn't exist fails with
+    ENOENT, as on Linux. It used to start and exit 127 with no message. The
+    shell prints bash's "cannot execute: required file not found" plus a hint
+    (`debian install` for a glibc loader).
+  - /proc/PID/syscall: the oldest syscall in progress as `nr a0..a5 sp pc`
+    (hex args, sp and pc 0), or `running`. /proc/PID/wchan is
+    `do_syscall_64` while blocked, else `0`.
 - **2026-10-10 (unix/perf-kernel)** — additive: System V message queues (src/kernel/sysvmsg.ts), /proc/sysvipc.
   - `msgget` 68 `(key, msgflg)` → msqid; keys, IPC_PRIVATE, IPC_CREAT,
     IPC_EXCL, permissions as on Linux (MSGMAX 8192, MSGMNB 16384).

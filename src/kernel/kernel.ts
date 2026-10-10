@@ -18,6 +18,7 @@ import { klog, KmsgFile, LOG_ERR, LOG_INFO, SYSLOG_ACTION_READ_ALL, SYSLOG_ACTIO
 import { processTable, type ShiroProcess } from '../process-table';
 import { packageShadows, pkgOwnShadows, packageArgsForPath, PKG_BIN_DIR } from '../pkg-manager';
 import * as A from './abi';
+import { elfInterpreter } from '../elf-interp';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
   RegularFile, DirFile, abortableWait, openInode, openInodeSync, isInodeOpen, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
@@ -1677,7 +1678,14 @@ export class Kernel {
     proc.syscalls++;
     // While in a syscall the process counts as sleeping (S in /proc/PID/stat)
     if (proc.inSyscall++ === 0) proc.syscallSince = t0;
-    const done = () => { proc.inSyscall--; proc.kernelMs += Date.now() - t0; };
+    const call = { nr, args };
+    proc.calls.push(call);
+    const done = () => {
+      proc.inSyscall--;
+      proc.kernelMs += Date.now() - t0;
+      const i = proc.calls.indexOf(call);
+      if (i >= 0) proc.calls.splice(i, 1);
+    };
     // The caller awaits the call itself: the bookkeeping adds no await hop to it
     const p = this.syscallImpl(proc, nr, args, data);
     p.then(done, done);
@@ -2928,11 +2936,16 @@ export class Kernel {
       if (i > 0) env[String(kv).slice(0, i)] = String(kv).slice(i + 1);
     }
     let head: Uint8Array = new Uint8Array(0);
+    let interp: string | null = null;
     if (!builtin) try {
       const raw = await this.fs!.readFile(path);
       head = typeof raw === 'string' ? enc.encode(raw.slice(0, 4)) : raw.subarray(0, 4);
+      if (typeof raw !== 'string') interp = elfInterpreter(raw);
     } catch { /* unreadable: let the loaders decide */ }
     const isElf = head.length === 4 && head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46;
+    // A dynamic executable whose loader isn't there is ENOENT, as on Linux
+    // (bash: "cannot execute: required file not found")
+    if (interp && typeof (await this.statPath(proc, interp)) === 'number') return -A.ENOENT;
     const probe = new Process({ pid: -1, ppid: proc.pid, path, argv, env, cwd: proc.cwd });
     const embryo = !!proc.data.embryo;
     // A package command with its own arguments (zcat = gzip -dc) can't be

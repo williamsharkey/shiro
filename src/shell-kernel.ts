@@ -18,6 +18,7 @@ import type { OpenFile } from './kernel/fd';
 import * as A from './kernel/abi';
 import { packageOfPath, packageShadows, packageKernelProgram } from './pkg-manager';
 import { nodeKernelProgram } from './node-worker/boot';
+import { elfInterpreter, missingInterpreterMessage } from './elf-interp';
 
 /** Bash builtins the shell implements inline (never looked up on PATH) */
 const SHELL_BUILTINS = new Set([
@@ -88,6 +89,13 @@ export async function resolveKernelProgram(
     return { argv: [base, ...args], run: wasmRunner(module, image) };
   }
   if (isElfBytes(bytes)) {
+    // A dynamic executable without its loader (a glibc program before
+    // `debian install`): bash's message and 127, not a silent exit
+    const interp = elfInterpreter(bytes);
+    if (interp && !(await shell.fs.stat(interp).then(() => true, () => false))) {
+      const msg = new TextEncoder().encode(missingInterpreterMessage(name, interp));
+      return { argv: [name, ...args], run: async (proc) => { await proc.fds.get(2)?.write(msg); return 127; } };
+    }
     // Blink (wasm) when the page can run it, else the src/x86 interpreter
     const { chooseElfRunner } = await import('./x86-engine');
     const { x86Runner } = await import('./x86/kernel-runner');

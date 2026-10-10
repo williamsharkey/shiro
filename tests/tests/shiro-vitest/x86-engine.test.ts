@@ -48,6 +48,14 @@ const haveGoV2 = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', goV2Bi
 const haveHttp = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', httpBin, 'nethttp.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const tcpBin = join(out, 'tcpecho');
 const haveTcp = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', tcpBin, 'tcpecho.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
+const gorunBin = join(out, 'gorun');
+const haveGorun = haveHttp && tryBuild(goExe, ['build', '-ldflags=-s', '-o', gorunBin, 'gorun.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
+const execerrBin = join(out, 'execerr');
+const haveExecerr = tryBuild('musl-gcc', ['-static', '-O1', '-o', execerrBin, 'execerr.c']);
+const dynBin = join(out, 'hello-dyn');
+const haveDyn = tryBuild('gcc', ['-O1', '-o', dynBin, 'hello.c']);
+const gowaitBin = join(out, 'gowait');
+const haveGowait = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', gowaitBin, 'gowait.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const ttyBin = join(out, 'tty');
 const haveTty = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', ttyBin, 'tty.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const haveGlibc = tryBuild('gcc', ['-static', '-Os', '-o', glibcBin, 'hello.c']);
@@ -581,6 +589,56 @@ describe.skipIf(!haveTcp)('Blink engine: real TCP through the kernel relay', () 
 });
 
 
+// A glibc program before `debian install`: no /lib64/ld-linux-x86-64.so.2.
+// Linux's execve fails with ENOENT and bash says "required file not found";
+// here the shell adds how to get glibc, instead of a silent 127.
+describe.skipIf(!haveDyn || !haveExecerr)('Blink engine: dynamic executable without its loader', () => {
+  it('the shell prints bash\'s message and a hint, exit 127', async () => {
+    const { shell } = await setup(readFileSync(dynBin));
+    const r = await run(shell, './prog');
+    expect(r.output).toContain('tabcomputer: ./prog: cannot execute: required file not found');
+    expect(r.output).toContain('(this program needs glibc: run `debian install`)');
+    expect(r.exitCode).toBe(127);
+  });
+
+  it('execve fails with ENOENT', async () => {
+    const { fs, shell } = await setup(readFileSync(execerrBin));
+    await fs.writeFile('/home/user/work/dyn', readFileSync(dynBin), { mode: 0o755 });
+    const r = await run(shell, './prog ./dyn');
+    expect(r.output).toContain('execv: errno 2 (ENOENT)');
+    expect(r.exitCode).toBe(1);
+  }, 60_000);
+});
+
+// cmd/go's build loop: parallel children that exit close together, each
+// waited for by os/exec in its own goroutine. Under load a SIGURG (Go's
+// preemption signal) for the forking thread can arrive while Blink runs the
+// vfork child on it; the child then dies with "signal received during fork"
+// and the parent hangs with its other children unreaped (toolchains' `go run`
+// hang). BLINK_FORK_STRESS=1 runs the stress (about half its runs hit it).
+describe.skipIf(!haveGowait)('Blink engine: parallel fork/exec/wait (Go os/exec)', () => {
+  const runGowait = async (args: string, ms: number) => {
+    const { shell } = await setup(readFileSync(gowaitBin));
+    let out = '';
+    const r = await Promise.race([
+      shell.execute(`./prog ${args}`, (s) => { out += s; }, (s) => { out += s; }),
+      new Promise((res) => setTimeout(() => res('timeout'), ms)),
+    ]);
+    return { r, out: out.replace(/\r\n/g, '\n') };
+  };
+  it('rounds of 4 children, every exit status collected', async () => {
+    const { r, out } = await runGowait('4 4', 60_000);
+    expect(out).toBe('done 4 4\n');
+    expect(r).toBe(0);
+  }, 90_000);
+  it.skipIf(!process.env.BLINK_FORK_STRESS)('stress: 60 rounds of 8', async () => {
+    const { r, out } = await runGowait('60 8', 200_000);
+    expect(out).not.toContain('signal received during fork');
+    expect(out).toBe('done 60 8\n');
+    expect(r).toBe(0);
+  }, 240_000);
+});
+
 describe.skipIf(!haveTty)('Blink engine: interactive program on a kernel pty', () => {
   it('sees a tty, its size, raw keys without echo, SIGWINCH and Ctrl-C', async () => {
     const { fs } = await setup(readFileSync(ttyBin));
@@ -654,6 +712,31 @@ describe.skipIf(!haveTty)('Blink engine: interactive program on a kernel pty', (
     tty.pty.input('q');
     await until(/bye/);
     expect(await done).toEqual({ type: 'exited', status: 0 });
+  }, 120_000);
+
+  // `go run srv.go` with stdout on the terminal (toolchains bench): cmd/go
+  // runs the binary as a child sharing the tty; the child's net/http uses
+  // epoll on loopback sockets. With the terminal's description left
+  // non-blocking, Go's runtime puts stdout in its edge-triggered netpoller too.
+  it.skipIf(!haveGorun).each(['', 'nonblock'])('a go-run-like parent, its net/http child writing to the shared tty (%s)', async (mode) => {
+    const { fs } = await setup(readFileSync(gorunBin));
+    await fs.writeFile('/home/user/work/nethttp', readFileSync(httpBin), { mode: 0o755 });
+    const { Kernel } = await import('@shiro/kernel/kernel');
+    const { TtySession, attachKernelTty } = await import('@shiro/kernel/pty');
+    const { JobControl } = await import('@shiro/kernel/signals');
+    const { blinkRunner } = await import('@shiro/x86-engine/blink');
+    const kernel = new Kernel({ fs, registerWithProcessTable: false });
+    const jc = new JobControl();
+    attachKernelTty(kernel, jc);
+    const tty = new TtySession({ jc });
+    let screen = '';
+    tty.pty.onOutput((b: Uint8Array) => { screen += new TextDecoder().decode(b); });
+    const p = tty.spawnJob(kernel, {
+      path: '/home/user/work/prog', argv: ['prog', '/home/user/work/nethttp'], cwd: '/tmp',
+      env: mode ? { GORUN_NONBLOCK: '1' } : {}, run: blinkRunner('/home/user/work/prog'),
+    });
+    expect(await tty.foreground({ pgid: p.pgid })).toEqual({ type: 'exited', status: 0 });
+    expect(screen).toBe('pong /0\r\npong /1\r\npong /2\r\npong /3\r\n');
   }, 120_000);
 
   it('Ctrl-C ends a C program blocked reading the tty (no handler)', async () => {
