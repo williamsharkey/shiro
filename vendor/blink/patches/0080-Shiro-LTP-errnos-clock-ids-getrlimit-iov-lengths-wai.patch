@@ -1,7 +1,7 @@
-From a15eda14a0bbe40c4c8409fdc80cd8e5a5869c5e Mon Sep 17 00:00:00 2001
+From 19d681438dc2ced7ba0db244b18c2652c1fe2ea5 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 00:54:01 +0000
-Subject: [PATCH 80/81] Shiro: LTP errnos: clock ids, getrlimit, iov lengths,
+Subject: [PATCH 80/82] Shiro: LTP errnos: clock ids, getrlimit, iov lengths,
  waitid options, fchown on O_PATH, personality, CLONE_PARENT, sigpending
 
 Conformance (LTP syscalls):
@@ -27,7 +27,7 @@ Conformance (LTP syscalls):
  4 files changed, 62 insertions(+), 6 deletions(-)
 
 diff --git a/blink/machine.h b/blink/machine.h
-index 481041f..22d74a4 100644
+index b6e48dd..fe8bab8 100644
 --- a/blink/machine.h
 +++ b/blink/machine.h
 @@ -306,6 +306,7 @@ struct System {
@@ -39,10 +39,10 @@ index 481041f..22d74a4 100644
    u64 kmask;      // ...this one (the main thread's)
  #ifdef HAVE_THREADS
 diff --git a/blink/shiro.inc b/blink/shiro.inc
-index 88e3ceb..53c5e19 100644
+index 657798e..1b536e6 100644
 --- a/blink/shiro.inc
 +++ b/blink/shiro.inc
-@@ -391,7 +391,12 @@ static i64 ShiroIov(struct Machine *m, bool write, int fd, i64 iovaddr,
+@@ -398,7 +398,12 @@ static i64 ShiroIov(struct Machine *m, bool write, int fd, i64 iovaddr,
    if (iovcnt < 0 || iovcnt > 1024) return -EINVAL_LINUX;
    if (!iovcnt) return 0;
    if (!(iov = (const u8 *)SchlepR(m, iovaddr, iovcnt * 16))) return -EFAULT_LINUX;
@@ -56,7 +56,7 @@ index 88e3ceb..53c5e19 100644
    if (total > (u64)g_shiro_chunk) total = g_shiro_chunk;
    buf = (u8 *)ShiroAlloc(m, total);
    if (write) {
-@@ -1559,6 +1564,9 @@ static i64 ShiroWaitid(struct Machine *m, int idtype, int id, i64 info,
+@@ -1588,6 +1593,9 @@ static i64 ShiroWaitid(struct Machine *m, int idtype, int id, i64 info,
      case 2: pid = id ? -id : 0; break;  // P_PGID
      default: return -EINVAL_LINUX;
    }
@@ -66,7 +66,7 @@ index 88e3ceb..53c5e19 100644
    // WEXITED is implied; WSTOPPED is WUNTRACED; WNOHANG, WCONTINUED, WNOWAIT pass
    options = (options & (1 | 8 | 0x01000000)) | (options & 2 ? 2 : 0);
    memset(buf, 0, sizeof(buf));
-@@ -1773,6 +1781,7 @@ struct ShiroForkHeader {
+@@ -1802,6 +1810,7 @@ struct ShiroForkHeader {
    u64 blinksigs;
    struct rlimit_linux rlim[RLIM_NLIMITS_LINUX];
    int nice;
@@ -74,7 +74,7 @@ index 88e3ceb..53c5e19 100644
    i64 elfbase, at_base, at_phdr, at_phent, at_entry, at_phnum;
    u8 rng[16];
    u32 proglen, execfnlen, interplen;
-@@ -1943,6 +1952,7 @@ static int ShiroSnapshot(struct Machine *m, u64 flags, i64 stack, i64 ctid,
+@@ -1972,6 +1981,7 @@ static int ShiroSnapshot(struct Machine *m, u64 flags, i64 stack, i64 ctid,
    h.blinksigs = s->blinksigs;
    memcpy(h.rlim, s->rlim, sizeof(h.rlim));
    h.nice = s->nice;
@@ -82,7 +82,7 @@ index 88e3ceb..53c5e19 100644
    h.elfbase = s->elf.base;
    h.at_base = s->elf.at_base, h.at_phdr = s->elf.at_phdr, h.at_phent = s->elf.at_phent;
    h.at_entry = s->elf.at_entry, h.at_phnum = s->elf.at_phnum;
-@@ -1978,7 +1988,7 @@ static i64 ShiroForkReal(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
+@@ -2007,7 +2017,7 @@ static i64 ShiroForkReal(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
    struct ShiroBuf b;
    i64 pid;
    int rc;
@@ -91,7 +91,7 @@ index 88e3ceb..53c5e19 100644
    if ((rc = ShiroSnapshot(m, flags, stack, ctid, &b)) < 0) {
      KS(m, 62, A12(pid, 9));
      return rc;
-@@ -2081,6 +2091,7 @@ static void ShiroRestoreFrom(struct Machine *m, const u8 *p, size_t len) {
+@@ -2110,6 +2120,7 @@ static void ShiroRestoreFrom(struct Machine *m, const u8 *p, size_t len) {
    s->blinksigs = h.blinksigs;
    memcpy(s->rlim, h.rlim, sizeof(h.rlim));
    s->nice = h.nice;
@@ -99,7 +99,7 @@ index 88e3ceb..53c5e19 100644
    memcpy(m->beg, h.regs, sizeof(h.regs));
    memcpy(m->xmm, h.xmm, sizeof(h.xmm));
    m->ip = h.ip;
-@@ -2314,7 +2325,7 @@ static i64 ShiroForkSame(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
+@@ -2343,7 +2354,7 @@ static i64 ShiroForkSame(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
    i64 pid;
    int i, rc;
    if (!(c = (struct ShiroChildStart *)calloc(1, sizeof(*c)))) return -ENOMEM_LINUX;
@@ -108,7 +108,7 @@ index 88e3ceb..53c5e19 100644
      free(c);
      return pid;
    }
-@@ -2729,8 +2740,28 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+@@ -2854,8 +2865,28 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
            }
  #undef SHIRO_UTS
          }
@@ -137,7 +137,7 @@ index 88e3ceb..53c5e19 100644
      case 0x0E4:                                                       // clock_gettime
        // CLOCK_BOOTTIME counts from the kernel's boot (procps' uptime and
        // process start times, like /proc); CLOCK_REALTIME gets sub-ms
-@@ -2884,7 +2915,11 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+@@ -3024,7 +3055,11 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
      // links before their targets exist)
      case 0x05C: r = ShiroStatAt(m, -100, a, 0, 0, 0); break;           // chown
      case 0x05E: r = ShiroStatAt(m, -100, a, 0, 0x100, 0); break;       // lchown
@@ -151,7 +151,7 @@ index 88e3ceb..53c5e19 100644
        if (!b) { r = -EFAULT_LINUX; break; }
        r = ShiroStatAt(m, a, b, 0, e & (0x100 | 0x1000), 0);
 diff --git a/blink/syscall.c b/blink/syscall.c
-index 19dda60..af771bf 100644
+index 29d76c3..2870ff0 100644
 --- a/blink/syscall.c
 +++ b/blink/syscall.c
 @@ -632,7 +632,8 @@ static int SysSpawn(struct Machine *m, u64 flags, u64 stack, u64 ptid, u64 ctid,
@@ -164,7 +164,7 @@ index 19dda60..af771bf 100644
    return (flags & ~supported) == SIGCHLD_LINUX ||
           (flags & ~supported) ==
               (CLONE_VM_LINUX | CLONE_VFORK_LINUX | SIGCHLD_LINUX);
-@@ -3999,6 +4000,8 @@ static int SysGetrlimit(struct Machine *m, i32 resource, i64 rlimitaddr) {
+@@ -4008,6 +4009,8 @@ static int SysGetrlimit(struct Machine *m, i32 resource, i64 rlimitaddr) {
      GetResourceLimit_(m, resource, &lux);
      return CopyToUserWrite(m, rlimitaddr, &lux, sizeof(lux));
    }
@@ -173,7 +173,7 @@ index 19dda60..af771bf 100644
    if ((rc = getrlimit(XlatResource(resource), &rlim)) != -1) {
      XlatRlimitToLinux(&lux, &rlim);
      if (CopyToUserWrite(m, rlimitaddr, &lux, sizeof(lux)) == -1) rc = -1;
-@@ -4312,6 +4315,8 @@ static int SysClockNanosleep(struct Machine *m, int clock, int flags,
+@@ -4321,6 +4324,8 @@ static int SysClockNanosleep(struct Machine *m, int clock, int flags,
    struct timespec req, rem;
    struct timespec_linux gtimespec;
    if (XlatClock(clock, &sysclock) == -1) return -1;
@@ -182,7 +182,7 @@ index 19dda60..af771bf 100644
    if (flags & ~TIMER_ABSTIME_LINUX) return einval();
    if (CopyFromUserRead(m, &gtimespec, reqaddr, sizeof(gtimespec)) == -1) {
      return -1;
-@@ -4367,7 +4372,11 @@ static int SysClockNanosleep(struct Machine *m, int clock, int flags,
+@@ -4376,7 +4381,11 @@ static int SysClockNanosleep(struct Machine *m, int clock, int flags,
            rem = SubtractTime(deadline, now);
            Write64(gtimespec.sec, rem.tv_sec);
            Write64(gtimespec.nsec, rem.tv_nsec);
