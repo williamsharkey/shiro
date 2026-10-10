@@ -48,6 +48,14 @@ const haveGoV2 = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', goV2Bi
 const haveHttp = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', httpBin, 'nethttp.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const tcpBin = join(out, 'tcpecho');
 const haveTcp = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', tcpBin, 'tcpecho.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
+const gorunBin = join(out, 'gorun');
+const haveGorun = haveHttp && tryBuild(goExe, ['build', '-ldflags=-s', '-o', gorunBin, 'gorun.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
+const execerrBin = join(out, 'execerr');
+const haveExecerr = tryBuild('musl-gcc', ['-static', '-O1', '-o', execerrBin, 'execerr.c']);
+const dynBin = join(out, 'hello-dyn');
+const haveDyn = tryBuild('gcc', ['-O1', '-o', dynBin, 'hello.c']);
+const gowaitBin = join(out, 'gowait');
+const haveGowait = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', gowaitBin, 'gowait.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const ttyBin = join(out, 'tty');
 const haveTty = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', ttyBin, 'tty.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const haveGlibc = tryBuild('gcc', ['-static', '-Os', '-o', glibcBin, 'hello.c']);
@@ -59,6 +67,8 @@ const mtchildBin = join(out, 'mtchild');
 const haveMtchild = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', mtchildBin, 'mtchild.c']);
 const psemBin = join(out, 'psem');
 const havePsem = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', psemBin, 'psem.c']);
+const shmobjBin = join(out, 'shmobj');
+const haveShmobj = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', shmobjBin, 'shmobj.c']);
 const fsidentBin = join(out, 'fsident');
 const haveFsident = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', fsidentBin, 'fsident.c']);
 // musl's libc (native Claude Code's) resolves paths and stats files its own way
@@ -132,6 +142,8 @@ const rotatesBin = join(out, 'rotates');
 const haveRotates = tryBuild('gcc', ['-static', '-O1', '-o', rotatesBin, 'rotates.c']);
 const sseiBin = join(out, 'ssei');
 const haveSsei = tryBuild('gcc', ['-static', '-O1', '-mssse3', '-o', sseiBin, 'ssei.c']);
+const sse41bBin = join(out, 'sse41b');
+const haveSse41b = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', sse41bBin, 'sse41b.c']);
 const ssefloatBin = join(out, 'ssefloat');
 const haveSsefloat = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', ssefloatBin, 'ssefloat.c', '-lm']);
 const cowforkBin = join(out, 'cowfork');
@@ -212,6 +224,26 @@ const haveSharedmaps = blinkHasSharedmaps && tryBuild('gcc', ['-static', '-O1', 
 const memerrsBin = join(out, 'memerrs');
 const blinkHasMemerrs = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_memerrs');
 const haveMemerrs = blinkHasMemerrs && tryBuild('gcc', ['-static', '-O1', '-w', '-o', memerrsBin, 'memerrs.c']);
+// Blink 0501: a thread's tkill is SI_TKILL from this process, and the signal frame is Linux's (pthread_cancel)
+const cancelBin = join(out, 'cancel');
+const blinkHasTkillinfo = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_tkillinfo');
+const haveCancel = blinkHasTkillinfo && tryBuild('gcc', ['-static', '-O1', '-w', '-o', cancelBin, 'cancel.c', '-lpthread']);
+// Blink 0502: CPU clock ids naming no process or thread of ours are EINVAL
+const cpuclockidsBin = join(out, 'cpuclockids');
+const blinkHasCpuclockids = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_cpuclockids');
+const haveCpuclockids = blinkHasCpuclockids && tryBuild('gcc', ['-static', '-O1', '-w', '-o', cpuclockidsBin, 'cpuclockids.c', '-lpthread']);
+// Blink 0503: tkill/tgkill of signal 0 to the calling thread
+const tkill0Bin = join(out, 'tkill0');
+const blinkHasTkill0 = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_tkill0');
+const haveTkill0 = blinkHasTkill0 && tryBuild('gcc', ['-static', '-O1', '-w', '-o', tkill0Bin, 'tkill0.c', '-lpthread']);
+// Blink 0504: setting another user's process's scheduling is EPERM
+const schedpermBin = join(out, 'schedperm');
+const blinkHasSchedperm = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_schedperm');
+const haveSchedperm = blinkHasSchedperm && tryBuild('gcc', ['-static', '-O1', '-w', '-o', schedpermBin, 'schedperm.c']);
+// Blink 0505: ITIMER_VIRTUAL/PROF are the kernel's, per process
+const itimersBin = join(out, 'itimers');
+const blinkHasItimers = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_itimers');
+const haveItimers = blinkHasItimers && tryBuild('gcc', ['-static', '-O1', '-w', '-o', itimersBin, 'itimers.c']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -581,6 +613,56 @@ describe.skipIf(!haveTcp)('Blink engine: real TCP through the kernel relay', () 
 });
 
 
+// A glibc program before `debian install`: no /lib64/ld-linux-x86-64.so.2.
+// Linux's execve fails with ENOENT and bash says "required file not found";
+// here the shell adds how to get glibc, instead of a silent 127.
+describe.skipIf(!haveDyn || !haveExecerr)('Blink engine: dynamic executable without its loader', () => {
+  it('the shell prints bash\'s message and a hint, exit 127', async () => {
+    const { shell } = await setup(readFileSync(dynBin));
+    const r = await run(shell, './prog');
+    expect(r.output).toContain('tabcomputer: ./prog: cannot execute: required file not found');
+    expect(r.output).toContain('(this program needs glibc: run `debian install`)');
+    expect(r.exitCode).toBe(127);
+  });
+
+  it('execve fails with ENOENT', async () => {
+    const { fs, shell } = await setup(readFileSync(execerrBin));
+    await fs.writeFile('/home/user/work/dyn', readFileSync(dynBin), { mode: 0o755 });
+    const r = await run(shell, './prog ./dyn');
+    expect(r.output).toContain('execv: errno 2 (ENOENT)');
+    expect(r.exitCode).toBe(1);
+  }, 60_000);
+});
+
+// cmd/go's build loop: parallel children that exit close together, each
+// waited for by os/exec in its own goroutine. Under load a SIGURG (Go's
+// preemption signal) for the forking thread can arrive while Blink runs the
+// vfork child on it; the child then dies with "signal received during fork"
+// and the parent hangs with its other children unreaped (toolchains' `go run`
+// hang). BLINK_FORK_STRESS=1 runs the stress (about half its runs hit it).
+describe.skipIf(!haveGowait)('Blink engine: parallel fork/exec/wait (Go os/exec)', () => {
+  const runGowait = async (args: string, ms: number) => {
+    const { shell } = await setup(readFileSync(gowaitBin));
+    let out = '';
+    const r = await Promise.race([
+      shell.execute(`./prog ${args}`, (s) => { out += s; }, (s) => { out += s; }),
+      new Promise((res) => setTimeout(() => res('timeout'), ms)),
+    ]);
+    return { r, out: out.replace(/\r\n/g, '\n') };
+  };
+  it('rounds of 4 children, every exit status collected', async () => {
+    const { r, out } = await runGowait('4 4', 60_000);
+    expect(out).toBe('done 4 4\n');
+    expect(r).toBe(0);
+  }, 90_000);
+  it.skipIf(!process.env.BLINK_FORK_STRESS)('stress: 60 rounds of 8', async () => {
+    const { r, out } = await runGowait('60 8', 200_000);
+    expect(out).not.toContain('signal received during fork');
+    expect(out).toBe('done 60 8\n');
+    expect(r).toBe(0);
+  }, 240_000);
+});
+
 describe.skipIf(!haveTty)('Blink engine: interactive program on a kernel pty', () => {
   it('sees a tty, its size, raw keys without echo, SIGWINCH and Ctrl-C', async () => {
     const { fs } = await setup(readFileSync(ttyBin));
@@ -654,6 +736,31 @@ describe.skipIf(!haveTty)('Blink engine: interactive program on a kernel pty', (
     tty.pty.input('q');
     await until(/bye/);
     expect(await done).toEqual({ type: 'exited', status: 0 });
+  }, 120_000);
+
+  // `go run srv.go` with stdout on the terminal (toolchains bench): cmd/go
+  // runs the binary as a child sharing the tty; the child's net/http uses
+  // epoll on loopback sockets. With the terminal's description left
+  // non-blocking, Go's runtime puts stdout in its edge-triggered netpoller too.
+  it.skipIf(!haveGorun).each(['', 'nonblock'])('a go-run-like parent, its net/http child writing to the shared tty (%s)', async (mode) => {
+    const { fs } = await setup(readFileSync(gorunBin));
+    await fs.writeFile('/home/user/work/nethttp', readFileSync(httpBin), { mode: 0o755 });
+    const { Kernel } = await import('@shiro/kernel/kernel');
+    const { TtySession, attachKernelTty } = await import('@shiro/kernel/pty');
+    const { JobControl } = await import('@shiro/kernel/signals');
+    const { blinkRunner } = await import('@shiro/x86-engine/blink');
+    const kernel = new Kernel({ fs, registerWithProcessTable: false });
+    const jc = new JobControl();
+    attachKernelTty(kernel, jc);
+    const tty = new TtySession({ jc });
+    let screen = '';
+    tty.pty.onOutput((b: Uint8Array) => { screen += new TextDecoder().decode(b); });
+    const p = tty.spawnJob(kernel, {
+      path: '/home/user/work/prog', argv: ['prog', '/home/user/work/nethttp'], cwd: '/tmp',
+      env: mode ? { GORUN_NONBLOCK: '1' } : {}, run: blinkRunner('/home/user/work/prog'),
+    });
+    expect(await tty.foreground({ pgid: p.pgid })).toEqual({ type: 'exited', status: 0 });
+    expect(screen).toBe('pong /0\r\npong /1\r\npong /2\r\npong /3\r\n');
   }, 120_000);
 
   it('Ctrl-C ends a C program blocked reading the tty (no handler)', async () => {
@@ -740,6 +847,36 @@ it.skipIf(!haveMemerrs)('mlock, munlock, mlockall and mmap refuse bad arguments 
   const { shell } = await setup(readFileSync(memerrsBin));
   const r = await run(shell, './prog');
   expect(r.output.replace(/\r\n/g, '\n')).toBe('mlock far ENOMEM mine ok\nmunlock far ENOMEM mine ok\nmlockall 0 EINVAL onfault EINVAL current ok\nmmap flags ~0 EINVAL pipe ENODEV huge ENOMEM\n');
+}, 60_000);
+
+it.skipIf(!haveCancel)('pthread_cancel, deferred and asynchronous, runs the cleanup handlers; a thread\'s tkill is SI_TKILL from this process (Open POSIX)', async () => {
+  const { shell } = await setup(readFileSync(cancelBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('deferred cleaned 1 canceled 1\nasync cleaned 11 canceled 1\ntkill code -6 self 1 frame 1\n');
+}, 60_000);
+
+it.skipIf(!haveCpuclockids)('CPU clock ids: the process\'s and the thread\'s read; one naming no process is EINVAL (Open POSIX)', async () => {
+  const { shell } = await setup(readFileSync(cpuclockidsBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('process ok self ok thread ok\nbogus EINVAL EINVAL EINVAL\n');
+}, 60_000);
+
+it.skipIf(!haveTkill0)('pthread_kill(self, 0) and tgkill/tkill of signal 0 probe the thread (Open POSIX pthread_kill_2-1)', async () => {
+  const { shell } = await setup(readFileSync(tkill0Bin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('pthread_kill 0 tgkill 0 tkill 0\n');
+}, 60_000);
+
+it.skipIf(!haveSchedperm)('sched_setparam of another user\'s process (init) is EPERM; reading it is allowed (Open POSIX sched_setparam_26-1)', async () => {
+  const { shell } = await setup(readFileSync(schedpermBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('get ok getscheduler ok set EPERM setscheduler EPERM self ok\n');
+}, 60_000);
+
+it.skipIf(!haveItimers)('ITIMER_VIRTUAL and ITIMER_PROF are per process: a fork child has none (Open POSIX fork_13-1)', async () => {
+  const { shell } = await setup(readFileSync(itimersBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('set 0 0 parent armed 1\nchild virtual 0 prof 0\n');
 }, 60_000);
 
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
@@ -1071,6 +1208,15 @@ describe('Blink engine: CPU and syscall fixes', () => {
     expect(r.output.replace(/\r\n/g, '\n')).toBe('misaligned faults 200\nmoves 5022a87e047adf0a\n00 7ee345218afcb239\n01 a391afcb2fab11d7\n02 96a4eae743305de5\n03 4f1fdbab20276a60\n04 2dd5c5e6b7d3e4c1\n05 1ea1f24828c932b8\n06 7252ee31cd46eac9\n07 a7d2613e2dbb0e13\n08 a8113f5bdd1f72c3\n09 07148d3151ffb9b6\n10 524e60ed9625a69b\n11 cf7ff38f3eef12f3\n12 7e7f27c94b126a65\n13 cb3818cf16c8e140\n14 cb3818cf16c8e140\n15 8e0e6be8bc8c6a2d\n16 4bcc7f190e24bd97\n17 1203fb1b726bbd12\n18 ab189b3fd9f24c9e\n19 950527b9d4f0dabc\n20 78c257c240f6f10d\n21 cf1ade267c265c1d\n22 c973936bed53b154\n23 aea16f40d5405a05\n24 eaf4afc255a34129\n25 17685060ffef0b34\n26 65d590d7ead5f7cf\n27 fd54d777ca69c642\n28 c00277b74ad06d8a\n29 5641aadecea618a1\n30 e3c2aed0e370a373\n31 2b57dc7aff029b1d\n32 d0aadbb892e4986b\n33 ec7115c07c008552\n34 3cb357330446786f\n35 92d70ae93be3a4a1\n36 0000000000000000\n37 1e890edd978855e7\n38 c7a0d592de6396ef\n39 f6cb7bac6e55409e\n40 0000000000000000\n41 9ce8b41d4b876de3\n42 25b1756106f5daf1\n43 8000000000000000\n44 0000000000000000\n45 e572344fc39ee05a\n46 c598c655170411b1\n47 c01044d0040f6876\n48 0000000000000000\n49 0000000000000000\n50 014a2157c3be93e2\nstrings 52edaac7a097348e\nall 6691258bf5fa7cfc\n');
   }, 60_000);
 
+  // llvmpipe's shader code (LLVM 15): pblendvb, ptest, pinsrd/extractps with memory, cvtsi2ss,
+  // movshdup, pminud/pmaxud, every cmpps predicate, unpckhpd (its low half was wrong: 0114), REX registers
+  it.skipIf(!haveSse41b)('LLVM\'s SSE4.1 forms (llvmpipe) match native, interpreted and compiled', async () => {
+    const { shell } = await setup(readFileSync(sse41bBin));
+    const r = await run(shell, './prog; BLINK_WJIT=0 ./prog');
+    const native = "pblendvb   40000000 bf800000 c0490fdb 00000000\nblendvps   40000000 bf800000 c0490fdb 00000000\nptest0 zf=1 cf=1 a=0\nptest1 zf=1 cf=1 a=0\nptest2 zf=0 cf=1 a=0\nptest3 zf=0 cf=0 a=1\nptest4 zf=0 cf=1 a=0\nptest5 zf=0 cf=0 a=1\npinsrd     3f800000 00000021 40490fdb 00000042\nextractps  3f000000 c0490fdb 80000000 00000000\ncvtsi2ss   c0e00000 bf800000 40490fdb 00000000\ncvtsi2ssq  51e5f4c9 bf800000 40490fdb 00000000\ncvtsi2ssm  42040000 bf800000 40490fdb 00000000\nmovshdup   bf800000 bf800000 00000000 00000000\nmovshdupm  3f000000 3f000000 80000000 80000000\nmovsldup   40000000 40000000 c0490fdb c0490fdb\npminud     3f800000 3f000000 40490fdb 00000000\npmaxud     40000000 bf800000 c0490fdb 80000000\npminsd     3f800000 bf800000 c0490fdb 80000000\npmulld     00000000 00000000 0be16559 00000000\ncmpps0     00000000 00000000 00000000 ffffffff\ncmpps1     ffffffff ffffffff 00000000 00000000\ncmpps2     ffffffff ffffffff 00000000 ffffffff\ncmpps3     00000000 00000000 00000000 00000000\ncmpps4     ffffffff ffffffff ffffffff 00000000\ncmpps5     00000000 00000000 ffffffff ffffffff\ncmpps6     00000000 00000000 ffffffff 00000000\ncmpps7     ffffffff ffffffff ffffffff ffffffff\ncmpnlepsm  00000000 00000000 ffffffff 00000000\nunpckhpd   40490fdb 00000000 c0490fdb 80000000\nunpcklpd   3f800000 bf800000 40000000 3f000000\npunpckhqdq 40490fdb 00000000 c0490fdb 80000000\npextrd     c0490fdb 80000000 00000000 00000000\ninsertps   00000000 c0490fdb 00000000 00000000\ninsertpsm  3f800000 bf800000 00000016 00000000\npacks      ff000000 2c21160b ff000000 2c21160b\n";
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(native + native);
+  }, 60_000);
+
   // PostgreSQL's huge_pages=try maps MAP_HUGETLB first and falls back on ENOMEM
   it.skipIf(!haveHugetlb)('MAP_HUGETLB is ENOMEM (no huge pages reserved), an ordinary map works', async () => {
     const { shell } = await setup(readFileSync(hugetlbBin));
@@ -1177,10 +1323,10 @@ describe('Blink engine: CPU and syscall fixes', () => {
     }
   }, 60_000);
 
-  // The acceptance test of docs/research/SHARED_MAPPINGS.md: within a process
-  // and across fork today; an exec'd process's sem_post needs the Blink half
-  // (remote pages). it.fails until then: flip it to `it` when it lands.
-  it.skipIf(!havePsem).fails('POSIX named semaphores across exec (sem_open, /dev/shm)', async () => {
+  // The acceptance test of docs/research/SHARED_MAPPINGS.md: within a process,
+  // across fork, and with a process it exec'd (another Blink instance: the
+  // semaphore's page is remote, Blink 0112)
+  it.skipIf(!havePsem)('POSIX named semaphores across exec (sem_open, /dev/shm)', async () => {
     const { shell } = await setup(readFileSync(psemBin));
     const r = await run(shell, './prog');
     const out = r.output.replace(/\r\n/g, '\n');
@@ -1188,6 +1334,15 @@ describe('Blink engine: CPU and syscall fixes', () => {
     expect(out).toContain('after fork child post 1\n');
     expect(out).toContain("exec'd process post seen: yes\n");
   }, 60_000);
+
+  // Firefox's font list: a memfd passed to a process it exec'd, mapped there
+  // afresh; lock-prefixed adds, a process-shared mutex and semaphores (0112)
+  it.skipIf(!haveShmobj)('a memfd mapped MAP_SHARED by an exec\'d process: atomics, mutex, semaphores across instances', async () => {
+    const { shell } = await setup(readFileSync(shmobjBin));
+    const r = await run(shell, './prog 2>/dev/null; BLINK_WJIT=0 ./prog 2>/dev/null');
+    const ok = 'child sees "written by the parent"\npongs 50 atomic 4000 locked 4000 text "written by the child" exit 0\n';
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(ok + ok);
+  }, 120_000);
 
   it.skipIf(!haveStatnull)('the stat family with a NULL buffer is EFAULT once the file is found', async () => {
     const { shell } = await setup(readFileSync(statnullBin));

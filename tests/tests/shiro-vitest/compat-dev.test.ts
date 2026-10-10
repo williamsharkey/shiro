@@ -5,7 +5,7 @@
  * WASM guests run in Node worker_threads as kernel processes (sab mode), as
  * in kernel-shell.test.ts. Packages built here are read from public/pkg.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { Worker } from 'node:worker_threads';
 import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
@@ -1978,5 +1978,140 @@ describe('npm install: install scripts and platform packages', () => {
     r = await sh(shell, 'mkdir -p /home/user/scr2 && cd /home/user/scr2 && npm i --ignore-scripts zzfake-dep > /dev/null; ls node_modules/zzfake-dep; echo ignore-scripts=true > ~/.npmrc; cd /home/user/scr && rm -rf node_modules && npm i > /dev/null 2>&1; ls node_modules/zzfake-bad; rm ~/.npmrc');
     expect(r.out).toBe('package.json\nindex.js\npackage.json\n');
     expect(r.err).toBe('');
+  }, 60_000);
+});
+
+describe("the page's esbuild is let go when idle", () => {
+  it('stops after the idle time and starts again for the next build', async () => {
+    // The page's esbuild is esbuild-wasm's browser build (here in this thread, from esbuild.wasm)
+    vi.resetModules();
+    vi.doMock('esbuild-wasm', () => import(`${REPO}/node_modules/esbuild-wasm/esm/browser.js`));
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async (input: any, init?: any) => String(input).endsWith('/esbuild.wasm')
+      ? new Response(readFileSync(`${REPO}/node_modules/esbuild-wasm/esbuild.wasm`)) : saved(input, init)) as typeof fetch;
+    const { buildCmd, esbuildRunning, setEsbuildIdleMs } = await import('@shiro/commands/build');
+    const { fs, shell } = await createTestShell();
+    shell.commands.register(buildCmd);
+    await fs.mkdir('/home/user/eb', { recursive: true });
+    await fs.writeFile('/home/user/eb/a.ts', 'const n: number = 41;\nexport const v = n + 1;\n');
+    setEsbuildIdleMs(200);
+    try {
+      let r = await sh(shell, 'cd /home/user/eb && build a.ts --outfile=out1.js');
+      expect(r.exitCode).toBe(0);
+      expect(esbuildRunning()).toBe(true);
+      await new Promise((res) => setTimeout(res, 600));
+      expect(esbuildRunning()).toBe(false);
+      r = await sh(shell, 'cd /home/user/eb && build a.ts --outfile=out2.js && cat out2.js');
+      expect(r.exitCode).toBe(0);
+      expect(r.out).toContain('n + 1');
+      expect(esbuildRunning()).toBe(true);
+    } finally {
+      setEsbuildIdleMs(60_000);
+      globalThis.fetch = saved;
+      vi.doUnmock('esbuild-wasm');
+    }
+  }, 120_000);
+});
+
+describe('node: a process that exits closes its servers', () => {
+  it('process.exit() frees the port; a script that goes idle while serving leaves it up', async () => {
+    const { iframeServer } = await import('@shiro/iframe-server');
+    const { shell } = await createTestShell();
+    let r = await sh(shell, `node -e "require('http').createServer((q, s) => s.end('up')).listen(4811, () => setTimeout(() => process.exit(0), 50))"; echo "e=$?"`);
+    expect(r.out).toBe('e=0\n');
+    expect(iframeServer.isPortInUse(4811)).toBe(false);
+    r = await sh(shell, `node -e "require('http').createServer((q, s) => s.end('up')).listen(4812)"; echo "e=$?"`);
+    expect(r.out).toBe('e=0\n');
+    expect(iframeServer.isPortInUse(4812)).toBe(true);
+    expect((await iframeServer.fetch(4812, '/')).body).toBe('up');
+    iframeServer.close(4812);
+  }, 60_000);
+});
+
+describe('node builtins have no enumerable `default` (as in node)', () => {
+  it("a copy of path's keys into a mock leaves path.resolve alone (@vercel/nft, Next's build)", async () => {
+    const { shell } = await createTestShell();
+    const r = await sh(shell, `node -e "
+      const o = { default: require('path') };
+      const Y = { default: {} };
+      Object.keys(o.default).forEach((e) => { const t = o.default[e]; Y[e] = Y.default[e] = t; });
+      Y.resolve = Y.default.resolve = function (...e) { return o.default.resolve.apply(this, ['/x', ...e]); };
+      console.log(Y.resolve('a'), require('path').resolve('/b', 'c'));
+      console.log(['path', 'assert', 'events', 'stream'].map((m) => Object.keys(require(m)).includes('default')).join(' '));
+      import('path').then((p) => console.log(typeof p.default.join));
+    "`);
+    expect(r.out).toBe('/x/a /b/c\nfalse false false false\nfunction\n');
+  }, 60_000);
+});
+
+describe('Buffer: every fixed- and variable-width read/write node has', () => {
+  it('LE/BE ints, floats, doubles, BigInt64, readUIntLE/writeIntBE (webpack\'s cache serializer)', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/bo', { recursive: true });
+    await fs.writeFile('/home/user/bo/ops.js', `const b = Buffer.alloc(16);
+const out = [];
+out.push(b.writeUInt32LE(0xdeadbeef, 0), b.writeInt16LE(-2, 4), b.writeInt32BE(-5, 6), b.writeUInt16LE(513, 10), b.writeInt8(-1, 12), b.writeFloatLE(1.5, 12));
+out.push(b.toString('hex'));
+out.push(b.readUInt32LE(0), b.readInt16LE(4), b.readInt32BE(6), b.readUint16LE(10), b.readFloatLE(12), b.readInt32LE(0));
+const d = Buffer.alloc(8); d.writeDoubleBE(Math.PI); out.push(d.toString('hex'), d.readDoubleBE(0));
+const g = Buffer.alloc(8); g.writeBigInt64LE(-3n); out.push(g.toString('hex'), String(g.readBigInt64LE()), String(g.readBigUInt64LE()));
+const v = Buffer.alloc(6); out.push(v.writeUIntBE(0x123456789a, 0, 5), v.toString('hex'), v.readUIntLE(0, 5), v.readIntBE(0, 3), v.writeIntLE(-300, 0, 3), v.readIntLE(0, 3), v.toString('hex'));
+console.log(out.join(' '));
+`);
+    const r = await sh(shell, 'node /home/user/bo/ops.js');
+    // (node 22's output for the same script)
+    expect(r.out).toBe('4 6 10 12 13 16 efbeaddefefffffffffb01020000c03f 3735928559 -2 -5 513 1.5 -559038737 400921fb54442d18 3.141592653589793 fdffffffffffffff -3 18446744073709551613 5 123456789a00 663443878930 1193046 3 -300 d4feff789a00\n');
+  }, 60_000);
+});
+
+describe('require.resolve finds any existing file', () => {
+  it('a binary file by its path (Next resolves app/favicon.ico)', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/rr/app', { recursive: true });
+    await fs.writeFile('/home/user/rr/app/favicon.ico', new Uint8Array([0, 0, 1, 0, 0xff, 0xfe]));
+    const r = await sh(shell, `cd /home/user/rr && node -e "console.log(require.resolve('/home/user/rr/app/favicon.ico'), require.resolve('./app/favicon.ico')); try { require.resolve('./app/nope.ico') } catch (e) { console.log(e.code) }"`);
+    expect(r.out).toBe('/home/user/rr/app/favicon.ico /home/user/rr/app/favicon.ico\nMODULE_NOT_FOUND\n');
+  }, 60_000);
+});
+
+describe('node:querystring as node has it', () => {
+  it('repeated keys are arrays both ways, + is a space, separators, bad escapes (Next\'s loader options)', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/qs', { recursive: true });
+    await fs.writeFile('/home/user/qs/qs.js', `const qs = require('querystring');
+console.log(JSON.stringify(qs.parse('a=1&a=2&b=x&c=&d')), qs.stringify({ a: ['1', '2'], b: 'x y', c: '' }));
+console.log(JSON.stringify(qs.parse('a=1;a=2', ';')), qs.escape('ä &'), qs.unescape('%C3%A4+%20'), JSON.stringify(qs.decode('x=%E4')));
+const u = new URLSearchParams('a=1&a=2'); console.log(u.getAll('a').join());
+`);
+    const r = await sh(shell, 'node /home/user/qs/qs.js');
+    // (node 22's output for the same script)
+    expect(r.out).toBe('{"a":["1","2"],"b":"x","c":"","d":""} a=1&a=2&b=x%20y&c=\n{"a":["1","2"]} %C3%A4%20%26 \u00e4+  {"x":"\ufffd"}\n1,2\n');
+  }, 60_000);
+});
+
+describe('vm.runInThisContext', () => {
+  it("gives the value of the script's last expression (webpack's executeModule)", async () => {
+    const { shell } = await createTestShell();
+    const r = await sh(shell, `node -e "const vm=require('vm'); console.log(typeof vm.runInThisContext('(function(a){return a+1})'), vm.runInThisContext('1+2'), new vm.Script('var zzvm = 5; zzvm*2').runInThisContext(), typeof zzvm, vm.runInThisContext('(function(a){return a+1})', { filename: '/x/y.js' })(1))"`);
+    expect(r.out).toBe('function 3 10 number 2\n');
+  }, 60_000);
+});
+
+describe('vm contexts are their own global object', () => {
+  it('globalThis in runInNewContext is the context (Next\'s client-reference manifests); names read and write it', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/vmc', { recursive: true });
+    await fs.writeFile('/home/user/vmc/vm.js', `const vm = require('vm');
+const ctx = {};
+vm.runInNewContext('globalThis.__RSC_MANIFEST = (globalThis.__RSC_MANIFEST || {}); globalThis.__RSC_MANIFEST["/page"] = { a: 1 }; globalThis.x = 2', ctx);
+console.log(JSON.stringify(ctx.__RSC_MANIFEST), ctx.x);
+const c2 = vm.createContext({ n: 2, out: [] });
+console.log(vm.runInContext('out.push(n * 21); n = n + 1; out.length + n', c2), c2.n, c2.out.join());
+console.log(vm.runInNewContext('typeof Math.max + " " + JSON.stringify([a, b])', { a: 1, b: 'q' }));
+console.log(new vm.Script('k * 2').runInNewContext({ k: 4 }), vm.isContext(c2));
+`);
+    const r = await sh(shell, 'node /home/user/vmc/vm.js');
+    // (node 22's output for the same script)
+    expect(r.out).toBe('{"/page":{"a":1}} 2\n4 3 42\nfunction [1,"q"]\n8 true\n');
   }, 60_000);
 });

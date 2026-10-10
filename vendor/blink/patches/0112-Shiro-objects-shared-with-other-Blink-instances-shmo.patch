@@ -1,0 +1,760 @@
+From e10dce10ae88529fafcfd1e7bd72cc296dc4f736 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 08:29:37 +0000
+Subject: [PATCH] Shiro: objects shared with other Blink instances (shmobj):
+ remote pages over the kernel's SharedArrayBuffer
+
+A MAP_SHARED mapping of a /dev/shm file or a memfd asks the kernel for a
+shared object (shiro_shmobj_map, 1020, remote at once: kind 0x100) and maps
+shadow pages marked PAGE_REMOTE. No TLB caches them (nor the wasm JIT's:
+compiled code leaves them to the interpreter), so every access comes through
+LookupAddress2: an instruction locks the object, refreshes the page from the
+buffer and writes it back when it ends (CommitStash, or the fault path); a
+system call locks only around its copies and writes back what it changed.
+FUTEX_WAIT/WAKE on such a word wait and wake on the buffer (Atomics), across
+instances. munmap, exit and same-instance fork keep the kernel's mapping
+counts. BLINK_SHMOBJ=0 maps such files as before.
+---
+ blink/gil.c     |   3 +
+ blink/gil.h     |   1 +
+ blink/machine.c |   3 +
+ blink/machine.h |  23 +++
+ blink/memory.c  |  19 +-
+ blink/shiro.inc | 463 +++++++++++++++++++++++++++++++++++++++++++++++-
+ blink/syscall.c |   8 +
+ blink/wjit.c    |   3 +-
+ 8 files changed, 520 insertions(+), 3 deletions(-)
+
+diff --git a/blink/gil.c b/blink/gil.c
+index 1448366..d3adfae 100644
+--- a/blink/gil.c
++++ b/blink/gil.c
+@@ -67,8 +67,11 @@ void GilAcquire(void) {
+ #endif
+ }
+ 
++void (*g_gil_release_hook)(void);
++
+ void GilRelease(void) {
+   if (!t_gil_held) return;
++  if (g_gil_release_hook) g_gil_release_hook();
+ #ifdef __EMSCRIPTEN__
+   if (g_shiro_prof) ShiroProfGil(false, 0);
+ #endif
+diff --git a/blink/gil.h b/blink/gil.h
+index 03f254a..74c03d9 100644
+--- a/blink/gil.h
++++ b/blink/gil.h
+@@ -10,6 +10,7 @@
+ #define kGilSlice 4096
+ 
+ extern bool g_gil_enabled;
++extern void (*g_gil_release_hook)(void);  // before the lock goes (shiro.inc)
+ 
+ void GilInit(void);
+ void GilAcquire(void);
+diff --git a/blink/machine.c b/blink/machine.c
+index 7fb0b9d..049d032 100644
+--- a/blink/machine.c
++++ b/blink/machine.c
+@@ -2381,6 +2381,9 @@ void Blink(struct Machine *m) {
+     m->canhalt = false;
+     m->nofault = false;
+     m->insyscall = false;
++    // a fault mid-instruction: shared objects it held go back unlocked
++    if (m->stashaddr == SHIRO_STASH_REMOTE) m->stashaddr = 0;
++    if (m->nrslot || m->nrlocks) ShiroRemoteFlush(m);
+     CollectPageLocks(m);
+     CollectGarbage(m, 0);
+     if (IsMakingPath(m)) {
+diff --git a/blink/machine.h b/blink/machine.h
+index f818607..ffcf0e6 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -110,6 +110,12 @@
+ // writable (a write gets this process its own copy)
+ #define PAGE_COW   0x0002000000000000
+ #define PAGE_COWRW 0x0004000000000000
++// Shiro: a page of an object shared with other Blink instances (shmobj,
++// docs/research/SHARED_MAPPINGS.md): its bytes live in the kernel's
++// SharedArrayBuffer; the host page is this instance's shadow of them,
++// refreshed and written back around each access (shiro.inc)
++#define PAGE_REMOTE 0x0001000000000000
++#define SHIRO_STASH_REMOTE 1  // m->stashaddr: only remote pages to write back
+ 
+ #define SREG_ES 0
+ #define SREG_CS 1
+@@ -477,6 +483,18 @@ struct Machine {               //
+   bool wjhot;                            // at a branch target (wasm jit)
+   struct WjTlb wjr[WJ_TLB_SIZE];         // wasm jit read translations
+   struct WjTlb wjw[WJ_TLB_SIZE];         // wasm jit write translations
++  struct ShiroRemoteSlot {               // remote pages this instruction or
++    i64 page;                            // system call has in its shadow
++    u8 *host;                            //
++    u8 *twin;                            // (a system call's: what it read)
++    int id;                              //
++    u32 off;                             //
++  } rslot[8];                            //
++  int nrslot;                            //
++  int rlocks[4];                         // shared objects it holds locked
++  int nrlocks;                           //
++  double rlockt;                         // since when (a lease: shiro.inc)
++  int rflag;                             // remote futex wake word
+ };  //
+ 
+ extern struct HostPages g_hostpages;
+@@ -511,6 +529,11 @@ u64 AllocatePageTable(struct System *);
+ u64 AllocateAnonymousPage(struct System *);
+ void FreeAnonymousPage(struct System *, u8 *);
+ u64 FindPageTableEntry(struct Machine *, u64);
++u8 *ShiroRemoteAccess(struct Machine *, i64, u8 *);
++void ShiroRemoteFlush(struct Machine *);
++void ShiroRemoteRelease(struct Machine *);
++void ShiroRemoteEnd(struct Machine *);
++int ShiroRemoteCopy(struct Machine *, i64, void *, u64, bool);
+ bool CheckMemoryInvariants(struct System *) nosideeffect dontdiscard;
+ i64 ReserveVirtual(struct System *, i64, i64, u64, int, i64, bool, bool);
+ char *FormatPml4t(struct Machine *);
+diff --git a/blink/memory.c b/blink/memory.c
+index a3c0ada..a3245f2 100644
+--- a/blink/memory.c
++++ b/blink/memory.c
+@@ -257,6 +257,7 @@ TryAgain:
+       return 0;
+     }
+   }
++  if (entry & PAGE_REMOTE) return entry;  // (every access goes the slow way)
+   m->tlb[tlbkey].page = page;
+   m->tlb[tlbkey].entry = entry;
+   return entry;
+@@ -354,6 +355,13 @@ u8 *LookupAddress2(struct Machine *m, i64 virt, u64 mask, u64 need) {
+     m->segvcode = SEGV_ACCERR_LINUX;
+     return (u8 *)efault0();
+   }
++  if (entry & PAGE_REMOTE) {
++    if ((host = GetPageAddress(m->system, entry, false))) {
++      return ShiroRemoteAccess(m, virt, host);
++    }
++    m->segvcode = SEGV_MAPERR_LINUX;
++    return (u8 *)efault0();
++  }
+ #ifndef DISABLE_JIT
+   if ((need & PAGE_RW) &&
+       (entry & (PAGE_U | PAGE_RW | PAGE_XD)) == (PAGE_U | PAGE_RW) &&
+@@ -458,6 +466,14 @@ int VirtualCopy(struct Machine *m, i64 v, char *r, u64 n, bool d) {
+   k = 4096 - (v & 4095);
+   while (n) {
+     k = MIN(k, n);
++    if (!m->metal && (FindPageTableEntry(m, v & -4096) & PAGE_REMOTE)) {
++      if (ShiroRemoteCopy(m, v, r, k, d) == -1) return -1;
++      n -= k;
++      r += k;
++      v += k;
++      k = 4096;
++      continue;
++    }
+     if (!(p = d ? LookupAddress(m, v) : LookupAddressWrite(m, v))) return -1;
+     if (d) {
+       memcpy(r, p, k);
+@@ -506,10 +522,11 @@ int CopyToUserWrite(struct Machine *m, i64 addr, void *src, u64 n) {
+ 
+ void CommitStash(struct Machine *m) {
+   unassert(m->stashaddr);
+-  if (m->opcache->writable) {
++  if (m->stashaddr != SHIRO_STASH_REMOTE && m->opcache->writable) {
+     CopyToUser(m, m->stashaddr, m->opcache->stash, m->opcache->stashsize);
+   }
+   m->stashaddr = 0;
++  if (m->nrslot || m->nrlocks) ShiroRemoteEnd(m);
+ }
+ 
+ u8 *ReserveAddress(struct Machine *m, i64 v, size_t n, bool writable) {
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 17ae48c..e38a6b7 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -25,6 +25,9 @@
+ // Memory, threads, futexes, signal delivery and timing stay Blink's.
+ 
+ int g_shiro_pid;  // kernel pid; 0 = not running under Shiro
++static bool g_shiro_noremote;  // BLINK_SHMOBJ=0: shared objects map as private copies
++static void ShiroRemoteFork(int, int);
++static void ShiroRemoteOnGil(void);
+ static bool g_shiro_nocow;  // BLINK_FORK_COW=0: a same-instance child gets copies, not shared pages
+ static int g_shiro_mmlog;  // SHIRO_BLINK_MMLOG=1: log the guest's mappings, 2: ring, 3: 1 + writes
+ static struct { int tid, nr; u64 a, b, c, r; } g_shiro_mmring[256];
+@@ -54,6 +57,8 @@ void ShiroInitSystem(struct System *s, bool first) {
+   g_shiro_trace = (e = getenv("SHIRO_BLINK_CRASH")) && !strcmp(e, "2");
+   g_shiro_mmlog = (e = getenv("SHIRO_BLINK_MMLOG")) ? atoi(e) : 0;
+   g_shiro_nocow = (e = getenv("BLINK_FORK_COW")) && *e == '0';
++  g_shiro_noremote = (e = getenv("BLINK_SHMOBJ")) && *e == '0';
++  g_gil_release_hook = ShiroRemoteOnGil;
+   if (first) ShiroProfInit();
+   if (g_shiro_trace && (e = getenv("SHIRO_BLINK_PROBE"))) {  // addr,addr,...
+     int k;
+@@ -2531,7 +2536,7 @@ static void ShiroShareRange(struct System *s, i64 virt, i64 size) {
+     }  // (pages of a host block or mug stay with their block)
+     do {
+       e = LoadPte(slot);
+-    } while (!CasPte(slot, e, (n & (PAGE_TA | PAGE_HOST)) | (e & (PAGE_U | PAGE_RW | PAGE_XD | PAGE_LOCKS)) |
++    } while (!CasPte(slot, e, (n & (PAGE_TA | PAGE_HOST)) | (e & (PAGE_U | PAGE_RW | PAGE_XD | PAGE_LOCKS | PAGE_REMOTE)) |
+                                   PAGE_V | PAGE_GROW));
+     ShareHostPage(np);
+   }
+@@ -2577,6 +2582,7 @@ static i64 ShiroForkSame(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
+     return pid;
+   }
+   ShiroShmFork(s->pid, pid);
++  ShiroRemoteFork(s->pid, pid);
+   LOCK(&s->mmap_lock);
+   for (i = 0; i < s->nshared; ++i) ShiroShareRange(s, s->shared[i][0], s->shared[i][1]);
+   UNLOCK(&s->mmap_lock);
+@@ -2651,6 +2657,456 @@ _Noreturn void ShiroInstanceChildKilled(struct Machine *m, int sig) {
+ }
+ 
+ 
++// ── Objects shared with other Blink instances (shmobj) ──────────────────
++//
++// docs/research/SHARED_MAPPINGS.md. A MAP_SHARED mapping of a /dev/shm file
++// or a memfd is one object for every Blink instance (worker) that maps it:
++// its bytes live in a SharedArrayBuffer the kernel owns (shiro_shmobj_map,
++// 1020, asked for remote at once: kind 0x100). This instance maps shadow
++// pages marked PAGE_REMOTE, which no TLB caches, so every access comes
++// through LookupAddress2 here: an instruction locks the object (a word in
++// the buffer) and refreshes the page from it; the thread keeps both for the
++// next instructions, briefly (a lease: kShiroLeaseMs, and never past a
++// system call or the GIL), then writes its pages back and unlocks. So an
++// instruction is atomic as a lock prefix needs, and a run of accesses
++// costs one round trip to the buffer, not one each. A system call
++// may block, so it locks only for its copies, and writes back what it
++// changed (against a twin of what it read). Futexes on such words wait and
++// wake on the buffer itself (Atomics), across instances.
++//
++// The buffer is only in the instance's main JS thread (host.mjs), which
++// these calls reach (shiro-kernel.js); BLINK_SHMOBJ=0 maps such files the
++// old way (a private copy, written back).
++
++extern int shiro_shm_io(int id, u32 off, void *p, int n, int dir);
++extern int shiro_shm_diff(int id, u32 off, const void *p, const void *twin, int n);
++extern int shiro_shm_acquire(int id, u32 off, void *p, int *flag, int how);
++extern int shiro_shm_release(int id, u32 off, const void *p);
++extern int shiro_shm_watch(int id, u32 off, u32 expect, int *flag, int ms);
++extern int shiro_shm_wake(int id, u32 off, int n);
++
++#define SHIRO_NOT_REMOTE (-100000)
++#define kShiroLeaseMs    0.5  // how long a thread may keep an object locked between instructions
++
++struct ShiroRemoteObj {  // one kernel mapping (1020), shared by fork copies
++  int id, refs;
++};
++struct ShiroRemoteMap {
++  struct ShiroRemoteMap *next;
++  int pid;
++  i64 addr, size;
++  u32 off;
++  struct ShiroRemoteObj *obj;
++};
++static struct ShiroRemoteMap *g_shiro_remote;
++static pthread_mutex_t_ g_shiro_remote_lock = PTHREAD_MUTEX_INITIALIZER_;
++
++static bool ShiroRemoteFind(int pid, i64 virt, int *id, u32 *off) {
++  struct ShiroRemoteMap *r;
++  bool ok = false;
++  LOCK(&g_shiro_remote_lock);
++  for (r = g_shiro_remote; r; r = r->next) {
++    if (r->pid == pid && r->addr <= virt && virt < r->addr + r->size) {
++      *id = r->obj->id;
++      *off = r->off + (u32)(virt - r->addr);
++      ok = true;
++      break;
++    }
++  }
++  UNLOCK(&g_shiro_remote_lock);
++  return ok;
++}
++
++// Locks object `id` for this thread, copying its page at `off` into `host`
++// (if host) in the same call; false if the thread held it already (then
++// nothing is copied). A newcomer lets the threads already waiting go first.
++static bool ShiroRemoteLock(struct Machine *m, int id, u32 off, u8 *host) {
++  int i, n, how = 0;
++  for (i = 0; i < m->nrlocks; ++i) {
++    if (m->rlocks[i] == id) return false;
++  }
++  for (n = 0;; ++n) {
++    m->rflag = 0;
++    if (shiro_shm_acquire(id, off, host, &m->rflag, how)) break;
++    how = 1;
++    if (n == 20) {  // ~2 s: its holder died with it (a crashed instance)
++      LOGF("shared object %d stayed locked; taking it over", id);
++      how = 3;
++      continue;
++    }
++    while (!atomic_load_explicit((_Atomic(int) *)&m->rflag, memory_order_acquire)) {
++      emscripten_futex_wait(&m->rflag, 0, 200);
++    }
++  }
++  if (m->nrlocks < (int)ARRAYLEN(m->rlocks)) {
++    if (!m->nrlocks) m->rlockt = emscripten_get_now();
++    m->rlocks[m->nrlocks++] = id;
++  } else {
++    LOGF("too many shared objects in one instruction");
++  }
++  return true;
++}
++
++// Unlocks `id`, writing the page at `host` back to `off` first (if host)
++static void ShiroRemoteUnlock(struct Machine *m, int id, u32 off, u8 *host) {
++  int i;
++  for (i = 0; i < m->nrlocks; ++i) {
++    if (m->rlocks[i] == id) {
++      m->rlocks[i] = m->rlocks[--m->nrlocks];
++      break;
++    }
++  }
++  shiro_shm_release(id, off, host);
++}
++
++// LookupAddress2 of a remote page (`host`: its shadow)
++u8 *ShiroRemoteAccess(struct Machine *m, i64 virt, u8 *host) {
++  struct ShiroRemoteSlot *s;
++  i64 page = virt & -4096;
++  u32 off;
++  int i, id;
++  for (i = 0; i < m->nrslot; ++i) {
++    if (m->rslot[i].page == page) return host + (virt & 4095);
++  }
++  if (m->nrslot == (int)ARRAYLEN(m->rslot) ||
++      !ShiroRemoteFind(m->system->pid, page, &id, &off)) {
++    LOGF("remote page %#" PRIx64 " not tracked", page);
++    return host + (virt & 4095);
++  }
++  s = m->rslot + m->nrslot;
++  s->page = page;
++  s->host = host;
++  s->id = id;
++  s->off = off;
++  s->twin = 0;
++  if (m->insyscall) {
++    // it may block: locked only to copy; what it changes goes back as a diff
++    if (!(s->twin = (u8 *)malloc(4096))) return host + (virt & 4095);
++    if (ShiroRemoteLock(m, id, off, host)) {
++      ShiroRemoteUnlock(m, id, 0, 0);
++    } else {
++      shiro_shm_io(id, off, host, 4096, 0);
++    }
++    memcpy(s->twin, host, 4096);
++  } else if (!ShiroRemoteLock(m, id, off, host)) {
++    shiro_shm_io(id, off, host, 4096, 0);  // (another page of an object it holds)
++  }
++  ++m->nrslot;
++  if (!m->stashaddr) m->stashaddr = SHIRO_STASH_REMOTE;
++  return host + (virt & 4095);
++}
++
++// The objects this thread holds go back, with what it wrote to their pages
++void ShiroRemoteRelease(struct Machine *m) {
++  struct ShiroRemoteSlot *s;
++  u8 *host;
++  u32 off;
++  int i, j, id;
++  while (m->nrlocks) {
++    id = m->rlocks[m->nrlocks - 1];
++    host = 0, off = 0;
++    for (i = j = 0; i < m->nrslot; ++i) {
++      s = m->rslot + i;
++      if (s->twin || s->id != id) {
++        m->rslot[j++] = *s;
++        continue;
++      }
++      if (host) shiro_shm_io(id, off, host, 4096, 1);
++      host = s->host, off = s->off;  // (the last one goes with the release)
++    }
++    m->nrslot = j;
++    ShiroRemoteUnlock(m, id, off, host);
++  }
++}
++
++// A system call's pages go back (what it changed)
++static void ShiroRemoteFlushTwins(struct Machine *m) {
++  struct ShiroRemoteSlot *s;
++  int i, j;
++  for (i = j = 0; i < m->nrslot; ++i) {
++    s = m->rslot + i;
++    if (!s->twin) {
++      m->rslot[j++] = *s;
++      continue;
++    }
++    ShiroRemoteLock(m, s->id, 0, 0);
++    shiro_shm_diff(s->id, s->off, s->host, s->twin, 4096);
++    ShiroRemoteUnlock(m, s->id, 0, 0);
++    free(s->twin);
++  }
++  m->nrslot = j;
++}
++
++void ShiroRemoteFlush(struct Machine *m) {
++  ShiroRemoteFlushTwins(m);
++  ShiroRemoteRelease(m);
++}
++
++// The end of an instruction (CommitStash) or a compiled region's start: a
++// system call's pages go back; an instruction's stay, locked, for the next
++// instructions (a lease) unless it has run out
++void ShiroRemoteEnd(struct Machine *m) {
++  int i;
++  for (i = 0; i < m->nrslot; ++i) {
++    if (m->rslot[i].twin) {
++      ShiroRemoteFlushTwins(m);
++      break;
++    }
++  }
++  if (!m->nrlocks) return;
++  if (emscripten_get_now() - m->rlockt < kShiroLeaseMs) {
++    m->stashaddr = SHIRO_STASH_REMOTE;  // (so the next instruction looks again)
++  } else {
++    ShiroRemoteRelease(m);
++  }
++}
++
++static void ShiroRemoteOnGil(void) {
++  struct Machine *m = g_machine;
++  if (m && m->nrlocks) ShiroRemoteRelease(m);
++}
++
++// VirtualCopy of n bytes (within one page) at remote `v`
++int ShiroRemoteCopy(struct Machine *m, i64 v, void *buf, u64 n, bool d) {
++  i64 page = v & -4096;
++  u8 *p;
++  u32 off;
++  int i, id;
++  for (i = 0; i < m->nrslot; ++i) {
++    if (m->rslot[i].page == page) {  // this instruction has it: the shadow
++      p = m->rslot[i].host + (v & 4095);
++      if (d) {
++        memcpy(buf, p, n);
++      } else {
++        memcpy(p, buf, n);
++      }
++      return 0;
++    }
++  }
++  if (!ShiroRemoteFind(m->system->pid, page, &id, &off)) return efault();
++  off += v & 4095;
++  if (d) {
++    shiro_shm_io(id, off, buf, n, 0);
++  } else if (ShiroRemoteLock(m, id, 0, 0)) {
++    shiro_shm_io(id, off, buf, n, 1);
++    ShiroRemoteUnlock(m, id, 0, 0);
++  } else {
++    shiro_shm_io(id, off, buf, n, 1);
++  }
++  return 0;
++}
++
++static void ShiroRemoteObjRelease(struct Machine *m, struct ShiroRemoteObj *o) {
++  if (--o->refs) return;
++  KS(m, 1021, A12(o->id));
++  free(o);
++}
++
++// [addr, addr + size) of `pid` no longer maps remote objects
++static void ShiroRemoteDrop(struct Machine *m, int pid, i64 addr, i64 size) {
++  struct ShiroRemoteMap **pp, *r, *r2, *gone = 0;
++  i64 end = addr + size;
++  LOCK(&g_shiro_remote_lock);
++  for (pp = &g_shiro_remote; (r = *pp);) {
++    if (r->pid != pid || r->addr >= end || addr >= r->addr + r->size) {
++      pp = &r->next;
++      continue;
++    }
++    if (addr <= r->addr && r->addr + r->size <= end) {
++      *pp = r->next;
++      r->next = gone;
++      gone = r;
++      continue;
++    }
++    if (r->addr < addr && end < r->addr + r->size &&
++        (r2 = (struct ShiroRemoteMap *)malloc(sizeof(*r2)))) {
++      *r2 = *r;  // a hole in the middle: the part above it
++      r2->off += (u32)(end - r->addr);
++      r2->size = r->addr + r->size - end;
++      r2->addr = end;
++      ++r2->obj->refs;
++      r->next = r2;
++    }
++    if (r->addr < addr) {
++      r->size = addr - r->addr;
++    } else {
++      r->off += (u32)(end - r->addr);
++      r->size = r->addr + r->size - end;
++      r->addr = end;
++    }
++    pp = &r->next;
++  }
++  UNLOCK(&g_shiro_remote_lock);
++  while ((r = gone)) {
++    gone = r->next;
++    ShiroRemoteObjRelease(m, r->obj);
++    free(r);
++  }
++}
++
++// same-instance fork: the child maps what the parent maps
++static void ShiroRemoteFork(int parent, int child) {
++  struct ShiroRemoteMap *r, *r2;
++  LOCK(&g_shiro_remote_lock);
++  for (r = g_shiro_remote; r; r = r->next) {
++    if (r->pid != parent || !(r2 = (struct ShiroRemoteMap *)malloc(sizeof(*r2)))) continue;
++    *r2 = *r;
++    r2->pid = child;
++    ++r2->obj->refs;
++    r2->next = r->next;  // (after r: the walk skips it)
++    r->next = r2;
++    r = r2;
++  }
++  UNLOCK(&g_shiro_remote_lock);
++}
++
++// mmap(MAP_SHARED) of `fd`: remote pages if it is a shareable object, else
++// SHIRO_NOT_REMOTE
++static i64 ShiroRemoteMapFile(struct Machine *m, i64 virt, u64 size, int prot,
++                              int flags, int fd, i64 off) {
++  struct ShiroRemoteObj *o;
++  struct ShiroRemoteMap *r;
++  i64 id, addr, end = off + (i64)size, v, rc;
++  u8 out[4] = {0}, *slot;
++  u64 e;
++  if (g_shiro_noremote || end > 0xfffff000) return SHIRO_NOT_REMOTE;
++  id = ShiroCall(m, 1020, A12(fd, 0x100, (int)end, (int)(end >> 32)), out, 0, 4, false, false);
++  if (id <= 0) return SHIRO_NOT_REMOTE;  // not a shareable object (or an older kernel)
++  if (!Read32(out)) {                    // (a kernel that would want a publish)
++    KS(m, 1021, A12((int)id));
++    return SHIRO_NOT_REMOTE;
++  }
++  if (!(o = (struct ShiroRemoteObj *)calloc(1, sizeof(*o))) ||
++      !(r = (struct ShiroRemoteMap *)calloc(1, sizeof(*r)))) {
++    free(o);
++    KS(m, 1021, A12((int)id));
++    return -ENOMEM_LINUX;
++  }
++  addr = SysMmap(m, virt, size, prot, (flags & ~3 & ~0x08000000) | 1 | 0x20 /* SHARED|ANONYMOUS */, -1, 0);
++  if (addr == -1) {
++    rc = ShiroErr();
++    free(o), free(r);
++    KS(m, 1021, A12((int)id));
++    return rc;
++  }
++  ShiroRemoteDrop(m, m->system->pid, addr, size);  // (what MAP_FIXED replaced)
++  LOCK(&m->system->mmap_lock);
++  for (v = addr; v < addr + (i64)size; v += 4096) {
++    if (!(slot = ShiroPteSlot(m->system, v))) continue;
++    do {
++      e = LoadPte(slot);
++    } while ((e & PAGE_V) && !CasPte(slot, e, e | PAGE_REMOTE));
++  }
++  UNLOCK(&m->system->mmap_lock);
++  o->id = (int)id;
++  o->refs = 1;
++  r->pid = m->system->pid;
++  r->addr = addr;
++  r->size = size;
++  r->off = (u32)off;
++  r->obj = o;
++  LOCK(&g_shiro_remote_lock);
++  r->next = g_shiro_remote;
++  g_shiro_remote = r;
++  UNLOCK(&g_shiro_remote_lock);
++  InvalidateSystem(m->system, true, false);
++  ResetTlb(m);
++  WjResetTlb(m);
++  return addr;
++}
++
++// futex on a remote word: waits and wakes on the buffer (true: handled;
++// *res as SysFutex returns it)
++static bool ShiroRemoteFutex(struct Machine *m, i64 uaddr, int op, u32 val,
++                             i64 timeout_addr, int *res) {
++  struct timespec now, end;
++  bool absolute;
++  u8 ts[16];
++  u32 off;
++  int id, r, ms;
++  clockid_t clk = CLOCK_MONOTONIC;
++  if (!g_shiro_remote || !(FindPageTableEntry(m, uaddr & -4096) & PAGE_REMOTE) ||
++      !ShiroRemoteFind(m->system->pid, uaddr & -4096, &id, &off)) {
++    return false;
++  }
++  off += uaddr & 4095;
++  switch (op & ~FUTEX_CLOCK_REALTIME_LINUX) {
++    case FUTEX_WAKE_LINUX:
++    case FUTEX_WAKE_BITSET_LINUX:
++      *res = shiro_shm_wake(id, off, (int)MIN(val, 0x7fffffff));
++      return true;
++    case FUTEX_WAIT_LINUX:
++    case FUTEX_WAIT_BITSET_LINUX:
++      break;
++    default:
++      LOGF("futex op %#x on a shared object's word isn't supported", op);
++      *res = (int)enosys();
++      return true;
++  }
++  absolute = (op & ~FUTEX_CLOCK_REALTIME_LINUX) == FUTEX_WAIT_BITSET_LINUX;
++  if (absolute && (op & FUTEX_CLOCK_REALTIME_LINUX)) clk = CLOCK_REALTIME;
++  end = GetMaxTime();
++  if (timeout_addr) {
++    if (CopyFromUserRead(m, ts, timeout_addr, 16) == -1) {
++      *res = (int)efault();
++      return true;
++    }
++    end.tv_sec = Read64(ts);
++    end.tv_nsec = Read64(ts + 8);
++    if (!(0 <= end.tv_nsec && end.tv_nsec < 1000000000)) {
++      *res = (int)einval();
++      return true;
++    }
++    if (!absolute) {
++      unassert(!clock_gettime(clk, &now));
++      end = AddTime(now, end);
++    }
++  }
++  for (;;) {
++    if (m->killed) {
++      *res = (int)eagain();
++      return true;
++    }
++    if (CheckInterrupt(m, true)) {
++      *res = (int)eintr();
++      return true;
++    }
++    unassert(!clock_gettime(clk, &now));
++    if (CompareTime(now, end) >= 0) {
++      errno = ETIMEDOUT;
++      *res = -1;
++      return true;
++    }
++    ms = kPollingMs;
++    if (CompareTime(SubtractTime(end, now), FromMilliseconds(ms)) < 0) {
++      ms = (int)ToMilliseconds(SubtractTime(end, now)) + 1;
++    }
++    m->rflag = 0;
++    r = shiro_shm_watch(id, off, val, &m->rflag, ms);
++    if (r == -11) {  // the word isn't `val`
++      *res = (int)eagain();
++      return true;
++    }
++    if (r) {  // no Atomics.waitAsync: poll
++      u32 cur = 0;
++      shiro_shm_io(id, off, &cur, 4, 0);
++      if (cur != val) {
++        *res = 0;
++        return true;
++      }
++      usleep(1000);
++      continue;
++    }
++    while (!atomic_load_explicit((_Atomic(int) *)&m->rflag, memory_order_acquire)) {
++      emscripten_futex_wait(&m->rflag, 0, ms + 1000);
++    }
++    if (m->rflag == 2) {  // woken
++      *res = 0;
++      return true;
++    }
++  }
++}
++
+ static void ShiroWriteBack(struct Machine *m, struct ShiroSharedMap *s, i64 addr,
+                            i64 size) {
+   u8 *buf = (u8 *)malloc(g_shiro_chunk);
+@@ -2707,6 +3163,7 @@ static void ShiroSyncMaps(struct Machine *m, i64 addr, i64 size, bool drop) {
+ // hold goes to the files (Linux's page cache keeps it past the exit)
+ void ShiroExitMaps(struct Machine *m) {
+   if (g_shiro_maps) ShiroSyncMaps(m, 0, (i64)1 << 47, true);
++  if (g_shiro_remote) ShiroRemoteDrop(m, m->system->pid, 0, (i64)1 << 47);
+ }
+ 
+ static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
+@@ -2720,6 +3177,9 @@ static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
+   if ((r = KS(m, 72, A12(fd, 3, 0))) < 0) return r;  // F_GETFL
+   if (r & 010000000) return -EBADF_LINUX;
+   if ((r & 3) == 1 || (shared && (prot & 2) && (r & 3) != 2)) return -EACCES_LINUX;
++  if (shared && (r = ShiroRemoteMapFile(m, virt, size, prot, flags, fd, off)) != SHIRO_NOT_REMOTE) {
++    return r;
++  }
+   // what this instance's writable shared mappings hold goes to the files
+   // first, so a new mapping of one sees it (as one page cache would)
+   if (g_shiro_maps) ShiroSyncMaps(m, 0, (i64)1 << 47, false);
+@@ -3847,6 +4307,7 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       break;
+     case 0x00B:                                                       // munmap
+       if (g_shiro_maps) ShiroSyncMaps(m, a, b, true);
++      if (g_shiro_remote) ShiroRemoteDrop(m, m->system->pid, a, b);
+       return false;
+     case 0x01A:                                                       // msync
+       if (g_shiro_maps) ShiroSyncMaps(m, a, b, false);
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 1aa3543..6b89208 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -270,6 +270,7 @@ bool DeliverSignalRecursively(struct Machine *m, int sig) {
+   bool gil = GilHeld();
+   GilAcquire();
+   SignalActor(m);
++  if (m->nrlocks) ShiroRemoteRelease(m);
+   if (!gil) GilRelease();
+   m->insyscall = true;
+   m->restored = false;
+@@ -1048,6 +1049,8 @@ static int SysFutexUnlockPi(struct Machine *m, i64 uaddr) {
+   return 0;
+ }
+ 
++static bool ShiroRemoteFutex(struct Machine *, i64, int, u32, i64, int *);
++
+ static int SysFutex(struct Machine *m,  //
+                     i64 uaddr,          //
+                     i32 op,             //
+@@ -1055,8 +1058,11 @@ static int SysFutex(struct Machine *m,  //
+                     i64 timeout_addr,   //
+                     i64 uaddr2,         //
+                     u32 val3) {
++  int res;
+   if (uaddr & 3) return efault();
+   op &= ~FUTEX_PRIVATE_FLAG_LINUX;
++  // a word of an object shared with other Blink instances (shiro.inc)
++  if (ShiroRemoteFutex(m, uaddr, op, val, timeout_addr, &res)) return res;
+   switch (op) {
+     case FUTEX_WAIT_LINUX:
+       return SysFutexWait(m, uaddr, op, val, timeout_addr);
+@@ -6233,6 +6239,8 @@ void OpSyscall(P) {
+   // some other thread. since we don't want to slow down instructions by
+   // adding locking logic to the tranlation lookaside buffer, we need to
+   // ensure any memory references the system call performs will tlb miss
++  // shared objects this thread holds (shiro.inc) go back first: it may block
++  if (m->nrlocks) ShiroRemoteRelease(m);
+   m->insyscall = true;
+   if (!m->sysdepth++) {
+     atomic_store_explicit(&m->invalidated, true, memory_order_relaxed);
+diff --git a/blink/wjit.c b/blink/wjit.c
+index 1ae9820..2993a51 100644
+--- a/blink/wjit.c
++++ b/blink/wjit.c
+@@ -458,7 +458,7 @@ static void WjFill(struct Machine *m, i64 v, bool write) {
+   u8 *host;
+   struct WjTlb *t;
+   if (!(entry = FindPageTableEntry(m, v & -4096))) return;
+-  if (!(entry & PAGE_U)) return;
++  if (!(entry & PAGE_U) || (entry & PAGE_REMOTE)) return;
+   if (write && !(entry & PAGE_RW)) return;
+   if (!(host = GetPageAddress(m->system, entry, false))) return;
+   if (IsRomAddress(m, host)) return;
+@@ -3887,6 +3887,7 @@ int WjExecute(struct Machine *m) {
+   unsigned epoch;
+   struct WjEnt *e;
+   if (!g_wj_enabled) return 0;
++  if (m->nrlocks) ShiroRemoteEnd(m);  // (a shared object's lease runs out)
+   epoch = atomic_load_explicit(&g_wj_epoch, memory_order_acquire);
+   if (UNLIKELY(!t_ready || t_epoch != epoch)) {
+     Clear();
+-- 
+2.43.0
+

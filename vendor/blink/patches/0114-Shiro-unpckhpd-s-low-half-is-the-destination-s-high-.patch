@@ -1,0 +1,31 @@
+From f9f601d62275c4631bba7ae5a3747652cd1f2984 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 09:45:53 +0000
+Subject: [PATCH] Shiro: unpckhpd's low half is the destination's high half (it
+ took the source's)
+
+llvmpipe's shader code (Mesa, LLVM 15) uses unpckhpd to move high halves;
+Blink copied the source's high quadword into both halves, so 3 of 5 sampled
+pixels of a GLSL test shader were wrong (unix/gui's osmesa-probe). Test:
+fixtures/x86/sse41b.c, LLVM's SSE4.1 forms with REX registers and memory
+operands, against native.
+---
+ blink/ssefloat.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/blink/ssefloat.c b/blink/ssefloat.c
+index 09591ea..115f159 100644
+--- a/blink/ssefloat.c
++++ b/blink/ssefloat.c
+@@ -107,7 +107,7 @@ void OpUnpckhpsd(P) {
+   b = GetModrmRegisterXmmPointerRead16(A);
+   IGNORE_RACES_START();
+   if (Osz(rde)) {
+-    memcpy(a + 0, b + 8, 8);
++    memcpy(a + 0, a + 8, 8);  // unpckhpd: the destination's high half, then the source's
+     memcpy(a + 8, b + 8, 8);
+   } else {
+     memcpy(a + 4 * 0, a + 4 * 2, 4);
+-- 
+2.43.0
+

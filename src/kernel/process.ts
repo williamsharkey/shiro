@@ -49,6 +49,8 @@ export class Process {
   inSyscall = 0;
   /** When the syscalls in progress began (inSyscall went from 0 to 1). */
   syscallSince = 0;
+  /** The syscalls in progress, oldest first (/proc/PID/syscall shows the oldest) */
+  calls: { nr: number; args: ArrayLike<number> }[] = [];
   /** Blocking waits the engine does itself (SYS_shiro_sleeping); they count as sleeping too. */
   engineSleeps = 0;
   /**

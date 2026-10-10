@@ -323,9 +323,18 @@ export function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: 
   };
   w.onError(() => crash());
   let ownGone = false;
+  // The guest exited on its own (blink-exiting): its exit_group reaches the
+  // kernel at once, while Blink's other threads are still on their way out.
+  // Chromium takes seconds to terminate a Worker whose threads are parked in
+  // a wait, so the termination waits for blink-quiet (up to 0.5 s).
+  let exiting = false, quiet = false, quietTimer: ReturnType<typeof setTimeout> | undefined;
+  const terminateWhenQuiet = () => {
+    if (!exiting || quiet) return terminate();
+    quietTimer ??= setTimeout(() => { quiet = true; terminate(); }, 500);
+  };
   w.terminate = () => {
     ownGone = true;
-    if (!hosted.size) return terminate();
+    if (!hosted.size) return terminateWhenQuiet();
   };
   const subs = new Map<number, () => void>();
   const pending = new Set<number>();
@@ -382,8 +391,16 @@ export function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: 
         off();
         hosted.delete(m.pid);
         w.postMessage({ type: 'blink-reap', pid: m.pid });
-        if (ownGone && !hosted.size) terminate();
+        if (ownGone && !hosted.size) terminateWhenQuiet();
       });
+    } else if (m?.type === 'blink-exiting') {
+      exiting = true;
+    } else if (m?.type === 'blink-quiet') {
+      if (exiting && !quiet) {
+        quiet = true;
+        if (quietTimer) clearTimeout(quietTimer);
+        if (ownGone && !hosted.size) terminate();
+      }
     } else if (m?.type === 'blink-abort') {
       kernel.reportFatal(proc, `blink ${String(m.text)}`);
       crash();

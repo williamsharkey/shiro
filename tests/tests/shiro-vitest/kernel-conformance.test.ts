@@ -534,6 +534,51 @@ describe('kernel syscalls found by LTP', () => {
     await kernel.syscall(proc, A.SYS_wait4, [t.pid, 0], z);
   });
 
+  it('Open POSIX fsync_7-1, mmap_14-1: fsync of a pipe is EINVAL; a write (and chmod) moves st_ctime', async () => {
+    const [r, w] = await pipe();
+    expect(await kernel.syscall(proc, A.SYS_fsync, [r], new Uint8Array(8))).toBe(-A.EINVAL);
+    await kernel.syscall(proc, A.SYS_close, [r], new Uint8Array(8));
+    await kernel.syscall(proc, A.SYS_close, [w], new Uint8Array(8));
+    const name = '/tmp/ctime_' + Date.now();
+    const fd = await open(name, A.O_RDWR | A.O_CREAT);
+    const ctime = async () => { const d = new Uint8Array(256); await kernel.syscall(proc, A.SYS_fstat, [fd], d); return Number(new DataView(d.buffer).getBigInt64(104, true)); };
+    const c0 = await ctime();
+    await new Promise((res) => setTimeout(res, 1100));
+    expect(await kernel.syscall(proc, A.SYS_write, [fd, 3], enc.encode('abc'))).toBe(3);
+    const c1 = await ctime();
+    expect(c1).toBeGreaterThan(c0);
+    expect(await kernel.syscall(proc, A.SYS_fsync, [fd], new Uint8Array(8))).toBe(0);
+    await kernel.syscall(proc, A.SYS_close, [fd], new Uint8Array(8));
+    expect((await fs.stat(name)).ctime.getTime()).toBeGreaterThanOrEqual(c1 * 1000);
+    await new Promise((res) => setTimeout(res, 10));
+    const before = (await fs.stat(name)).ctime.getTime();
+    await fs.chmod(name, 0o600);
+    expect((await fs.stat(name)).ctime.getTime()).toBeGreaterThan(before);
+    await fs.unlink(name);
+  });
+
+  it('Open POSIX fork_13-1: ITIMER_VIRTUAL and ITIMER_PROF are per process, signal SIGVTALRM/SIGPROF, and a fork child has none', async () => {
+    const t = kernel.vfork(proc);
+    kernel.setSigmask(t, new Set([A.SIGVTALRM, A.SIGPROF]));
+    const it = (which: number, ms: number) => {
+      const d = new Uint8Array(32); const dv = new DataView(d.buffer);
+      dv.setBigInt64(16, BigInt(Math.floor(ms / 1000)), true); dv.setBigInt64(24, BigInt((ms % 1000) * 1000), true);
+      return kernel.syscall(t, A.SYS_setitimer, [which, 1], d);
+    };
+    expect(await it(1, 20)).toBe(0);
+    expect(await it(2, 20)).toBe(0);
+    expect(await it(3, 20)).toBe(-A.EINVAL);
+    const got = new Uint8Array(32);
+    expect(await kernel.syscall(t, A.SYS_getitimer, [1], got)).toBe(0);
+    expect(Number(new DataView(got.buffer).getBigInt64(24, true))).toBeGreaterThan(0);
+    const child = kernel.vfork(t);
+    expect(await kernel.syscall(child, A.SYS_getitimer, [1], got)).toBe(0);
+    expect(new DataView(got.buffer).getBigInt64(24, true)).toBe(0n);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(t.deferredSignals.has(A.SIGVTALRM) && t.deferredSignals.has(A.SIGPROF)).toBe(true);
+    for (const p of [child, t]) { kernel.kill(p.pid, A.SIGKILL); await kernel.syscall(proc, A.SYS_wait4, [p.pid, 0], new Uint8Array(8)); }
+  });
+
   it('Open POSIX sigqueue_3-1/12-1, LTP kill05: signalling another user\'s process (or init) is EPERM', async () => {
     const t = kernel.vfork(proc), other = kernel.vfork(proc);
     other.uid = 0; other.ruid = 0; other.suid = 0;

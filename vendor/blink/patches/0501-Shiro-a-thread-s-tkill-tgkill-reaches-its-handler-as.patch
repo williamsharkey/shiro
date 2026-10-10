@@ -1,0 +1,134 @@
+From 10e314d15f35fa04d7a9f4b1da97319130d49c74 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 08:08:02 +0000
+Subject: [PATCH] Shiro: a thread's tkill/tgkill reaches its handler as
+ SI_TKILL from this process
+
+Blink delivered a signal another thread sent with tgkill as SI_KERNEL with
+no sender, and glibc's SIGCANCEL handler acts only on SI_TKILL from its
+own pid, so pthread_cancel never cancelled (Open POSIX pthread_cancel_*,
+pthread_setcancelstate_*, pthread_setcanceltype_1-1). A thread's pending
+tkills are marked (Machine.tkills) and delivered with si_code SI_TKILL
+and si_pid; kernel-sent siginfo still takes precedence.
+
+The signal frame takes Linux's rt_sigframe order (return address,
+ucontext, siginfo): libgcc unwinds through a handler by finding the
+ucontext above the restorer's address, and asynchronous cancellation
+unwinds from the SIGCANCEL handler (pthread_cancel_1-1 segfaulted).
+
+Exports blink_shiro_tkillinfo.
+---
+ blink/machine.h |  1 +
+ blink/shiro.inc |  2 ++
+ blink/signal.c  | 18 ++++++++++++++----
+ blink/syscall.c |  2 ++
+ 4 files changed, 19 insertions(+), 4 deletions(-)
+
+diff --git a/blink/machine.h b/blink/machine.h
+index f818607..a2089d4 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -440,6 +440,7 @@ struct Machine {               //
+   struct PageLocks pagelocks;            // track page table entry locks
+   struct JitPath path;                   // under construction jit route
+   _Atomicish(u64) signals;               // [attention] pending delivery
++  u64 tkills;                            // [Shiro] of those, sent by tkill/tgkill (SI_TKILL)
+   _Atomicish(u64) sigmask;               // signals that've been blocked
+   i64 bofram[2];                         // helps debug bootloading code
+   i64 faultaddr;                         // used for tui error reporting
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 60384b8..77ad1ae 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2399,6 +2399,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_sigmodes(void) { return 1; }
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_sharedmaps(void) { return 1; }
+ // 0099: mlock/munlock/mlockall and mmap answer bad arguments as Linux
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_memerrs(void) { return 1; }
++// 0501: a thread's tkill/tgkill reaches its handler as SI_TKILL from this process (pthread_cancel)
++EMSCRIPTEN_KEEPALIVE int blink_shiro_tkillinfo(void) { return 1; }
+ 
+ // the same with the signal's siginfo (the kernel's call 1030, made as `pid`)
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid_info(int pid, int sig, int w0, int w1, int w2,
+diff --git a/blink/signal.c b/blink/signal.c
+index 5c5e04d..b19f5fd 100644
+--- a/blink/signal.c
++++ b/blink/signal.c
+@@ -36,10 +36,14 @@
+ #include "blink/util.h"
+ #include "blink/xlat.h"
+ 
++// Linux's rt_sigframe order: the return address, then the ucontext, then
++// the siginfo. Unwinders step through a handler's frame by finding the
++// ucontext right above the restorer's return address (libgcc's x86-64
++// fallback; glibc's asynchronous pthread_cancel unwinds that way).
+ struct SignalFrame {
+   u8 ret[8];
+-  struct siginfo_linux si;
+   struct ucontext_linux uc;
++  struct siginfo_linux si;
+   struct fpstate_linux fp;
+ };
+ 
+@@ -90,7 +94,11 @@ void DeliverSignal(struct Machine *m, int sig, int code) {
+     SYS_LOGF("delivering %s {.si_code = %d, .si_addr = %#" PRIx64 "}",
+              DescribeSignal(sig), code, m->faultaddr);
+   } else {
+-    // what the kernel sent with it: sender, si_code, sigqueue's value
++    // a thread's tkill/tgkill: the sender is this process (glibc's
++    // pthread_cancel handler acts on SIGCANCEL only with SI_TKILL from its
++    // own pid). si_uid stays 0: no kernel call here. What the kernel sent
++    // with a signal (sender, si_code, sigqueue's value) replaces it.
++    if (code == SI_TKILL_LINUX) Write32(sf.si.pid, m->system->pid);
+     ShiroTakeSiginfo(m, sig, (u8 *)&sf.si);
+     Write32(sf.si.signo, sig);
+     SYS_LOGF("delivering %s, {.si_code = %d}", DescribeSignal(sig), code);
+@@ -236,7 +244,7 @@ void SigRestore(struct Machine *m) {
+ }
+ 
+ static int ConsumeSignalImpl(struct Machine *m, int *delivered, bool *restart) {
+-  int sig;
++  int sig, code;
+   i64 handler;
+   u64 signals;
+   if (delivered) *delivered = 0;
+@@ -245,6 +253,8 @@ static int ConsumeSignalImpl(struct Machine *m, int *delivered, bool *restart) {
+   while ((signals = m->signals & ~m->sigmask)) {
+     sig = bsr(signals) + 1;
+     m->signals &= ~((u64)1 << (sig - 1));
++    code = (m->tkills >> (sig - 1)) & 1 ? SI_TKILL_LINUX : SI_KERNEL_LINUX;
++    m->tkills &= ~((u64)1 << (sig - 1));
+     handler = Read64(m->system->hands[sig - 1].handler);
+     if (handler == SIG_DFL_LINUX || handler == SIG_IGN_LINUX) {
+       ShiroTakeSiginfo(m, sig, 0);  // (its siginfo goes with it)
+@@ -268,7 +278,7 @@ static int ConsumeSignalImpl(struct Machine *m, int *delivered, bool *restart) {
+     if (restart) {
+       *restart = !!(Read64(m->system->hands[sig - 1].flags) & SA_RESTART_LINUX);
+     }
+-    DeliverSignal(m, sig, SI_KERNEL_LINUX);
++    DeliverSignal(m, sig, code);
+     return 0;
+   }
+   return 0;
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 6387b5f..636a2ce 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -5628,6 +5628,7 @@ static int SysTkill(struct Machine *m, int tid, int sig) {
+       return rc;
+     } else {
+       m->signals |= (u64)1 << (sig - 1);
++      m->tkills |= (u64)1 << (sig - 1);
+       return 0;
+     }
+   }
+@@ -5647,6 +5648,7 @@ static int SysTkill(struct Machine *m, int tid, int sig) {
+       m2 = MACHINE_CONTAINER(e);
+       if (m2->tid == tid) {
+         if (sig) {
++          m2->tkills |= (u64)1 << (sig - 1);
+           EnqueueSignal(m2, sig);
+           err = pthread_kill(m2->thread, SIGSYS);
+         } else {
+-- 
+2.43.0
+

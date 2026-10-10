@@ -549,7 +549,19 @@ else self.addEventListener('unhandledrejection', (e) => { e.preventDefault(); on
 function exitGuest(code) {
   if (exiting) return;
   exiting = true;
+  // Blink's other threads are on their way out (ShiroQuiesce): the page holds
+  // this worker's termination until they are gone (blink-quiet), not the exit
+  const others = blinkModule?._blink_shiro_others;
+  if (others) post({ type: 'blink-exiting' });
   sys(SYS.exit_group, code & 255);
+  if (others) {
+    const t0 = Date.now();
+    const poll = () => {
+      if (others() > 0 && Date.now() - t0 < 500) setTimeout(poll, 1);
+      else post({ type: 'blink-quiet' });
+    };
+    poll();
+  }
   // The kernel terminates this worker. Unwind out of Blink back to the event
   // loop rather than park: Chromium takes 2 s to terminate a Worker blocked in
   // a wait, and only then starts on Blink's thread Workers (another 2 s).
@@ -602,6 +614,8 @@ async function run(msg) {
     const next = waiting.shift();
     if (next) next(ch); else ch.busy = false;
   };
+  // shmobj id -> SharedArrayBuffer (shiro-kernel.js's shiro_shm_*)
+  const shmObjs = new Map();
   // One request on `ch`; the page serves it and posts 'blink-done'.
   const hosted = new Set();  // kernel pids of same-instance fork children
   const issue = (ch, nr, args, as) => new Promise((resolve) => {
@@ -676,6 +690,10 @@ async function run(msg) {
       done?.({ r, hi, sig });
     } else if (m.type === 'blink-channel') {
       addChannel(m.sab);
+    } else if (m.type === 'blink-shmobj') {
+      // an object shared with other instances (shmobj): its buffer, before
+      // the shiro_shmobj_map reply that names it
+      shmObjs.set(m.id, m.sab);
     } else if (m.type === 'blink-signal' && !exiting) {
       // The kernel signalled us: any syscall reply carries the signal word.
       if (m.pid) void call(SYS.getpid, [], m.pid, new Uint8Array(0), 0);
@@ -705,6 +723,7 @@ async function run(msg) {
   const kernel = {
     sys,
     call,
+    shm: shmObjs,
     // same-instance fork: this worker runs kernel process `pid` too
     hosted(pid) {
       hosted.add(pid);

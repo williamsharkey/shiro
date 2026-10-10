@@ -103,10 +103,16 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
     return result;
   }
 
+  /** A file the text cache doesn't hold (a binary one: require.resolve('./favicon.ico'), Next's build) */
+  function isFile(p: string): boolean {
+    if (!/\.[^/.]+$/.test(p) || /\.(c|m)?[jt]sx?$|\.json$/.test(p)) return false;
+    try { return !!getBuiltinModule('fs')?.statSync(p)?.isFile(); } catch { return false; }
+  }
+
   function tryResolveExtensions(base: string): string | undefined {
     // As Node: the file itself, then with an extension (require('./package')
     // is package.json: uvu's CLI), then a directory's index
-    if (fileCache.has(base)) return base;
+    if (fileCache.has(base) || isFile(base)) return base;
     for (const ext of ['.ts', '.tsx', '.js', '.jsx', '.json']) {
       if (fileCache.has(base + ext)) return base + ext;
     }
@@ -411,7 +417,7 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
     }
 
     if (resolveOnly) {
-      if (fileCache.has(resolved) || moduleCache.has(resolved)) return resolved;
+      if (fileCache.has(resolved) || moduleCache.has(resolved) || isFile(resolved)) return resolved;
       const err: any = new Error(`Cannot find module '${modPath}'`);
       err.code = 'MODULE_NOT_FOUND';
       throw err;

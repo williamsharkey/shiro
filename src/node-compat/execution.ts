@@ -125,6 +125,11 @@ export async function executeNodeScript(
   const exitHooks: (() => void)[] = [];
   const atExit = (fn: () => void) => { exitHooks.push(fn); };
   const runExitHooks = () => { for (const fn of exitHooks.splice(0)) { try { fn(); } catch { /* ignore */ } } };
+  // Ended by process.exit(), a signal (^C) or an error, not by going idle: as
+  // in node its servers close then. A script that goes idle while serving
+  // leaves its servers up (they serve from the page after it returns).
+  let exitedExplicitly = true;
+  const atExplicitExit = (fn: () => void) => atExit(() => { if (exitedExplicitly) fn(); });
 
   // Shared mutable state
   const _st: SharedState = {
@@ -226,6 +231,14 @@ export async function executeNodeScript(
 
     // Built-in module registry with caching
     const _builtinCache = new Map<string, any>();
+    // A process that exits lets go of what it loaded: a handler it left behind
+    // (a page listener, a job-table entry) otherwise reached all of it through
+    // these (vite's 112 MB rolldown memory stayed after ^C). One that went idle
+    // keeps them: the servers it left up still run its code.
+    if (!guest) atExplicitExit(() => {
+      moduleCache.clear(); fileCache.clear(); _builtinCache.clear(); browserModules.clear();
+      for (const k of Object.keys(processEvents)) delete processEvents[k];
+    });
     function getBuiltinModule(name: string): any | null {
       const cacheKey = name.startsWith('node:') ? name.slice(5) : name;
       if (_builtinCache.has(cacheKey)) return _builtinCache.get(cacheKey);
@@ -304,9 +317,9 @@ export async function executeNodeScript(
         case 'crypto':
         case 'node:crypto': return createCryptoModule({ sha256sync, sha1sync, fnvHash, FakeBuffer });
         case 'http':
-        case 'node:http': return createHttpModule({ ctx, iframeServer, fakeConsole, getBuiltinModule, trackAsync });
+        case 'node:http': return createHttpModule({ ctx, iframeServer, fakeConsole, getBuiltinModule, trackAsync, atExit: atExplicitExit });
         case 'https':
-        case 'node:https': return createHttpsModule({ ctx, iframeServer, fakeConsole, getBuiltinModule, trackAsync });
+        case 'node:https': return createHttpsModule({ ctx, iframeServer, fakeConsole, getBuiltinModule, trackAsync, atExit: atExplicitExit });
         case 'net':
         case 'node:net': return createNetModule({ Buffer: FakeBuffer, ...(nodeGuestOf(ctx)?.netStack ? { stack: nodeGuestOf(ctx)!.netStack as any } : {}) });
         case 'tls':
@@ -885,18 +898,21 @@ export async function executeNodeScript(
       const DEFERRED_TIMEOUT = _st.isInteractiveMode ? 86400000 : 600000;
       // Like the script timeout, it fires on a script that has gone idle, not
       // on one still waiting on the network (a CLI's model request)
+      // (cleared when the wait ends: a pending page timer kept the ended
+      // process, and all it loaded, for its 10 minutes)
+      let deferredTimer: ReturnType<typeof setTimeout> | undefined;
       const deferredTimeout = new Promise<never>((_, reject) => {
         let outSeen = stdoutBuf.length + stderrBuf.length;
         const check = () => {
           const out = stdoutBuf.length + stderrBuf.length;
           if (!_st.isInteractiveMode && (activity.pending > 0 || intervalsAlive() || out !== outSeen)) {
             outSeen = out;
-            _baseST(check, DEFERRED_TIMEOUT);
+            deferredTimer = _baseST(check, DEFERRED_TIMEOUT);
             return;
           }
           reject(new ProcessExitError(124));
         };
-        _baseST(check, DEFERRED_TIMEOUT); // untracked: not script activity
+        deferredTimer = _baseST(check, DEFERRED_TIMEOUT); // untracked: not script activity
       });
       let freshExitPromise = deferredExitPromise;
       if (_st.exitCalled && _st.isInteractiveMode) {
@@ -947,6 +963,8 @@ export async function executeNodeScript(
         }
       } finally {
         waitOver = true;
+        exitedExplicitly = _st.exitCalled;
+        _baseCT(deferredTimer);
       }
       while (pendingPromises.length > 0) {
         const current = [...pendingPromises];
@@ -985,7 +1003,7 @@ export async function executeNodeScript(
     _st.ttyStdin?.close();
     if (ctx.terminal && _st.ownsStdinPassthrough) ctx.terminal.exitStdinPassthrough();
     if (typeof window !== 'undefined') {
-      setTimeout(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000);
+      _baseST(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000); // (the page's timer: the global one may be another script's, cleared when it ends)
     }
     restoreGlobals(true);
     runExitHooks();
@@ -998,7 +1016,7 @@ export async function executeNodeScript(
     _st.ttyStdin?.close();
     if (ctx.terminal && _st.ownsStdinPassthrough) ctx.terminal.exitStdinPassthrough();
     if (typeof window !== 'undefined') {
-      setTimeout(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000);
+      _baseST(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000); // (the page's timer: the global one may be another script's, cleared when it ends)
     }
     restoreGlobals(true);
     runExitHooks();

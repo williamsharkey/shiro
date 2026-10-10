@@ -351,6 +351,9 @@ deviceScaleFactor 2 and 3, before and after.)
 
 ## Known gaps and next steps
 
+0. **OpenGL**: there is no GLX in Xshiro, so no GL app gets a context
+   (Blender stops there). Options and estimates: docs/research/GL.md.
+
 1. ~~A D-Bus session bus~~: done. The launcher starts Debian's `dbus-daemon`
    (manifest entry `dbus-session`) with the first app and gives apps its
    address (`src/gui/apps.ts` `sessionBus`); lximage-qt runs now. The
