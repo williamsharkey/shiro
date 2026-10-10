@@ -1,0 +1,56 @@
+From 5f41271490431b8f99bcf56a8ee2a3290d86164f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 09:36:11 +0000
+Subject: [PATCH] Shiro: setting another user's process's scheduling is EPERM
+
+sched_setparam/sched_setscheduler of another process succeeded whenever
+it existed. Like Linux, setting it takes kill(2)'s permission (the
+kernel's answer to kill(pid, 0)); reading it doesn't (Open POSIX
+sched_setparam_26-1: a non-root caller and pid 1).
+
+Exports blink_shiro_schedperm.
+---
+ blink/shiro.inc | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 881ffb0..43af334 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2405,6 +2405,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_tkillinfo(void) { return 1; }
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_cpuclockids(void) { return 1; }
+ // 0503: tkill/tgkill of signal 0 to the calling thread
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_tkill0(void) { return 1; }
++// 0504: setting another user's process's scheduling is EPERM
++EMSCRIPTEN_KEEPALIVE int blink_shiro_schedperm(void) { return 1; }
+ 
+ // the same with the signal's siginfo (the kernel's call 1030, made as `pid`)
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid_info(int pid, int sig, int w0, int w1, int w2,
+@@ -3313,11 +3315,14 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+     // real-time ones (FIFO 1, RR 2) EPERM, priorities in their ranges, ESRCH
+     // for no such process; struct sched_param is one int
+     case 0x08E: case 0x08F: case 0x090: case 0x091: {                 // sched_{set,get}param, sched_{set,get}scheduler
+-      int pid = (int)a, self, policy, prio = 0;
++      int pid = (int)a, self, policy, prio = 0, perm = 0;
+       u8 p[4];
+       if (pid < 0) { r = -EINVAL_LINUX; break; }
+       self = !pid || pid == m->system->pid || ShiroIsOwnThread(m, pid);  // (glibc passes a thread's tid)
+       if (!self && (r = KS(m, 62, A12(pid, 0))) == -ESRCH_LINUX) break;  // kill(pid, 0): does it exist?
++      // (and may we signal it: setting another user's scheduling is EPERM, as
++      // kill(2)'s rule; reading it isn't. Open POSIX sched_setparam_26-1)
++      if (!self) perm = r == -EPERM_LINUX ? r : 0;
+       if (nr == 0x091) { r = self ? m->system->sched_policy : 0; break; }
+       if (nr == 0x08F) {
+         if (!b) { r = -EINVAL_LINUX; break; }
+@@ -3331,7 +3336,7 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       if (policy != 0 && policy != 1 && policy != 2 && policy != 3 && policy != 5) { r = -EINVAL_LINUX; break; }
+       if ((policy == 1 || policy == 2) ? prio < 1 || prio > 99 : prio != 0) { r = -EINVAL_LINUX; break; }
+       if (policy == 1 || policy == 2) { r = -EPERM_LINUX; break; }   // RLIMIT_RTPRIO is 0
+-      if (!self) { r = 0; break; }                                     // (another process's: same user, nothing to keep)
++      if (!self) { r = perm; break; }                                  // (another process's: same user, nothing to keep)
+       m->system->sched_policy = policy;
+       r = 0;
+       break;
+-- 
+2.43.0
+

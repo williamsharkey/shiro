@@ -142,6 +142,8 @@ const rotatesBin = join(out, 'rotates');
 const haveRotates = tryBuild('gcc', ['-static', '-O1', '-o', rotatesBin, 'rotates.c']);
 const sseiBin = join(out, 'ssei');
 const haveSsei = tryBuild('gcc', ['-static', '-O1', '-mssse3', '-o', sseiBin, 'ssei.c']);
+const sse41bBin = join(out, 'sse41b');
+const haveSse41b = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', sse41bBin, 'sse41b.c']);
 const ssefloatBin = join(out, 'ssefloat');
 const haveSsefloat = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', ssefloatBin, 'ssefloat.c', '-lm']);
 const cowforkBin = join(out, 'cowfork');
@@ -1164,6 +1166,15 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const { shell } = await setup(readFileSync(sseiBin));
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe('misaligned faults 200\nmoves 5022a87e047adf0a\n00 7ee345218afcb239\n01 a391afcb2fab11d7\n02 96a4eae743305de5\n03 4f1fdbab20276a60\n04 2dd5c5e6b7d3e4c1\n05 1ea1f24828c932b8\n06 7252ee31cd46eac9\n07 a7d2613e2dbb0e13\n08 a8113f5bdd1f72c3\n09 07148d3151ffb9b6\n10 524e60ed9625a69b\n11 cf7ff38f3eef12f3\n12 7e7f27c94b126a65\n13 cb3818cf16c8e140\n14 cb3818cf16c8e140\n15 8e0e6be8bc8c6a2d\n16 4bcc7f190e24bd97\n17 1203fb1b726bbd12\n18 ab189b3fd9f24c9e\n19 950527b9d4f0dabc\n20 78c257c240f6f10d\n21 cf1ade267c265c1d\n22 c973936bed53b154\n23 aea16f40d5405a05\n24 eaf4afc255a34129\n25 17685060ffef0b34\n26 65d590d7ead5f7cf\n27 fd54d777ca69c642\n28 c00277b74ad06d8a\n29 5641aadecea618a1\n30 e3c2aed0e370a373\n31 2b57dc7aff029b1d\n32 d0aadbb892e4986b\n33 ec7115c07c008552\n34 3cb357330446786f\n35 92d70ae93be3a4a1\n36 0000000000000000\n37 1e890edd978855e7\n38 c7a0d592de6396ef\n39 f6cb7bac6e55409e\n40 0000000000000000\n41 9ce8b41d4b876de3\n42 25b1756106f5daf1\n43 8000000000000000\n44 0000000000000000\n45 e572344fc39ee05a\n46 c598c655170411b1\n47 c01044d0040f6876\n48 0000000000000000\n49 0000000000000000\n50 014a2157c3be93e2\nstrings 52edaac7a097348e\nall 6691258bf5fa7cfc\n');
+  }, 60_000);
+
+  // llvmpipe's shader code (LLVM 15): pblendvb, ptest, pinsrd/extractps with memory, cvtsi2ss,
+  // movshdup, pminud/pmaxud, every cmpps predicate, unpckhpd (its low half was wrong: 0114), REX registers
+  it.skipIf(!haveSse41b)('LLVM\'s SSE4.1 forms (llvmpipe) match native, interpreted and compiled', async () => {
+    const { shell } = await setup(readFileSync(sse41bBin));
+    const r = await run(shell, './prog; BLINK_WJIT=0 ./prog');
+    const native = "pblendvb   40000000 bf800000 c0490fdb 00000000\nblendvps   40000000 bf800000 c0490fdb 00000000\nptest0 zf=1 cf=1 a=0\nptest1 zf=1 cf=1 a=0\nptest2 zf=0 cf=1 a=0\nptest3 zf=0 cf=0 a=1\nptest4 zf=0 cf=1 a=0\nptest5 zf=0 cf=0 a=1\npinsrd     3f800000 00000021 40490fdb 00000042\nextractps  3f000000 c0490fdb 80000000 00000000\ncvtsi2ss   c0e00000 bf800000 40490fdb 00000000\ncvtsi2ssq  51e5f4c9 bf800000 40490fdb 00000000\ncvtsi2ssm  42040000 bf800000 40490fdb 00000000\nmovshdup   bf800000 bf800000 00000000 00000000\nmovshdupm  3f000000 3f000000 80000000 80000000\nmovsldup   40000000 40000000 c0490fdb c0490fdb\npminud     3f800000 3f000000 40490fdb 00000000\npmaxud     40000000 bf800000 c0490fdb 80000000\npminsd     3f800000 bf800000 c0490fdb 80000000\npmulld     00000000 00000000 0be16559 00000000\ncmpps0     00000000 00000000 00000000 ffffffff\ncmpps1     ffffffff ffffffff 00000000 00000000\ncmpps2     ffffffff ffffffff 00000000 ffffffff\ncmpps3     00000000 00000000 00000000 00000000\ncmpps4     ffffffff ffffffff ffffffff 00000000\ncmpps5     00000000 00000000 ffffffff ffffffff\ncmpps6     00000000 00000000 ffffffff 00000000\ncmpps7     ffffffff ffffffff ffffffff ffffffff\ncmpnlepsm  00000000 00000000 ffffffff 00000000\nunpckhpd   40490fdb 00000000 c0490fdb 80000000\nunpcklpd   3f800000 bf800000 40000000 3f000000\npunpckhqdq 40490fdb 00000000 c0490fdb 80000000\npextrd     c0490fdb 80000000 00000000 00000000\ninsertps   00000000 c0490fdb 00000000 00000000\ninsertpsm  3f800000 bf800000 00000016 00000000\npacks      ff000000 2c21160b ff000000 2c21160b\n";
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(native + native);
   }, 60_000);
 
   // PostgreSQL's huge_pages=try maps MAP_HUGETLB first and falls back on ENOMEM
