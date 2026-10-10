@@ -4,6 +4,7 @@ import { openInode, RegularFile } from '@shiro/kernel/fd';
 import { Kernel } from '@shiro/kernel/kernel';
 import * as A from '@shiro/kernel/abi';
 import { createTestShell, run } from './helpers';
+import { stored, checkStore } from './fs-store-check';
 
 // Hard links (FileSystem.link): one file, several names. Data in an inode
 // record ("\u0001i/<ino>"), names as stubs, the name map at "\u0001links".
@@ -18,38 +19,6 @@ describe('hard links', { timeout: 60_000 }, () => {
   const text = async (fs: FileSystem, p: string) => fs.readFile(p, 'utf8');
   const pattern = (n: number, seed = 1) => { const b = new Uint8Array(n); for (let i = 0; i < n; i++) b[i] = (i * 31 + seed * 7 + (i >> 10)) & 255; return b; };
   async function fresh(): Promise<FileSystem> { const fs = new FileSystem(); await fs.init(); return fs; }
-  async function stored(fs: FileSystem): Promise<Map<string, any>> {
-    await fs.sync();
-    const db = (fs as any).db as IDBDatabase;
-    const all = await new Promise<any[]>((r, j) => { const q = db.transaction('files').objectStore('files').getAll(); q.onsuccess = () => r(q.result); q.onerror = () => j(q.error); });
-    return new Map(all.map((n) => [n.path, n]));
-  }
-  /** Stubs, inode records and the link map agree; blocks belong to live owners. */
-  function checkStore(recs: Map<string, any>): void {
-    const map = new Map<string, number>(recs.get('\u0001links')?.links ?? []);
-    for (const [p, n] of recs) {
-      if (p.startsWith('\u0001i/')) {
-        expect(n.names.length, `${p} has fewer than 2 names`).toBeGreaterThanOrEqual(2);
-        for (const name of n.names) {
-          expect(recs.get(name)?.link, `${name} of ${p} is not its stub`).toBe(n.ino);
-          expect(map.get(name), `${name} missing from the link map`).toBe(n.ino);
-        }
-      } else if (!p.startsWith('\u0001') && n.link !== undefined) {
-        expect(recs.get(`\u0001i/${n.link}`)?.names, `stub ${p} without its inode`).toContain(p);
-      }
-    }
-    for (const [name, ino] of map) expect(recs.get(name)?.link, `link map entry ${name}`).toBe(ino);
-    const blobs = new Map<string, string>(recs.get('\u0001blobs')?.blobs ?? []);
-    const owners = new Map([...blobs].map(([p, id]) => [id, p]));
-    for (const k of recs.keys()) {
-      if (!k.startsWith('\u0001b/')) continue;
-      const id = k.slice(3, k.lastIndexOf('/'));
-      const owner = owners.get(id);
-      expect(owner, `orphaned block ${k}`).toBeDefined();
-      expect(recs.get(owner!)?.blob, `block ${k} of a blob its owner doesn't use`).toBe(id);
-    }
-  }
-
   it('two names share data, mode, times, st_ino and st_nlink, across a reload', async () => {
     const fs = await fresh();
     await fs.mkdir('/tmp/hl1', { recursive: true });

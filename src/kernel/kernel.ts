@@ -21,13 +21,13 @@ import * as A from './abi';
 import { elfInterpreter } from '../elf-interp';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
-  RegularFile, DirFile, abortableWait, openInode, openInodeSync, isInodeOpen, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
+  RegularFile, DirFile, abortableWait, openInode, openInodeSync, isInodeOpen, exchangeInodes, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
   linkCount, writeBackAll, attachInodeShared, detachOpenFileShared, unlinkedFileKey, sharedBufferOf,
 } from './fd';
 import { createPipe, Pipe, PipeEnd, FifoRdWr } from './pipe';
 import type { PtyFile } from './pty';
 import { LockTable, F_RDLCK, F_WRLCK, F_UNLCK } from './locks';
-import { Process } from './process';
+import { Process, abortReason } from './process';
 import { SysvShm } from './sysvshm';
 import { SysvSem } from './sysvsem';
 import { SysvMsg } from './sysvmsg';
@@ -37,7 +37,7 @@ import { splice, tee, vmsplice, copyFileRange, type Moved } from './splice';
 import { CONTROL_BYTES, SharedObjects, isShareablePath, type ShmObjMessage } from './shmobj';
 import { EpollFile, waitReady } from './epoll';
 import { SignalFile, notifySignalPending, pendingSignalListeners } from './signalfd';
-import { EventFile, MemFile, TimerFile, writeInodeBytes } from './fd';
+import { EventFile, MemFile, TimerFile, writeInodeBytes, SymlinkPathFile, anonymousInode, linkAnonymousInode } from './fd';
 import { activeProfile, unameRelease, UNAME_VERSION } from '../profile';
 import { memoryInfo } from '../utils/sysinfo';
 
@@ -1087,12 +1087,35 @@ export class Kernel {
   async open(proc: Process, path: string, flags: number, mode = 0o666, dirfd = A.AT_FDCWD): Promise<OpenFile | number> {
     // O_PATH: a descriptor that only names the file (fstat, fchdir, *at, dup, close)
     if (flags & A.O_PATH) {
+      // With O_NOFOLLOW a symlink is opened itself (readlinkat(fd, ""), fstat of the link)
+      if ((flags & A.O_NOFOLLOW) && this.fs && !trailingSlash(path)) {
+        const p = this.resolvePath(proc, path, dirfd);
+        if (typeof p === 'string' && !/^\/(?:proc|dev)(?:\/|$)/.test(p)) {
+          if (this.searchDenied(proc, p)) return -A.EACCES;
+          const lst = await this.fs.lstat(p).catch(() => null);
+          if (lst?.isSymbolicLink()) {
+            if (flags & A.O_DIRECTORY) return -A.ENOTDIR;
+            return new SymlinkPathFile(p, () => this.statPath(proc, p, false));
+          }
+        }
+      }
       const f = await this.open(proc, path, (flags & (A.O_NOFOLLOW | A.O_DIRECTORY)) | A.O_RDONLY, mode, dirfd);
       return typeof f === 'number' ? f : pathOnlyFile(f);
     }
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
     if (this.searchDenied(proc, p)) return -A.EACCES;
+    // O_TMPFILE: an unnamed regular file in directory `p` (linkat names it)
+    if (flags & A.__O_TMPFILE) {
+      if (!canWrite(flags)) return -A.EINVAL;
+      if (!this.fs) return -A.ENOSYS;
+      const st = await this.fs.stat(p).catch(() => null);
+      if (!st) return -A.ENOENT;
+      if (!st.isDirectory()) return -A.ENOTDIR;
+      const real = await this.fs.realpath(p);
+      const statusFlags = flags & ~(A.O_TMPFILE | A.O_CREAT | A.O_EXCL | A.O_TRUNC | A.O_CLOEXEC | A.O_NOCTTY | A.O_NOFOLLOW);
+      return new RegularFile(anonymousInode(this.fs, real, mode & ~proc.umask, !(flags & A.O_EXCL)), statusFlags);
+    }
     // /proc/PID/fd/N, /dev/fd/N, /dev/stdin…: what the fd refers to, opened anew (reopenFile)
     const fdm = /^\/(?:dev\/fd|proc\/(self|thread-self|\d+)\/fd)\/(\d+)$/.exec(p);
     const stdm = /^\/dev\/(stdin|stdout|stderr)$/.exec(p);
@@ -1236,10 +1259,11 @@ export class Kernel {
    */
   openSync(proc: Process, path: string, flags: number, dirfd = A.AT_FDCWD, mode = 0o666): OpenFile | number | undefined {
     const fs = this.fs;
-    if (!fs || flags & A.O_PATH || trailingSlash(path)) return undefined;
+    if (!fs || flags & (A.O_PATH | A.__O_TMPFILE) || trailingSlash(path)) return undefined;
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
     if (this.devices.has(p) || /^\/(?:dev|proc)\//.test(p)) return undefined;
+    if (this.searchDenied(proc, p)) return -A.EACCES;
     const statusFlags = flags & ~(A.O_CREAT | A.O_EXCL | A.O_TRUNC | A.O_CLOEXEC | A.O_NOCTTY | A.O_DIRECTORY | A.O_NOFOLLOW);
     if (flags & (A.O_CREAT | A.O_TRUNC | A.O_NOFOLLOW)) {
       // Creating, truncating or not following: decided on the last component itself
@@ -1375,6 +1399,7 @@ export class Kernel {
     if (!fs || trailingSlash(path)) return undefined;
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
+    if (this.searchDenied(proc, p)) return -A.EACCES;
     if (this.devices.has(p) || p === '/proc' || p.startsWith('/proc/') || this.socketPaths?.has(p)) return undefined;
     const hit = fs.lookupCached(p, follow);
     if (hit === undefined) return undefined;
@@ -1441,6 +1466,10 @@ export class Kernel {
     }
     const fs = this.fs;
     if (!fs) return -A.ENOSYS;
+    // Known missing in memory: ENOENT without fs.stat's thrown error (an
+    // Error with its stack: most of a missing-file stat, as node's module
+    // resolution makes by the hundred)
+    if (!this.socketPaths?.has(p) && fs.lookupCached?.(p, follow) === null) return -A.ENOENT;
     try {
       const st = follow ? await fs.stat(p) : await fs.lstat(p);
       let type = st.isDirectory() ? A.S_IFDIR : st.isSymbolicLink() ? A.S_IFLNK : st.isFIFO?.() ? A.S_IFIFO : A.S_IFREG;
@@ -1507,27 +1536,32 @@ export class Kernel {
    * `echo`, `mkdir`... leave it for the next reader.
    */
   async runBuiltin(proc: Process, cmd: Command): Promise<number> {
-    const shell = this.forkShell(proc);
+    const env = this.processEnv(proc);
+    // The process's Shell is made when the command first asks for it (most
+    // never do: true, cat, ls), then it is that one Shell every time
+    let shell: Shell | undefined;
+    const getShell = () => (shell ??= this.forkShell(proc, env));
     let stdio: KernelStdio | undefined;
     if (SHELL_NAMES.has(cmd.name) || SHELL_NAMES.has(proc.argv[0]?.slice(proc.argv[0].lastIndexOf('/') + 1))) {
+      const sh = getShell();
       stdio = new KernelStdio(this, proc);
-      shell.kernelStdio = stdio;
-      stdio.adoptFds(shell);
-      shell.kernelStdinLive = true;
+      sh.kernelStdio = stdio;
+      stdio.adoptFds(sh);
+      sh.kernelStdinLive = true;
     }
     const lazy = !stdio;
-    const ctx: CommandContext = {
+    const ctx = {
       args: proc.argv.slice(1),
-      fs: this.fs ?? shell.fs,
+      fs: this.fs ?? this.shell!.fs,
       cwd: proc.cwd,
-      env: shell.env,
+      env,
       stdin: '',
       stdout: '',
       stderr: '',
-      shell,
       stdoutIsTTY: proc.fds.get(1)?.kind === 'pty',
       ...(stdio ? { liveStdin: true, streamStdout: stdio.out, streamStderr: stdio.err } : {}),
-    };
+    } as CommandContext;
+    Object.defineProperty(ctx, 'shell', { get: getShell, set: (v: Shell) => { shell = v; }, enumerable: true, configurable: true });
     let code: number;
     try {
       code = lazy ? await execLazyStdin(cmd, ctx, () => this.stdinText(proc)) : await cmd.exec(ctx);
@@ -1540,8 +1574,13 @@ export class Kernel {
     // Byte-exact (src/utils/byte-text.ts): binary output of a builtin keeps its bytes
     if (ctx.stdout) await this.writeAll(proc, 1, encodeText(ctx.stdout));
     if (ctx.stderr && !proc.exiting) await this.writeAll(proc, 2, enc.encode(ctx.stderr));
-    if (shell.cwd !== proc.cwd) proc.cwd = shell.cwd;
+    if (shell && shell.cwd !== proc.cwd) proc.cwd = shell.cwd;
     return code;
+  }
+
+  /** A new process's shell environment: proc.env with PWD and $0. */
+  private processEnv(proc: Process): Record<string, string> {
+    return { ...proc.env, PWD: proc.cwd, 0: proc.argv[0] ?? proc.path };
   }
 
   /** Run argv through a forked shell (scripts, node programs, anything in PATH that is not a registered command). */
@@ -1694,29 +1733,20 @@ export class Kernel {
     return code;
   }
 
-  private forkShell(proc: Process): Shell {
+  private forkShell(proc: Process, env = this.processEnv(proc)): Shell {
     const base = this.shell;
     if (!base) throw new Error('kernel has no shell attached');
-    const shell = base.fork();
-    shell.cwd = proc.cwd;
-    shell.env = { ...proc.env, PWD: proc.cwd, 0: proc.argv[0] ?? proc.path };
-    shell.localVars = new Set(['0']); // $0 is not exported
-    // $$, $PPID and $BASHPID are the process's
-    shell.shellPid = shell.bashPid = shell.kernelPid = proc.pid;
-    shell.parentPid = proc.ppid;
-    shell.uid = proc.uid;
-    // Its fds are the process's (KernelStdio, adoptFds), not whatever exec did in the page's shell
-    shell.userFds = new Map();
-    shell.fileDescriptors = new Map();
-    // A new process: only the page shell's `export -f` functions come along
-    shell.dropUnexportedFunctions();
+    // A new process: what exec passes on (env, `export -f` functions, cwd,
+    // umask, uid; $$ and $PPID are the process's), not a copy of the page's shell
+    // (through the instance: kernel.ts imports Shell only as a type)
+    const shell = (base.constructor as typeof Shell).forProcess(base, { env, cwd: proc.cwd, pid: proc.pid, ppid: proc.ppid, uid: proc.uid, umask: proc.umask });
     // Its own abort, which its end fires. Not the page shell's: killing a
     // program's `sh -c` child would abort the page's foreground job, whose
     // abort SIGINTs that program's whole group (codex's "turn interrupted")
     const abort = new AbortController();
     shell.abortController = null;
     shell.inheritedAbort = abort;
-    proc.onTerminate(() => abort.abort());
+    proc.onTerminate(() => abort.abort(abortReason()));
     return shell;
   }
 
@@ -2576,10 +2606,27 @@ export class Kernel {
           const to = at(nd, ol, nl);
           if (typeof from === 'number') return from;
           if (typeof to === 'number') return to;
-          if (flags & ~A.RENAME_NOREPLACE) return -A.EINVAL;
+          if (flags & ~(A.RENAME_NOREPLACE | A.RENAME_EXCHANGE)) return -A.EINVAL;
+          if ((flags & A.RENAME_NOREPLACE) && (flags & A.RENAME_EXCHANGE)) return -A.EINVAL;
           const src = await this.statPath(proc, from, false);
           if (typeof src === 'number') return src;
           const srcDir = (src.mode & A.S_IFMT) === A.S_IFDIR;
+          if (flags & A.RENAME_EXCHANGE) {
+            const dst = await this.statPath(proc, to, false);
+            if (typeof dst === 'number') return dst;
+            const dstDir = (dst.mode & A.S_IFMT) === A.S_IFDIR;
+            if ((!srcDir && trailingSlash(str(0, ol))) || (!dstDir && trailingSlash(str(ol, nl)))) return -A.ENOTDIR;
+            if (from === to) return 0;
+            const under = (a: string, b: string) => b.startsWith(a === '/' ? '/' : a + '/');
+            if (from === '/' || to === '/' || under(from, to) || under(to, from)) return -A.EINVAL;
+            // One swap of the two names; open files follow their file
+            const swap = await exchangeInodes(fs(), from, to);
+            await fs().exchange(from, to);
+            swap();
+            const sf = this.socketPaths?.has(from), st = this.socketPaths?.has(to);
+            if (sf !== st) { this.socketPaths!.delete(sf ? from : to); this.socketPaths!.add(sf ? to : from); }
+            return 0;
+          }
           // "name/" on either side only names a directory
           if (!srcDir && (trailingSlash(str(0, ol)) || trailingSlash(str(ol, nl)))) return -A.ENOTDIR;
           if (from === to) return 0;
@@ -2667,6 +2714,36 @@ export class Kernel {
           const [od, ol, nd, nl, lflags] = nr === A.SYS_link
             ? [A.AT_FDCWD, args[0], A.AT_FDCWD, args[1], 0] : [args[0], args[1], args[2], args[3], args[4]];
           if (lflags & ~(A.AT_SYMLINK_FOLLOW | A.AT_EMPTY_PATH)) return -A.EINVAL;
+          // The file an fd has open: linkat(fd, "", AT_EMPTY_PATH), or its
+          // /proc/self/fd/N with AT_SYMLINK_FOLLOW (an O_TMPFILE file gets its name so)
+          const fdLink = ol === 0 && (lflags & A.AT_EMPTY_PATH) ? od : undefined;
+          const fromStr = ol > 0 ? str(0, ol) : '';
+          const procFd = (lflags & A.AT_SYMLINK_FOLLOW) ? /^\/proc\/(self|thread-self|\d+)\/fd\/(\d+)$/.exec(normalize(fromStr.startsWith('/') ? fromStr : '/')) : null;
+          if (fdLink !== undefined || procFd) {
+            const owner = procFd && procFd[1] !== 'self' && procFd[1] !== 'thread-self' ? this.procs.get(Number(procFd[1])) : proc;
+            const f = owner?.fds.get(fdLink ?? Number(procFd![2]));
+            if (!f) return fdLink !== undefined ? -A.EBADF : -A.ENOENT;
+            const to = at(nd, ol, nl);
+            if (typeof to === 'number') return to;
+            if (trailingSlash(str(ol, nl))) return -A.ENOENT;
+            try {
+              if (await fs().exists(to)) return -A.EEXIST;
+              if (f instanceof RegularFile && f.inode.unlinked) {
+                // The canonical new name (its directory through symlinks): the inode's path from now on
+                const slash = to.lastIndexOf('/');
+                const dir = await fs().realpath(to.slice(0, slash) || '/');
+                if (!(await fs().stat(dir)).isDirectory()) return -A.ENOTDIR;
+                await linkAnonymousInode(fs(), f.inode, (dir === '/' ? '' : dir) + to.slice(slash));
+              }
+              else if (f instanceof SymlinkPathFile) await fs().link(f.path, to, { follow: false });
+              else if (f.kind === 'dir') return -A.EPERM;
+              else if (f instanceof RegularFile) await fs().link(f.inode.path, to, { follow: false });
+              else return -A.ENOENT;
+            } catch (e) {
+              return A.errnoFromError(e);
+            }
+            return 0;
+          }
           const from = at(od, 0, ol);
           const to = at(nd, ol, nl);
           if (typeof from === 'number') return from;
@@ -2686,6 +2763,18 @@ export class Kernel {
         case A.SYS_readlink:
         case A.SYS_readlinkat: {
           const [dirfd, len, bufsiz] = nr === A.SYS_readlink ? [A.AT_FDCWD, args[0], args[1]] : [args[0], args[1], args[2]];
+          // An empty path: the symlink an O_PATH|O_NOFOLLOW fd names
+          if (nr === A.SYS_readlinkat && len === 0) {
+            const f = file(dirfd);
+            if (!f) return -A.EBADF;
+            if (!(f instanceof SymlinkPathFile)) return -A.ENOENT;
+            let t: string;
+            try { t = await fs().readlink(f.path); } catch (e) { return A.errnoFromError(e, A.EINVAL); }
+            const b = enc.encode(t);
+            const n = Math.min(b.length, bufsiz >>> 0 || data.length, data.length);
+            data.set(b.subarray(0, n));
+            return n;
+          }
           const p = at(dirfd, 0, len);
           if (typeof p === 'number') return p;
           let target: string;

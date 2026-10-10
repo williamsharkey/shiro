@@ -1,6 +1,7 @@
 import { stripComments } from './shell-comments';
 import * as fifo from './shell-fifo';
 import { groupStatements, trimCommand } from './shell-statements';
+import { syntaxError } from './shell-syntax';
 import { printfFormat } from './utils/printf';
 import { evalArith, ArithError, type ArithEnv } from './utils/arith';
 import { readRecord, recordText, splitRecord } from './shell-read';
@@ -968,7 +969,8 @@ export class Shell {
   }
   private terminal?: ShiroTerminal;
 
-  constructor(fs: FileSystem, commands: CommandRegistry) {
+  /** `forked`: a fork's (fork()): it shares its parent's history, so it doesn't read ~/.bash_history */
+  constructor(fs: FileSystem, commands: CommandRegistry, forked = false) {
     this.fs = fs;
     this.commands = commands;
     // Commands that read or write a named pipe by name (cat fifo, tee fifo) go through the kernel's pipe
@@ -991,8 +993,8 @@ export class Shell {
       // (no FORCE_COLOR: programs colour when their stdout is a tty, and
       // chalk, npm and python tracebacks put no escapes into pipes and files)
     };
-    // Load history async (don't block construction)
-    this.loadHistory();
+    // Load history async (don't block construction); a fork shares its parent's
+    if (!forked) this.loadHistory();
     this.syncOptionVars();
   }
 
@@ -1170,7 +1172,8 @@ export class Shell {
     let status = 0;
     for (const word of names) {
       const m = /^([A-Za-z_][A-Za-z0-9_]*)(\+?=)?([\s\S]*)$/.exec(word);
-      if (!m) { err(`tabcomputer: ${cmd}: \`${word}': not a valid identifier\r\n`); status = 1; continue; }
+      // (NAME, NAME=…, NAME+=…, NAME[…]=…: `a-b=1` is no name)
+      if (!m || !/^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?(\+?=|$)/.test(word)) { err(`tabcomputer: ${cmd}: \`${word}': not a valid identifier\r\n`); status = 1; continue; }
       const name = m[1];
       const append = m[2] === '+=';
       let value: string | undefined = m[2] ? m[3] : undefined;
@@ -1482,7 +1485,7 @@ export class Shell {
   }
 
   fork(): Shell {
-    const child = new Shell(this.fs, this.commands);
+    const child = new Shell(this.fs, this.commands, true);
     child.inheritedAbort = this.abortController ?? this.inheritedAbort;
     child.kernelStdio = this.kernelStdio;
     child.kernelStdinLive = this.kernelStdinLive;
@@ -1543,6 +1546,47 @@ export class Shell {
     child.uid = this.uid;
     child.bootGate = this.bootGate;
     return child;
+  }
+
+  /**
+   * The shell of a new kernel process (Kernel.forkShell: a builtin, `sh -c`,
+   * a script run as a program): what exec passes on and nothing more. `env`
+   * (adopted, not copied) is the process's environment, every name exported;
+   * `base`'s exported functions come along. Options and shopts start at
+   * bash's defaults, or from SHELLOPTS/BASHOPTS when the environment exports
+   * them. No aliases, arrays, traps (ignored signals are the process's
+   * dispositions), hash table, dir stack or fds (the kernel's fd table is the
+   * process's; runShellProcess wires kernelStdio). Cheaper than fork(), which
+   * copies all of the page shell only for it to be replaced.
+   */
+  static forProcess(base: Shell, p: { env: Record<string, string>; cwd: string; pid: number; ppid: number; uid: number; umask: number }): Shell {
+    const s = new Shell(base.fs, base.commands, true);
+    // (the defaults' SHELLOPTS/BASHOPTS, which the constructor computed)
+    const defOpts = s.env.SHELLOPTS, defShopts = s.env.BASHOPTS;
+    s.env = p.env;
+    s.localVars = new Set(['0']); // $0 is not exported
+    for (const name of base.exportedFunctions) {
+      const fn = base.functions[name];
+      if (fn) { s.functions[name] = fn; s.exportedFunctions.add(name); }
+    }
+    // Options: the defaults, or what an exported SHELLOPTS/BASHOPTS says (the setters resync the variables)
+    if (p.env.SHELLOPTS === undefined) { p.env.SHELLOPTS = defOpts; s.localVars.add('SHELLOPTS'); }
+    else if (p.env.SHELLOPTS !== defOpts) s.options = new Set(p.env.SHELLOPTS.split(':').filter((o) => SET_O_OPTIONS.includes(o)));
+    if (p.env.BASHOPTS === undefined) { p.env.BASHOPTS = defShopts; s.localVars.add('BASHOPTS'); }
+    else if (p.env.BASHOPTS !== defShopts) s.shoptopts = new Set(p.env.BASHOPTS.split(':').filter(Boolean));
+    s.cwd = p.cwd;
+    // PWD names cwd (Kernel.processEnv): the logical directory pwd prints, no realpath
+    if (p.env.PWD === p.cwd) s.logicalPwd = p.cwd;
+    // The command-location cache, seeded from the page's (a cache, as fork()
+    // copies it: a new bash would find the same files on PATH)
+    if (base.hashPath === p.env.PATH) s.hashTable = new Map([...base.hashTable].map(([k, v]) => [k, { ...v }]));
+    s.hashPath = base.hashPath;
+    s.ownUmask = p.umask;
+    s.uid = p.uid;
+    s.bashPid = s.shellPid = s.kernelPid = p.pid;
+    s.parentPid = p.ppid;
+    s.bootGate = base.bootGate;
+    return s;
   }
 
   /**
@@ -2771,7 +2815,8 @@ export class Shell {
         // Handle /usr/bin/env CMD ARGS → execute CMD ARGS
         if (cmdName === '/usr/bin/env' || cmdName === '/bin/env') {
           if (cmdArgs.length > 0) {
-            const envCmd = quoteArgsForShell(cmdArgs);
+            // (through the env builtin: -i, -u, NAME=value and the rest apply)
+            const envCmd = quoteArgsForShell(['env', ...cmdArgs]);
             this.injectedStdin = nestedStdin;
             exitCode = await this.execute(envCmd, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
           } else {
@@ -2831,7 +2876,8 @@ export class Shell {
         }
 
         // Handle array assignment: arr=(a b c) or arr[N]=val
-        if (effectiveCmdName.includes('=') && !effectiveCmdName.startsWith('=')) {
+        // (only NAME= / NAME[…]= / NAME+=: `FOO-BAR=foo` is a command word, as in bash)
+        if (effectiveCmdName.includes('=') && /^[A-Za-z_][A-Za-z0-9_]*(\[[\s\S]*\])?\+?=/.test(cmdName)) {
           const eqIdx = cmdName.indexOf('=');
           const key = cmdName.substring(0, eqIdx);
           const val = cmdName.substring(eqIdx + 1);
@@ -2987,9 +3033,12 @@ export class Shell {
           // Execute remaining args as a shell command
           exitCode = 0;
           const evalCmd = stripComments((cmdArgs[0] === '--' ? cmdArgs.slice(1) : cmdArgs).join(' '));
-          if (evalCmd && !this.compoundsBalanced(evalCmd)) {
-            // `eval "if"`: a syntax error; as sh it ends the script (eval is a special builtin)
-            stderrWriter('tabcomputer: eval: syntax error: unexpected end of file\r\n');
+          // The string is parsed whole first: a syntax error runs none of it
+          // (`eval 'echo hi; if'` prints nothing); as sh it ends the script (a special builtin)
+          const evalErr = !evalCmd ? null : !this.compoundsBalanced(evalCmd) ? 'syntax error: unexpected end of file'
+            : this.aliases.size ? null : syntaxError(evalCmd);
+          if (evalErr) {
+            stderrWriter(`tabcomputer: eval: ${evalErr}\r\n`);
             exitCode = 2;
             if (this.posixFatal()) throw new ExitSignal(2);
           } else if (evalCmd) {
@@ -3858,6 +3907,11 @@ export class Shell {
             for (const arg of cmdArgs) {
               if (arg === '-p') continue;
               const eqIdx = arg.indexOf('=');
+              if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(eqIdx !== -1 ? arg.slice(0, eqIdx) : arg)) {
+                stderrWriter(`tabcomputer: readonly: \`${arg}': not a valid identifier\r\n`);
+                exitCode = 1;
+                continue;
+              }
               if (eqIdx !== -1) {
                 const name = arg.slice(0, eqIdx);
                 const val = arg.slice(eqIdx + 1);
@@ -3908,6 +3962,11 @@ export class Shell {
               }
               const eqIdx = arg.indexOf('=');
               const name = eqIdx !== -1 ? arg.slice(0, eqIdx) : arg;
+              if (!/^[A-Za-z_][A-Za-z0-9_]*(\+)?$/.test(name)) {
+                stderrWriter(`tabcomputer: export: \`${arg}': not a valid identifier\r\n`);
+                exitCode = 1;
+                continue;
+              }
               if (eqIdx !== -1) {
                 const err = this.setVar(name, arg.slice(eqIdx + 1));
                 if (err) {
@@ -9176,8 +9235,20 @@ export class Shell {
     this.executeDepth++;
     if (!this.abortController) this.abortController = this.inheritedAbort ?? new AbortController();
     let exitCode = 0;
+    // Each statement is parsed whole before it runs, as bash does: one with a syntax
+    // error doesn't run at all and ends the script (2). Aliases can change how a line
+    // parses, so a script that uses them isn't checked.
+    const checkSyntax = !this.aliases.size && !/\balias\b/.test(content);
     try {
       for (const stmt of groupStatements(stripComments(content))) {
+        if (checkSyntax) {
+          const err = syntaxError(stmt.text);
+          if (err) {
+            writeStderr(`tabcomputer: line ${stmt.line}: ${err}\r\n`);
+            exitCode = 2;
+            break;
+          }
+        }
         if (this.pendingSignals.length) await this.processSignals(writeStdout, writeStderr);
         if (this.abortController?.signal.aborted) { exitCode = 130; break; }
         // set -n (noexec): a non-interactive shell reads the rest without running it
