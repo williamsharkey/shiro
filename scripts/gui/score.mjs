@@ -210,7 +210,7 @@ async function scoreApp(browser, base, id) {
 const KNOWN = {
   blender: 'past the CPU check and PI futexes (engine fixes); needs OpenGL 3.3 over GLX, which Xshiro doesn\'t provide',
   'libreoffice-writer': 'runs (via oosplash): its first window is the splash, the start center follows (~2 min)',
-  'firefox-esr': 'content processes live (font list by message, an overlay pref); the parent goes down a few minutes in (not diagnosed)',
+  'firefox-esr': 'runs (~4.5 min to its window): content processes get the font list by message (an overlay pref) until shared mappings work across processes; its text isn\'t reported',
   audacity: 'its first window is the first-run plugin scan; the main window follows (~70 s); wxWidgets text isn\'t reported',
   eog: 'input: a viewer with nothing open: typing changes nothing',
   ristretto: 'input: a viewer with nothing open: typing changes nothing',
