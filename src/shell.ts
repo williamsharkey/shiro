@@ -602,8 +602,6 @@ function capturing<T extends object>(term: T, stdout: boolean, stderr: boolean):
   });
 }
 
-/** Builtins whose redirected output is written as it comes (they may run a server that never ends) */
-const STREAM_REDIRECT_CMDS = new Set(['node', 'nodejs', 'npm', 'npx']);
 
 /** Is fd 2 still the terminal after these redirects? (`stdoutTty`: fd 1 is, before them) */
 function stderrIsTty(redirects: Redirect[], stdoutTty: boolean): boolean {
@@ -4503,10 +4501,10 @@ export class Shell {
           if (h) h.hits++;
           else this.hashTable.set(effectiveCmdName, { path: cmd ? `/usr/bin/${effectiveCmdName}` : (await this.findExecutableInPath(effectiveCmdName)) ?? `/usr/bin/${effectiveCmdName}`, hits: 1 });
         }
-        // node, npm and npx may run a server that never ends: their redirected output
-        // goes into the files as it comes (`npm run dev > log &` wrote nothing)
-        const liveOut = !live && (cmd ? STREAM_REDIRECT_CMDS.has(effectiveCmdName) : true)
-          ? await this.openLiveRedirects(redirects, stderrWriter) : null;
+        // Redirect files are opened (and `>` truncates) before the command runs, as
+        // in bash: what it writes goes in as it comes (`npm run dev > log &`), and a
+        // file the command writes itself isn't overwritten afterwards
+        const liveOut = !live ? await this.openLiveRedirects(redirects, stderrWriter) : null;
         if (liveOut === 'failed') {
           exitCode = 1;
           this.redirectFailed = false;
