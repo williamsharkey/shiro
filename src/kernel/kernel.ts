@@ -104,6 +104,8 @@ export interface WaitResult {
   pid: number;
   /** Linux wait status. */
   status: number;
+  /** CPU ms of a reaped child and of the children it reaped (its rusage) */
+  cpuMs?: number;
 }
 
 const enc = new TextEncoder();
@@ -747,11 +749,13 @@ export class Kernel {
       if (kids.length === 0) return { pid: -A.ECHILD, status: 0 };
       for (const k of kids) {
         if (k.state === 'zombie') {
+          const cpuMs = ProcFs.cpuMs(k) + k.childCpuMs;
           if (!(options & A.WNOWAIT)) {
             this.procs.delete(k.pid);
+            caller.childCpuMs += cpuMs;
             this.notify();
           }
-          return { pid: k.pid, status: k.exitStatus! };
+          return { pid: k.pid, status: k.exitStatus!, cpuMs };
         }
       }
       for (const k of kids) {
@@ -1725,13 +1729,15 @@ export class Kernel {
   readinessFile(proc: Process, nr: number, args: ArrayLike<number>): OpenFile | undefined {
     if ((nr !== A.SYS_read && nr !== A.SYS_write) || proc.state !== 'running' || proc.exiting || this.syscallTable.has(nr)) return undefined;
     const f = proc.fds.get(args[0]);
-    if (!f || f.flags & A.O_NONBLOCK) return undefined;
+    // A regular file never becomes ready: its tryRead/tryWrite fail only while a page of a big file must load (syscall loads it)
+    if (!f || f.flags & A.O_NONBLOCK || f.kind === 'file') return undefined;
     if (nr === A.SYS_read) return f.tryRead ? f : undefined;
     return f.tryWrite && (args[1] >>> 0) <= A.PIPE_BUF ? f : undefined;
   }
 
   syscall(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): Promise<number> {
-    // Time inside syscalls is time the process isn't computing (/proc CPU estimate)
+    // Time blocked inside syscalls is time the process isn't computing (/proc
+    // CPU estimate); a quick call counts as CPU, as Linux's system time does
     const t0 = Date.now();
     proc.syscalls++;
     // While in a syscall the process counts as sleeping (S in /proc/PID/stat)
@@ -1740,7 +1746,8 @@ export class Kernel {
     proc.calls.push(call);
     const done = () => {
       proc.inSyscall--;
-      proc.kernelMs += Date.now() - t0;
+      const ms = Date.now() - t0;
+      if (ms >= 2) proc.kernelMs += ms;
       const i = proc.calls.indexOf(call);
       if (i >= 0) proc.calls.splice(i, 1);
     };
@@ -1971,7 +1978,7 @@ export class Kernel {
           return 0;
         }
         case A.SYS_timer_create:
-          return this.timers.create(proc, args[0] | 0, args[1] ? new DataView(data.buffer, data.byteOffset, 24) : null);
+          return this.timers.create(proc, args[0] | 0, args[1] ? new DataView(data.buffer, data.byteOffset, 24) : null, (args[2] & 1) === 1);
         case A.SYS_timer_settime:
           return this.timers.settime(proc, args[0] | 0, args[1], new DataView(data.buffer, data.byteOffset, 32));
         case A.SYS_timer_gettime:
@@ -2054,7 +2061,7 @@ export class Kernel {
             };
             // While remote, the file's fds read and write the buffer (not the control page)
             onRemote = (sab) => attachInodeShared(fs, path, sab, sab.byteLength - CONTROL_BYTES);
-            writeBack = async (b) => { if (!writeInodeBytes(fs, path, b) && await fs.exists(path)) await fs.writeFile(path, b); };
+            writeBack = async (b) => { if (!(await writeInodeBytes(fs, path, b)) && await fs.exists(path)) await fs.writeFile(path, b); };
           } else if (kind === 1) {
             const seg = this.shm.list().find((x) => x.id === args[0]);
             if (!seg) return -A.EINVAL;
@@ -2217,6 +2224,8 @@ export class Kernel {
           if ((args[0] | 0) === -0x80000000) return -A.ESRCH;
           const r = await this.waitpid(args[0], args[1], proc, sig);
           if (r.pid > 0) new DataView(data.buffer, data.byteOffset, 4).setInt32(0, r.status, true);
+          // then the reaped child's CPU time in µs (Blink 0509 fills wait4's rusage with it)
+          if (r.pid > 0 && data.length >= 12) new DataView(data.buffer, data.byteOffset + 4, 8).setBigInt64(0, BigInt(Math.round((r.cpuMs ?? 0) * 1000)), true);
           return r.pid;
         }
         case A.SYS_kill:
@@ -2692,9 +2701,21 @@ export class Kernel {
           return await this.getdents(proc, args[0], data.subarray(0, Math.min(args[1] >>> 0, data.length)));
         case A.SYS_spawn:
           return await this.sysSpawn(proc, JSON.parse(str(0, args[0])));
-        case A.SYS_shiro_sleeping:
+        case A.SYS_shiro_sleeping: {
+          const was = proc.engineSleeps;
           proc.engineSleeps = Math.max(0, proc.engineSleeps + (args[0] | 0));
+          if (!was && proc.engineSleeps) proc.engineSleepSince = Date.now();
+          else if (was && !proc.engineSleeps) proc.kernelMs += Date.now() - proc.engineSleepSince;
           return 0;
+        }
+        case A.SYS_shiro_cputimes: {
+          // the caller's CPU time and its reaped children's, in µs (times, getrusage)
+          if (data.length < 16) return -A.EINVAL;
+          const dv = new DataView(data.buffer, data.byteOffset, 16);
+          dv.setBigInt64(0, BigInt(Math.round(ProcFs.cpuMs(proc) * 1000)), true);
+          dv.setBigInt64(8, BigInt(Math.round(proc.childCpuMs * 1000)), true);
+          return 0;
+        }
         case A.SYS_getenv: {
           const b = enc.encode(JSON.stringify({ argv: proc.argv, env: proc.env, cwd: proc.cwd, pid: proc.pid }));
           if (b.length > data.length) return -A.E2BIG;

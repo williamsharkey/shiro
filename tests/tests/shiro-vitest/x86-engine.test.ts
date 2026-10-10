@@ -152,6 +152,8 @@ const sse41bBin = join(out, 'sse41b');
 const haveSse41b = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', sse41bBin, 'sse41b.c']);
 const ssefloatBin = join(out, 'ssefloat');
 const haveSsefloat = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', ssefloatBin, 'ssefloat.c', '-lm']);
+const sharedmapBin = join(out, 'sharedmap');
+const haveSharedmap = tryBuild('gcc', ['-static', '-O1', '-o', sharedmapBin, 'sharedmap.c']);
 const roundingBin = join(out, 'rounding');
 const haveRounding = tryBuild('gcc', ['-static', '-O1', '-frounding-math', '-o', roundingBin, 'rounding.c', '-lm']);
 const cowforkBin = join(out, 'cowfork');
@@ -230,6 +232,9 @@ const haveSigmodes = blinkHasSigmodes && tryBuild('gcc', ['-static', '-O1', '-w'
 const sharedmapsBin = join(out, 'sharedmaps');
 const blinkHasSharedmaps = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_sharedmaps');
 const haveSharedmaps = blinkHasSharedmaps && tryBuild('gcc', ['-static', '-O1', '-w', '-o', sharedmapsBin, 'sharedmaps.c']);
+// The same with a big file (the kernel holds it as pages: FileSystem.BLOB_MIN)
+const bigsharedBin = join(out, 'bigshared');
+const haveBigshared = blinkHasSharedmaps && tryBuild('gcc', ['-static', '-O1', '-w', '-o', bigsharedBin, 'bigshared.c']);
 // Blink 0099: mlock/munlock/mlockall and mmap errors as Linux's
 const memerrsBin = join(out, 'memerrs');
 const blinkHasMemerrs = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_memerrs');
@@ -267,6 +272,18 @@ const haveThreadintr = blinkHasThreadintr && tryBuild('gcc', ['-static', '-O1', 
 const sigbusBin = join(out, 'sigbus');
 const blinkHasSigbus = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_sigbus');
 const haveSigbus = blinkHasSigbus && tryBuild('gcc', ['-static', '-O1', '-w', '-o', sigbusBin, 'sigbus.c', '-lrt']);
+// Blink 0509: CPU-time clocks and times() start again in a fork child; children's CPU from the kernel
+const forkcpuBin = join(out, 'forkcpu');
+const blinkHasForkcpu = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_forkcpu');
+const haveForkcpu = blinkHasForkcpu && tryBuild('gcc', ['-static', '-O1', '-w', '-o', forkcpuBin, 'forkcpu.c', '-lpthread']);
+// Blink 0510: a SIGEV_THREAD_ID timer's signal goes to its thread (SIGEV_THREAD timers)
+const timerthreadBin = join(out, 'timerthread');
+const blinkHasTimerthread = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_timerthread');
+const haveTimerthread = blinkHasTimerthread && tryBuild('gcc', ['-static', '-O1', '-w', '-o', timerthreadBin, 'timerthread.c', '-lpthread', '-lrt']);
+// Blink 0511: a file mapping's last page is the file's to its end
+const mmaptailBin = join(out, 'mmaptail');
+const blinkHasMmaptail = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_mmaptail');
+const haveMmaptail = blinkHasMmaptail && tryBuild('gcc', ['-static', '-O1', '-w', '-o', mmaptailBin, 'mmaptail.c']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -866,6 +883,19 @@ it.skipIf(!haveSharedmaps)('MAP_SHARED /dev/shm mappings: write-only pages, a se
   expect(r.output.replace(/\r\n/g, '\n')).toBe('second qwerty\nchild from child\n');
 }, 60_000);
 
+it.skipIf(!haveBigshared)('a 6 MiB file mapped MAP_SHARED, written through the mapping and pwrite, reads back whole after munmap', async () => {
+  const { fs, shell } = await setup(readFileSync(bigsharedBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe(
+    'big.bin size 6291456 read 6291456 pread-sees-map 1 bad 0 first -1\n');
+  // And in the FileSystem, stored as blocks
+  await fs.sync();
+  const back = await fs.readFile('/home/user/work/big.bin') as Uint8Array;
+  expect(back.length).toBe(6 << 20);
+  expect([back[0], back[4096 * 5], back[(3 << 20) + 200], back[(6 << 20) - 1], back[1]]).toEqual([0, 5, 80, 69, 0]);
+  expect(fs.blobOf('/home/user/work/big.bin')).toBeTruthy();
+}, 120_000);
+
 it.skipIf(!haveMemerrs)('mlock, munlock, mlockall and mmap refuse bad arguments with Linux\'s errors (Open POSIX)', async () => {
   const { shell } = await setup(readFileSync(memerrsBin));
   const r = await run(shell, './prog');
@@ -920,6 +950,25 @@ it.skipIf(!haveSigbus)('a page of a shared file mapping past the end of a file o
   expect(r.output.replace(/\r\n/g, '\n')).toBe(
     'PROT_NONE SIGSEGV\nfile SIGBUS code 2 at page 1\nfile SIGBUS on read\nfile grown: 0 122\nfile wrote back a\n' +
     'shm SIGBUS code 2 at page 1\nshm SIGBUS on read\nshm grown: 0 0\n');
+}, 60_000);
+
+it.skipIf(!haveForkcpu)('a fork child\'s and a new thread\'s CPU-time clocks, and the child\'s times(), start at 0 and move; the parent counts reaped children\'s CPU, not their sleep (Open POSIX fork_22-1, fork_8-1)', async () => {
+  const { shell } = await setup(readFileSync(forkcpuBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('parent process 1 thread 1 utime 1\nnew thread 1\nchild process 1 thread 1 utime 1\nchild moves\n' +
+    'wait4 1\nchildren utime 1 cutime 1\nsleeping child 1\n');
+}, 60_000);
+
+it.skipIf(!haveTimerthread)('a SIGEV_THREAD timer runs its function in another thread with its value at each expiry; a fork child does not inherit it (Open POSIX fork_18-1)', async () => {
+  const { shell } = await setup(readFileSync(timerthreadBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('runs 1 value 42 other thread 1\nchild runs 0\nparent runs 1\n');
+}, 60_000);
+
+it.skipIf(!haveMmaptail)('a file mapping whose length ends mid-page shows the file to the end of the page; MAP_FIXED over it shows the new file (Open POSIX mmap_3-1)', async () => {
+  const { shell } = await setup(readFileSync(mmaptailBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('tail a\nreplaced 1 tail b\n');
 }, 60_000);
 
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
@@ -1246,6 +1295,15 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe('arith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\narith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\narith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\n');
   }, 60_000);
+
+  // apt's pkgcache.bin: a 27 MB writable MAP_SHARED file mapping; msync and
+  // munmap write back only this process's changes, so a child's writes
+  // through its own mapping stay (0098; a hash per 128 bytes since 0120)
+  it.skipIf(!haveSharedmap)('a big writable shared file mapping writes back only what changed', async () => {
+    const { shell } = await setup(readFileSync(sharedmapBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe("msync 0 file 'header' child 'child' parent 'P' sum dc7153090c0f509a\n");
+  }, 120_000);
 
   // fesetround's directed modes (MXCSR.RC), as CGAL checks at startup:
   // SSE add/sub/mul/div/sqrt and conversions as native, compiled and not (0119)
