@@ -117,9 +117,15 @@ diversions, so apt and dpkg stay truthful (`src/debian/overlay.ts`):
 
 - **tabcomputer's**: `dpkg-divert --local --rename --divert PATH.debian --add PATH`.
   Debian's file lives at `PATH.debian` (upgrades land there too); `PATH`
-  itself is absent, and the kernel and the shell resolve an absent
-  `/usr/bin/NAME` to the tabcomputer command of that name. Programs that must exist
-  as files (apt's methods) get a `#!/usr/bin/<command>` stub instead.
+  holds a builtin shim (`#!/usr/libexec/tabcomputer/builtin`), which the
+  kernel and the shell run as the tabcomputer command of that name. The file
+  is there for programs that search PATH themselves with stat(): Debian's
+  bash running a `curl … | bash` installer found no `grep` without it.
+  Programs whose tabcomputer side is a kernel program (apt, apt's methods)
+  get a `#!/usr/bin/<command>` stub instead. Builtins Debian doesn't ship
+  (curl, git, rg, …) get the same shim in `/usr/bin` while no file provides
+  them; a package that installs the real program replaces it.
+  Neither kind counts as a Debian program shadowing the builtin.
 - **Debian's**: no diversion; `PATH` is the package's own file, and in
   Debian mode a program file in `/usr/{local/,}{s,}bin` takes precedence
   over a tabcomputer builtin of the same name (`debianShadows`, kept current as
