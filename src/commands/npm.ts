@@ -317,7 +317,7 @@ async function installTree(
   ctx: CommandContext,
   baseDir: string,
   tree: BuildResult,
-  opts: { globalBinDir?: string } = {},
+  opts: { globalBinDir?: string; ignoreScripts?: boolean } = {},
 ): Promise<{ added: number; failed: number }> {
   const base = baseDir.replace(/\/$/, '');
   const byDepth = new Map<number, TreeNode[]>();
@@ -327,6 +327,7 @@ async function installTree(
   }
   let added = 0;
   let failed = 0;
+  const fresh: TreeNode[] = [];
   for (const depth of [...byDepth.keys()].sort((x, y) => x - y)) {
     const queue = [...byDepth.get(depth)!];
     const worker = async () => {
@@ -347,6 +348,7 @@ async function installTree(
             mkdir: async (path: string) => { try { await ctx.fs.mkdir(path, { recursive: true }); } catch { /* exists */ } },
           };
           await extractTarGzToFS(tarballData, dir, fsWriter);
+          fresh.push(n);
           added++;
         } catch (e: any) {
           failed++;
@@ -372,7 +374,63 @@ async function installTree(
       }
     }
   }
+  if (!opts.ignoreScripts) await runInstallScripts(ctx, base, fresh);
   return { added, failed };
+}
+
+/** --ignore-scripts, or ignore-scripts=true in ~/.npmrc */
+async function ignoreScripts(ctx: CommandContext): Promise<boolean> {
+  if (ctx.args.includes('--ignore-scripts')) return true;
+  try {
+    const rc = await ctx.fs.readFile(`${ctx.env['HOME'] || '/home/user'}/.npmrc`, 'utf8') as string;
+    return /^\s*ignore-scripts\s*=\s*true\s*$/m.test(rc);
+  } catch { return false; }
+}
+
+/**
+ * The install scripts of the packages just installed (preinstall, install,
+ * postinstall), dependencies before the packages that need them, in each
+ * package's directory, as npm runs them: quiet unless one fails. A failure is
+ * a warning here, not the end of the install: a script that builds a native
+ * addon (node-gyp, prebuild-install) can't succeed in the tab, and the
+ * package's JavaScript often works without it.
+ */
+async function runInstallScripts(ctx: CommandContext, base: string, nodes: TreeNode[]): Promise<void> {
+  const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+  // Each package after what it depends on (hoisting leaves that at any depth)
+  const order: TreeNode[] = [];
+  const seen = new Set<TreeNode>();
+  const visit = (n: TreeNode) => {
+    if (seen.has(n)) return;
+    seen.add(n);
+    for (const d of n.resolved.values()) visit(d);
+    order.push(n);
+  };
+  nodes.forEach(visit);
+  const fresh = new Set(nodes);
+  for (const n of order.filter((n) => fresh.has(n))) {
+    const dir = `${base}/${n.dir}`;
+    let scripts: Record<string, string> = {};
+    try { scripts = JSON.parse(await ctx.fs.readFile(`${dir}/package.json`, 'utf8') as string).scripts ?? {}; } catch { continue; }
+    for (const event of ['preinstall', 'install', 'postinstall']) {
+      const script = scripts[event];
+      if (!script) continue;
+      const env = {
+        npm_lifecycle_event: event, npm_lifecycle_script: script, npm_package_name: n.name,
+        npm_package_version: n.version, INIT_CWD: ctx.cwd, npm_command: 'install',
+      };
+      let out = '';
+      const code = await ctx.shell.execute(
+        `(cd ${q(dir)} && export ${Object.entries(env).map(([k, v]) => `${k}=${q(v)}`).join(' ')} PATH=${q(`${dir}/node_modules/.bin:${base}/${binDirOf(n)}`)}:"$PATH" && ${script})`,
+        (s) => { out += s; }, (s) => { out += s; }, false, undefined, true,
+      );
+      if (code !== 0) {
+        ctx.stderr += `npm warn ${n.name}@${n.version} ${event}: \`${script}\` exited with ${code}\n`;
+        if (out.trim()) ctx.stderr += out.trimEnd().split('\n').slice(-10).map((l) => `npm warn   ${l}`).join('\n') + '\n';
+        break;
+      }
+    }
+  }
 }
 
 /** The tree for `wanted`, with what was left out reported */
@@ -466,7 +524,7 @@ async function npmInstall(ctx: CommandContext): Promise<number> {
 
   const t0 = Date.now();
   const tree = await resolveTree(ctx, Object.entries(depsToResolve).map(([name, range]) => ({ name, range })));
-  const { added, failed } = await installTree(ctx, ctx.cwd, tree);
+  const { added, failed } = await installTree(ctx, ctx.cwd, tree, { ignoreScripts: await ignoreScripts(ctx) });
   ctx.stdout += `\nadded ${added} package(s), ${tree.nodes.length} in the tree, in ${((Date.now() - t0) / 1000).toFixed(1)}s\n`;
   if (failed || (tree.warnings.length && tree.nodes.length === 0)) return 1;
   ctx.stdout += 'Packages installed successfully.\n';
@@ -523,7 +581,7 @@ async function npmInstallGlobal(
 
   ctx.stdout += 'Installing packages globally...\n';
   const tree = await resolveTree(ctx, Object.entries(depsToResolve).map(([name, range]) => ({ name, range })));
-  const { added, failed } = await installTree(ctx, '/usr/local/lib', tree, { globalBinDir });
+  const { added, failed } = await installTree(ctx, '/usr/local/lib', tree, { globalBinDir, ignoreScripts: await ignoreScripts(ctx) });
   ctx.stdout += `\nadded ${added} package(s)\n`;
   if (failed) return 1;
   ctx.stdout += 'Packages installed globally.\n';

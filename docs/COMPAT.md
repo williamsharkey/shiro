@@ -330,6 +330,19 @@ Shell and platform fixes these needed (all with tests in the same file):
   `promises.opendir`, a process-local `process.chdir` (the shell's cwd comes
   back when the script exits), `npm config get/set/delete/list`, and
   `__dirname` text inside template literals left alone.
+- npm: an optional platform package for linux-x64 (glibc) is installed when it
+  ships an executable, which Blink runs: `npm i -g @openai/codex` gets
+  `@openai/codex-linux-x64`, `opencode-ai` gets `opencode-linux-x64` (and
+  `-baseline`, as npm does). Node addons (`main: *.node`: @next/swc-*,
+  @rollup/rollup-*), musl builds, other platforms, and natives of a package
+  that also offers a WebAssembly build (sharp, @tailwindcss/oxide) are still
+  left out. Install scripts (preinstall, install, postinstall) run after
+  extraction, dependencies first, in the package's directory with npm's
+  `npm_lifecycle_event`/`npm_package_*` variables; `--ignore-scripts` and
+  `ignore-scripts=true` skip them. Unlike npm, a failing script is a warning
+  (its last lines are shown) and the install goes on: a script that builds a
+  native addon can't succeed in the tab, and the package usually works
+  without it.
 - Node: a script's timers and intervals end with it. An interval left by a
   script that called `process.exit()` kept firing in the page, and its
   `setTimeout`s became the next script's timers, so that script never went
