@@ -13,7 +13,7 @@ import { ProcessExitError } from '../commands/jseval/utils';
 import { transformESModules, transformTS, transformJSX } from '../commands/jseval/module-transform';
 import type { SharedState } from './types';
 import { createFakeBuffer } from './buffer';
-import { asyncContext, carryAsyncContext } from './async-context';
+import { asyncContext, carryAsyncContext, carriesAsyncContext } from './async-context';
 import { createFakeConsole, formatLog } from './console';
 import { createFakeProcess } from './process';
 import { createFileCache } from './file-cache';
@@ -454,7 +454,6 @@ export async function executeNodeScript(
       // (the same passes as the cached text: claude-transform-cache.ts)
       transformedCode = await transformClaudeSource(code);
       opts.onTransformed?.(transformedCode);
-      if (asyncContext.active && !code.includes('AsyncLocalStorage')) transformedCode = carryAsyncContext(transformedCode);
     } else {
       transformedCode = patchPackageSource(scriptPath, code);
       if (scriptPath && (scriptPath.endsWith('.ts') || scriptPath.endsWith('.tsx'))) {
@@ -468,7 +467,7 @@ export async function executeNodeScript(
       // (added after the transform, so the AsyncLocalStorage rewrite can't use its code mask)
       transformedCode = awaitSyncCalls(transformedCode);
       // Once a process uses AsyncLocalStorage, awaits carry its stores (async-context.ts)
-      if (asyncContext.active || code.includes('AsyncLocalStorage')) transformedCode = carryAsyncContext(transformedCode);
+      if (carriesAsyncContext(code)) transformedCode = carryAsyncContext(transformedCode);
     }
 
     // Stash real browser console on globalThis so injected code can use it

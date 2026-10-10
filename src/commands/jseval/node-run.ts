@@ -2,7 +2,7 @@ import type { CommandContext } from '../index';
 import { executeNodeScript } from '../../node-compat/execution';
 import { NODE_REPL } from './node-repl';
 import { CLAUDE_CODE_CLI_JS } from '../../claude-code-version';
-import { readClaudeTransform, saveClaudeTransform, claudeTransformPath } from '../../claude-transform-cache';
+import { readClaudeTransform, saveClaudeTransform } from '../../claude-transform-cache';
 
 /**
  * node (node-cmd.ts runs it here, or in a Worker as a kernel guest): executes JS files from the virtual filesystem.
@@ -56,13 +56,13 @@ export async function runNode(ctx: CommandContext): Promise<number> {
     scriptPath = ctx.fs.resolvePath(fileArgs[0], ctx.cwd);
     // Claude Code's npm build: its transformed text, when the page has written it
     if (scriptPath === CLAUDE_CODE_CLI_JS) {
-      const cached = await readClaudeTransform(ctx.fs as any);
-      if (cached) return executeNodeScript(ctx, cached, scriptPath, fileArgs, printResult, { pretransformed: true });
+      const cache = await readClaudeTransform(ctx.fs as any);
+      if (cache.text) return executeNodeScript(ctx, cache.text, scriptPath, fileArgs, printResult, { pretransformed: true });
       // none: this run transforms it, and saves the text once its program has ended
-      if (claudeTransformPath(0)) {
+      if (cache.path) {
         let text: string | undefined;
         const code = await executeNodeScript(ctx, await ctx.fs.readFile(scriptPath, 'utf8') as string, scriptPath, fileArgs, printResult, { onTransformed: (t) => { text = t; } });
-        if (text) await saveClaudeTransform(ctx.fs as any, text).catch(() => {});
+        if (text) await saveClaudeTransform(ctx.fs as any, cache.path, text).catch(() => {});
         return code;
       }
     }

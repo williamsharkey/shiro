@@ -87,6 +87,11 @@ function patchThen(): void {
 
 const ID = /[A-Za-z0-9_$\u0080-￿]/;
 
+/** Whether code from `src` gets carryAsyncContext: once a process uses AsyncLocalStorage, or when `src` does */
+export function carriesAsyncContext(src: string): boolean {
+  return active || src.includes('AsyncLocalStorage');
+}
+
 /**
  * `await X` → `__shiroAls.r(__shiroAls.c(), await X)`, in code only. An await
  * whose operand isn't a plain unary/member/call expression (one starting
