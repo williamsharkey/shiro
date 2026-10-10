@@ -101,11 +101,15 @@ async function writeClaudeTransform(fs: CacheFs): Promise<void> {
 }
 
 /** Write it in the background, by `node --tabcomputer-claude-cache` (a guest Worker where node runs as one) */
+let backgroundWriter: Promise<unknown> | null = null;
 export function writeClaudeTransformInBackground(shell: { fork(): any }): void {
+  // (one at a time: a `claude` started while it works finds no file yet)
+  if (backgroundWriter) return;
   try {
     const sh = shell.fork();
     sh.terminal = null;
-    void Promise.resolve(sh.execute(`node ${CACHE_FLAG} < /dev/null > /dev/null 2>&1`, () => {}, () => {})).catch(() => {});
+    backgroundWriter = Promise.resolve(sh.execute(`node ${CACHE_FLAG} < /dev/null > /dev/null 2>&1`, () => {}, () => {}))
+      .catch(() => {}).finally(() => { backgroundWriter = null; });
   } catch { /* no shell */ }
 }
 
