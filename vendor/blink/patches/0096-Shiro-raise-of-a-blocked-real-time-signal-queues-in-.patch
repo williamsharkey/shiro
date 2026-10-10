@@ -1,4 +1,4 @@
-From 301ebd919d44a0708289ad2c2407b0be28059880 Mon Sep 17 00:00:00 2001
+From ccae765a3155c3edbc72c415d4060cc98a443bd6 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 05:46:42 +0000
 Subject: [PATCH] Shiro: raise of a blocked real-time signal queues in the
@@ -12,17 +12,55 @@ SI_TKILL. sigprocmask leaves SIGKILL and SIGSTOP out of the mask
 SS_ONSTACK|SS_DISABLE, and a disabled stack reads back as ss_sp NULL,
 ss_size 0 (sigaltstack_2-1, 11-1).
 
+rt_sigaction mirrors SIGCHLD's SA_NOCLDSTOP and SA_NOCLDWAIT to the kernel, which
+skips stop reports and reaps
+the children as they exit (sigaction_21-1).
+
 Exports blink_shiro_sigmodes.
 ---
- blink/shiro.inc | 23 +++++++++++++++++++++--
+ blink/shiro.inc | 35 +++++++++++++++++++++++++++++------
  blink/syscall.c | 15 ++++++++++++++-
- 2 files changed, 35 insertions(+), 3 deletions(-)
+ 2 files changed, 43 insertions(+), 7 deletions(-)
 
 diff --git a/blink/shiro.inc b/blink/shiro.inc
-index 1f2d523..564258e 100644
+index 1f2d523..a3c0d69 100644
 --- a/blink/shiro.inc
 +++ b/blink/shiro.inc
-@@ -2344,6 +2344,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_mqueue(void) { return 1; }
+@@ -1676,11 +1676,14 @@ static i64 ShiroWaitid(struct Machine *m, int idtype, int id, i64 info,
+ }
+ 
+ // The kernel's view of a guest handler: caught signals are forwarded here.
+-static i64 ShiroMirrorSigaction(struct Machine *m, int sig, u64 handler) {
++static i64 ShiroMirrorSigaction(struct Machine *m, int sig, u64 handler, u64 flags) {
+   u8 act[64];
+   memset(act, 0, sizeof(act));
+   if (sig == 9 || sig == 19) return 0;
+   Write64(act, handler == SIG_DFL_LINUX ? 0 : handler == SIG_IGN_LINUX ? 1 : K_FWD_HANDLER);
++  // SIGCHLD's SA_NOCLDSTOP (no SIGCHLD for a child's stop or continue) and
++  // SA_NOCLDWAIT (the kernel reaps the children as they exit: no zombies)
++  if (sig == 17) Write64(act + 8, flags & 3);
+   return ShiroCall(m, 13, A12(sig, 1, 0), act, 64, 0, false, false);
+ }
+ 
+@@ -1692,7 +1695,7 @@ static i64 ShiroVforkSigaction(struct Machine *m, int sig, i64 act, i64 old,
+   if (old && CopyToUserWrite(m, old, h, sizeof(*h)) == -1) return -EFAULT_LINUX;
+   if (act) {
+     if (CopyFromUserRead(m, h, act, sizeof(*h)) == -1) return -EFAULT_LINUX;
+-    ShiroMirrorSigaction(m, sig, Read64(h->handler));
++    ShiroMirrorSigaction(m, sig, Read64(h->handler), Read64(h->flags));
+   }
+   return 0;
+ }
+@@ -1702,7 +1705,7 @@ static i64 ShiroVforkSigaction(struct Machine *m, int sig, i64 act, i64 old,
+ // TerminateSignal() instead of terminating.
+ bool ShiroStopSelf(struct Machine *m, int sig) {
+   if (!g_shiro_pid || (sig != 19 && sig != 20 && sig != 21 && sig != 22)) return false;
+-  ShiroMirrorSigaction(m, sig, SIG_DFL_LINUX);
++  ShiroMirrorSigaction(m, sig, SIG_DFL_LINUX, 0);
+   KS(m, 62, A12(m->system->pid, sig));
+   KS(m, 24, A12(0));  // sched_yield: answered once we're continued
+   return true;
+@@ -2344,6 +2347,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_mqueue(void) { return 1; }
  EMSCRIPTEN_KEEPALIVE int blink_shiro_timers(void) { return 1; }
  // 0092: rt_sigqueueinfo carries its siginfo to the kernel
  EMSCRIPTEN_KEEPALIVE int blink_shiro_siginfo(void) { return 1; }
@@ -31,7 +69,7 @@ index 1f2d523..564258e 100644
  
  // the kernel signalled hosted child `pid` (host.mjs routes by pid)
  EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid(int pid, int sig) {
-@@ -3117,9 +3119,26 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+@@ -3117,9 +3122,26 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
        // SIGKILL or SIGSTOP to the calling thread (raise) is the kernel's to
        // act on: Blink would raise it on the host, where nothing ends or
        // stops the guest process and its parent's wait never returns
@@ -60,6 +98,17 @@ index 1f2d523..564258e 100644
        break;
      }
      case 0x080: {                                                     // rt_sigtimedwait
+@@ -3702,8 +3724,9 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       if (r == 0 && b && a >= 1 && a <= 64) {
+         LOCK(&m->system->sig_lock);
+         u64 h = Read64(m->system->hands[a - 1].handler);
++        u64 f = Read64(m->system->hands[a - 1].flags);
+         UNLOCK(&m->system->sig_lock);
+-        ShiroMirrorSigaction(m, a, h);
++        ShiroMirrorSigaction(m, a, h, f);
+       }
+       break;
+     }
 diff --git a/blink/syscall.c b/blink/syscall.c
 index b477722..51697ca 100644
 --- a/blink/syscall.c
