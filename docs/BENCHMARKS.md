@@ -1055,6 +1055,42 @@ gain. The likely cause (not yet proven): the page holds the worker's
 wasm memory for the channels, so it is released at the page's next GC
 rather than with the worker. Off by default until that's solved.
 
+### unix/perf-blink 8 — direct kernel channels, re-measured; what holds the memory
+
+With two thread Workers per process (the pool change), `node bench/ab.mjs
+unix/perf-blink <direct on by default> --suites x86 --only 'x86\.blink\.'
+--rounds 5` (Chromium, isolated):
+
+| metric (isolated) | off | on | shift | verdict |
+|---|---:|---:|---:|---|
+| x86.blink.go_hello | 173 ms | 152 ms | -12.1% | improved |
+| x86.blink.vim_defaults | 1190 ms | 996 ms | -16.0% | improved |
+| x86.blink.vim_startup | 2560 ms | 2279 ms | -9.7% | improved |
+| x86.blink.hello_musl | 79 ms | 73 ms | -10.2% | same |
+| x86.blink.peak_rss.vim_startup | 10.5 MiB | 32.5 MiB | +211% | regressed |
+| x86.blink.peak_rss.go_nethttp | 14.4 MiB | 35.9 MiB | +103% | regressed |
+| x86.blink.peak_rss.go_hello | 2.4 MiB | 14.3 MiB | +447% | regressed |
+
+The memory is the finished process's wasm memory, kept until the page's
+next GC, as guessed in round 7: the page's channel views on the
+SharedArrayBuffer hold all of it. Measured in Chromium, after a vim run
+(`vim -es -c 'source $VIMRUNTIME/defaults.vim' -c q`) and 2 s idle, a
+forced page GC (CDP `HeapProfiler.collectGarbage`) gives back 19.2-19.5
+MiB with direct channels and 4.6-4.7 MiB without (rounds 2-3; round 1 is
+warm-up). Memory-infra dumps taken while vim runs show no difference in
+any allocator (V8 heaps, malloc, PartitionAlloc), so nothing grows while
+the process runs: the bench's peak counts the previous run's memory
+still held on top of the current one. Each finished process costs its
+wasm memory until the page collects, which a burst of short processes
+(a shell script, apt's methods) multiplies.
+
+Direct channels stay opt-in. A way out, not built: channels in their own
+small SharedArrayBuffers instead of the wasm memory, which the calling
+thread copies its request into and its reply out of through a JS import
+on its own thread (no proxy to host.mjs's thread, no messages; a copy of
+at most 64 KiB), so the page never holds the wasm memory. It needs each
+pthread Worker to receive the channel buffers.
+
 ### unix/perf-blink 6 — content-hashed engine wasm
 
 `vite-plugin-engines.ts` writes a content-hashed copy of each engine's
