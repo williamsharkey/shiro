@@ -63,10 +63,6 @@ export const KNOWN_ISSUES: { issue: string; workaround?: string }[] = [
     workaround: 'Reload the tab (this ends running agents, including you), or do node work such as `vitest` and `esbuild` in a checkout outside the tab.',
   },
   {
-    issue: "In the page's own shell (the terminal's, and commands it runs in the page), `/proc/self/fd/N` links read `/dev/pts/0` even when the fd is redirected to a pipe or file, `stat -L` on them gives the redirect's type, and `/proc/self/cmdline` is just `bash`. Kernel processes' `/proc/PID/fd` are right.",
-    workaround: 'Ask `[ -t N ]` whether an fd is a terminal rather than reading the link.',
-  },
-  {
     issue: "Images can't be pasted into Claude Code: `xclip` and `xsel` here are text only.",
     workaround: 'Save the image to a file and give its path.',
   },
