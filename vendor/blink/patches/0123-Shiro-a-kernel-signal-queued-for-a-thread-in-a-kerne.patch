@@ -1,0 +1,55 @@
+From 1a10ab0d2a30b60970cd3fa824e9411c1b6b7e9d Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 18:18:40 +0000
+Subject: [PATCH] Shiro: a kernel signal queued for a thread in a kernel call
+ interrupts the call
+
+When the kernel has no call of ours to interrupt (the guest is between
+calls), it hands the signal to host.mjs, which queues it here
+(blink_shiro_signal). That woke only threads waiting on direct channels:
+one that went into a pool-channel call (epoll_wait) meanwhile slept with
+the signal pending (a SIGWINCH handler that never ran: the rawepoll test
+under load; a child's SIGUSR1 lost within 0-16 of 300 rounds). Now the
+page is asked to interrupt the call (shiro_kick, ShiroKickIfInCall), as
+for another thread's tkill; the thread counts itself in the call before it
+looks for signals, and the page remembers a kick that comes before the
+call (src/x86-engine/blink.ts).
+---
+ blink/blink.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/blink/blink.c b/blink/blink.c
+index b8f9a68..c66cc48 100644
+--- a/blink/blink.c
++++ b/blink/blink.c
+@@ -242,6 +242,19 @@ void ShiroRestore(struct Machine *);
+ // block it. Blocking syscalls notice within kPollingMs.
+ void ShiroDirectWake(void);
+ 
++// A signal the kernel handed over (host.mjs queues it here) for a thread in
++// an interruptible kernel call: the page ends the call with EINTR, as on
++// Linux. It came when the kernel had no call of ours to interrupt (between
++// calls), and the thread may have gone into one since: without the kick it
++// slept through it (a SIGWINCH's handler never ran while epoll_wait waited).
++// The thread counts itself in a call before it looks for signals
++// (ShiroCall), and the page remembers a kick that comes before the call.
++extern void shiro_kick(void);
++void ShiroKickIfInCall(struct Machine *m, int sig) {
++  atomic_thread_fence(memory_order_seq_cst);
++  if (!(m->sigmask & ((u64)1 << (sig - 1))) && atomic_load(&m->shiro_incall) > 0) shiro_kick();
++}
++
+ void ShiroSignalSystem(struct System *s, int sig) {
+   struct Dll *e;
+   struct Machine *m, *pick = 0, *busy = 0, *any = 0;
+@@ -263,6 +276,7 @@ void ShiroSignalSystem(struct System *s, int sig) {
+   if (pick) EnqueueSignal(pick, sig);
+   UNLOCK(&s->machines_lock);
+   ShiroDirectWake();
++  if (pick) ShiroKickIfInCall(pick, sig);
+ }
+ 
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal(int sig) {
+-- 
+2.43.0
+
