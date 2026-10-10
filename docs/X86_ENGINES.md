@@ -860,8 +860,73 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
 111. memfd_create goes to the kernel's (Blink answered ENOSYS): Firefox's
    shared memory, Mesa, Wayland and PulseAudio make their buffers with
    it. Test: fixtures/x86/memfd.c. (Another process mapping the same
-   memfd afresh doesn't see its writes yet; that needs the cross-instance
-   shared objects of docs/research/SHARED_MAPPINGS.md.)
+   memfd afresh doesn't see its writes yet; 0112 fixes that.)
+112. Objects shared with other Blink instances (shmobj, the Blink half of
+   docs/research/SHARED_MAPPINGS.md). A MAP_SHARED mapping of a /dev/shm
+   file or a memfd asks the kernel for a shared object (call 1020, kind
+   0x100: remote from the first mapper, so nobody has to publish). Its
+   bytes live in the kernel's SharedArrayBuffer, which the instance's
+   host.mjs thread holds.
+   - Blink maps shadow pages marked PAGE_REMOTE (bit 48). No TLB caches
+     them, the JIT's included: compiled code leaves the instruction to the
+     interpreter. Every access comes through LookupAddress2.
+   - An instruction locks the object (a control word after its bytes) and
+     copies the page in, in one call to the host thread. The thread keeps
+     the lock and the page for the next instructions, a lease of at most
+     0.5 ms, released before any system call or GIL hand-off. Then it
+     writes the pages back and unlocks. Lock-prefixed instructions are
+     atomic across instances. A thread waiting for the lock sleeps on a
+     wake from the host thread (Atomics.waitAsync), and newcomers let
+     waiters go first.
+   - A system call may block, so it locks only around its copies. It
+     writes back what it changed, diffed against what it read.
+   - FUTEX_WAIT/WAKE on a remote word wait and wake on the buffer itself,
+     so a wake crosses instances.
+   - munmap, exit and same-instance fork keep the kernel's mapping counts.
+   - BLINK_SHMOBJ=0 maps such files as private copies, as before.
+
+   Tests:
+   - fixtures/x86/psem.c: sem_open, with an exec'd process posting (was
+     it.fails).
+   - fixtures/x86/shmobj.c: a memfd mapped again by an exec'd process,
+     2×2000 lock xadds plus a PROCESS_SHARED mutex, and 50 semaphore
+     ping-pongs. Counts exact with and without the JIT, 0.8 s for the
+     whole program. The first version, a call per access and no lease,
+     took 24 s.
+   - shmobj.test.ts: the kernel side of kind 0x100, memfd keys and the
+     control page.
+
+   Costs and gaps:
+   - A cross-instance semaphore round trip is ~6 ms (native: 0.08 ms).
+   - read()/write() on a memfd go through the buffer while it's remote
+     (perf-kernel's side). A /dev/shm file's don't yet.
+   - SysV shm between instances still uses a copy per instance.
+113. SHIRO_BLINK_MMLOG=3's write lines name the fd's file, as the kernel's
+   /proc/self/fd link gives it (fds get reused; debian's PostgreSQL WAL
+   hunt needed to know which file a write went to).
+114. unpckhpd took the source's high half for both halves of the result
+   (its low half is the destination's high half). llvmpipe's shader code
+   (Mesa 22, LLVM 15) uses it, so GLSL output was wrong in whole 4-pixel
+   blocks (unix/gui's osmesa-probe: 3 of 5 sampled pixels). It was wrong in
+   the interpreter, and the JIT calls the same handler. Test:
+   fixtures/x86/sse41b.c, the SSE4.1 forms LLVM emits there (pblendvb,
+   ptest+setcc, pinsrd/extractps with memory, cvtsi2ss, movshdup,
+   pminud/pmaxud, all cmpps predicates, unpck*pd, REX registers), against
+   native, with and without the JIT.
+0500. unix/conformance's mlock/munlock/mlockall and mmap argument errors
+   (Open POSIX mlock_8-1, munlock_10-1, mlockall_13-1, mmap_21-1, 23-1,
+   24-2). Numbered from 0500 so the two branches never renumber each
+   other.
+0501. unix/conformance's: a thread's tkill/tgkill reaches its handler as
+   SI_TKILL from its own process (glibc's SIGCANCEL handler checks that),
+   and the signal frame is in Linux's rt_sigframe order (ret, uc, si), as
+   libgcc's fallback unwinder expects. pthread_cancel works.
+0502. unix/conformance's: a CPU clock id that names no process or thread
+   of ours is EINVAL.
+0503. unix/conformance's: tkill/tgkill of signal 0 to the calling thread is
+   0 (pthread_kill(self, 0) read hands[-1]).
+0504. unix/conformance's: setting another user's process's scheduling is
+   EPERM, as kill(pid, 0) says; reading it isn't.
 
    fork+exit+wait with 16 MiB of dirty heap went from 30 to 7.5 ms, and
    with 64 MiB from 104 to 12 ms (native: 3.1 ms). Test:

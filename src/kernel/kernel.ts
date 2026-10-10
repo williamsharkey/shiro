@@ -33,7 +33,7 @@ import { SysvSem } from './sysvsem';
 import { SysvMsg } from './sysvmsg';
 import { MessageQueues, MqFile } from './mqueue';
 import { PosixTimers } from './posixtimers';
-import { SharedObjects, isShareablePath, type ShmObjMessage } from './shmobj';
+import { CONTROL_BYTES, SharedObjects, isShareablePath, type ShmObjMessage } from './shmobj';
 import { EpollFile, waitReady } from './epoll';
 import { SignalFile, notifySignalPending, pendingSignalListeners } from './signalfd';
 import { EventFile, MemFile, TimerFile } from './fd';
@@ -169,6 +169,9 @@ function shellQuote(s: string): string {
  * reported as the default user's is the caller's: root's git and ssh find
  * their own files theirs.
  */
+/** Where a process keeps each interval timer (ITIMER_REAL, ITIMER_VIRTUAL, ITIMER_PROF) */
+const ITIMER_KEYS = ['realTimer', 'virtualTimer', 'profTimer'];
+
 function statFor(proc: Process, st: A.KStat): A.KStat {
   return st.uid === 1000 && proc.uid !== 1000 ? { ...st, uid: proc.uid, gid: proc.gid } : st;
 }
@@ -581,49 +584,58 @@ export class Kernel {
     if (!proc.exiting) await this.exit(proc, A.W_EXITCODE(typeof code === 'number' ? code : 0));
   }
 
-  /** ITIMER_REAL of `proc`: milliseconds left and the reload interval. */
-  realTimer(proc: Process): { value: number; interval: number } {
-    const t = proc.data.realTimer as { deadline: number; interval: number } | undefined;
+  /**
+   * An interval timer of `proc` (which: ITIMER_REAL 0, ITIMER_VIRTUAL 1,
+   * ITIMER_PROF 2): milliseconds left and the reload interval.
+   */
+  realTimer(proc: Process, which = 0): { value: number; interval: number } {
+    const t = proc.data[ITIMER_KEYS[which]] as { deadline: number; interval: number } | undefined;
     if (!t) return { value: 0, interval: 0 };
     return { value: Math.max(0, t.deadline - Date.now()), interval: t.interval };
   }
 
   /**
-   * setitimer(ITIMER_REAL)/alarm: SIGALRM to `proc` in `valueMs` (0 disarms),
-   * then every `intervalMs`. Returns the old setting. Not inherited by fork
-   * children; kept across exec (it lives on the process).
+   * setitimer/alarm: the timer's signal (SIGALRM, SIGVTALRM, SIGPROF) to
+   * `proc` in `valueMs` (0 disarms), then every `intervalMs`. Returns the
+   * old setting. Not inherited by fork children; kept across exec (it lives
+   * on the process). ITIMER_VIRTUAL and ITIMER_PROF count wall time: there's
+   * no per-process CPU time to count (the CPU clocks are the same stand-in).
    */
-  setRealTimer(proc: Process, valueMs: number, intervalMs: number): { value: number; interval: number } {
-    const old = this.realTimer(proc);
-    const t = proc.data.realTimer as { handle?: ReturnType<typeof setTimeout>; deadline: number; interval: number } | undefined;
+  setRealTimer(proc: Process, valueMs: number, intervalMs: number, which = 0): { value: number; interval: number } {
+    const key = ITIMER_KEYS[which];
+    const signo = [A.SIGALRM, A.SIGVTALRM, A.SIGPROF][which];
+    const old = this.realTimer(proc, which);
+    const t = proc.data[key] as { handle?: ReturnType<typeof setTimeout>; deadline: number; interval: number } | undefined;
     if (t?.handle) clearTimeout(t.handle);
     if (!(valueMs > 0)) {
-      delete proc.data.realTimer;
+      delete proc.data[key];
       return old;
     }
     const timer: { handle?: ReturnType<typeof setTimeout>; deadline: number; interval: number } = { deadline: Date.now() + valueMs, interval: intervalMs > 0 ? intervalMs : 0 };
     const arm = (ms: number) => {
       // setTimeout holds at most 2^31-1 ms (~24.8 days); a longer alarm waits in steps
       timer.handle = setTimeout(() => {
-        if (proc.exiting || proc.data.realTimer !== timer) return;
+        if (proc.exiting || proc.data[key] !== timer) return;
         if (timer.deadline - Date.now() > 0 && ms > 0x7fffffff) { arm(timer.deadline - Date.now()); return; }
         if (timer.interval > 0) {
           timer.deadline = Date.now() + timer.interval;
           arm(timer.interval);
         } else {
-          delete proc.data.realTimer;
+          delete proc.data[key];
         }
-        this.deliver(proc, A.SIGALRM);
+        this.deliver(proc, signo);
       }, Math.min(0x7fffffff, Math.max(0, ms)));
       (timer.handle as any)?.unref?.();
     };
-    proc.data.realTimer = timer;
+    proc.data[key] = timer;
     if (!proc.data.realTimerCleanup) {
       proc.data.realTimerCleanup = true;
       proc.onTerminate(() => {
-        const cur = proc.data.realTimer as { handle?: ReturnType<typeof setTimeout> } | undefined;
-        if (cur?.handle) clearTimeout(cur.handle);
-        delete proc.data.realTimer;
+        for (const k of ITIMER_KEYS) {
+          const cur = proc.data[k] as { handle?: ReturnType<typeof setTimeout> } | undefined;
+          if (cur?.handle) clearTimeout(cur.handle);
+          delete proc.data[k];
+        }
       });
     }
     arm(valueMs);
@@ -1982,7 +1994,7 @@ export class Kernel {
             key = mf.shareKey;
             size = Math.max(len, mf.statSync().size);
             initial = () => mf.bytes();
-            onRemote = (sab) => mf.attachShared(sab);
+            onRemote = (sab) => mf.attachShared(sab, sab.byteLength - CONTROL_BYTES); // (not the control page)
             writeBack = (b) => mf.detachShared(b);
           } else if (kind === 0) {
             if (!f) return -A.EBADF;
@@ -1990,7 +2002,15 @@ export class Kernel {
             if (f.kind !== 'file' || !path || !isShareablePath(path) || !this.fs) return -A.EINVAL;
             const fs = this.fs;
             key = `file:${inodeNumber(fs, path)}`;
-            initial = async () => { const b = await fs.readFile(path); return typeof b === 'string' ? new TextEncoder().encode(b) : b; };
+            // (through the fd: writes it holds may not have reached the filesystem yet)
+            initial = async () => {
+              if (f.pread) {
+                const b = new Uint8Array((await f.stat()).size);
+                return b.subarray(0, Math.max(0, await f.pread(b, 0)));
+              }
+              const b = await fs.readFile(path);
+              return typeof b === 'string' ? new TextEncoder().encode(b) : b;
+            };
             writeBack = async (b) => { if (await fs.exists(path)) await fs.writeFile(path, b); };
           } else if (kind === 1) {
             const seg = this.shm.list().find((x) => x.id === args[0]);
@@ -2098,9 +2118,9 @@ export class Kernel {
         }
         case A.SYS_getitimer:
         case A.SYS_setitimer: {
-          // ITIMER_REAL only (the engine keeps the CPU-time timers); struct
-          // itimerval in data: interval then value, each {i64 sec, i64 usec}
-          if (args[0] !== 0) return -A.EINVAL;
+          // ITIMER_REAL, ITIMER_VIRTUAL, ITIMER_PROF; struct itimerval in
+          // data: interval then value, each {i64 sec, i64 usec}
+          if (args[0] !== 0 && args[0] !== 1 && args[0] !== 2) return -A.EINVAL;
           const dv = new DataView(data.buffer, data.byteOffset, 32);
           const ms = (o: number) => Number(dv.getBigInt64(o, true)) * 1000 + Number(dv.getBigInt64(o + 8, true)) / 1000;
           const put = (o: number, v: number) => {
@@ -2108,7 +2128,7 @@ export class Kernel {
             dv.setBigInt64(o, BigInt(Math.floor(us / 1e6)), true);
             dv.setBigInt64(o + 8, BigInt(us % 1e6), true);
           };
-          const old = nr === A.SYS_setitimer ? this.setRealTimer(proc, ms(16), ms(0)) : this.realTimer(proc);
+          const old = nr === A.SYS_setitimer ? this.setRealTimer(proc, ms(16), ms(0), args[0]) : this.realTimer(proc, args[0]);
           put(0, old.interval);
           put(16, old.value);
           return 0;
@@ -2272,9 +2292,12 @@ export class Kernel {
         }
         case A.SYS_fcntl:
           return this.fcntl(proc, args[0], args[1], args[2], data);
-        case A.SYS_fsync: {
+        case A.SYS_fsync: { // (and fdatasync: Blink sends both here)
           const f = file(args[0]);
           if (!f) return -A.EBADF;
+          // a pipe, FIFO or socket has nothing to sync: EINVAL (Open POSIX fsync_7-1)
+          const type = (await f.stat()).mode & A.S_IFMT;
+          if (type === A.S_IFIFO || type === A.S_IFSOCK) return -A.EINVAL;
           try { await f.sync?.(); } catch (e) { return A.errnoFromError(e); }
           return 0;
         }
@@ -2582,7 +2605,9 @@ export class Kernel {
           const name = str(0, args[0]);
           if (name.length > 249) return -A.EINVAL;
           if (args[1] & ~(A.MFD_CLOEXEC | A.MFD_ALLOW_SEALING)) return -A.EINVAL;
-          return fds.alloc(new MemFile(`/memfd:${name} (deleted)`), 0, (args[1] & A.MFD_CLOEXEC) !== 0);
+          const file = new MemFile(`/memfd:${name} (deleted)`);
+          if (args[1] & A.MFD_ALLOW_SEALING) file.seals = 0;
+          return fds.alloc(file, 0, (args[1] & A.MFD_CLOEXEC) !== 0);
         }
         case A.SYS_prlimit64: { // pid, resource, set → data: old {cur, max} (u64s); a new one first when set
           // RLIMIT_NOFILE only (the fd table's): engines keep the other limits
@@ -2753,6 +2778,18 @@ export class Kernel {
         if (size < 0) return -A.EINVAL;
         if (size > A.PIPE_MAX_SIZE) return -A.EPERM;
         return f.pipe.resize(size);
+      }
+      case A.F_ADD_SEALS:
+      case A.F_GET_SEALS: {
+        // memfds only (Linux: shmem files; anything else is EINVAL)
+        if (!(f instanceof MemFile)) return -A.EINVAL;
+        if (cmd === A.F_GET_SEALS) return f.seals;
+        const known = A.F_SEAL_SEAL | A.F_SEAL_SHRINK | A.F_SEAL_GROW | A.F_SEAL_WRITE | A.F_SEAL_FUTURE_WRITE;
+        if (arg & ~known) return -A.EINVAL;
+        if ((f.flags & A.O_ACCMODE) === A.O_RDONLY) return -A.EPERM;
+        if (f.seals & A.F_SEAL_SEAL) return -A.EPERM;
+        f.seals |= arg;
+        return 0;
       }
       default: return -A.EINVAL;
     }

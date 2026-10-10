@@ -602,6 +602,8 @@ async function run(msg) {
     const next = waiting.shift();
     if (next) next(ch); else ch.busy = false;
   };
+  // shmobj id -> SharedArrayBuffer (shiro-kernel.js's shiro_shm_*)
+  const shmObjs = new Map();
   // One request on `ch`; the page serves it and posts 'blink-done'.
   const hosted = new Set();  // kernel pids of same-instance fork children
   const issue = (ch, nr, args, as) => new Promise((resolve) => {
@@ -676,6 +678,10 @@ async function run(msg) {
       done?.({ r, hi, sig });
     } else if (m.type === 'blink-channel') {
       addChannel(m.sab);
+    } else if (m.type === 'blink-shmobj') {
+      // an object shared with other instances (shmobj): its buffer, before
+      // the shiro_shmobj_map reply that names it
+      shmObjs.set(m.id, m.sab);
     } else if (m.type === 'blink-signal' && !exiting) {
       // The kernel signalled us: any syscall reply carries the signal word.
       if (m.pid) void call(SYS.getpid, [], m.pid, new Uint8Array(0), 0);
@@ -705,6 +711,7 @@ async function run(msg) {
   const kernel = {
     sys,
     call,
+    shm: shmObjs,
     // same-instance fork: this worker runs kernel process `pid` too
     hosted(pid) {
       hosted.add(pid);

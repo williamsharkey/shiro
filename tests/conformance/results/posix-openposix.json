@@ -1,14 +1,19 @@
 {
  "suite": "Open POSIX Test Suite",
  "title": "POSIX: Open POSIX Test Suite under Blink (x86-64)",
- "note": "The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scripts/conformance/build-openposix.sh) run as static x86-64 kernel processes in the Blink engine: signals, pthreads, semaphores, message queues, timers, clocks, mmap, scheduling. A test passes when it exits 0; only tests that pass natively on the build host as uid 1000 are scored (openposix/native-baseline.json). First run: 1173/1448, with Blink 0080–0084 built locally (raise(SIGKILL) and sigqueue/AIO fixed from this suite); the gaps are POSIX message queues (mq_*), POSIX timers (timer_*), sigwait/sigtimedwait, sched_* policies and shm_open. → 1326/1448 (kernel POSIX message queues and timers, Blink 0086–0089 and 0093 built locally: mq_*, timer_*, sigtimedwait/sigwait, sched_*; sigqueue waits on siginfo in Blink's handler frames; fork_21-1 and pthread_attr_destroy_1-1 hit a Blink page-lock assertion, fixed in perf-blink's 0092). → 1353/1448 with perf-blink's Blink 0092 (fork keeps page lock counts) and 0095 (siginfo in SA_SIGINFO frames, real-time signals queue): sigqueue, sigwait/sigwaitinfo, fork_21-1, pthread_attr_destroy_1-1, lio_listio and aio_* now pass. Left: shm_open and mmap of shared objects, mlock*, pthread_cancel and cancellation points, process-shared pthread objects, pthread_kill interrupting another thread's call (mq_timedsend_12-1). → 1379/1448 (kernel: kill/sigqueue permissions, SIGCHLD's CLD_* siginfo and SA_NOCLDSTOP/SA_NOCLDWAIT, sigtimedwait taking unblocked waited signals, timer overruns, open() owner bits; Blink 0096–0099 built locally: raise of a blocked real-time signal queues, sigprocmask/sigaltstack modes, write-only pages readable, shared kernel-file maps written back before a new map and at exit, mlock/mmap errors). Left: mmap of shared objects across instances and SIGBUS past EOF, pthread_cancel and cancellation points, process-shared pthread objects, fork cases, pthread_kill interrupting another thread's call (mq_timedsend_12-1); sigqueue_1-1 is fixed by perf-blink's 0110.",
+ "note": "The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scripts/conformance/build-openposix.sh) run as static x86-64 kernel processes in the Blink engine: signals, pthreads, semaphores, message queues, timers, clocks, mmap, scheduling. A test passes when it exits 0; only tests that pass natively on the build host as uid 1000 are scored (openposix/native-baseline.json). First run: 1173/1448, with Blink 0080–0084 built locally (raise(SIGKILL) and sigqueue/AIO fixed from this suite); the gaps are POSIX message queues (mq_*), POSIX timers (timer_*), sigwait/sigtimedwait, sched_* policies and shm_open. → 1326/1448 (kernel POSIX message queues and timers, Blink 0086–0089 and 0093 built locally: mq_*, timer_*, sigtimedwait/sigwait, sched_*; sigqueue waits on siginfo in Blink's handler frames; fork_21-1 and pthread_attr_destroy_1-1 hit a Blink page-lock assertion, fixed in perf-blink's 0092). → 1353/1448 with perf-blink's Blink 0092 (fork keeps page lock counts) and 0095 (siginfo in SA_SIGINFO frames, real-time signals queue): sigqueue, sigwait/sigwaitinfo, fork_21-1, pthread_attr_destroy_1-1, lio_listio and aio_* now pass. Left: shm_open and mmap of shared objects, mlock*, pthread_cancel and cancellation points, process-shared pthread objects, pthread_kill interrupting another thread's call (mq_timedsend_12-1). → 1379/1448 (kernel: kill/sigqueue permissions, SIGCHLD's CLD_* siginfo and SA_NOCLDSTOP/SA_NOCLDWAIT, sigtimedwait taking unblocked waited signals, timer overruns, open() owner bits; Blink 0096–0099 built locally: raise of a blocked real-time signal queues, sigprocmask/sigaltstack modes, write-only pages readable, shared kernel-file maps written back before a new map and at exit, mlock/mmap errors). Left: mmap of shared objects across instances and SIGBUS past EOF, pthread_cancel and cancellation points, process-shared pthread objects, fork cases, pthread_kill interrupting another thread's call (mq_timedsend_12-1); sigqueue_1-1 is fixed by perf-blink's 0110. Measured on integration bab5481 (perf-blink's engine through 0110, which has 0096–0098 but not this branch's 0500/0501): 1370/1448, rerun on a quiet machine; 0500 (mlock/mmap errors) and 0501 (pthread_cancel) add 15 more when built (1379 + pthread_cancel's 9 locally).",
  "files": {
   "aio_cancel": {
-   "pass": 9,
+   "pass": 8,
    "total": 11,
    "failures": [
     {
      "name": "aio_cancel_5-1",
+     "reason": "timeout: ",
+     "timeout": true
+    },
+    {
+     "name": "aio_cancel_6-1",
      "reason": "timeout: ",
      "timeout": true
     },
@@ -182,14 +187,23 @@
    "failures": []
   },
   "mlock": {
-   "pass": 3,
+   "pass": 2,
    "total": 3,
-   "failures": []
+   "failures": [
+    {
+     "name": "mlock_8-1",
+     "reason": "UNRESOLVED: Unexpected error: Success"
+    }
+   ]
   },
   "mlockall": {
-   "pass": 3,
+   "pass": 2,
    "total": 5,
    "failures": [
+    {
+     "name": "mlockall_13-1",
+     "reason": "FAIL: mlockall() return 0 instead of -1."
+    },
     {
      "name": "mlockall_3-6",
      "reason": "FAIL: The shared memory pages of the process are not locked."
@@ -201,7 +215,7 @@
    ]
   },
   "mmap": {
-   "pass": 24,
+   "pass": 21,
    "total": 32,
    "failures": [
     {
@@ -226,9 +240,21 @@
      "reason": "FAIL: Test FAILED: st_ctime and st_mtime were not updated properly"
     },
     {
+     "name": "mmap_21-1",
+     "reason": "FAIL: Test FAILED"
+    },
+    {
+     "name": "mmap_23-1",
+     "reason": "FAIL: Text FAILED: mmap() succeded"
+    },
+    {
      "name": "mmap_24-1",
      "reason": "timeout: ",
      "timeout": true
+    },
+    {
+     "name": "mmap_24-2",
+     "reason": "FAIL: Test Fail: Did not get ENOMEM as expected"
     },
     {
      "name": "mmap_3-1",
@@ -292,9 +318,14 @@
    "failures": []
   },
   "munlock": {
-   "pass": 3,
+   "pass": 2,
    "total": 3,
-   "failures": []
+   "failures": [
+    {
+     "name": "munlock_10-1",
+     "reason": "UNRESOLVED: Unexpected error: Success"
+    }
+   ]
   },
   "munlockall": {
    "pass": 1,
@@ -657,9 +688,13 @@
    "failures": []
   },
   "pthread_join": {
-   "pass": 6,
+   "pass": 4,
    "total": 8,
    "failures": [
+    {
+     "name": "pthread_join_1-2",
+     "reason": "FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/pthread_join/1-2.c FAILED: Child returned before its creation ??"
+    },
     {
      "name": "pthread_join_3-1",
      "reason": "timeout: ",
@@ -667,6 +702,11 @@
     },
     {
      "name": "pthread_join_4-1",
+     "reason": "timeout: ",
+     "timeout": true
+    },
+    {
+     "name": "pthread_join_6-3",
      "reason": "timeout: ",
      "timeout": true
     }
@@ -696,8 +736,7 @@
     },
     {
      "name": "pthread_kill_8-1",
-     "reason": "timeout: ",
-     "timeout": true
+     "reason": "exit 139: "
     }
    ]
   },
@@ -830,9 +869,15 @@
    "failures": []
   },
   "pthread_rwlock_init": {
-   "pass": 4,
+   "pass": 3,
    "total": 4,
-   "failures": []
+   "failures": [
+    {
+     "name": "pthread_rwlock_init_2-1",
+     "reason": "skipped: hangs tabcomputer",
+     "timeout": true
+    }
+   ]
   },
   "pthread_rwlock_rdlock": {
    "pass": 6,
@@ -1184,15 +1229,9 @@
    "failures": []
   },
   "sigqueue": {
-   "pass": 12,
+   "pass": 13,
    "total": 13,
-   "failures": [
-    {
-     "name": "sigqueue_1-1",
-     "reason": "timeout: ",
-     "timeout": true
-    }
-   ]
+   "failures": []
   },
   "sigrelse": {
    "pass": 3,
