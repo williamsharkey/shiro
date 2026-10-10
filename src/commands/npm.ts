@@ -368,12 +368,13 @@ async function npmInstall(ctx: CommandContext): Promise<number> {
     const content = await ctx.fs.readFile(pkgPath, 'utf8') as string;
     pkg = JSON.parse(content);
   } catch (e: any) {
-    if (e.message.includes('ENOENT')) {
-      ctx.stderr += 'npm: package.json not found. Run "npm init" first.\n';
+    if (!e.message.includes('ENOENT')) {
+      ctx.stderr += `npm: failed to parse package.json: ${e.message}\n`;
       return 1;
     }
-    ctx.stderr += `npm: failed to parse package.json: ${e.message}\n`;
-    return 1;
+    // As npm: installing into a directory without one starts it (`npm i x` → {"dependencies": {"x": …}})
+    if (!packagesToInstall.length) { ctx.stdout += 'up to date, audited 0 packages\n'; return 0; }
+    pkg = {} as PackageJson;
   }
 
   let depsToResolve: Record<string, string> = {};

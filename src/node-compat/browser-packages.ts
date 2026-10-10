@@ -10,6 +10,8 @@
  * are bundled together, so they share one instance of the binding, and its
  * WASI file system, an in-memory memfs on the web, is the node process's own
  * fs, so rolldown reads the project's files.
+ *
+ * lightningcss (vite's CSS minifier) the same way, as lightningcss-wasm.
  */
 import { bundleFromVfs, type BundleFs } from './vfs-bundle';
 
@@ -20,11 +22,22 @@ interface BrowserPackage {
   browserName: string;
   /** Its subpaths that run in a page (others need node: config loading, parallel plugins on worker_threads) */
   subpaths: string[];
+  /** A napi-rs WASI binding (@napi-rs/wasm-runtime): its file system is the process's, its node entry the browser one */
+  napiWasi?: { nodeBinding: string; browserBinding: string };
+  /** Run once loaded, before any script sees it (an async WebAssembly init) */
+  init?: (main: any) => Promise<unknown>;
 }
 
 const PACKAGES: BrowserPackage[] = [{
   name: 'rolldown', browserName: '@rolldown/browser',
   subpaths: ['.', './experimental', './experimental/runtime', './filter', './parseAst', './plugins', './utils', './getLogFilter'],
+  napiWasi: { nodeBinding: 'dist/rolldown-binding.wasi.cjs', browserBinding: 'dist/rolldown-binding.wasi-browser.js' },
+}, {
+  // vite's CSS minifier. Its node build compiles its 16 MB .wasm synchronously,
+  // which a page's main thread may not; the browser build compiles it async in init()
+  name: 'lightningcss', browserName: 'lightningcss-wasm',
+  subpaths: ['.'],
+  init: (main) => main.default(),
 }];
 
 /** Loaded packages: package dir → specifier → module namespace */
@@ -85,10 +98,12 @@ async function loadPackage(fs: BundleFs, pkgDir: string, pkg: any, p: BrowserPac
   const entryPath = `${pkgDir}/.tabcomputer-entry.mjs`;
   // @napi-rs/wasm-runtime/fs as the package resolves it (nested, or hoisted up the tree)
   let wasmFsModule = '';
-  for (let dir = pkgDir; ; dir = dirOf(dir)) {
-    const candidate = `${dir === '/' ? '' : dir}/node_modules/@napi-rs/wasm-runtime/dist/fs.js`;
-    try { await fs.readFile(candidate); wasmFsModule = candidate; break; } catch { /* up */ }
-    if (dir === '/') throw new Error(`${p.browserName}: @napi-rs/wasm-runtime is not installed`);
+  if (p.napiWasi) {
+    for (let dir = pkgDir; ; dir = dirOf(dir)) {
+      const candidate = `${dir === '/' ? '' : dir}/node_modules/@napi-rs/wasm-runtime/dist/fs.js`;
+      try { await fs.readFile(candidate); wasmFsModule = candidate; break; } catch { /* up */ }
+      if (dir === '/') throw new Error(`${p.browserName}: @napi-rs/wasm-runtime is not installed`);
+    }
   }
   const code = await bundleFromVfs({
     readFile: (path: string, enc?: string) => (path === entryPath ? Promise.resolve(enc ? entry : new TextEncoder().encode(entry)) : fs.readFile(path, enc)),
@@ -96,13 +111,18 @@ async function loadPackage(fs: BundleFs, pkgDir: string, pkg: any, p: BrowserPac
   }, entryPath, {
     banner: PROCESS_BANNER,
     builtins: getBuiltinModule,
-    // Its node entry points import the node WASI binding; here they get the browser one
-    redirect: { [`${pkgDir}/dist/rolldown-binding.wasi.cjs`]: `${pkgDir}/dist/rolldown-binding.wasi-browser.js` },
-    // The main thread's WASI file system: the node process's fs (workers proxy theirs to it)
-    replaceInEntryGraph: { '@napi-rs/wasm-runtime/fs': wasmFsShim(wasmFsModule) },
+    ...(p.napiWasi ? {
+      // Its node entry points import the node WASI binding; here they get the browser one
+      redirect: { [`${pkgDir}/${p.napiWasi.nodeBinding}`]: `${pkgDir}/${p.napiWasi.browserBinding}` },
+      // Its shared memory starts at what the module needs, not 1 GB (it grows; a phone may not commit 1 GB)
+      patch: { [`${pkgDir}/${p.napiWasi.browserBinding}`]: [['initial: 16384,', 'initial: 1024,']] },
+      // The main thread's WASI file system: the node process's fs (workers proxy theirs to it)
+      replaceInEntryGraph: { '@napi-rs/wasm-runtime/fs': wasmFsShim(wasmFsModule) },
+    } : {}),
   });
   const url = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
   const ns: any = await import(/* @vite-ignore */ url);
+  if (p.init) await p.init(ns.m0);
   const out = new Map<string, any>();
   subpaths.forEach(([key], i) => out.set(key === '.' ? p.name : p.name + key.slice(1), ns[`m${i}`]));
   return out;

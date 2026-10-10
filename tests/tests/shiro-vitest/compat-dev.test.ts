@@ -1137,6 +1137,15 @@ describe('node: real npm packages', () => {
     expect(r.exitCode).toBe(0);
   }, 300_000);
 
+  it('npm install in a directory without package.json starts one, as npm does', async () => {
+    const r = await sh(shell, 'mkdir -p /home/user/nopkg && cd /home/user/nopkg && npm install dayjs@1.11.13 > /dev/null; echo "e=$?"; cat package.json; node -e "console.log(typeof require(\'dayjs\'))"; npm install; echo "f=$?"');
+    expect(r.out).toContain('e=0');
+    expect(JSON.parse(r.out.slice(r.out.indexOf('{'), r.out.lastIndexOf('}') + 1))).toEqual({ dependencies: { dayjs: '1.11.13' } });
+    expect(r.out).toContain('function\n');
+    expect(r.out).toContain('f=0');
+    expect((await sh(shell, 'mkdir -p /home/user/nopkg2 && cd /home/user/nopkg2 && npm install; echo "g=$?"; ls')).out).toBe('up to date, audited 0 packages\ng=0\n');
+  }, 120_000);
+
   it('pnpm: add into the virtual store, require through its symlinks, run scripts, exec bins', async () => {
     let r = await sh(shell, 'mkdir -p /home/user/pn && cd /home/user/pn && npm init -y > /dev/null && npm install pnpm@9.12.3 > /dev/null; echo $?');
     expect(r.out).toBe('0\n');
@@ -1647,12 +1656,13 @@ describe('npm install: the node_modules tree (npm-tree.ts)', () => {
 
   it('installs peers, leaves out native builds but takes wasm32 ones, and the WebAssembly esbuild and rollup', async () => {
     const t = await buildTree([{ name: 'vite', range: '^5.0.0' }, { name: 'plugin', range: '1' }], registry({
-      vite: { '5.4.10': { dependencies: { esbuild: '^0.21.3', rollup: '^4.20.0' }, optionalDependencies: { fsevents: '~2.3.3', '@x/binding-linux-x64-gnu': '1', '@x/binding-wasm32-wasi': '1' } } },
+      vite: { '5.4.10': { dependencies: { esbuild: '^0.21.3', rollup: '^4.20.0', lightningcss: '^1.33.0' }, optionalDependencies: { fsevents: '~2.3.3', '@x/binding-linux-x64-gnu': '1', '@x/binding-wasm32-wasi': '1' } } },
       '@x/binding-linux-x64-gnu': { '1.0.0': { os: ['linux'], cpu: ['x64'] } },
       '@x/binding-wasm32-wasi': { '1.0.0': { cpu: ['wasm32'] } },
       'esbuild-wasm': { '0.21.5': { bin: { esbuild: 'bin/esbuild' } } },
       '@rollup/wasm-node': { '4.24.0': { dependencies: { '@types/estree': '1.0.6' }, bin: { rollup: 'dist/bin/rollup' } } },
       '@types/estree': { '1.0.6': {} },
+      'lightningcss-wasm': { '1.33.0': {} },
       fsevents: { '2.3.3': { os: ['darwin'] } },
       plugin: { '1.0.0': { peerDependencies: { vite: '^5.0.0', missing: '*' }, peerDependenciesMeta: { missing: { optional: true } } } },
     }));
@@ -1660,6 +1670,7 @@ describe('npm install: the node_modules tree (npm-tree.ts)', () => {
       'node_modules/vite': '5.4.10', 'node_modules/plugin': '1.0.0',
       'node_modules/esbuild': 'esbuild-wasm@0.21.5', 'node_modules/rollup': '@rollup/wasm-node@4.24.0',
       'node_modules/@types/estree': '1.0.6', 'node_modules/@x/binding-wasm32-wasi': '1.0.0',
+      'node_modules/lightningcss': 'lightningcss-wasm@1.33.0',
     });
     expect(t.skipped.sort()).toEqual(['@x/binding-linux-x64-gnu@1.0.0', 'fsevents@2.3.3']);
     expect(t.warnings).toEqual([]);
