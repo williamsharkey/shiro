@@ -997,7 +997,9 @@ export class FileSystem {
 
   private async _get(path: string): Promise<FSNode | undefined> {
     if (this.cache.has(path)) {
-      return this.cache.get(path);
+      const hit = this.cache.get(path);
+      if (hit?.content && hit.content.byteLength >= FileSystem.CONTENT_TRACK_MIN) this._touch(path);
+      return hit;
     }
     // Under a pending range delete: gone, though IndexedDB still has it
     if (this._ranges.size && this._underRange(path)) { this.cache.set(path, undefined); return undefined; }
@@ -1013,6 +1015,7 @@ export class FileSystem {
     // A write or delete made while the read was pending is newer than what it returned
     if (this.cache.has(path)) return this.cache.get(path);
     this.cache.set(path, result);
+    if (result?.content && result.content.byteLength >= FileSystem.CONTENT_TRACK_MIN) this._touch(path);
     return result;
   }
 
@@ -1073,9 +1076,83 @@ export class FileSystem {
   }
 
   /** _get from memory: the node, null when it surely doesn't exist, undefined when only IndexedDB knows. */
+  // ── Content cache ──────────────────────────────────────────────────────
+  // Every file read or written stays in `cache` with its bytes. Clean files'
+  // contents (committed to IndexedDB, no open file holding them) leave memory
+  // once unused for CONTENT_IDLE_MS: all of a big file's at once, and the
+  // least recently used beyond CONTENT_BUDGET. The whole entry goes, as if
+  // never read: sync readers (readBytesCached, lookupCached) then say "needs
+  // IndexedDB", as on a fresh boot. After `apt-get update` the cache held
+  // 164 MiB, 139 MiB of it three apt files that apt reads only on update.
+  // Idle, not merely over budget: evicting what a running apt reads again
+  // made each reload allocate anew and raised the install's peak.
+
+  /** Smaller files stay (cheap, and node programs read them synchronously). */
+  static CONTENT_TRACK_MIN = 64 << 10;
+  static CONTENT_BUDGET = 64 << 20;
+  static CONTENT_BIG = 8 << 20;
+  static CONTENT_IDLE_MS = 30_000;
+
+  /** Cached files of CONTENT_TRACK_MIN or more, least recently used first → last use. */
+  private _contentUse = new Map<string, number>();
+  private _contentTimer: ReturnType<typeof setTimeout> | null = null;
+  private _contentPins = new Set<(path: string) => boolean>();
+
+  /** Keep a file's content in memory while `pinned(path)` (the kernel's open files). */
+  addContentPin(pinned: (path: string) => boolean): () => void {
+    this._contentPins.add(pinned);
+    return () => { this._contentPins.delete(pinned); };
+  }
+
+  private _touch(path: string): void {
+    this._contentUse.delete(path);
+    this._contentUse.set(path, Date.now());
+    if (!this._contentTimer) this._armContentSweep();
+  }
+
+  private _armContentSweep(): void {
+    const t = setTimeout(() => { this._contentTimer = null; this.sweepContent(); if (this._contentUse.size) this._armContentSweep(); },
+      FileSystem.CONTENT_IDLE_MS / 2);
+    (t as { unref?: () => void }).unref?.();
+    this._contentTimer = t;
+  }
+
+  /** Bytes of tracked (CONTENT_TRACK_MIN or more) file content in memory. */
+  get contentCacheBytes(): number {
+    let n = 0;
+    for (const p of this._contentUse.keys()) n += this.cache.get(p)?.content?.byteLength ?? 0;
+    return n;
+  }
+
+  /** Drop idle clean content (see above); `now` for tests. Returns the bytes dropped. */
+  sweepContent(now = Date.now()): number {
+    let total = 0;
+    for (const [p] of this._contentUse) {
+      const node = this.cache.get(p);
+      if (!node?.content || node.content.byteLength < FileSystem.CONTENT_TRACK_MIN) this._contentUse.delete(p);
+      else total += node.content.byteLength;
+    }
+    let dropped = 0;
+    for (const [p, at] of this._contentUse) {
+      if (now - at < FileSystem.CONTENT_IDLE_MS) break; // the rest were used more recently
+      const node = this.cache.get(p)!;
+      const size = node.content!.byteLength;
+      if (size < FileSystem.CONTENT_BIG && total <= FileSystem.CONTENT_BUDGET) continue;
+      if (this._dirty.has(p) || this._inflight?.has(p) || this._materializing.has(p)) continue;
+      let pinned = false;
+      for (const f of this._contentPins) if (f(p)) { pinned = true; break; }
+      if (pinned) continue;
+      this.cache.delete(p);
+      this._contentUse.delete(p);
+      total -= size;
+      dropped += size;
+    }
+    return dropped;
+  }
+
   private _getCached(path: string): FSNode | null | undefined {
     const hit = this.cache.get(path); // one lookup: misses (cached as undefined) are the rare case
-    if (hit) return hit;
+    if (hit) { if (hit.content && hit.content.byteLength >= FileSystem.CONTENT_TRACK_MIN) this._touch(path); return hit; }
     if (this.cache.has(path)) return null;
     if (this._allKeys && !this._allKeys.has(path)) return null;
     return undefined;
@@ -1202,6 +1279,7 @@ export class FileSystem {
     }
     if (node.type === 'symlink' || this.cache.get(node.path)?.type === 'symlink') this._canonDirs.clear();
     this.cache.set(node.path, node);
+    if (node.content && node.content.byteLength >= FileSystem.CONTENT_TRACK_MIN) this._touch(node.path);
     this._noteKey(node.path, true);
     this._queue(node.path, node);
   }
@@ -1315,6 +1393,7 @@ export class FileSystem {
   readCached(path: string): string | undefined {
     const node = this.cache.get(path);
     if (!node || node.type !== 'file' || !node.content) return undefined;
+    if (node.content.byteLength >= FileSystem.CONTENT_TRACK_MIN) this._touch(path);
     return decodeBytes(node.content);
   }
 
@@ -1322,6 +1401,7 @@ export class FileSystem {
   readBytesCached(path: string): Uint8Array | undefined {
     const node = this.cache.get(path);
     if (!node || node.type !== 'file' || !node.content) return undefined;
+    if (node.content.byteLength >= FileSystem.CONTENT_TRACK_MIN) this._touch(path);
     return node.content;
   }
 
