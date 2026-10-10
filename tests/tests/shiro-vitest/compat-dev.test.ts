@@ -2020,7 +2020,9 @@ describe('node: a process that exits closes its servers', () => {
     let r = await sh(shell, `node -e "require('http').createServer((q, s) => s.end('up')).listen(4811, () => setTimeout(() => process.exit(0), 50))"; echo "e=$?"`);
     expect(r.out).toBe('e=0\n');
     expect(iframeServer.isPortInUse(4811)).toBe(false);
-    r = await sh(shell, `node -e "require('http').createServer((q, s) => s.end('up')).listen(4812)"; echo "e=$?"`);
+    // (the page's node: its script returns and the server lives on in the page; a guest stays
+    // running while it listens, as node does)
+    r = await sh(shell, `TABCOMPUTER_NODE_WORKER=0 node -e "require('http').createServer((q, s) => s.end('up')).listen(4812)"; echo "e=$?"`);
     expect(r.out).toBe('e=0\n');
     expect(iframeServer.isPortInUse(4812)).toBe(true);
     expect((await iframeServer.fetch(4812, '/')).body).toBe('up');

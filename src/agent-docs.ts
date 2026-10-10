@@ -118,6 +118,11 @@ ${bootSection(ctx, name)}
   correct, but big programs take seconds to start. WASM programs run directly.
 - \`node\`, \`npm\` and \`npx\` are a Node.js-compatible runtime built into the page,
   not real Node. Most pure-JS npm packages work; native addons (\`.node\`) don't.
+  Each \`node\` is a real process in a background worker: \`*Sync\` child_process
+  calls block, \`ps\` and \`kill\` see it, and a server (\`node server.js\`, \`npm run
+  dev\`) stays in the foreground while it listens, as on Linux. Start one with
+  \`&\` (\`node server.js > server.log 2>&1 &\`) to keep using the shell, and stop it
+  with \`kill %1\`. \`TABCOMPUTER_NODE_WORKER=0\` runs node in the page instead.
 - Network: outbound HTTP(S) works. Linux programs get TCP through the site's
   relay when it is on (ports 22, 80, 443, 9418); UDP is DNS only. Nothing on the
   internet can connect in.

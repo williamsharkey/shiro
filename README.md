@@ -141,8 +141,9 @@ Not here: hardware devices, kernel modules, and any access to your own machine.
   [docs/DOM-RENDERING.md](docs/DOM-RENDERING.md)).
 - **Browser app (research spike).** Tabs showing real sites on per-site origins, with TLS done
   in the page over the relay ([docs/BROWSER.md](docs/BROWSER.md), [docs/WEB_SCORE.md](docs/WEB_SCORE.md)).
-- **Languages.** Node.js (tabcomputer's runtime with real npm tarballs; `node` alone is a
-  REPL), Python, Ruby (`irb` works), Go, clang, and whatever Debian packages
+- **Languages.** Node.js (tabcomputer's runtime with real npm tarballs; each `node` is a
+  real process in a background Worker, so a server stays in the foreground until you stop it
+  or start it with `&`; `node` alone is a REPL), Python, Ruby (`irb` works), Go, clang, and whatever Debian packages
   ([docs/COMPAT.md](docs/COMPAT.md)).
 - **Web development.** `npm create vite@latest app -- --template react`, `npm i`,
   `npm run dev`, then `serve open 5173`: the app renders in a preview window and an edit to
