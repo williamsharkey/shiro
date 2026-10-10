@@ -5,6 +5,7 @@
 // - Simpler architecture (no MessageChannel, no SW lifecycle)
 
 import { bytePipe, type ByteChannel } from './byte-pipe';
+import { withPageTimers } from './node-compat/page-globals';
 import { previewStreamsScript, installStreamProxy } from './preview-streams';
 
 export interface VirtualRequest {
@@ -60,7 +61,8 @@ class IframeServerManager {
     return () => { this.portListeners.delete(cb); };
   }
   private emitPort(port: number, up: boolean): void {
-    for (const cb of this.portListeners) { try { cb(port, up); } catch {} }
+    // (page code: its timers aren't the in-page node script's that listened, when one did)
+    withPageTimers(() => { for (const cb of this.portListeners) { try { cb(port, up); } catch {} } });
   }
 
   /**

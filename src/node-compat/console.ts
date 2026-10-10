@@ -23,8 +23,8 @@ export function createFakeConsole(
       stdoutBuf.push(s + '\n');
       if (_st.stdoutToTerminal && ctx.terminal) { _st.streamedToTerminal = true; ctx.terminal.writeOutput(s.replace(/\n/g, '\r\n') + '\r\n'); }
     },
-    warn: (...args: any[]) => { stderrBuf.push(formatLog(args, !!ctx.terminal) + '\n'); },
-    error: (...args: any[]) => { stderrBuf.push(formatLog(args, !!ctx.terminal) + '\n'); },
+    warn: (...args: any[]) => { stderrBuf.push(formatLog(args, _st.stderrToTerminal) + '\n'); },
+    error: (...args: any[]) => { stderrBuf.push(formatLog(args, _st.stderrToTerminal) + '\n'); },
     dir: (obj: any, opts?: any) => {
       const s = inspect(obj, { colors: _st.stdoutToTerminal, ...(opts && typeof opts === 'object' ? opts : {}), customInspect: false });
       stdoutBuf.push(s + '\n');
