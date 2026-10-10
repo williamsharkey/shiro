@@ -721,6 +721,11 @@ composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts,
 a few MiB each. The terminal UI's +19 KiB is /dom, the sign-in hook and the
 other integration changes since db9f698, not desktop code.
 
+### unix/shell-stdio 11 — the shell's builtins read the kernel's /proc
+
+`node bench/ab.mjs 41265dd2~1 41265dd2 --suites shell,kernel --quick`: all 24
+unchanged.
+
 ### unix/shell-stdio 10 — terminal restored after a TUI dies; timeout signals and waits
 
 `node bench/ab.mjs HEAD~1 HEAD --suites shell,kernel --quick` (2e51dd4 →
