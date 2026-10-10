@@ -7,9 +7,10 @@
  * did them while loading cli.js peaked well above the page doing the same
  * (bench: workload.peak_rss.claude_npm_first), and every launch redid them.
  * `node --tabcomputer-claude-cache` writes the file, in a guest Worker where
- * node runs as one (off the page's main thread): started in the background
- * after the boot install and after a `claude` run that found none, never in
- * a run's way. A run without it transforms as before (execution.ts, the same
+ * node runs as one (off the page's main thread): started in the background a
+ * little after a `claude` run that found none. It costs what a first run
+ * does, so it never runs beside one: not at the boot install (a first
+ * `claude` soon after peaked at twice the memory). A run without it transforms as before (execution.ts, the same
  * function).
  *
  * Keyed by this build's commit (the transforms are this build's code), the
@@ -102,15 +103,24 @@ async function writeClaudeTransform(fs: CacheFs): Promise<void> {
 
 /** Write it in the background, by `node --tabcomputer-claude-cache` (a guest Worker where node runs as one) */
 let backgroundWriter: Promise<unknown> | null = null;
+/** How long after a run the writer starts: it loads and transforms cli.js as a first run does, so never beside one */
+const WRITE_AFTER_MS = 2000;
 export function writeClaudeTransformInBackground(shell: { fork(): any }): void {
   // (one at a time: a `claude` started while it works finds no file yet)
   if (backgroundWriter) return;
+  backgroundWriter = new Promise((r) => setTimeout(r, WRITE_AFTER_MS)).then(() => startWriter(shell));
+}
+
+function startWriter(shell: { fork(): any }): Promise<unknown> {
   try {
     const sh = shell.fork();
     sh.terminal = null;
-    backgroundWriter = Promise.resolve(sh.execute(`node ${CACHE_FLAG} < /dev/null > /dev/null 2>&1`, () => {}, () => {}))
+    return Promise.resolve(sh.execute(`node ${CACHE_FLAG} < /dev/null > /dev/null 2>&1`, () => {}, () => {}))
       .catch(() => {}).finally(() => { backgroundWriter = null; });
-  } catch { /* no shell */ }
+  } catch {
+    backgroundWriter = null;
+    return Promise.resolve();
+  }
 }
 
 /** node's internal option that writes the file and exits (node-run.ts) */
