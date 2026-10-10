@@ -11,6 +11,7 @@ import { posixRegExp, RegexSyntaxError } from './utils/posix-regex';
 import { arrayValues, arrayTop, copyArray, splitRawWords as splitAssignWords, parseAssignWord, splitListWords, type AssignWord } from './shell-arrays';
 import { HeredocStore, extractHeredocs, hasHeredoc } from './shell-heredoc';
 import { FileSystem, addProcInfoSource, setProcSelf } from './filesystem';
+import { processTable, type ShiroProcess } from './process-table';
 import { CommandRegistry, CommandContext, type Command } from './commands/index';
 import type { ShiroTerminal } from './terminal';
 import type { KernelStdio } from './shell-stdio';
@@ -265,11 +266,67 @@ let nextInPagePid = 40000;
 
 /** Shells started as their own process (`sh script`, `sh -c`), by $$: `kill PID` reaches them */
 const shellsByPid = new Map<number, WeakRef<Shell>>();
-/** Running in-page background jobs by their made-up pid ($!), for `kill PID` from any shell */
+/** Running in-page background jobs by their pid ($!), for `kill PID` from any shell */
 const inPageJobs = new Map<number, BackgroundJob>();
 export function inPageJobForPid(pid: number): BackgroundJob | undefined {
   return inPageJobs.get(pid);
 }
+/** What ps and /proc show for an in-page job: the shell running it, who started it, when */
+const inPageJobInfo = new WeakMap<BackgroundJob, { shell: Shell; ppid: number; startMs: number }>();
+
+/** Signals whose default action doesn't end a process (0, SIGCHLD, SIGCONT, the stops, SIGURG, SIGWINCH) */
+const NON_TERMINATING = new Set([0, 17, 18, 19, 20, 21, 22, 23, 28]);
+/** `kill -SIG` to an in-page job: a terminating signal aborts it and its status becomes 128+SIG */
+export function signalInPageJob(job: BackgroundJob, sig: number): void {
+  if (NON_TERMINATING.has(sig) || job.status !== 'running') return;
+  if (job.ignoresIntQuit && (sig === 2 || sig === 3)) return;
+  job.abortController?.abort();
+  job.status = 'failed';
+  job.exitCode = 128 + sig;
+  job.signal = sig;
+}
+
+function inPageJobProcInfo(pid: number) {
+  const job = inPageJobs.get(pid);
+  const info = job && inPageJobInfo.get(job);
+  if (!job || !info) return undefined;
+  const cmdline = job.command.trim().split(/\s+/);
+  const comm = (cmdline[0].split('/').pop() || 'sh').slice(0, 15);
+  return { job, info, cmdline, comm };
+}
+
+// In-page background jobs are processes to ps, /proc and kill(2): `sleep 30 &`
+// with the builtin sleep has a pid that `ps`, `ls /proc/$!` and Debian's kill see
+processTable.attachSource({
+  list: () => [...inPageJobs.keys()].map((pid) => inPageJobView(pid)!).filter(Boolean),
+  get: (pid) => inPageJobView(pid),
+  kill: (pid, sig = 15) => {
+    const job = inPageJobs.get(pid);
+    if (!job) return false;
+    signalInPageJob(job, sig);
+    return true;
+  },
+});
+function inPageJobView(pid: number): ShiroProcess | undefined {
+  const p = inPageJobProcInfo(pid);
+  if (!p) return undefined;
+  return {
+    pid, command: p.job.command.trim(), status: 'running', exitCode: 0, startTime: p.info.startMs,
+    windowTerminal: null, serverWindow: null, promise: p.job.promise,
+    kill: () => signalInPageJob(p.job, 15), abortController: null,
+  };
+}
+addProcInfoSource({
+  get(pid) {
+    const p = inPageJobProcInfo(pid);
+    if (!p) return undefined;
+    return {
+      pid, ppid: p.info.ppid, pgid: pid, sid: p.info.ppid, comm: p.comm, state: 'S', cmdline: p.cmdline,
+      cwd: p.info.shell.cwd, environ: p.info.shell.exportedEnv(), startMs: p.info.startMs,
+    };
+  },
+  list: () => [...inPageJobs.keys()],
+});
 
 /** Newlines as `; `, except inside quotes ('…', "…", $'…'), where they are text */
 function newlinesToSemicolons(s: string): string {
@@ -491,7 +548,7 @@ export function capturingStdout<T extends object>(term: T): T {
 }
 
 /** The terminal minus its pty session (for background work that must not become the foreground job) */
-function withoutTty<T extends object>(term: T): T {
+export function withoutTty<T extends object>(term: T): T {
   return new Proxy(term, {
     get(t, k) {
       if (k === 'tty') return undefined;
@@ -1374,8 +1431,9 @@ export class Shell {
   ): number {
     const jobId = this.nextJobId++;
     const stderrWriter = writeStderr || writeStdout;
-    // An in-page job has no kernel process; $! and `wait PID` use a made-up pid
-    const pid = nextInPagePid++;
+    // An in-page job has no kernel process; its pid comes from the kernel's
+    // pid space, so it never collides with one (ps, /proc and kill see it)
+    const pid = processTable.allocatePid();
     // `( list ) &`: the job's shell is already the subshell
     const t = command.trim();
     if (t.startsWith('(') && !t.startsWith('((') && t.endsWith(')') && this.parseCompound(t).length === 1 && splitTopLevelPipes(t).length === 1) {
@@ -1423,6 +1481,7 @@ export class Shell {
       ),
     };
     this.backgroundJobs.set(jobId, job);
+    inPageJobInfo.set(job, { shell: child, ppid: this.bashPid, startMs: Date.now() });
     if (job.status === 'running') inPageJobs.set(pid, job);
     this.env['!'] = String(pid);
     // An interactive shell reports the job; a script doesn't

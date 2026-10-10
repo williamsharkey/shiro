@@ -291,7 +291,7 @@ export class Kernel {
       this.detachTable = processTable.attachSource({
         list: () => [...this.procs.values()].filter(p => p.pid !== 1).map(p => this.view(p)),
         get: pid => { const p = this.procs.get(pid); return p && p.pid !== 1 ? this.view(p) : undefined; },
-        kill: pid => this.procs.has(pid) && pid !== 1 && this.kill(pid, A.SIGTERM) === 0,
+        kill: (pid, sig) => this.procs.has(pid) && pid !== 1 && this.kill(pid, sig ?? A.SIGTERM) === 0,
       });
     }
   }
@@ -773,6 +773,14 @@ export class Kernel {
   kill(pid: number, sig: number, sender: Process = this.init): number {
     if (sig < 0 || sig >= A.NSIG) return -A.EINVAL;
     let targets: Process[];
+    if (pid > 0 && !this.procs.has(pid)) {
+      // A process the page runs outside the kernel (an in-page background job,
+      // a windowed command): the process table reaches it
+      const other = processTable.get(pid);
+      if (!other || other.status !== 'running') return -A.ESRCH;
+      if (sig !== 0) processTable.kill(pid, sig);
+      return 0;
+    }
     if (pid > 0) targets = this.procs.has(pid) ? [this.procs.get(pid)!] : [];
     else if (pid === 0) targets = [...this.procs.values()].filter(p => p.pgid === sender.pgid && p.pid !== 1);
     else if (pid === -1) targets = [...this.procs.values()].filter(p => p.pid !== 1 && p.pid !== sender.pid);
