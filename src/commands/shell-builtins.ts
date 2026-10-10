@@ -273,6 +273,7 @@ async function runShell(ctx: CommandContext, invokedAs: 'sh' | 'bash'): Promise<
     let script: string;
     let argv0: string;
     let positional: string[];
+    let fromFile = false;
     if (commandMode) {
       if (rest.length === 0) { ctx.stderr += 'sh: -c: option requires an argument\n'; return 2; }
       script = rest[0];
@@ -289,6 +290,7 @@ async function runShell(ctx: CommandContext, invokedAs: 'sh' | 'bash'): Promise<
       }
       argv0 = rest[0];
       positional = rest.slice(1);
+      fromFile = true;
     } else if (ctx.liveStdin && ctx.shell.kernelStdio) {
       // The script is fd 0 (a shell running as a kernel process, shell-stdio.ts)
       script = await ctx.shell.kernelStdio.readAll();
@@ -307,6 +309,7 @@ async function runShell(ctx: CommandContext, invokedAs: 'sh' | 'bash'): Promise<
     child.invokedAsSh = invokedAs === 'sh';
     ctx.shell.execPid = ctx.shell.execPpid = undefined;
     child.setPositional(positional, argv0);
+    if (fromFile) child.setScriptSource(argv0);
     for (const o of options) child.options.add(o);
     for (const o of parsed.off) child.options.delete(o);
     if (parsed.posix) child.options.add('posix');

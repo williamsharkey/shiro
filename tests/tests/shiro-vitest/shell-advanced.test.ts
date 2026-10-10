@@ -2356,10 +2356,11 @@ describe('Shell Advanced', () => {
   // === Section 60: caller and BASH_SOURCE ===
   describe('60. caller and BASH_SOURCE', () => {
     it('caller returns info inside function', async () => {
+      // (bash -c: the caller's line, then NULL for the file; caller 0 needs a frame above)
       const script = 'show() { caller; }; show';
       const { output, exitCode } = await run(shell, script);
       expect(exitCode).toBe(0);
-      expect(output).toContain('show');
+      expect(output.replace(/\r/g, '').trim()).toBe('1 NULL');
     });
 
     it('FUNCNAME tracks function name', async () => {
