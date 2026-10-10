@@ -734,8 +734,9 @@ tabcomputer changes these programs needed (tests in `x86-engine.test.ts`,
 - `link(2)` makes a real hard link (053330da): both names are one file with
   one inode number, which git's local clone checks, and a link count that
   follows links and unlinks (shadow's lock files: `groupadd`, `useradd` in
-  openssh-client's and other postinsts). Node's `fs.link` does the same. The
-  built-in `ln` and `cp -l` still copy. `kernel-core.test.ts`.
+  openssh-client's and other postinsts). Node's `fs.link` does the same, and so do
+  the built-in `ln`, `cp -l` and tar's hard-link members. `kernel-core.test.ts`,
+  `builtins-hardlinks.test.ts`.
 - Files keep no owner, so `stat` reports them as the caller's (root's in a
   root shell): git refused root's own repositories ("dubious ownership").
 - tabcomputer's commands look like files only where exec runs them (`/bin`,
