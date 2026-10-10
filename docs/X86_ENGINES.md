@@ -670,6 +670,12 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    saturates). Rust's `as` casts test for that value, and librsvg drew every
    gradient transparent. Test: fixtures/x86/sse2d.c, compared with native
    output, JIT on and off.
+74. SHIRO_BLINK_PROFILE times each compiled-code entry, giving a per-thread
+   "in compiled code ms" (the JIT's compiles included; see the header line),
+   and splits the 1-ms samples by kind. In gh --version, the main thread runs
+   4.8 s, of which 3.0 s is compiled code (0.67 s of it compiling) and ~1.8 s
+   is the interpreter, at ~290 ns per instruction with the profile's own
+   overhead.
 
 The page compiles blink.wasm once and gives the `WebAssembly.Module` to every
 Blink worker (src/x86-engine/blink.ts `blinkWasmModule`, host.mjs

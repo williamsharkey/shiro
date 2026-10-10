@@ -513,6 +513,10 @@ async function main() {
     () => import('./commands/base-utils').then(m => m.pingCmd)), 'src/commands/base-utils.ts');
   registerCommand(commands, lazyCommand('strace', "Trace a kernel program's system calls",
     () => import('./commands/base-utils').then(m => m.straceCmd)), 'src/commands/base-utils.ts');
+  registerCommand(commands, lazyCommand('ipcs', 'Show System V IPC objects (message queues, shared memory, semaphores)',
+    () => import('./commands/ipcs').then(m => m.ipcsCmd)), 'src/commands/ipcs.ts');
+  registerCommand(commands, lazyCommand('ipcrm', 'Remove System V IPC objects (by id or key)',
+    () => import('./commands/ipcs').then(m => m.ipcrmCmd)), 'src/commands/ipcs.ts');
   registerCommand(commands, lazyCommand('doctor', 'Check this tab (deploy, browser, engine, network, sign-ins, storage) for a bug report',
     () => import('./commands/doctor').then(m => m.doctorCmd)), 'src/commands/doctor.ts');
   registerCommand(commands, lazyCommand('tabinfo', 'Same as doctor',
