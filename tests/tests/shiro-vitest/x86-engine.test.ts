@@ -272,6 +272,18 @@ const haveThreadintr = blinkHasThreadintr && tryBuild('gcc', ['-static', '-O1', 
 const sigbusBin = join(out, 'sigbus');
 const blinkHasSigbus = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_sigbus');
 const haveSigbus = blinkHasSigbus && tryBuild('gcc', ['-static', '-O1', '-w', '-o', sigbusBin, 'sigbus.c', '-lrt']);
+// Blink 0509: CPU-time clocks and times() start again in a fork child; children's CPU from the kernel
+const forkcpuBin = join(out, 'forkcpu');
+const blinkHasForkcpu = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_forkcpu');
+const haveForkcpu = blinkHasForkcpu && tryBuild('gcc', ['-static', '-O1', '-w', '-o', forkcpuBin, 'forkcpu.c', '-lpthread']);
+// Blink 0510: a SIGEV_THREAD_ID timer's signal goes to its thread (SIGEV_THREAD timers)
+const timerthreadBin = join(out, 'timerthread');
+const blinkHasTimerthread = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_timerthread');
+const haveTimerthread = blinkHasTimerthread && tryBuild('gcc', ['-static', '-O1', '-w', '-o', timerthreadBin, 'timerthread.c', '-lpthread', '-lrt']);
+// Blink 0511: a file mapping's last page is the file's to its end
+const mmaptailBin = join(out, 'mmaptail');
+const blinkHasMmaptail = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_mmaptail');
+const haveMmaptail = blinkHasMmaptail && tryBuild('gcc', ['-static', '-O1', '-w', '-o', mmaptailBin, 'mmaptail.c']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -938,6 +950,25 @@ it.skipIf(!haveSigbus)('a page of a shared file mapping past the end of a file o
   expect(r.output.replace(/\r\n/g, '\n')).toBe(
     'PROT_NONE SIGSEGV\nfile SIGBUS code 2 at page 1\nfile SIGBUS on read\nfile grown: 0 122\nfile wrote back a\n' +
     'shm SIGBUS code 2 at page 1\nshm SIGBUS on read\nshm grown: 0 0\n');
+}, 60_000);
+
+it.skipIf(!haveForkcpu)('a fork child\'s and a new thread\'s CPU-time clocks, and the child\'s times(), start at 0 and move; the parent counts reaped children\'s CPU, not their sleep (Open POSIX fork_22-1, fork_8-1)', async () => {
+  const { shell } = await setup(readFileSync(forkcpuBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('parent process 1 thread 1 utime 1\nnew thread 1\nchild process 1 thread 1 utime 1\nchild moves\n' +
+    'wait4 1\nchildren utime 1 cutime 1\nsleeping child 1\n');
+}, 60_000);
+
+it.skipIf(!haveTimerthread)('a SIGEV_THREAD timer runs its function in another thread with its value at each expiry; a fork child does not inherit it (Open POSIX fork_18-1)', async () => {
+  const { shell } = await setup(readFileSync(timerthreadBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('runs 1 value 42 other thread 1\nchild runs 0\nparent runs 1\n');
+}, 60_000);
+
+it.skipIf(!haveMmaptail)('a file mapping whose length ends mid-page shows the file to the end of the page; MAP_FIXED over it shows the new file (Open POSIX mmap_3-1)', async () => {
+  const { shell } = await setup(readFileSync(mmaptailBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('tail a\nreplaced 1 tail b\n');
 }, 60_000);
 
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink

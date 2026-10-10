@@ -2,15 +2,17 @@
  * POSIX per-process timers (timer_create, timer_settime, timer_gettime,
  * timer_getoverrun, timer_delete), as Linux keeps them: ids per process,
  * not inherited by fork, gone at exec and exit; an expiry sends the
- * timer's signal (SIGEV_SIGNAL, or SIGEV_THREAD_ID to the process: signals
- * carry no thread yet), or nothing (SIGEV_NONE). Expiries while that
+ * timer's signal (SIGEV_SIGNAL; SIGEV_THREAD_ID's names its thread, which
+ * the engine routes it to), or nothing (SIGEV_NONE). Expiries while that
  * signal is still pending are counted as overruns, reported for the
  * signal once it has been taken.
  *
  * ABI (data area as in kernel.ts; struct itimerspec = interval {sec, nsec},
  * value {sec, nsec}, i64 each):
- *   timer_create 222 (clockid, hasSigevent); data = sigev_value i64,
- *            sigev_signo i32, sigev_notify i32, sigev_tid i32  → timer id
+ *   timer_create 222 (clockid, hasSigevent, engineThread); data =
+ *            sigev_value i64, sigev_signo i32, sigev_notify i32, sigev_tid
+ *            i32  → timer id. engineThread 1: the tid is a thread the
+ *            engine runs itself (Blink's), which the kernel doesn't know
  *   timer_settime 223 (id, flags); data in = the new itimerspec (value
  *            absolute with TIMER_ABSTIME), out = the old one
  *   timer_gettime 224 (id); data out = the itimerspec (time left)
@@ -40,6 +42,7 @@ interface Timer {
   queued: boolean; // its signal was sent and may still be pending
   cur: number; // expiries while that signal was pending
   last: number; // overruns of the last signal taken
+  tid?: number; // SIGEV_THREAD_ID: the thread its signal is for
 }
 
 const now = () => performance.now();
@@ -65,11 +68,12 @@ export class PosixTimers {
     t.clear();
   }
 
-  create(proc: Process, clock: number, sev: DataView | null): number {
+  create(proc: Process, clock: number, sev: DataView | null, engineThread = false): number {
     // (a negative id is a process's or thread's CPU clock, clock_getcpuclockid's: wall time here too)
     if (!CLOCKS.has(clock) && clock >= 0) return clock === 8 || clock === 9 ? -A.EPERM : -A.EINVAL; // the alarm clocks take CAP_WAKE_ALARM
     let signo = A.SIGALRM;
     let value: bigint | undefined;
+    let tid: number | undefined;
     if (sev) {
       value = sev.getBigInt64(0, true);
       const how = sev.getInt32(12, true);
@@ -78,8 +82,8 @@ export class PosixTimers {
       else if (how === SIGEV_SIGNAL || how === SIGEV_THREAD_ID) {
         if (signo < 1 || signo > 64) return -A.EINVAL;
         if (how === SIGEV_THREAD_ID) {
-          const tid = sev.getInt32(16, true);
-          if (tid !== proc.pid && !proc.tids.has(tid)) return -A.EINVAL;
+          tid = sev.getInt32(16, true);
+          if (tid !== proc.pid && !proc.tids.has(tid) && !engineThread) return -A.EINVAL;
         }
       } else return how === SIGEV_THREAD ? -A.EINVAL : -A.EINVAL; // (glibc makes SIGEV_THREAD a SIGEV_THREAD_ID)
     }
@@ -87,7 +91,7 @@ export class PosixTimers {
     let id = 0;
     while (t.has(id)) id++;
     // (with no sigevent, the value is the timer's id, as on Linux)
-    t.set(id, { id, value: value ?? BigInt(id), clock, signo, deadline: 0, interval: 0, queued: false, cur: 0, last: 0 });
+    t.set(id, { id, value: value ?? BigInt(id), clock, signo, deadline: 0, interval: 0, queued: false, cur: 0, last: 0, tid });
     return id;
   }
 
@@ -123,7 +127,7 @@ export class PosixTimers {
       else if (tm.queued) tm.cur = Math.min(DELAYTIMER_MAX, tm.cur + 1);
       else {
         tm.queued = true;
-        this.deliver(proc, tm.signo, { signo: tm.signo, code: A.SI_TIMER, timerid: tm.id, overrun: 0, value: tm.value });
+        this.deliver(proc, tm.signo, { signo: tm.signo, code: A.SI_TIMER, timerid: tm.id, overrun: 0, value: tm.value, tid: tm.tid });
       }
     }
     if (tm.interval > 0) {
