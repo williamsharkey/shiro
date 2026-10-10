@@ -290,3 +290,15 @@ describe('background kernel programs in a kernel-run sh', () => {
     expect(out).toMatch(/^\[1\] \d+\nown-group\n\[1\]\+ \d+ Stopped\s+readloop\nst 143\n$/);
   });
 });
+
+describe('posix_spawn of a script by relative path', () => {
+  it('sub/s.sh is found from the spawning process\'s cwd (make running build-aux/install-sh)', async () => {
+    await fs.mkdir('/tmp/sub', { recursive: true });
+    await fs.writeFile('/tmp/sub/s.sh', '#!/bin/sh\necho "ran $*"\n');
+    await fs.chmod?.('/tmp/sub/s.sh', 0o755);
+    const r = await run(['sub/s.sh', '-c', 'x'], '');
+    expect(r.err).toBe('');
+    expect(r.out).toBe('ran -c x\n');
+    expect(r.status).toBe(0);
+  });
+});
