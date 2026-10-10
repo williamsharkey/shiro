@@ -766,13 +766,14 @@ describe('Demo 9: npm Edge Cases', () => {
     expect(output).toContain('unknown command');
   });
 
-  it('npm install without package.json exits 1', async () => {
+  it('npm install without package.json is up to date (as npm), and creates none', async () => {
     const dir = tmpDir('nopkg');
     await fs.mkdir(dir, { recursive: true });
     shell.cwd = dir;
     const { output, exitCode } = await run(shell, 'npm install');
-    expect(exitCode).toBe(1);
-    expect(output).toContain('package.json not found');
+    expect(exitCode).toBe(0);
+    expect(output).toContain('up to date');
+    expect(await fs.exists(dir + '/package.json')).toBe(false);
   });
 
   it('npm install -g without packages exits 1', async () => {

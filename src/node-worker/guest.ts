@@ -11,7 +11,8 @@ import { decodeTermios, encodeTermios, decodeWinsize, makeRaw, TCSETS, TERMIOS_S
 import { SyscallFs } from './sys-fs';
 import { runChild, runChildSync } from './child';
 import { GuestNetStack, installGuestPorts } from './net';
-import type { NodeGuestHooks } from './hooks';
+import { GuestTtyStdin } from './tty';
+import type { NodeGuestHooks, ThreadEvents } from './hooks';
 
 const dec = new TextDecoder();
 
@@ -32,7 +33,8 @@ function terminalFacade(sys: GuestSys, stdinTTY: boolean) {
   const buf = new Uint8Array(4096);
   return {
     tty: true,
-    writeOutput: (s: string) => { sys.write(1, s); },
+    // node-compat writes a terminal's newlines as \r\n; the pty's line discipline (ONLCR) does that here
+    writeOutput: (s: string) => { sys.write(1, s.replace(/\r\n/g, '\n')); },
     getSize: () => {
       const w = new Uint8Array(WINSIZE_SIZE);
       if (ioctl(sys, 1, A.TIOCGWINSZ, w) < 0) return { cols: 80, rows: 24 };
@@ -70,14 +72,27 @@ function terminalFacade(sys: GuestSys, stdinTTY: boolean) {
 /** Run node for one start message; exits the process (does not return normally). */
 export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) => void): Promise<void> {
   const sys = connectGuest(start, post);
+  // (a pooled worker runs one guest after another: nothing of the last one's carries over)
+  exitRequested = false;
+  fsEvents = null;
+  parentMessages = null;
+  earlyMessages.length = 0;
+  threadEvents.clear();
   try {
     const fs = new SyscallFs(sys);
+    // fs.watch: the page sends its filesystem's changes once asked (host.ts)
+    fs.requestChanges = () => post({ type: 'node-guest-watch' });
+    fsEvents = (m) => fs.changed(m.event, m.path, m.newPath);
     const stdinTTY = isatty(sys, 0);
     const stdoutTTY = isatty(sys, 1);
     // Networking over socket syscalls; servers listen on kernel ports (the page previews them)
     const net = new GuestNetStack(sys);
     const { iframeServer } = await import('../iframe-server');
     installGuestPorts(iframeServer as any, net, (port) => { if (stdoutTTY) post({ type: 'node-guest-listen', port }); });
+    rejection = null;
+    installWorkerHandlers();
+    // A worker_threads thread of a node process (host.ts started it with attachThread)
+    const nodeThread = (start as any).nodeThread as { file: string; eval?: boolean; workerData?: unknown; argv?: string[]; threadId: number } | undefined;
     const hooks: NodeGuestHooks = {
       readText(path) {
         const b = fs.readRaw(path);
@@ -90,11 +105,38 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
       writeOut: (fd, s) => { sys.write(fd, s); },
       netStack: net,
       busy: () => net.busy,
+      onUnhandledRejection: (fn) => { rejection = fn; },
+      page: {
+        clipboard: (text) => post({ type: 'node-guest-clipboard', text }),
+        preview: (port) => { if (stdoutTTY) post({ type: 'node-guest-listen', port }); },
+      },
+      ...(stdinTTY ? { ttyStdin: (on: ConstructorParameters<typeof GuestTtyStdin>[1]) => new GuestTtyStdin(sys, on) } : {}),
+      // worker_threads: a thread of this process, a guest of its own; messages go by way of the page
+      startThread(file, opts, events) {
+        const id = ++lastThread;
+        threadEvents.set(id, events);
+        post({ type: 'node-guest-thread', id, file, eval: !!opts.eval, workerData: opts.workerData, argv: opts.argv ?? [], env: opts.env, threadId: opts.threadId });
+        return {
+          post: (value) => post({ type: 'node-guest-thread-post', id, value }),
+          terminate: () => post({ type: 'node-guest-thread-kill', id }),
+        };
+      },
+      ...(nodeThread ? {
+        thread: {
+          threadId: nodeThread.threadId,
+          workerData: nodeThread.workerData,
+          post: (value: unknown) => post({ type: 'node-thread-out', kind: 'message', value }),
+          onMessage: (fn: (value: unknown) => void) => {
+            parentMessages = fn;
+            for (const v of earlyMessages.splice(0)) fn(v);
+          },
+        },
+      } : {}),
     };
     const env = { ...start.env };
     const shell: any = { cwd: start.cwd, env, abortController: null, fork() { throw new Error('no shell in a node guest'); } };
     const ctx: any = {
-      args: start.argv.slice(1),
+      args: nodeThread ? (nodeThread.eval ? ['-e', nodeThread.file] : [nodeThread.file, ...(nodeThread.argv ?? [])]) : start.argv.slice(1),
       fs,
       cwd: start.cwd,
       env,
@@ -107,8 +149,8 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
       terminal: stdoutTTY ? terminalFacade(sys, stdinTTY) : undefined,
       nodeGuest: hooks,
     };
-    // stdin: read when the program asks for it (a pipe until its end)
-    if (!stdinTTY) {
+    // stdin: read when the program asks for it (a pipe until its end); a thread's is the main thread's
+    if (!stdinTTY && !nodeThread) {
       ctx.readStdin = async () => {
         const r = sys.readAll(0);
         return typeof r === 'number' ? '' : dec.decode(r);
@@ -127,7 +169,17 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
       status = 1;
     }
     if (ctx.stdout) sys.write(1, ctx.stdout);
+    if (nodeThread) {
+      // A thread's uncaught error is its Worker's 'error' event; its exit ends only the thread
+      if (status !== 0 && ctx.stderr) post({ type: 'node-thread-out', kind: 'error', value: { message: ctx.stderr.trim() } });
+      else if (ctx.stderr) sys.write(2, ctx.stderr);
+      post({ type: 'node-thread-out', kind: 'exit', value: status }); // after its messages (the kernel's exit can overtake them)
+      sys.exitThread(status);
+    }
     if (ctx.stderr) sys.write(2, ctx.stderr);
+    exitRequested = true; // a clean end: the worker can run another guest (host.ts's pool)
+    // Said in the channel's memory, which the page reads when the process ends (a message would come too late)
+    if (!nodeThread) { const w = new Int32Array(sys.ch.sab); Atomics.store(w, w.length - 1, EXITING_MARK); }
     sys.exit(status);
   } catch (e) {
     if (e instanceof ChannelClosed) return; // killed: the kernel is done with us
@@ -135,12 +187,79 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
   }
 }
 
-/** The worker's message handler: the first start message runs node */
+/** In the last word of the channel's buffer before exit_group: this guest ends itself (host.ts) */
+export const EXITING_MARK = 0x45584954;
+
+/** The guest ended itself (exit_group), so this worker may run another */
+let exitRequested = false;
+/** Who hears unhandled rejections now (node-compat's handler for the running guest) */
+let rejection: ((reason: unknown, promise: Promise<unknown>) => void) | null = null;
+let handlersInstalled = false;
+
+/**
+ * The worker's own handlers, once: unhandled rejections go to the running
+ * guest's node-compat, and a ChannelClosed from a finished guest's leftover
+ * callbacks (its channel is gone) is not an error of the next one.
+ */
+function installWorkerHandlers(): void {
+  if (handlersInstalled) return;
+  handlersInstalled = true;
+  const g: any = globalThis;
+  if (typeof g.addEventListener === 'function') {
+    g.addEventListener('unhandledrejection', (e: any) => {
+      if (e.reason instanceof ChannelClosed) { e.preventDefault(); return; }
+      if (rejection) { e.preventDefault(); rejection(e.reason, e.promise); }
+    });
+    g.addEventListener('error', (e: any) => { if (e.error instanceof ChannelClosed) e.preventDefault(); });
+  } else if (typeof g.process?.on === 'function' && g.process.versions?.node) {
+    g.process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) => {
+      if (reason instanceof ChannelClosed) return;
+      rejection?.(reason, promise);
+    });
+    // (a finished guest's timer calling into its closed channel; anything else still ends the worker)
+    g.process.on('uncaughtException', (e: unknown) => { if (!(e instanceof ChannelClosed)) throw e; });
+  }
+}
+
+/** Where the page's filesystem changes go (the running guest's SyscallFs) */
+let fsEvents: ((m: { event: string; path: string; newPath?: string }) => void) | null = null;
+/** worker_threads: this guest's threads' events by id, and (in a thread) its parent's messages */
+let lastThread = 0;
+const threadEvents = new Map<number, ThreadEvents>();
+let parentMessages: ((value: unknown) => void) | null = null;
+/** The parent's messages that came before the thread's script was listening */
+const earlyMessages: unknown[] = [];
+
+/** The worker's message handler: the first start message runs node; then filesystem changes */
 export function nodeGuestMain(on: (handler: (m: unknown) => void) => void, post: (m: unknown) => void): void {
   let started = false;
-  on((m) => {
-    if (started || !isStartMessage(m)) return;
+  /** The next guest's start, come while this one finishes its exit (host.ts lends the worker then) */
+  let queued: GuestStartMessage | null = null;
+  const start = (m: GuestStartMessage) => {
     started = true;
-    void runNodeGuest(m, post);
+    // After a clean exit the worker takes another start message (host.ts pools it); a thread doesn't
+    void runNodeGuest(m, post).then(() => {
+      if (!exitRequested || (m as any).nodeThread) return;
+      started = false;
+      const next = queued;
+      queued = null;
+      if (next) start(next); else post({ type: 'node-guest-idle' });
+    });
+  };
+  on((m) => {
+    const t = (m as any)?.type;
+    if (started && t === 'node-guest-fs') { fsEvents?.(m as any); return; }
+    if (started && t === 'node-guest-parent-msg') { if (parentMessages) parentMessages((m as any).value); else earlyMessages.push((m as any).value); return; }
+    if (started && t === 'node-guest-thread-ev') {
+      const { id, kind, value } = m as any;
+      const ev = threadEvents.get(id);
+      if (!ev) return;
+      if (kind === 'exit') threadEvents.delete(id);
+      (ev as any)[kind]?.(value);
+      return;
+    }
+    if (!isStartMessage(m)) return;
+    if (started) { queued = m; return; }
+    start(m);
   });
 }

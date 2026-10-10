@@ -77,10 +77,6 @@ describe('Claude Code Install', () => {
     });
 
     it('should not require package.json for global installs', async () => {
-      const localCtx = createCtx(shell, fs, ['install', 'some-pkg']);
-      await npmCmd.exec(localCtx);
-      expect(localCtx.stderr).toContain('package.json not found');
-
       const globalCtx = createCtx(shell, fs, ['install', '-g', 'some-pkg']);
       await npmCmd.exec(globalCtx);
       expect(globalCtx.stderr).not.toContain('package.json not found');

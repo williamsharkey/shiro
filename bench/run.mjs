@@ -19,7 +19,7 @@ import { startGitDaemon } from './lib/gitserver.mjs';
 
 const BENCH = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(BENCH, '..');
-const ALL_SUITES = ['boot', 'shell', 'kernel', 'wasm', 'x86', 'net', 'node', 'hygiene', 'workloads'];
+const ALL_SUITES = ['boot', 'shell', 'kernel', 'wasm', 'x86', 'net', 'node', 'hygiene', 'workloads', 'workflows'];
 // Only when asked for (--suites debian): apt runs take minutes
 const OPTIONAL_SUITES = ['debian', 'x86first', 'workloads-slow', 'toolchains'];
 const NONISOLATED_SUITES = ['boot', 'shell', 'kernel', 'wasm', 'x86', 'hygiene'];
@@ -27,7 +27,7 @@ const NONISOLATED_SUITES = ['boot', 'shell', 'kernel', 'wasm', 'x86', 'hygiene']
 const QUICK_NONISOLATED_SUITES = ['kernel'];
 
 function parseArgs(argv) {
-  const a = { quick: false, runs: null, build: true, modes: ['isolated', 'nonisolated'], suites: null, only: null, offline: false, out: null, docs: null, gh: true, src: null };
+  const a = { quick: false, runs: null, build: true, modes: ['isolated', 'nonisolated'], suites: null, only: null, skip: null, offline: false, out: null, docs: null, gh: true, src: null };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i], v = () => argv[++i];
     if (k === '--quick') a.quick = true;
@@ -36,6 +36,7 @@ function parseArgs(argv) {
     else if (k === '--modes') a.modes = v().split(',');
     else if (k === '--suites') a.suites = v().split(',');
     else if (k === '--only') a.only = v().split(',').map((s) => new RegExp(s));
+    else if (k === '--skip') a.skip = v().split(',').map((s) => new RegExp(s));
     else if (k === '--offline') a.offline = true;
     else if (k === '--out') a.out = v();
     else if (k === '--no-docs') a.docs = false;
@@ -108,7 +109,7 @@ async function main() {
     });
     const h = new Harness({
       mode, origin: server.origin, netcache, runs: args.runs, quick: args.quick, log, results,
-      testServer: { host: hostAddr, ports: tcp.ports }, hostAddr, only: args.only,
+      testServer: { host: hostAddr, ports: tcp.ports }, hostAddr, only: args.only, skipRe: args.skip,
     });
     h.gitServer = gitd ? { host: hostAddr, port: gitd.port, repo: gitd.repo } : null;
     h.fixtures = fixtures;

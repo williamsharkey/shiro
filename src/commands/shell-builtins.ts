@@ -95,6 +95,161 @@ export const cdCmd: Command = {
   },
 };
 
+/**
+ * The directory stack (bash): entry 0 is the current directory, the rest are
+ * in shell.dirStack. pushd and popd change directory through cd and print
+ * the stack after; dirs prints it (~ for $HOME unless -l).
+ */
+function dirStackOf(ctx: CommandContext): string[] {
+  return [ctx.shell.env['PWD'] || ctx.shell.cwd, ...ctx.shell.dirStack];
+}
+
+function showDir(ctx: CommandContext, d: string, long: boolean): string {
+  const home = ctx.shell.env['HOME'];
+  if (long || !home || home === '/') return d;
+  return d === home ? '~' : d.startsWith(home + '/') ? '~' + d.slice(home.length) : d;
+}
+
+/** +N / -N: an index into a stack of `len` entries, or null if out of range or not one */
+function stackIndex(arg: string, len: number): number | null {
+  const m = /^([+-])(\d+)$/.exec(arg);
+  if (!m) return null;
+  const n = Number(m[2]);
+  if (n >= len) return null;
+  return m[1] === '+' ? n : len - 1 - n;
+}
+
+async function cdFor(ctx: CommandContext, cmd: string, dir: string): Promise<number> {
+  const c = { ...ctx, args: ['--', dir], stdout: '', stderr: '' };
+  const code = await cdCmd.exec(c);
+  if (code) ctx.stderr += c.stderr.replace(/^cd:/, `${cmd}:`);
+  return code;
+}
+
+const dirsUsage = (cmd: string, opts: string) => `${cmd}: usage: ${cmd} ${opts}\n`;
+
+export const dirsCmd: Command = {
+  name: 'dirs',
+  description: 'Display the directory stack',
+  async exec(ctx) {
+    let long = false, perLine = false, numbered = false;
+    let pick: string | undefined;
+    for (const a of ctx.args) {
+      if (/^[+-]\d+$/.test(a)) { pick = a; continue; }
+      if (/^-[clpv]+$/.test(a)) {
+        for (const c of a.slice(1)) {
+          if (c === 'c') ctx.shell.dirStack = [];
+          else if (c === 'l') long = true;
+          else if (c === 'p') perLine = true;
+          else if (c === 'v') { perLine = true; numbered = true; }
+        }
+        continue;
+      }
+      ctx.stderr += a.startsWith('-') ? `dirs: ${a}: invalid option\n${dirsUsage('dirs', '[-clpv] [+N] [-N]')}` : `dirs: ${a}: invalid argument\n`;
+      return a.startsWith('-') ? 2 : 1;
+    }
+    // (dirs -c alone only clears)
+    if (ctx.args.length && ctx.args.every((a) => /^-c+$/.test(a))) return 0;
+    const stack = dirStackOf(ctx);
+    if (pick !== undefined) {
+      const k = stackIndex(pick, stack.length);
+      if (k === null) { ctx.stderr += `dirs: ${pick.slice(1)}: directory stack index out of range\n`; return 1; }
+      ctx.stdout += (numbered ? ` ${k}  ` : '') + showDir(ctx, stack[k], long) + '\n';
+      return 0;
+    }
+    const shown = stack.map((d) => showDir(ctx, d, long));
+    ctx.stdout += numbered ? shown.map((d, k) => `${String(k).padStart(2)}  ${d}\n`).join('')
+      : perLine ? shown.map((d) => d + '\n').join('') : shown.join(' ') + '\n';
+    return 0;
+  },
+};
+
+export const pushdCmd: Command = {
+  name: 'pushd',
+  description: 'Add a directory to the directory stack',
+  async exec(ctx) {
+    const args = [...ctx.args];
+    let noCd = false;
+    while (args.length && /^-./.test(args[0]) && !/^-\d+$/.test(args[0])) {
+      const a = args.shift()!;
+      if (a === '--') break;
+      if (a === '-n') { noCd = true; continue; }
+      ctx.stderr += `pushd: ${a}: invalid option\n${dirsUsage('pushd', '[-n] [+N | -N | dir]')}`;
+      return 2;
+    }
+    if (args.length > 1) { ctx.stderr += 'pushd: too many arguments\n'; return 1; }
+    const stack = dirStackOf(ctx);
+    const show = () => { ctx.stdout += dirStackOf(ctx).map((d) => showDir(ctx, d, false)).join(' ') + '\n'; };
+    if (args.length === 0) {
+      // swap the top two
+      if (stack.length < 2) { ctx.stderr += 'pushd: no other directory\n'; return 1; }
+      const [cur, next, ...rest] = stack;
+      if (!noCd) {
+        if (await cdFor(ctx, 'pushd', next)) return 1;
+        ctx.shell.dirStack = [cur, ...rest];
+      }
+      show();
+      return 0;
+    }
+    const k = stackIndex(args[0], stack.length);
+    if (k !== null || /^[+-]\d+$/.test(args[0])) {
+      if (k === null) { ctx.stderr += `pushd: ${args[0]}: directory stack index out of range\n`; return 1; }
+      // rotate: entry k on top
+      const rotated = [...stack.slice(k), ...stack.slice(0, k)];
+      if (!noCd && await cdFor(ctx, 'pushd', rotated[0])) return 1;
+      ctx.shell.dirStack = rotated.slice(1);
+      show();
+      return 0;
+    }
+    if (noCd) {
+      ctx.shell.dirStack = [args[0], ...ctx.shell.dirStack];
+      show();
+      return 0;
+    }
+    const before = stack[0];
+    if (await cdFor(ctx, 'pushd', args[0])) return 1;
+    ctx.shell.dirStack = [before, ...ctx.shell.dirStack];
+    show();
+    return 0;
+  },
+};
+
+export const popdCmd: Command = {
+  name: 'popd',
+  description: 'Remove a directory from the directory stack',
+  async exec(ctx) {
+    const args = [...ctx.args];
+    let noCd = false;
+    while (args.length && /^-./.test(args[0]) && !/^-\d+$/.test(args[0])) {
+      const a = args.shift()!;
+      if (a === '--') break;
+      if (a === '-n') { noCd = true; continue; }
+      ctx.stderr += `popd: ${a}: invalid option\n${dirsUsage('popd', '[-n] [+N | -N]')}`;
+      return 2;
+    }
+    if (args.length > 1) { ctx.stderr += 'popd: too many arguments\n'; return 1; }
+    const stack = dirStackOf(ctx);
+    if (stack.length < 2) { ctx.stderr += 'popd: directory stack empty\n'; return 1; }
+    let k = 0;
+    if (args.length) {
+      if (!/^[+-]\d+$/.test(args[0])) { ctx.stderr += `popd: ${args[0]}: invalid argument\n${dirsUsage('popd', '[-n] [+N | -N]')}`; return 2; }
+      const idx = stackIndex(args[0], stack.length);
+      if (idx === null) { ctx.stderr += `popd: ${args[0]}: directory stack index out of range\n`; return 1; }
+      k = idx;
+    }
+    if (k === 0 && !noCd) {
+      if (await cdFor(ctx, 'popd', stack[1])) return 1;
+      ctx.shell.dirStack = stack.slice(2);
+    } else {
+      // (-n with no N removes the entry after the current directory)
+      const drop = k === 0 ? 1 : k;
+      ctx.shell.dirStack = stack.filter((_, j) => j !== drop).slice(1);
+    }
+    ctx.stdout += dirStackOf(ctx).map((d) => showDir(ctx, d, false)).join(' ') + '\n';
+    return 0;
+  },
+};
+
 // Map of env vars to localStorage keys for persistence across sessions
 const PERSIST_ENV: Record<string, string> = {
   ANTHROPIC_API_KEY: 'tabcomputer_anthropic_key',
@@ -273,6 +428,7 @@ async function runShell(ctx: CommandContext, invokedAs: 'sh' | 'bash'): Promise<
     let script: string;
     let argv0: string;
     let positional: string[];
+    let fromFile = false;
     if (commandMode) {
       if (rest.length === 0) { ctx.stderr += 'sh: -c: option requires an argument\n'; return 2; }
       script = rest[0];
@@ -289,6 +445,7 @@ async function runShell(ctx: CommandContext, invokedAs: 'sh' | 'bash'): Promise<
       }
       argv0 = rest[0];
       positional = rest.slice(1);
+      fromFile = true;
     } else if (ctx.liveStdin && ctx.shell.kernelStdio) {
       // The script is fd 0 (a shell running as a kernel process, shell-stdio.ts)
       script = await ctx.shell.kernelStdio.readAll();
@@ -307,6 +464,7 @@ async function runShell(ctx: CommandContext, invokedAs: 'sh' | 'bash'): Promise<
     child.invokedAsSh = invokedAs === 'sh';
     ctx.shell.execPid = ctx.shell.execPpid = undefined;
     child.setPositional(positional, argv0);
+    if (fromFile) child.setScriptSource(argv0);
     for (const o of options) child.options.add(o);
     for (const o of parsed.off) child.options.delete(o);
     if (parsed.posix) child.options.add('posix');
@@ -360,7 +518,7 @@ export const bashCmd: Command = {
  */
 export const shellBuiltins: Command[] = [
   cdCmd, exportCmd, helpCmd, commandCmd,
-  shCmd, bashCmd, timesCmd,
+  shCmd, bashCmd, timesCmd, dirsCmd, pushdCmd, popdCmd,
   // Re-exports that override unix.ts versions:
   grepCmd, egrepCmd, fgrepCmd, sedCmd, diffCmd,
   // POSIX test bracket alias (delegates to test command)

@@ -16,7 +16,7 @@
  */
 import * as A from '../kernel/abi';
 import type { GuestSys } from '../kernel/channel';
-import { decodeSockaddr, encodeSockaddr, encodeHttpRequest, parseHttpResponse, ipFamily, type SockAddr } from '../kernel/net';
+import { decodeSockaddr, encodeSockaddr, encodeHttpRequest, readHttpResponse, ipFamily, type SockAddr } from '../kernel/net';
 import type { ByteChannel } from '../byte-pipe';
 
 const enc = new TextEncoder();
@@ -393,32 +393,21 @@ export function installGuestPorts(host: PortHost, stack: GuestNetStack, onListen
   host.fetch = async (port, path = '/', options = {}) => {
     const s = stack.socket(A.AF_INET, A.SOCK_STREAM);
     if (typeof s === 'number') throw new Error(`socket: errno ${-s}`);
-    try {
-      const r = await s.connect({ family: A.AF_INET, address: '127.0.0.1', port });
-      if (r < 0) {
-        const err: any = new TypeError('fetch failed');
-        err.cause = Object.assign(new Error(`connect ECONNREFUSED 127.0.0.1:${port}`), { code: 'ECONNREFUSED', errno: r, syscall: 'connect', address: '127.0.0.1', port });
-        throw err;
-      }
-      const method = (options.method || 'GET').toUpperCase();
-      const req = encodeHttpRequest({ method, path, headers: options.headers, body: options.body ?? null, query: options.query } as any, port);
-      let off = 0;
-      while (off < req.length) {
-        const n = await s.write(req.subarray(off));
-        if (n <= 0) break;
-        off += n;
-      }
-      let raw = new Uint8Array(0);
-      const buf = new Uint8Array(64 * 1024);
-      for (;;) {
-        const n = await s.read(buf);
-        if (n > 0) raw = concat(raw, buf.subarray(0, n));
-        const p = parseHttpResponse(raw, n <= 0, method);
-        if (p.complete) return p.response as VirtualResponse;
-        if (n <= 0) return { status: 502, body: 'Bad gateway' };
-      }
-    } finally {
+    const r = await s.connect({ family: A.AF_INET, address: '127.0.0.1', port });
+    if (r < 0) {
       void s.close();
+      const err: any = new TypeError('fetch failed');
+      err.cause = Object.assign(new Error(`connect ECONNREFUSED 127.0.0.1:${port}`), { code: 'ECONNREFUSED', errno: r, syscall: 'connect', address: '127.0.0.1', port });
+      throw err;
     }
+    const method = (options.method || 'GET').toUpperCase();
+    const req = encodeHttpRequest({ method, path, headers: options.headers, body: options.body ?? null, query: options.query } as any, port);
+    for (let off = 0; off < req.length;) {
+      const n = await s.write(req.subarray(off));
+      if (n <= 0) break;
+      off += n;
+    }
+    // a body still coming (server-sent events, a long poll) is a stream; the socket closes with it
+    return readHttpResponse(s, method, 30_000) as Promise<VirtualResponse>;
   };
 }

@@ -1,0 +1,1514 @@
+{
+ "suite": "Open POSIX Test Suite",
+ "title": "POSIX: Open POSIX Test Suite under Blink (x86-64)",
+ "note": "The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scripts/conformance/build-openposix.sh) run as static x86-64 kernel processes in the Blink engine: signals, pthreads, semaphores, message queues, timers, clocks, mmap, scheduling. A test passes when it exits 0; only tests that pass natively on the build host as uid 1000 are scored (openposix/native-baseline.json). First run: 1173/1448, with Blink 0080\u20130084 built locally (raise(SIGKILL) and sigqueue/AIO fixed from this suite); the gaps are POSIX message queues (mq_*), POSIX timers (timer_*), sigwait/sigtimedwait, sched_* policies and shm_open. \u2192 1326/1448 (kernel POSIX message queues and timers, Blink 0086\u20130092 built locally: mq_*, timer_*, sigtimedwait/sigwait, sched_*; sigqueue waits on siginfo in Blink's handler frames; fork_21-1 and pthread_attr_destroy_1-1 hit a Blink page-lock assertion).",
+ "files": {
+  "aio_cancel": {
+   "pass": 7,
+   "total": 11,
+   "failures": [
+    {
+     "name": "aio_cancel_3-1",
+     "reason": "exit 131: "
+    },
+    {
+     "name": "aio_cancel_5-1",
+     "reason": "timeout: ",
+     "timeout": true
+    },
+    {
+     "name": "aio_cancel_6-1",
+     "reason": "timeout: ",
+     "timeout": true
+    },
+    {
+     "name": "aio_cancel_7-1",
+     "reason": "timeout: ",
+     "timeout": true
+    }
+   ]
+  },
+  "aio_error": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "aio_fsync": {
+   "pass": 11,
+   "total": 11,
+   "failures": []
+  },
+  "aio_read": {
+   "pass": 10,
+   "total": 10,
+   "failures": []
+  },
+  "aio_return": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "aio_suspend": {
+   "pass": 1,
+   "total": 4,
+   "failures": [
+    {
+     "name": "aio_suspend_1-1",
+     "reason": "UNRESOLVED: aio_suspend/1-1.c Error at write(): No such file or directory"
+    },
+    {
+     "name": "aio_suspend_4-1",
+     "reason": "exit 131: "
+    },
+    {
+     "name": "aio_suspend_9-1",
+     "reason": "exit 131: "
+    }
+   ]
+  },
+  "aio_write": {
+   "pass": 10,
+   "total": 10,
+   "failures": []
+  },
+  "asctime": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "clock": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "clock_getcpuclockid": {
+   "pass": 4,
+   "total": 4,
+   "failures": []
+  },
+  "clock_getres": {
+   "pass": 6,
+   "total": 7,
+   "failures": [
+    {
+     "name": "clock_getres_6-2",
+     "reason": "FAIL: At least one test FAILED -- see above"
+    }
+   ]
+  },
+  "clock_gettime": {
+   "pass": 7,
+   "total": 8,
+   "failures": [
+    {
+     "name": "clock_gettime_8-2",
+     "reason": "FAIL: At least one test FAILED -- see above"
+    }
+   ]
+  },
+  "clock_nanosleep": {
+   "pass": 12,
+   "total": 12,
+   "failures": []
+  },
+  "clock_settime": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "ctime": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "difftime": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "fork": {
+   "pass": 10,
+   "total": 16,
+   "failures": [
+    {
+     "name": "fork_13-1",
+     "reason": "FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/13-1.c FAILED: Child exited abnormally"
+    },
+    {
+     "name": "fork_18-1",
+     "reason": "UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/18-1.c unresolved: got 22 (Invalid argument) on line 87 (Failed to create a ti"
+    },
+    {
+     "name": "fork_21-1",
+     "reason": "exit 134: \t<blink backtrace unavailable>"
+    },
+    {
+     "name": "fork_22-1",
+     "reason": "FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/22-1.c FAILED: Child exited abnormally"
+    },
+    {
+     "name": "fork_7-1",
+     "reason": "UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/7-1.c unresolved: got 2 (No such file or directory) on line 121 (Could not ope"
+    },
+    {
+     "name": "fork_8-1",
+     "reason": "timeout: ",
+     "timeout": true
+    }
+   ]
+  },
+  "fsync": {
+   "pass": 2,
+   "total": 3,
+   "failures": [
+    {
+     "name": "fsync_7-1",
+     "reason": "FAIL: fsync/7-1.c Test Fail: Expect EINVAL, get: Success"
+    }
+   ]
+  },
+  "getpid": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "gmtime": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "kill": {
+   "pass": 3,
+   "total": 3,
+   "failures": []
+  },
+  "killpg": {
+   "pass": 7,
+   "total": 7,
+   "failures": []
+  },
+  "lio_listio": {
+   "pass": 8,
+   "total": 15,
+   "failures": [
+    {
+     "name": "lio_listio_10-1",
+     "reason": "exit 131: "
+    },
+    {
+     "name": "lio_listio_14-1",
+     "reason": "exit 131: "
+    },
+    {
+     "name": "lio_listio_15-1",
+     "reason": "exit 131: "
+    },
+    {
+     "name": "lio_listio_2-1",
+     "reason": "exit 132: "
+    },
+    {
+     "name": "lio_listio_3-1",
+     "reason": "exit 131: "
+    },
+    {
+     "name": "lio_listio_4-1",
+     "reason": "exit 132: "
+    },
+    {
+     "name": "lio_listio_7-1",
+     "reason": "exit 131: "
+    }
+   ]
+  },
+  "localtime": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "mktime": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "mlock": {
+   "pass": 2,
+   "total": 3,
+   "failures": [
+    {
+     "name": "mlock_8-1",
+     "reason": "UNRESOLVED: Unexpected error: Success"
+    }
+   ]
+  },
+  "mlockall": {
+   "pass": 2,
+   "total": 5,
+   "failures": [
+    {
+     "name": "mlockall_13-1",
+     "reason": "FAIL: mlockall() return 0 instead of -1."
+    },
+    {
+     "name": "mlockall_3-6",
+     "reason": "FAIL: The shared memory pages of the process are not locked."
+    },
+    {
+     "name": "mlockall_3-7",
+     "reason": "FAIL: The mapped files pages of the process are not locked."
+    }
+   ]
+  },
+  "mmap": {
+   "pass": 21,
+   "total": 32,
+   "failures": [
+    {
+     "name": "mmap_10-1",
+     "reason": "timeout: ",
+     "timeout": true
+    },
+    {
+     "name": "mmap_11-2",
+     "reason": "FAIL: Test FAILED: SIGBUS not triggered, while Memory Protection is enabled"
+    },
+    {
+     "name": "mmap_11-3",
+     "reason": "FAIL: Test FAILED: SIGBUS not triggered, while Memory Protection is enabled"
+    },
+    {
+     "name": "mmap_11-4",
+     "reason": "UNTESTED: From mmap(2) manpage, skip known bug on tmpfs"
+    },
+    {
+     "name": "mmap_14-1",
+     "reason": "FAIL: Test FAILED: st_ctime and st_mtime were not updated properly"
+    },
+    {
+     "name": "mmap_21-1",
+     "reason": "FAIL: Test FAILED"
+    },
+    {
+     "name": "mmap_23-1",
+     "reason": "FAIL: Text FAILED: mmap() succeded"
+    },
+    {
+     "name": "mmap_24-1",
+     "reason": "timeout: ",
+     "timeout": true
+    },
+    {
+     "name": "mmap_24-2",
+     "reason": "FAIL: Test Fail: Did not get ENOMEM as expected"
+    },
+    {
+     "name": "mmap_3-1",
+     "reason": "FAIL: Test Fail: The file is not mapped correctly"
+    },
+    {
+     "name": "mmap_7-4",
+     "reason": "FAIL: mmap with MAP_SHARED failed to propagate change into the child"
+    }
+   ]
+  },
+  "mq_close": {
+   "pass": 6,
+   "total": 6,
+   "failures": []
+  },
+  "mq_getattr": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "mq_notify": {
+   "pass": 6,
+   "total": 6,
+   "failures": []
+  },
+  "mq_open": {
+   "pass": 16,
+   "total": 16,
+   "failures": []
+  },
+  "mq_send": {
+   "pass": 17,
+   "total": 17,
+   "failures": []
+  },
+  "mq_setattr": {
+   "pass": 4,
+   "total": 4,
+   "failures": []
+  },
+  "mq_timedreceive": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "mq_timedsend": {
+   "pass": 20,
+   "total": 21,
+   "failures": [
+    {
+     "name": "mq_timedsend_12-1",
+     "reason": "timeout: ",
+     "timeout": true
+    }
+   ]
+  },
+  "mq_unlink": {
+   "pass": 4,
+   "total": 4,
+   "failures": []
+  },
+  "munlock": {
+   "pass": 2,
+   "total": 3,
+   "failures": [
+    {
+     "name": "munlock_10-1",
+     "reason": "UNRESOLVED: Unexpected error: Success"
+    }
+   ]
+  },
+  "munlockall": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "munmap": {
+   "pass": 7,
+   "total": 7,
+   "failures": []
+  },
+  "nanosleep": {
+   "pass": 11,
+   "total": 11,
+   "failures": []
+  },
+  "pthread_atfork": {
+   "pass": 6,
+   "total": 7,
+   "failures": [
+    {
+     "name": "pthread_atfork_3-3",
+     "reason": "timeout: ",
+     "timeout": true
+    }
+   ]
+  },
+  "pthread_attr_destroy": {
+   "pass": 2,
+   "total": 3,
+   "failures": [
+    {
+     "name": "pthread_attr_destroy_1-1",
+     "reason": "exit 134: "
+    }
+   ]
+  },
+  "pthread_attr_getdetachstate": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "pthread_attr_getinheritsched": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "pthread_attr_getschedparam": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "pthread_attr_getschedpolicy": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "pthread_attr_getscope": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "pthread_attr_getstack": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "pthread_attr_getstacksize": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "pthread_attr_init": {
+   "pass": 4,
+   "total": 4,
+   "failures": []
+  },
+  "pthread_attr_setdetachstate": {
+   "pass": 4,
+   "total": 4,
+   "failures": []
+  },
+  "pthread_attr_setinheritsched": {
+   "pass": 3,
+   "total": 3,
+   "failures": []
+  },
+  "pthread_attr_setschedparam": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "pthread_attr_setschedpolicy": {
+   "pass": 3,
+   "total": 3,
+   "failures": []
+  },
+  "pthread_attr_setscope": {
+   "pass": 3,
+   "total": 3,
+   "failures": []
+  },
+  "pthread_attr_setstack": {
+   "pass": 5,
+   "total": 5,
+   "failures": []
+  },
+  "pthread_attr_setstacksize": {
+   "pass": 3,
+   "total": 3,
+   "failures": []
+  },
+  "pthread_barrier_destroy": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "pthread_barrier_init": {
+   "pass": 3,
+   "total": 3,
+   "failures": []
+  },
+  "pthread_barrier_wait": {
+   "pass": 4,
+   "total": 4,
+   "failures": []
+  },
+  "pthread_barrierattr_destroy": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "pthread_barrierattr_getpshared": {
+   "pass": 1,
+   "total": 2,
+   "failures": [
+    {
+     "name": "pthread_barrierattr_getpshared_2-1",
+     "reason": "FAIL: Test Fail: block on pthread_barrier_wait()"
+    }
+   ]
+  },
+  "pthread_barrierattr_init": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "pthread_barrierattr_setpshared": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "pthread_cancel": {
+   "pass": 4,
+   "total": 9,
+   "failures": [
+    {
+     "name": "pthread_cancel_1-1",
+     "reason": "FAIL: Test FAILED: Cancel request timed out"
+    },
+    {
+     "name": "pthread_cancel_2-1",
+     "reason": "FAIL: Test FAILED: Timed out while waiting for cancelation cleanup handlers to execute"
+    },
+    {
+     "name": "pthread_cancel_2-2",
+     "reason": "FAIL: unexpected error: pthread_cancel 2-2: Test FAIL: Destructor was not executed."
+    },
+    {
+     "name": "pthread_cancel_2-3",
+     "reason": "FAIL: unexpected error: pthread_cancel 2-3: Test FAIL: Cleanup handler was not executed."
+    },
+    {
+     "name": "pthread_cancel_3-1",
+     "reason": "timeout: Error: cancel never arrived",
+     "timeout": true
+    }
+   ]
+  },
+  "pthread_cleanup_pop": {
+   "pass": 3,
+   "total": 3,
+   "failures": []
+  },
+  "pthread_cleanup_push": {
+   "pass": 2,
+   "total": 3,
+   "failures": [
+    {
+     "name": "pthread_cleanup_push_1-2",
+     "reason": "UNRESOLVED: Error: cancellation not correctly handled"
+    }
+   ]
+  },
+  "pthread_cond_broadcast": {
+   "pass": 4,
+   "total": 7,
+   "failures": [
+    {
+     "name": "pthread_cond_broadcast_1-2",
+     "reason": "timeout:  MF  : 200809",
+     "timeout": true
+    },
+    {
+     "name": "pthread_cond_broadcast_2-3",
+     "reason": "timeout: ",
+     "timeout": true
+    },
+    {
+     "name": "pthread_cond_broadcast_4-2",
+     "reason": "timeout: ",
+     "timeout": true
+    }
+   ]
+  },
+  "pthread_cond_destroy": {
+   "pass": 2,
+   "total": 3,
+   "failures": [
+    {
+     "name": "pthread_cond_destroy_2-1",
+     "reason": "timeout: ",
+     "timeout": true
+    }
+   ]
+  },
+  "pthread_cond_init": {
+   "pass": 5,
+   "total": 5,
+   "failures": []
+  },
+  "pthread_cond_signal": {
+   "pass": 4,
+   "total": 6,
+   "failures": [
+    {
+     "name": "pthread_cond_signal_1-2",
+     "reason": "timeout: ",
+     "timeout": true
+    },
+    {
+     "name": "pthread_cond_signal_4-2",
+     "reason": "timeout: ",
+     "timeout": true
+    }
+   ]
+  },
+  "pthread_cond_timedwait": {
+   "pass": 8,
+   "total": 12,
+   "failures": [
+    {
+     "name": "pthread_cond_timedwait_2-5",
+     "reason": "timeout: ",
+     "timeout": true
+    },
+    {
+     "name": "pthread_cond_timedwait_2-6",
+     "reason": "timeout: ",
+     "timeout": true
+    },
+    {
+     "name": "pthread_cond_timedwait_4-2",
+     "reason": "timeout:  MF  : 200809",
+     "timeout": true
+    },
+    {
+     "name": "pthread_cond_timedwait_4-3",
+     "reason": "timeout: ",
+     "timeout": true
+    }
+   ]
+  },
+  "pthread_cond_wait": {
+   "pass": 4,
+   "total": 6,
+   "failures": [
+    {
+     "name": "pthread_cond_wait_2-3",
+     "reason": "timeout: ",
+     "timeout": true
+    },
+    {
+     "name": "pthread_cond_wait_4-1",
+     "reason": "timeout: ",
+     "timeout": true
+    }
+   ]
+  },
+  "pthread_condattr_destroy": {
+   "pass": 4,
+   "total": 4,
+   "failures": []
+  },
+  "pthread_condattr_getclock": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "pthread_condattr_getpshared": {
+   "pass": 3,
+   "total": 3,
+   "failures": []
+  },
+  "pthread_condattr_init": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "pthread_condattr_setclock": {
+   "pass": 4,
+   "total": 4,
+   "failures": []
+  },
+  "pthread_condattr_setpshared": {
+   "pass": 3,
+   "total": 3,
+   "failures": []
+  },
+  "pthread_create": {
+   "pass": 11,
+   "total": 14,
+   "failures": [
+    {
+     "name": "pthread_create_1-3",
+     "reason": "timeout: Test FAILED: Alarm fired while waiting for cancelation",
+     "timeout": true
+    },
+    {
+     "name": "pthread_create_11-1",
+     "reason": "timeout: ",
+     "timeout": true
+    },
+    {
+     "name": "pthread_create_3-2",
+     "reason": "UNRESOLVED: )"
+    }
+   ]
+  },
+  "pthread_detach": {
+   "pass": 7,
+   "total": 7,
+   "failures": []
+  },
+  "pthread_equal": {
+   "pass": 2,
+   "total": 3,
+   "failures": [
+    {
+     "name": "pthread_equal_2-1",
+     "reason": "timeout: ",
+     "timeout": true
+    }
+   ]
+  },
+  "pthread_exit": {
+   "pass": 10,
+   "total": 10,
+   "failures": []
+  },
+  "pthread_getcpuclockid": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "pthread_getschedparam": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "pthread_getspecific": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "pthread_join": {
+   "pass": 4,
+   "total": 8,
+   "failures": [
+    {
+     "name": "pthread_join_1-2",
+     "reason": "UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/pthread_join/1-2.c unresolved: got 3 (No such process) on line 98 (Failed to create"
+    },
+    {
+     "name": "pthread_join_3-1",
+     "reason": "timeout: ",
+     "timeout": true
+    },
+    {
+     "name": "pthread_join_4-1",
+     "reason": "UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/pthread_join/4-1.c unresolved: got 3 (No such process) on line 114 (Failed to creat"
+    },
+    {
+     "name": "pthread_join_6-3",
+     "reason": "UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/pthread_join/6-3.c unresolved: got 3 (No such process) on line 142 (Failed to creat"
+    }
+   ]
+  },
+  "pthread_key_create": {
+   "pass": 4,
+   "total": 4,
+   "failures": []
+  },
+  "pthread_key_delete": {
+   "pass": 3,
+   "total": 3,
+   "failures": []
+  },
+  "pthread_kill": {
+   "pass": 3,
+   "total": 6,
+   "failures": [
+    {
+     "name": "pthread_kill_2-1",
+     "reason": "exit 139: "
+    },
+    {
+     "name": "pthread_kill_3-1",
+     "reason": "exit 139: "
+    },
+    {
+     "name": "pthread_kill_8-1",
+     "reason": "exit 139: "
+    }
+   ]
+  },
+  "pthread_mutex_destroy": {
+   "pass": 6,
+   "total": 6,
+   "failures": []
+  },
+  "pthread_mutex_getprioceiling": {
+   "pass": 3,
+   "total": 4,
+   "failures": [
+    {
+     "name": "pthread_mutex_getprioceiling_3-3",
+     "reason": "exit 134: The futex facility returned an unexpected error code."
+    }
+   ]
+  },
+  "pthread_mutex_init": {
+   "pass": 5,
+   "total": 7,
+   "failures": [
+    {
+     "name": "pthread_mutex_init_1-2",
+     "reason": "timeout: ",
+     "timeout": true
+    },
+    {
+     "name": "pthread_mutex_init_3-2",
+     "reason": "timeout: ",
+     "timeout": true
+    }
+   ]
+  },
+  "pthread_mutex_lock": {
+   "pass": 5,
+   "total": 5,
+   "failures": []
+  },
+  "pthread_mutex_setprioceiling": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "pthread_mutex_timedlock": {
+   "pass": 6,
+   "total": 6,
+   "failures": []
+  },
+  "pthread_mutex_trylock": {
+   "pass": 6,
+   "total": 7,
+   "failures": [
+    {
+     "name": "pthread_mutex_trylock_4-3",
+     "reason": "timeout: ",
+     "timeout": true
+    }
+   ]
+  },
+  "pthread_mutex_unlock": {
+   "pass": 5,
+   "total": 5,
+   "failures": []
+  },
+  "pthread_mutexattr_destroy": {
+   "pass": 4,
+   "total": 4,
+   "failures": []
+  },
+  "pthread_mutexattr_getprioceiling": {
+   "pass": 3,
+   "total": 3,
+   "failures": []
+  },
+  "pthread_mutexattr_getprotocol": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "pthread_mutexattr_getpshared": {
+   "pass": 4,
+   "total": 4,
+   "failures": []
+  },
+  "pthread_mutexattr_gettype": {
+   "pass": 5,
+   "total": 5,
+   "failures": []
+  },
+  "pthread_mutexattr_init": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "pthread_mutexattr_setprioceiling": {
+   "pass": 3,
+   "total": 3,
+   "failures": []
+  },
+  "pthread_mutexattr_setprotocol": {
+   "pass": 3,
+   "total": 3,
+   "failures": []
+  },
+  "pthread_mutexattr_setpshared": {
+   "pass": 6,
+   "total": 6,
+   "failures": []
+  },
+  "pthread_mutexattr_settype": {
+   "pass": 7,
+   "total": 7,
+   "failures": []
+  },
+  "pthread_once": {
+   "pass": 4,
+   "total": 6,
+   "failures": [
+    {
+     "name": "pthread_once_3-1",
+     "reason": "timeout: : Interrupted system call",
+     "timeout": true
+    },
+    {
+     "name": "pthread_once_6-1",
+     "reason": "timeout: ",
+     "timeout": true
+    }
+   ]
+  },
+  "pthread_rwlock_destroy": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "pthread_rwlock_init": {
+   "pass": 4,
+   "total": 4,
+   "failures": []
+  },
+  "pthread_rwlock_rdlock": {
+   "pass": 6,
+   "total": 6,
+   "failures": []
+  },
+  "pthread_rwlock_timedrdlock": {
+   "pass": 6,
+   "total": 6,
+   "failures": []
+  },
+  "pthread_rwlock_timedwrlock": {
+   "pass": 5,
+   "total": 6,
+   "failures": [
+    {
+     "name": "pthread_rwlock_timedwrlock_6-1",
+     "reason": "FAIL: Test FAILED: Timeout was for 5 seconds, but waited for 4.999750 seconds instead"
+    }
+   ]
+  },
+  "pthread_rwlock_tryrdlock": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "pthread_rwlock_trywrlock": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "pthread_rwlock_unlock": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "pthread_rwlock_wrlock": {
+   "pass": 3,
+   "total": 3,
+   "failures": []
+  },
+  "pthread_rwlockattr_destroy": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "pthread_rwlockattr_getpshared": {
+   "pass": 2,
+   "total": 3,
+   "failures": [
+    {
+     "name": "pthread_rwlockattr_getpshared_2-1",
+     "reason": "timeout: Test FAILED: Child expects EBUSY",
+     "timeout": true
+    }
+   ]
+  },
+  "pthread_rwlockattr_init": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "pthread_rwlockattr_setpshared": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "pthread_self": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "pthread_setcancelstate": {
+   "pass": 2,
+   "total": 4,
+   "failures": [
+    {
+     "name": "pthread_setcancelstate_1-1",
+     "reason": "FAIL: Test FAILED: Thread of cancel type PTHREAD_CANCEL_ENABLE did not honor cancel request"
+    },
+    {
+     "name": "pthread_setcancelstate_2-1",
+     "reason": "FAIL: Test FAILED: Thread default cancel type is not PTHREAD_CANCEL_ENABLE, it did not honor cancel request"
+    }
+   ]
+  },
+  "pthread_setcanceltype": {
+   "pass": 2,
+   "total": 3,
+   "failures": [
+    {
+     "name": "pthread_setcanceltype_1-1",
+     "reason": "FAIL: Test FAILED: Cancel request timed out"
+    }
+   ]
+  },
+  "pthread_setschedparam": {
+   "pass": 0,
+   "total": 1,
+   "failures": [
+    {
+     "name": "pthread_setschedparam_5-1",
+     "reason": "timeout: ",
+     "timeout": true
+    }
+   ]
+  },
+  "pthread_setspecific": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "pthread_sigmask": {
+   "pass": 13,
+   "total": 14,
+   "failures": [
+    {
+     "name": "pthread_sigmask_10-1",
+     "reason": "FAIL: Test FAILED"
+    }
+   ]
+  },
+  "pthread_spin_destroy": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "pthread_spin_init": {
+   "pass": 2,
+   "total": 4,
+   "failures": [
+    {
+     "name": "pthread_spin_init_2-1",
+     "reason": "timeout: ",
+     "timeout": true
+    },
+    {
+     "name": "pthread_spin_init_2-2",
+     "reason": "timeout: ",
+     "timeout": true
+    }
+   ]
+  },
+  "pthread_spin_lock": {
+   "pass": 2,
+   "total": 4,
+   "failures": [
+    {
+     "name": "pthread_spin_lock_1-1",
+     "reason": "timeout: ",
+     "timeout": true
+    },
+    {
+     "name": "pthread_spin_lock_3-1",
+     "reason": "exit 139: "
+    }
+   ]
+  },
+  "pthread_spin_trylock": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "pthread_spin_unlock": {
+   "pass": 3,
+   "total": 3,
+   "failures": []
+  },
+  "pthread_testcancel": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "raise": {
+   "pass": 7,
+   "total": 7,
+   "failures": []
+  },
+  "sched_get_priority_max": {
+   "pass": 4,
+   "total": 4,
+   "failures": []
+  },
+  "sched_get_priority_min": {
+   "pass": 4,
+   "total": 4,
+   "failures": []
+  },
+  "sched_getparam": {
+   "pass": 4,
+   "total": 4,
+   "failures": []
+  },
+  "sched_getscheduler": {
+   "pass": 4,
+   "total": 4,
+   "failures": []
+  },
+  "sched_setparam": {
+   "pass": 7,
+   "total": 8,
+   "failures": [
+    {
+     "name": "sched_setparam_26-1",
+     "reason": "FAIL: errno is not EPERM: Success"
+    }
+   ]
+  },
+  "sched_setscheduler": {
+   "pass": 8,
+   "total": 8,
+   "failures": []
+  },
+  "sched_yield": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "sem_close": {
+   "pass": 3,
+   "total": 4,
+   "failures": [
+    {
+     "name": "sem_close_3-2",
+     "reason": "FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/sem_close/3-2.c FAILED: The semaphore count has changed after sem_close"
+    }
+   ]
+  },
+  "sem_destroy": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "sem_getvalue": {
+   "pass": 5,
+   "total": 5,
+   "failures": []
+  },
+  "sem_init": {
+   "pass": 9,
+   "total": 9,
+   "failures": []
+  },
+  "sem_open": {
+   "pass": 11,
+   "total": 12,
+   "failures": [
+    {
+     "name": "sem_open_3-1",
+     "reason": "UNRESOLVED: unexpected error: sem_open 3-1: sem_open: No such file or directory"
+    }
+   ]
+  },
+  "sem_post": {
+   "pass": 6,
+   "total": 6,
+   "failures": []
+  },
+  "sem_timedwait": {
+   "pass": 11,
+   "total": 11,
+   "failures": []
+  },
+  "sem_unlink": {
+   "pass": 9,
+   "total": 9,
+   "failures": []
+  },
+  "sem_wait": {
+   "pass": 8,
+   "total": 8,
+   "failures": []
+  },
+  "shm_open": {
+   "pass": 18,
+   "total": 27,
+   "failures": [
+    {
+     "name": "shm_open_1-1",
+     "reason": "exit 139: "
+    },
+    {
+     "name": "shm_open_14-2",
+     "reason": "exit 139: "
+    },
+    {
+     "name": "shm_open_15-1",
+     "reason": "skipped: hangs tabcomputer",
+     "timeout": true
+    },
+    {
+     "name": "shm_open_23-1",
+     "reason": "timeout: ",
+     "timeout": true
+    },
+    {
+     "name": "shm_open_28-1",
+     "reason": "exit 139: "
+    },
+    {
+     "name": "shm_open_28-3",
+     "reason": "exit 139: "
+    },
+    {
+     "name": "shm_open_32-1",
+     "reason": "FAIL: shm_open success."
+    },
+    {
+     "name": "shm_open_34-1",
+     "reason": "FAIL: shm_open success."
+    },
+    {
+     "name": "shm_open_5-1",
+     "reason": "FAIL: Test FAILED"
+    }
+   ]
+  },
+  "shm_unlink": {
+   "pass": 7,
+   "total": 7,
+   "failures": []
+  },
+  "sigaction": {
+   "pass": 496,
+   "total": 500,
+   "failures": [
+    {
+     "name": "sigaction_10-1",
+     "reason": "timeout: ",
+     "timeout": true
+    },
+    {
+     "name": "sigaction_17-15",
+     "reason": "skipped: hangs tabcomputer",
+     "timeout": true
+    },
+    {
+     "name": "sigaction_21-1",
+     "reason": "FAIL: Test FAILED"
+    },
+    {
+     "name": "sigaction_29-1",
+     "reason": "exit 160: "
+    }
+   ]
+  },
+  "sigaddset": {
+   "pass": 5,
+   "total": 5,
+   "failures": []
+  },
+  "sigaltstack": {
+   "pass": 9,
+   "total": 11,
+   "failures": [
+    {
+     "name": "sigaltstack_11-1",
+     "reason": "FAIL: Test FAILED: Expected return value of -1."
+    },
+    {
+     "name": "sigaltstack_2-1",
+     "reason": "FAIL: Test FAILED: ss_sp of the handler's stack changed even though SS_DISABLE was set"
+    }
+   ]
+  },
+  "sigdelset": {
+   "pass": 5,
+   "total": 5,
+   "failures": []
+  },
+  "sigemptyset": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "sigfillset": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "sighold": {
+   "pass": 3,
+   "total": 3,
+   "failures": []
+  },
+  "sigignore": {
+   "pass": 5,
+   "total": 5,
+   "failures": []
+  },
+  "sigismember": {
+   "pass": 3,
+   "total": 3,
+   "failures": []
+  },
+  "signal": {
+   "pass": 6,
+   "total": 6,
+   "failures": []
+  },
+  "sigpause": {
+   "pass": 5,
+   "total": 5,
+   "failures": []
+  },
+  "sigpending": {
+   "pass": 4,
+   "total": 4,
+   "failures": []
+  },
+  "sigprocmask": {
+   "pass": 11,
+   "total": 12,
+   "failures": [
+    {
+     "name": "sigprocmask_10-1",
+     "reason": "FAIL: FAIL: SIGKILL was added to the signal mask"
+    }
+   ]
+  },
+  "sigqueue": {
+   "pass": 5,
+   "total": 13,
+   "failures": [
+    {
+     "name": "sigqueue_1-1",
+     "reason": "FAIL: Test FAILED"
+    },
+    {
+     "name": "sigqueue_12-1",
+     "reason": "FAIL: sigqueue() did not return -1"
+    },
+    {
+     "name": "sigqueue_3-1",
+     "reason": "FAIL: Test FAILED: sigqueue() succeeded even though this program's user id did not match the recieving process's user id"
+    },
+    {
+     "name": "sigqueue_4-1",
+     "reason": "exit 130: "
+    },
+    {
+     "name": "sigqueue_5-1",
+     "reason": "exit 130: "
+    },
+    {
+     "name": "sigqueue_6-1",
+     "reason": "exit 130: "
+    },
+    {
+     "name": "sigqueue_7-1",
+     "reason": "exit 160: "
+    },
+    {
+     "name": "sigqueue_8-1",
+     "reason": "exit 130: "
+    }
+   ]
+  },
+  "sigrelse": {
+   "pass": 3,
+   "total": 3,
+   "failures": []
+  },
+  "sigset": {
+   "pass": 10,
+   "total": 10,
+   "failures": []
+  },
+  "sigsuspend": {
+   "pass": 4,
+   "total": 4,
+   "failures": []
+  },
+  "sigtimedwait": {
+   "pass": 5,
+   "total": 5,
+   "failures": []
+  },
+  "sigwait": {
+   "pass": 6,
+   "total": 8,
+   "failures": [
+    {
+     "name": "sigwait_2-1",
+     "reason": "FAIL: Test FAILED"
+    },
+    {
+     "name": "sigwait_6-2",
+     "reason": "FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/sigwait/6-2.c FAILED: Unexpected number of threads awaken"
+    }
+   ]
+  },
+  "sigwaitinfo": {
+   "pass": 5,
+   "total": 8,
+   "failures": [
+    {
+     "name": "sigwaitinfo_3-1",
+     "reason": "FAIL: Test FAILED"
+    },
+    {
+     "name": "sigwaitinfo_7-1",
+     "reason": "FAIL: Test FAILED: The queued value 0 was dequeued before the queued value 5 even though 5 was queued first."
+    },
+    {
+     "name": "sigwaitinfo_8-1",
+     "reason": "timeout: ",
+     "timeout": true
+    }
+   ]
+  },
+  "speculative": {
+   "pass": 17,
+   "total": 17,
+   "failures": []
+  },
+  "strchr": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "strcpy": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "strftime": {
+   "pass": 3,
+   "total": 3,
+   "failures": []
+  },
+  "strlen": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "strncpy": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "time": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "timer_create": {
+   "pass": 8,
+   "total": 8,
+   "failures": []
+  },
+  "timer_delete": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "timer_getoverrun": {
+   "pass": 3,
+   "total": 4,
+   "failures": [
+    {
+     "name": "timer_getoverrun_2-3",
+     "reason": "FAIL: FAIL:  0 overruns sent; expected 499"
+    }
+   ]
+  },
+  "timer_gettime": {
+   "pass": 7,
+   "total": 7,
+   "failures": []
+  },
+  "timer_settime": {
+   "pass": 14,
+   "total": 14,
+   "failures": []
+  }
+ }
+}

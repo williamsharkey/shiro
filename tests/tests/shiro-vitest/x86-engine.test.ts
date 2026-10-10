@@ -118,6 +118,14 @@ const sse2dBin = join(out, 'sse2d');
 const haveSse2d = tryBuild('gcc', ['-static', '-O1', '-o', sse2dBin, 'sse2d.c']);
 const futexckptBin = join(out, 'futexckpt');
 const haveFutexckpt = tryBuild('gcc', ['-static', '-O1', '-o', futexckptBin, 'futexckpt.c']);
+const sysvsemBin = join(out, 'sysvsem');
+const haveSysvsem = 'SYS_semget' in Abi && tryBuild('gcc', ['-static', '-O1', '-o', sysvsemBin, 'sysvsem.c']);
+const sysvmsgBin = join(out, 'sysvmsg');
+const haveSysvmsg = 'SYS_msgget' in Abi && tryBuild('gcc', ['-static', '-O1', '-o', sysvmsgBin, 'sysvmsg.c']);
+const sigwaitBin = join(out, 'sigwait');
+const haveSigwait = 'SYS_rt_sigtimedwait' in Abi && tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', sigwaitBin, 'sigwait.c']);
+const futexrequeueBin = join(out, 'futexrequeue');
+const haveFutexrequeue = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', futexrequeueBin, 'futexrequeue.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -162,6 +170,22 @@ const ltpErrnosBin = join(out, 'ltp-errnos');
 // (the built engine, not the patch file: perf-blink folds the patches in and rebuilds; 0081 exports blink_shiro_conformance)
 const blinkHasLtpErrnos = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_conformance');
 const haveLtpErrnos = blinkHasLtpErrnos && tryBuild('gcc', ['-static', '-O1', '-w', '-o', ltpErrnosBin, 'ltp-errnos.c']);
+// Blink 0083: raise(SIGKILL) is the kernel's (the parent's wait returned never)
+const raiseKillBin = join(out, 'raise-kill');
+const blinkHasRaiseKill = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_raise_kill');
+const haveRaiseKill = blinkHasRaiseKill && tryBuild('gcc', ['-static', '-O1', '-w', '-o', raiseKillBin, 'raise-kill.c']);
+// Blink 0084: rt_sigqueueinfo is the kernel's (POSIX AIO's completion notice, sigqueue)
+const aioSigqueueBin = join(out, 'aio-sigqueue');
+const blinkHasSigqueue = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_sigqueue');
+const haveAioSigqueue = blinkHasSigqueue && tryBuild('gcc', ['-static', '-O1', '-w', '-o', aioSigqueueBin, 'aio-sigqueue.c', '-lrt', '-pthread']);
+// Blink 0086: POSIX message queues are the kernel's
+const mqueueBin = join(out, 'mqueue');
+const blinkHasMqueue = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_mqueue');
+const haveMqueue = blinkHasMqueue && tryBuild('gcc', ['-static', '-O1', '-w', '-o', mqueueBin, 'mqueue.c', '-lrt', '-pthread']);
+// Blink 0089: POSIX timers are the kernel's (0087 sigtimedwait); sched_* as Linux answers
+const timersBin = join(out, 'timers');
+const blinkHasTimers = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_timers');
+const haveTimers = blinkHasTimers && tryBuild('gcc', ['-static', '-O1', '-w', '-o', timersBin, 'timers.c', '-lrt']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -700,6 +724,34 @@ it.skipIf(!haveLtpErrnos)('errnos Linux gives; record locks, pipe sizes and RLIM
   expect(r.output.replace(/\r\n/g, '\n')).toContain('rlimit-bad 1 nofile 1024/1048576 writev-len 1 pipe-sz 1 read-ro 1 waitid-opts 1 clocks 1 uname26 1 1 pending 1 locks 3\n');
 }, 60_000);
 
+// Open POSIX sigaction_4-*: a child's raise(SIGKILL), plain or from a handler whose mask names SIGKILL
+it.skipIf(!haveRaiseKill)('raise(SIGKILL) ends the child and its parent\'s wait returns', async () => {
+  const { shell } = await setup(readFileSync(raiseKillBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('-1:11 0:11 1:11 \n');
+}, 60_000);
+
+// Open POSIX aio_*, sigqueue: an AIO write completes (not ENOSYS), sigqueue delivers, signal 0 probes
+it.skipIf(!haveAioSigqueue)('POSIX AIO completes and sigqueue delivers', async () => {
+  const { shell } = await setup(readFileSync(aioSigqueueBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('aio 0 9 sigqueue 0 1 probe 0\n');
+}, 60_000);
+
+// Open POSIX mq_*: priority order, a full queue, a receive blocked across processes, unlink
+it.skipIf(!haveMqueue)('POSIX message queues', async () => {
+  const { shell } = await setup(readFileSync(mqueueBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('full 1 first high/7 second low/1 blocked 1 unlink 1\n');
+}, 60_000);
+
+// Open POSIX timer_*, sigtimedwait, sched_* (as an unprivileged process)
+it.skipIf(!haveTimers)('POSIX timers signal into sigtimedwait; sched_* answers as Linux\'s', async () => {
+  const { shell } = await setup(readFileSync(timersBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('timer 1 overruns 1 timeout 1 sched 1 1 1 1\n');
+}, 60_000);
+
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
 // (busybox picks its applet by it; Debian's redis-server -> redis-check-rdb)
 describe('argv[0] through a symlink', () => {
@@ -972,6 +1024,36 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const r = await run(shell, './prog a 10; ./prog f 10');
     expect(r.output.replace(/\r\n/g, '\n')).toBe('anon: 0 of 10 rounds bad\nfile: 0 of 10 rounds bad\n');
   }, 120_000);
+
+  // Audacity's single-instance lock: System V semaphores (the kernel's, forwarded)
+  it.skipIf(!haveSysvsem)('System V semaphores: values, blocking semop, SEM_UNDO at exit, timeouts, IPC_RMID', async () => {
+    const { shell } = await setup(readFileSync(sysvsemBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe("semget ok\nsetval 0 getval 1\ngetall 1 0 nsems 2\nnowait while held -1 Resource temporarily unavailable\nblocking semop 0 after child exit 1\nsemtimedop -1 Resource temporarily unavailable waited 1\nrmid 0\nsemop after rmid -1 Invalid argument\n");
+  }, 60_000);
+
+  // System V message queues (the kernel's, forwarded)
+  it.skipIf(!haveSysvmsg)('System V message queues: typed receive, IPC_NOWAIT, a blocked receiver, IPC_RMID', async () => {
+    const { shell } = await setup(readFileSync(sysvmsgBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe("msgget ok\nsend 0 0\nqnum 2\nrcv type 2: 6 2 world\nrcv any: 6 1 hello\nrcv empty nowait: -1 No message of desired type\nchild got 5 7 late\nrmid 0\nsend after rmid -1 Invalid argument\n");
+  }, 60_000);
+
+  // LTP futex_cmp_requeue01-03: requeued waiters are found at the target at once
+  it.skipIf(!haveFutexrequeue)('FUTEX_CMP_REQUEUE and FUTEX_REQUEUE wake some waiters and move the rest', async () => {
+    const { shell } = await setup(readFileSync(futexrequeueBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'cmp mismatch -1 1\ncmp_requeue 5 woken 2\nleft on f1 1 woken 3\nrequeue 3 then wake 2 woken 6\n');
+  }, 60_000);
+
+  // VLC's main thread sigwaits for SIGINT/HUP/QUIT/TERM and quits when it returns
+  it.skipIf(!haveSigwait)('sigwait, sigwaitinfo and sigtimedwait: process and thread signals, timeout, poll', async () => {
+    const { shell } = await setup(readFileSync(sigwaitBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'sigwait 0 14 waited 1\npthread_kill 0 15\nsigwaitinfo 10 signo 10 code 0\ntimeout -1 EAGAIN 1\npoll -1 EAGAIN\n');
+  }, 60_000);
 
   // vim's typeahead check blocked for a key when two reads straddled a ms tick
   it.skipIf(!haveRealtime)('CLOCK_REALTIME and gettimeofday have sub-ms resolution', async () => {

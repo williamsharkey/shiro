@@ -17,13 +17,13 @@ Blink engine.
 | --- | --- | --- |
 | python3, venv | `pkg install python3` (CPython 3.13.7 WASI) | works |
 | pip | builtin (PyPI over fetch) / Debian `python3-pip` | works for pure-Python wheels / works with the TCP relay |
-| node, npm, npx | builtin | works (commander, mocha, tsc 5, prettier); `node` alone is the REPL on a terminal (`let`/`const` persist, `...` continuation lines, `await`, .help/.exit, ^C/^D as node) and reads its program from a pipe |
+| node, npm, npx | builtin | works (commander, mocha, tsc 5, prettier); `node` alone is the REPL on a terminal (`let`/`const` persist, `...` continuation lines, `await`, .help/.exit, ^C/^D as node) and reads its program from a pipe; on a terminal process.stdin reads the pty as the foreground job (cooked lines with echo and ^D, `setRawMode` sets its termios, ^C is SIGINT) |
 | pnpm 9 | `npm install pnpm` | works (add, store, symlinks, run, exec, bins) |
 | yarn 1 | `npm install yarn` | works (add, lockfile, run, bins, offline) |
 | ruby, gem, rake | `pkg install ruby` (ruby.wasm 3.4.1) | works (no sockets) |
 | perl | `pkg install perl` (x86-64 in Blink) | works |
 | lua | `pkg install lua` | works |
-| go | `pkg install go` (wasip1) / Debian `golang-go` | builds and runs / fails: link step (Blink `fallocate`, reported) |
+| go | `pkg install go` (wasip1) / Debian `golang-go` (`toolchain install go`) | builds and runs / builds and runs: std comes precompiled in the `go` layer |
 | clang, make, ninja, cmake | `pkg install llvm make ninja cmake` | works (zlib's own build, CMake → Ninja/Make, CTest) |
 | gcc, make (Debian) | `apt install build-essential` | works: hello.c with gcc and through make |
 | node (Debian) | `apt install nodejs` | works (Blink patch 0047), 22–26 s per script; `builtin node` runs tabcomputer's |
@@ -85,7 +85,8 @@ the page (`apt-get update` ≈2m20s first).
 | node: which wins | Debian's | — | in Debian mode a program file on PATH replaces the builtin of that name, so `node` is `/usr/bin/node` once nodejs is installed (22–26 s per script under emulation); `builtin node` still runs tabcomputer's (0.2 s) |
 | `node -e` / `node script.js` (Debian's node) | pass | 22–26s per run | crashed in Blink until patch 0047 (`pop m64` addressed relative to the old `rsp`, overwriting V8's CEntry return address); JS, `require`, `os` and fs work, slowly (emulated V8) |
 | `sudo apt-get install -y golang-go` | installs | 5m05s–10m40s | go1.24.4 linux/amd64 |
-| `go run hello.go` | **fail** (Blink) | 35m to the link step | the compile of `fmt` and its std dependencies under Blink finishes (into GOCACHE, kept for later runs), then cmd/link stops: "mapping output file failed: function not implemented" (Blink answers `fallocate` with ENOSYS; Go tolerates only EOPNOTSUPP; sent to perf-blink). tabcomputer's own `pkg install go` (wasip1 toolchain) builds and runs Go programs |
+| `go run hello.go` | pass | apt + cold cache: compiling `fmt` and its std dependencies takes ~35 min under Blink. With `toolchain install go` (std precompiled into GOCACHE): 42s first, 17s warm | the link step works since Blink 0052 (`fallocate` → EOPNOTSUPP). The layer sets `CGO_ENABLED=0` in `~/.config/go/env`: with cgo on, `go` found tabcomputer's WASM-only `cc` on PATH and `net` failed to build (docs/DEBIAN.md "Toolchain layers") |
+| net/http server + client over loopback | pass | `go build` + run 74s (bench median; compiles only `main`), `go run` 84s; the binary itself runs in 0.7s | an earlier `go run` hung: the shipped std cache was trimmed by the first `go` command (fixed: entries dated 2100), and while recompiling std, one of the parallel `compile` children stayed a zombie that `go` never reaped. Cause: Blink's vfork emulation runs the child on the parent's thread and takes Go's preemption SIGURG there, so parallel forks can wedge `go` (with perf-blink). The layer sets `GOFLAGS=-p=1` (one build job; Blink runs one guest thread anyway), which makes it rare |
 | `sudo apt-get install -y cargo` | installs | 9m35s | cargo 1.85.1, rustc 1.85.1 |
 | `cargo new hello_rs && cargo build && cargo run` | pass (after fix) | `new` 2.3s, `build` 54s, `run` 1.9s | failed at first: Rust's `std::process::Command` makes an AF_UNIX `SOCK_SEQPACKET` socketpair for every spawn, which the kernel refused (EOPNOTSUPP), so cargo couldn't start rustc nor rustc its linker |
 | `sudo apt-get install -y ruby` | installs | 2m43s | ruby 3.3.8 (`ruby` is `/usr/bin/ruby`) |
@@ -189,8 +190,20 @@ Shell and platform fixes these needed (all with tests in the same file):
   is loading rolldown), `serve open 5173` until the app renders 1.7–2.1 s, an
   edit to `src/App.jsx` shown by HMR (no reload) 0.1 s; 15 s in all. JS heap
   ≈245 MB with the dev server up, 260–300 MB with the preview (boot: 8 MB).
-  Six runs on 2026-10-10: five passed; one had `/@vite/client` answer 500
-  after vite cleared the screen (not yet explained). What it took:
+  `npm run build` (vite build, CSS minified by lightningcss) then 2–3.6 s.
+  Of 17 runs on 2026-10-10, 16 passed; the one failure (an early one) had
+  `/@vite/client` answer 500 after vite cleared the screen. It hasn't come
+  back in 15 runs since; the script now keeps the terminal's whole output
+  for a failure report (VERBOSE=1).
+  Memory (MEM=1: resident, Linux, Chromium's renderer process): 212 MB booted,
+  371 MB after `npm i`, 712 MB with the dev server up, 1061 MB after
+  `vite build` (its process loads vite, rolldown's workers and lightningcss
+  again). The JS heap is 250–310 MB of that; the rest is WebAssembly
+  (rolldown's 11 MB module compiled, its workers, esbuild-wasm's 64 MB Go
+  memory, lightningcss's 16 MB module) and ArrayBuffers (file contents).
+  Rolldown's shared memory used to start at 1 GB (16384 pages; the module
+  needs 1001): it starts at 64 MB now and grows (−23 MB resident, and no
+  1 GB commit on a phone). What it took:
   - Rolldown runs as its browser build. `npm install` puts `@rolldown/browser`
     where `rolldown` goes (same API and versions); a process that imports it
     gets it bundled from the VFS with the page's esbuild
@@ -219,10 +232,43 @@ Shell and platform fixes these needed (all with tests in the same file):
   - ES module export names that are strings (`export { x as "module.exports" }`),
     `x as default` among other exports, `url.pathToFileURL` of relative and
     `\0`-prefixed ids, `crypto.getRandomValues` in node:crypto.
-  Not yet: `vite build` stops at CSS minification (lightningcss is a native
-  addon; its WebAssembly build has an async init); node output into a pipe
-  or file comes when the process exits (only the terminal streams), so
-  `npm run dev > log &` shows nothing while it runs.
+  - lightningcss (vite's CSS minifier) is a native addon; npm installs
+    `lightningcss-wasm` (same API and versions) in its place, and it runs as
+    a browser package too: its node build compiles its 16 MB .wasm
+    synchronously, which Chromium refuses on a page's main thread over 8 MB,
+    so its browser build's async `init()` runs before the script starts.
+  - `npm install x` in a directory without package.json creates one (as
+    npm); `npm install` there is "up to date".
+- vite 7 (React template), the same script with VITE=7: `npm create vite@7`
+  2.1 s, `npm i` 5.1 s, `npm run dev` to ready 4.4 s, preview 1.6 s, HMR
+  0.1 s, `vite build` 3.7 s; renderer resident 671 MB with dev up, 788 MB
+  after the build. Its esbuild is esbuild-wasm, whose API runs
+  `node bin/esbuild --service` as a child and talks to it over stdin and
+  stdout while it lives. What that took:
+  - A node child spawned with piped stdio (`spawn(process.execPath, …)`)
+    runs with live pipes (live-stdin.ts): `child.stdin.write` reaches the
+    child as it is written, its `process.stdin` and `fs.read(0)` get the
+    bytes as they arrive, and its stdout/stderr reach the parent's 'data'
+    listeners as written, byte for byte (Go writes binary with
+    `fs.writeSync(1)`). An `unref()`'d child doesn't keep its parent alive,
+    and when the parent ends the child's stdin closes.
+  - node-compat's fs has fds 0-2: `fs.read(0)`/`readSync(0)` read stdin,
+    `fs.readFileSync(0)` and `'/dev/stdin'` too (piped input is loaded
+    before a script that reads it so runs), and `fs.writeSync(1|2)` writes
+    stdout/stderr (it wrote nothing).
+  - esbuild-wasm's bin compiles its 12 MB .wasm asynchronously (Chromium
+    refuses a synchronous compile over 8 MB on the main thread), and Go's
+    `go.exit` no longer throws out of its event loop as a page error
+    (source-patches.ts).
+  - Output into a pipe from in-page node streams where the shell gives a
+    live writer (`ctx.streamStdout`, a shell running as a kernel process)
+    and to a spawned child's pipes, not at exit.
+  - On the terminal, `\n` is `\r\n` in every write, escape sequences or
+    not (libuv keeps ONLCR in raw mode): output with colours or cursor moves
+    (clack's prompts in create-vite 7) stepped down the screen.
+  Not yet: node output into a pipe or file comes when the process exits
+  (only the terminal streams), so `npm run dev > log &` shows nothing while
+  it runs.
 - Node: a script's timers and intervals end with it. An interval left by a
   script that called `process.exit()` kept firing in the page, and its
   `setTimeout`s became the next script's timers, so that script never went

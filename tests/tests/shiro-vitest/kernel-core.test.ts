@@ -692,6 +692,41 @@ describe('kernel processes', () => {
     kernel.kill(parent.pid, A.SIGKILL);
   });
 
+  it('syscallSync answers mkdir, rename and rmdir of cached paths like the async path', async () => {
+    await fs.mkdir('/tmp/kpath', { recursive: true });
+    await fs.writeFile('/tmp/kpath/a', 'A');
+    await fs.writeFile('/tmp/kpath/b', 'B');
+    await fs.readdir('/tmp/kpath'); // loads the key and child index
+    const proc = kernel.spawn({ path: 'holder', cwd: '/tmp/kpath', run: () => new Promise<number>(() => {}) });
+    proc.umask = 0o022;
+    const data = new Uint8Array(4096);
+    const put = (s: string) => { const b = bytes(s); data.set(b); return b.length; };
+    const put2 = (x: string, y: string) => { const a = bytes(x), b = bytes(y); data.set(a); data.set(b, a.length); return [a.length, b.length]; };
+    expect(kernel.syscallSync(proc, A.SYS_mkdirat, [A.AT_FDCWD, put('d'), 0o777], data)).toBe(0);
+    expect((await fs.stat('/tmp/kpath/d')).mode & 0o777).toBe(0o755);
+    expect(kernel.syscallSync(proc, A.SYS_mkdirat, [A.AT_FDCWD, put('d'), 0o777], data)).toBe(-A.EEXIST);
+    expect(kernel.syscallSync(proc, A.SYS_mkdirat, [A.AT_FDCWD, put('no/x'), 0o777], data)).toBe(-A.ENOENT);
+    const ino = fs.inoOf('/tmp/kpath/a');
+    let [l1, l2] = put2('a', 'c');
+    expect(kernel.syscallSync(proc, A.SYS_renameat2, [A.AT_FDCWD, l1, A.AT_FDCWD, l2, 0], data)).toBe(0);
+    expect(await fs.readFile('/tmp/kpath/c', 'utf8')).toBe('A');
+    expect(await fs.exists('/tmp/kpath/a')).toBe(false);
+    expect(fs.inoOf('/tmp/kpath/c')).toBe(ino);
+    [l1, l2] = put2('b', 'c');
+    expect(kernel.syscallSync(proc, A.SYS_renameat2, [A.AT_FDCWD, l1, A.AT_FDCWD, l2, A.RENAME_NOREPLACE], data)).toBe(-A.EEXIST);
+    expect(kernel.syscallSync(proc, A.SYS_renameat2, [A.AT_FDCWD, l1, A.AT_FDCWD, l2, 0], data)).toBe(0); // replaces c
+    expect(await fs.readFile('/tmp/kpath/c', 'utf8')).toBe('B');
+    [l1, l2] = put2('c', 'd');
+    expect(kernel.syscallSync(proc, A.SYS_renameat2, [A.AT_FDCWD, l1, A.AT_FDCWD, l2, 0], data)).toBe(-A.EISDIR);
+    await fs.writeFile('/tmp/kpath/d/x', 'x');
+    expect(kernel.syscallSync(proc, A.SYS_unlinkat, [A.AT_FDCWD, put('d'), A.AT_REMOVEDIR], data)).toBe(-A.ENOTEMPTY);
+    expect(kernel.syscallSync(proc, A.SYS_unlinkat, [A.AT_FDCWD, put('d/x'), 0], data)).toBe(0);
+    expect(kernel.syscallSync(proc, A.SYS_unlinkat, [A.AT_FDCWD, put('d'), A.AT_REMOVEDIR], data)).toBe(0);
+    expect(await fs.exists('/tmp/kpath/d')).toBe(false);
+    expect(kernel.syscallSync(proc, A.SYS_unlinkat, [A.AT_FDCWD, put('c'), A.AT_REMOVEDIR], data)).toBe(-A.ENOTDIR);
+    kernel.kill(proc.pid, A.SIGKILL);
+  });
+
   it('syscallSync answers open/stat/close of cached files like the async path', async () => {
     await fs.mkdir('/tmp/ksync', { recursive: true });
     await fs.writeFile('/tmp/ksync/a.txt', 'hello');
@@ -717,13 +752,25 @@ describe('kernel processes', () => {
     expect(await kernel.syscall(proc, A.SYS_close, [bfd], data)).toBe(0);
     expect(kernel.syscallSync(proc, A.SYS_close, [fd], data)).toBe(0);
     expect(kernel.syscallSync(proc, A.SYS_close, [fd], data)).toBe(-A.EBADF);
-    // A file with unwritten data closes through the async path, which stores it
+    // A file with unwritten data is written back into the cached node and closes here too
     const w = (await kernel.open(proc, 'a.txt', A.O_WRONLY | A.O_APPEND)) as OpenFile;
     const wfd = proc.fds.alloc(w);
     await w.write(bytes(' world'));
-    expect(kernel.syscallSync(proc, A.SYS_close, [wfd], data)).toBeUndefined();
-    expect(await kernel.syscall(proc, A.SYS_close, [wfd], data)).toBe(0);
+    expect(kernel.syscallSync(proc, A.SYS_close, [wfd], data)).toBe(0);
     expect(await fs.readFile('/tmp/ksync/a.txt', 'utf8')).toBe('hello world');
+    await fs.sync();
+    const other = new (fs.constructor as typeof FileSystem)();
+    await other.init();
+    expect(await other.readFile('/tmp/ksync/a.txt', 'utf8')).toBe('hello world');
+    // with a backlog of uncommitted writes, it takes the async path (which waits for the commit)
+    const w2 = (await kernel.open(proc, 'a.txt', A.O_WRONLY | A.O_APPEND)) as OpenFile;
+    const wfd2 = proc.fds.alloc(w2);
+    await w2.write(bytes('!'));
+    Object.defineProperty(fs, 'pendingBytes', { get: () => 64 << 20, configurable: true });
+    try { expect(kernel.syscallSync(proc, A.SYS_close, [wfd2], data)).toBeUndefined(); }
+    finally { delete (fs as any).pendingBytes; }
+    expect(await kernel.syscall(proc, A.SYS_close, [wfd2], data)).toBe(0);
+    expect(await fs.readFile('/tmp/ksync/a.txt', 'utf8')).toBe('hello world!');
     kernel.kill(proc.pid, A.SIGKILL);
   });
 

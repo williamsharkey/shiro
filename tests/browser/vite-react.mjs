@@ -19,6 +19,8 @@ const shots = opt('--shots');
 const url = args[0] || 'http://localhost:5299/';
 const exe = process.env.CHROMIUM || '/opt/pw-browsers/chromium';
 const LIMIT = Number(process.env.STEP_LIMIT_MS || 600_000);
+// VITE=7 for vite 7's template (esbuild and Rollup as their WebAssembly builds)
+const VITE = process.env.VITE || 'latest';
 if (shots) mkdirSync(shots, { recursive: true });
 
 const bufferOf = (page) => page.evaluate(() => {
@@ -76,6 +78,20 @@ async function preview(page) {
   throw new Error('no preview of :5173');
 }
 
+/** With MEM=1: resident memory of the browser's processes (Linux), by process type */
+async function rss(when) {
+  if (!process.env.MEM) return;
+  const { execSync } = await import('node:child_process');
+  const by = {};
+  for (const line of execSync('ps -eo rss=,args=').toString().split('\n')) {
+    const m = /^\s*(\d+)\s+(\S*chrom\S*)(.*)$/.exec(line);
+    if (!m) continue;
+    const type = /--type=(\S+)/.exec(m[3])?.[1] ?? 'browser';
+    by[type] = (by[type] ?? 0) + Number(m[1]) / 1024;
+  }
+  console.log(`  RSS, ${when}:`, Object.entries(by).map(([k, v]) => `${k} ${Math.round(v)} MB`).join(', '));
+}
+
 const proxy = process.env.HTTPS_PROXY ? process.env.HTTPS_PROXY.replace(/^\w+:\/\//, '').replace(/\/$/, '') : '';
 const browser = await chromium.launch({ executablePath: exe, args: ['--no-sandbox', '--enable-precise-memory-info', ...(proxy ? [`--proxy-server=${proxy}`] : [])] });
 const context = await browser.newContext({ viewport: { width: 1400, height: 900 }, ignoreHTTPSErrors: !!proxy });
@@ -94,6 +110,7 @@ try {
   await page.waitForFunction(() => window.__tabcomputer?.terminal?.term && window.__tabcomputer?.kernel, null, { timeout: 90_000 });
   for (let i = 0; i < 300 && !/\$ ?$/m.test(await bufferOf(page)); i++) await page.waitForTimeout(100);
   await record(page, 'boot to prompt', t0);
+  await rss('booted');
   // Everything written to the terminal (vite clears the screen), for a failure report
   await page.evaluate(() => {
     const t = window.__tabcomputer.terminal.term, w = t.write.bind(t);
@@ -102,30 +119,46 @@ try {
   });
   await page.evaluate(() => window.__tabcomputer.terminal.term.focus());
 
-  await step(page, 'npm create vite@latest app -- --template react --no-interactive');
+  await step(page, `npm create vite@${VITE} app -- --template react --no-interactive`);
   await step(page, 'cd app && npm i');
+  await rss('installed');
 
   t0 = Date.now();
   const from = (await bufferOf(page)).length;
   await page.keyboard.type('npm run dev\r', { delay: 2 });
   await waitBuffer(page, /ready in \d+ ms|Local:\s+http/, from, 'vite ready');
   await record(page, 'npm run dev → ready', t0);
+  await rss('dev up');
+  if (process.env.HEAPSNAP) {
+    // A heap snapshot with the dev server up (where the memory goes)
+    const cdp = await page.context().newCDPSession(page);
+    const chunks = [];
+    cdp.on('HeapProfiler.addHeapSnapshotChunk', (e) => chunks.push(e.chunk));
+    await cdp.send('HeapProfiler.takeHeapSnapshot', { reportProgress: false });
+    (await import('node:fs')).writeFileSync(process.env.HEAPSNAP, chunks.join(''));
+  }
 
   t0 = Date.now();
   const opened = await side(page, 'serve open 5173');
   if (opened.code !== 0) throw new Error(`serve open 5173: ${opened.out}`);
   let frame = await preview(page);
-  await frame.waitForFunction(() => /Count is \d/.test(document.body?.innerText ?? ''), null, { timeout: LIMIT });
+  await frame.waitForFunction(() => /count is \d/i.test(document.body?.innerText ?? ''), null, { timeout: LIMIT });
   frame = await preview(page);
   await record(page, 'preview renders the app', t0);
   await frame.evaluate(() => { window.__notReloaded = true; });
 
   // The edit, from a shell of its own (the terminal's is running vite)
   t0 = Date.now();
-  await side(page, "sed -i 's|Get started|Edited by HMR|' ~/app/src/App.jsx");
+  await side(page, "sed -i 's|<h1>[^<]*</h1>|<h1>Edited by HMR</h1>|' ~/app/src/App.jsx");
   await frame.waitForFunction(() => /Edited by HMR/.test(document.body?.innerText ?? ''), null, { timeout: 60_000 });
   if (!await frame.evaluate(() => window.__notReloaded === true)) throw new Error('the preview reloaded instead of hot-updating');
   await record(page, 'edit App.jsx → HMR update', t0);
+
+  t0 = Date.now();
+  const built = await side(page, 'cd ~/app && npm run build && ls dist/assets');
+  if (built.code !== 0 || !/\.css\b/.test(built.out) || !/\.js\b/.test(built.out)) throw new Error(`npm run build: ${built.out.slice(-1500)}`);
+  await record(page, 'npm run build (vite build)', t0);
+  await rss('after build');
   if (errors.length) throw new Error(`page errors: ${errors.join('; ')}`);
 } catch (e) {
   failed = true;
@@ -143,6 +176,6 @@ try {
   }
 }
 if (shots) await page.screenshot({ path: `${shots}/vite-react.png` }).catch(() => {});
-console.log(`${failed ? 'FAIL' : 'ok  '} vite react template  ${((Date.now() - T) / 1000).toFixed(0)} s`);
+console.log(`${failed ? 'FAIL' : 'ok  '} vite@${VITE} react template  ${((Date.now() - T) / 1000).toFixed(0)} s`);
 await browser.close();
 process.exit(failed ? 1 : 0);

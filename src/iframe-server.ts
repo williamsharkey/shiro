@@ -52,6 +52,16 @@ class IframeServerManager {
   private servers: Map<number, RegisteredServer> = new Map();
   private defaultContainer: HTMLElement | null = null;
   private resourceProxySetup = false;
+  private portListeners = new Set<(port: number, up: boolean) => void>();
+
+  /** Called when a server starts (up) or stops on a port; returns an unsubscribe */
+  onPortChange(cb: (port: number, up: boolean) => void): () => void {
+    this.portListeners.add(cb);
+    return () => { this.portListeners.delete(cb); };
+  }
+  private emitPort(port: number, up: boolean): void {
+    for (const cb of this.portListeners) { try { cb(port, up); } catch {} }
+  }
 
   /**
    * Set the default container where iframes will be spawned
@@ -70,6 +80,7 @@ class IframeServerManager {
 
     this.servers.set(port, { port, handler, name, connect: opts?.connect });
     console.log(`[IframeServer] Server "${name || 'unnamed'}" listening on port ${port}`);
+    this.emitPort(port, true);
 
     // Return cleanup function
     return () => this.close(port);
@@ -670,6 +681,7 @@ class IframeServerManager {
 
       this.servers.delete(port);
       console.log(`[IframeServer] Server on port ${port} closed`);
+      this.emitPort(port, false);
     }
   }
 

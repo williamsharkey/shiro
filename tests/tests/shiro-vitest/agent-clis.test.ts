@@ -274,3 +274,11 @@ describe('claude install --native', () => {
     expect(ctx.stderr).toContain('TCP relay');
   });
 });
+
+describe("a process's globalThis", () => {
+  it('takes a new non-configurable global (undici defines its global dispatcher so; Gemini CLI threw)', async () => {
+    const { shell } = await createTestShell();
+    const r = await run(shell, `node -e "const s = Symbol.for('undici.globalDispatcher.1'); Object.defineProperty(globalThis, s, { value: 7, writable: true, enumerable: false, configurable: false }); console.log(globalThis[s], Object.getOwnPropertyDescriptor(globalThis, s).configurable)"`);
+    expect(r.output).toContain('7 false');
+  });
+});

@@ -1,0 +1,74 @@
+From be1de5e8d57c43b4c070d541abc34efd0a6e9f6e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 04:01:55 +0000
+Subject: [PATCH] Shiro: fork shares a page of its own in place and keeps PTE
+ lock counts
+
+---
+ blink/shiro.inc | 29 +++++++++++++++++------------
+ 1 file changed, 17 insertions(+), 12 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 8bccd08..d93f286 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2125,7 +2125,7 @@ static void ShiroRestoreFrom(struct Machine *m, const u8 *p, size_t len) {
+         u8 *slot;
+         memcpy(&e, p, 8);
+         unassert((slot = ShiroPteSlot(s, r.virt + k * 4096)));
+-        StorePte(slot, e);
++        StorePte(slot, e & ~PAGE_LOCKS);  // the parent's threads' locks aren't ours
+         s->memstat.reserved -= 1;
+         s->memstat.committed += 1;
+         s->rss += 1;
+@@ -2332,8 +2332,12 @@ bool ShiroParentExitWithKids(struct Machine *m, int rc) {
+   pthread_exit(0);
+ }
+ 
+-// Moves the pages of [virt, virt+size) onto host pages of their own, marked
+-// shared, so a child can map the same ones.
++// Marks the pages of [virt, virt+size) shared, so a child can map the same
++// ones. A page of its own is shared where it is: another thread may hold it
++// locked (a futex waiter, a read() filling it), and it neither moves nor
++// is freed under them. Pages of a host block or mug, and reserved ones, go
++// onto pages of their own first. The PTE is swapped keeping its lock count
++// (a lock released after a plain store failed `entry & PAGE_LOCKS`).
+ static void ShiroShareRange(struct System *s, i64 virt, i64 size) {
+   i64 v;
+   u64 e, n;
+@@ -2342,6 +2346,11 @@ static void ShiroShareRange(struct System *s, i64 virt, i64 size) {
+     if (!(slot = ShiroPteSlot(s, v))) continue;
+     e = LoadPte(slot);
+     if (!(e & PAGE_V) || (e & PAGE_GROW) || !(e & PAGE_U)) continue;
++    if ((e & (PAGE_HOST | PAGE_MAP | PAGE_MUG | PAGE_RSRV)) == PAGE_HOST) {
++      while (!CasPte(slot, e, e | PAGE_GROW)) e = LoadPte(slot);
++      ShareHostPage(FindHostPage(e));
++      continue;
++    }
+     if ((n = AllocateAnonymousPage(s)) == (u64)-1) continue;
+     np = FindHostPage(n);
+     if (e & PAGE_RSRV) {
+@@ -2350,15 +2359,11 @@ static void ShiroShareRange(struct System *s, i64 virt, i64 size) {
+       s->memstat.committed += 1;
+     } else {
+       memcpy(np, GetPageAddress(s, e, false), 4096);
+-      if ((e & (PAGE_HOST | PAGE_MAP | PAGE_MUG)) == PAGE_HOST) {
+-        u8 *old = FindHostPage(e);
+-        memset(old, 0, 4096);
+-        FreeAnonymousPage(s, old);
+-        s->rss -= 1;
+-      }  // (pages of a host block or mug stay with their block)
+-    }
+-    StorePte(slot, (n & (PAGE_TA | PAGE_HOST)) | (e & (PAGE_U | PAGE_RW | PAGE_XD)) |
+-                       PAGE_V | PAGE_GROW);
++    }  // (pages of a host block or mug stay with their block)
++    do {
++      e = LoadPte(slot);
++    } while (!CasPte(slot, e, (n & (PAGE_TA | PAGE_HOST)) | (e & (PAGE_U | PAGE_RW | PAGE_XD | PAGE_LOCKS)) |
++                                  PAGE_V | PAGE_GROW));
+     ShareHostPage(np);
+   }
+ }
+-- 
+2.43.0
+

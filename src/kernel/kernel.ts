@@ -30,9 +30,11 @@ import { Process } from './process';
 import { SysvShm } from './sysvshm';
 import { SysvSem } from './sysvsem';
 import { SysvMsg } from './sysvmsg';
+import { MessageQueues, MqFile } from './mqueue';
+import { PosixTimers } from './posixtimers';
 import { SharedObjects, isShareablePath, type ShmObjMessage } from './shmobj';
 import { EpollFile, waitReady } from './epoll';
-import { SignalFile, notifySignalPending } from './signalfd';
+import { SignalFile, notifySignalPending, pendingSignalListeners } from './signalfd';
 import { EventFile, MemFile, TimerFile } from './fd';
 import { activeProfile, unameRelease, UNAME_VERSION } from '../profile';
 import { memoryInfo } from '../utils/sysinfo';
@@ -195,6 +197,10 @@ export class Kernel {
   readonly sem = new SysvSem();
   /** SysV message queues (msgget, msgsnd, msgrcv, msgctl) */
   readonly msg = new SysvMsg();
+  /** POSIX message queues (mq_open, mq_timedsend, ...) */
+  readonly mq = new MessageQueues((pid, sig, info) => { const p = this.procs.get(pid); if (p) this.deliver(p, sig, info); });
+  /** POSIX timers (timer_create, timer_settime, ...) */
+  readonly timers = new PosixTimers((proc, sig, info) => this.deliver(proc, sig, info), bootMs);
   /** Engine instances (a Blink worker each) and how to post to them: shared objects' messages */
   private engineInstances = new Map<number, (msg: ShmObjMessage) => void>();
   private nextEngineInstance = 1;
@@ -729,24 +735,33 @@ export class Kernel {
     targets = targets.filter(p => p.state !== 'zombie' || pid > 0);
     if (targets.length === 0) return -A.ESRCH;
     if (sig === 0) return 0;
-    for (const p of targets) this.deliver(p, sig);
+    for (const p of targets) this.deliver(p, sig, { signo: sig, code: A.SI_USER, pid: sender.pid, uid: sender.uid });
     return 0;
   }
 
   /** Deliver one signal: the signal hook (signals.ts) first, then the disposition, then the default action. */
-  deliver(proc: Process, sig: number): void {
+  deliver(proc: Process, sig: number, info: A.SigInfo = { signo: sig, code: A.SI_KERNEL }): void {
     if (proc.state === 'zombie' || proc.exiting || proc.pid === 1) return;
     if (sig === A.SIGKILL) { void this.exit(proc, A.W_TERMSIG(A.SIGKILL)); return; }
     if (sig === A.SIGSTOP) { proc.markStopped(sig); this.notify(); return; }
     if (sig === A.SIGCONT) { proc.markContinued(); this.notify(); }
-    if (proc.signalHook?.(proc, sig)) return;
+    if (proc.signalHook) {
+      // (job control routes it: signals.ts queues what it carries when it goes pending)
+      proc.data.sigInFlight = info;
+      try { if (proc.signalHook(proc, sig)) return; } finally { delete proc.data.sigInFlight; }
+    }
     const disp = proc.dispositions.get(sig) ?? 'default';
     // A blocked signal stays pending even when ignored (signalfd reads it; setSigmask drops it if still ignored)
-    if (proc.sigmask.has(sig)) { proc.deferredSignals.add(sig); notifySignalPending(proc); return; }
+    if (proc.sigmask.has(sig)) {
+      // (a standard signal already pending coalesces; a real-time one queues)
+      if (proc.queueSiginfo(info) || !proc.deferredSignals.has(sig)) { proc.deferredSignals.add(sig); notifySignalPending(proc); }
+      return;
+    }
     if (disp === 'ignore') return;
     if (disp === 'default' && A.defaultSignalAction(sig) === 'ignore') return;
     if (typeof disp === 'number') {
       // A guest handler: flag it for the guest and interrupt blocking syscalls (EINTR)
+      if (!proc.queueSiginfo(info) && proc.pendingSignals.has(sig)) return;
       proc.pendingSignals.add(sig);
       proc.interruptSyscalls();
       (proc.data.onSignal as ((s: number) => void) | undefined)?.(sig);
@@ -768,7 +783,7 @@ export class Kernel {
   takeSignal(proc: Process): number {
     const sig = [...proc.pendingSignals].filter(s => !proc.sigmask.has(s)).sort((a, b) => a - b)[0];
     if (sig === undefined) return 0;
-    proc.pendingSignals.delete(sig);
+    proc.takeSiginfo(sig, proc.pendingSignals);
     const act = proc.sigactions.get(sig);
     proc.signalFrames.push(new Set(proc.sigmask));
     for (const s of act?.mask ?? []) if (s !== A.SIGKILL && s !== A.SIGSTOP) proc.sigmask.add(s);
@@ -798,7 +813,12 @@ export class Kernel {
     mask.delete(A.SIGSTOP);
     proc.sigmask = mask;
     for (const s of [...proc.deferredSignals]) {
-      if (!mask.has(s)) { proc.deferredSignals.delete(s); this.deliver(proc, s); }
+      if (mask.has(s)) continue;
+      // every queued instance, with what it carries
+      const q = proc.siginfo.get(s) ?? [{ signo: s, code: A.SI_KERNEL }];
+      proc.siginfo.delete(s);
+      proc.deferredSignals.delete(s);
+      for (const info of q) this.deliver(proc, s, info);
     }
     if ([...proc.pendingSignals].some(s => !mask.has(s))) (proc.data.onSignal as ((s: number) => void) | undefined)?.(0);
   }
@@ -1052,6 +1072,85 @@ export class Kernel {
     if (!fs.unlinkCachedSync(hit.path)) return undefined;
     forgetInodeNumber(fs, hit.path);
     return 0;
+  }
+
+  /**
+   * The canonical path for a new entry `p` (resolved, absent) from the
+   * cached parent: the path, -ENOENT/-ENOTDIR, or undefined when the parent
+   * isn't in memory.
+   */
+  private childPathSync(p: string): string | number | undefined {
+    const slash = p.lastIndexOf('/');
+    const parent = this.fs!.lookupCached(slash <= 0 ? '/' : p.slice(0, slash));
+    if (parent === undefined) return undefined;
+    if (parent === null) return -A.ENOENT;
+    if (parent.node.type !== 'dir') return -A.ENOTDIR;
+    return (parent.path === '/' ? '' : parent.path) + p.slice(slash);
+  }
+
+  /**
+   * rmdir, mkdir and rename from memory (node in a Worker makes these back
+   * to back): the result, or undefined for the async path (uncached, open,
+   * a symlink or directory rename would move, sockets, FIFOs).
+   */
+  private pathOpSync(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): number | undefined {
+    const fs = this.fs;
+    if (!fs) return undefined;
+    const at = (dirfd: number, off: number, len: number): string | number | undefined => {
+      if (len <= 0 || off < 0 || off + len > data.length) return undefined;
+      const s = A.decodeText(data.subarray(off, off + len));
+      if (trailingSlash(s)) return undefined;
+      const p = this.resolvePath(proc, s, dirfd);
+      if (typeof p === 'string' && (this.devices.has(p) || /^\/(?:dev|proc)(?:\/|$)/.test(p) || this.socketPaths?.has(p) || this.fifos.has(p))) return undefined;
+      return p;
+    };
+    switch (nr) {
+      case A.SYS_rmdir: case A.SYS_unlinkat: {
+        const [dirfd, len] = nr === A.SYS_rmdir ? [A.AT_FDCWD, args[0]] : [args[0], args[1]];
+        const p = at(dirfd, 0, len);
+        if (typeof p !== 'string') return p;
+        const own = fs.lookupCached(p, false);
+        if (!own) return undefined; // missing: the async path tells ENOENT from ENOTDIR
+        if (own.node.type !== 'dir') return -A.ENOTDIR;
+        const r = fs.rmdirNow(own.path);
+        return r === undefined ? undefined : r ? 0 : -A.ENOTEMPTY;
+      }
+      case A.SYS_mkdir: case A.SYS_mkdirat: {
+        const [dirfd, len, mode] = nr === A.SYS_mkdir ? [A.AT_FDCWD, args[0], args[1]] : [args[0], args[1], args[2]];
+        const p = at(dirfd, 0, len);
+        if (typeof p !== 'string') return p;
+        const own = fs.lookupCached(p, false);
+        if (own === undefined) return undefined;
+        if (own) return -A.EEXIST;
+        const real = this.childPathSync(p);
+        if (typeof real !== 'string') return real;
+        return fs.createDirNow(real, mode & ~proc.umask) ? 0 : undefined;
+      }
+      case A.SYS_rename: case A.SYS_renameat: case A.SYS_renameat2: {
+        const [od, ol, nd, nl, flags] = nr === A.SYS_rename
+          ? [A.AT_FDCWD, args[0], A.AT_FDCWD, args[1], 0]
+          : [args[0], args[1], args[2], args[3], nr === A.SYS_renameat2 ? args[4] : 0];
+        if (flags & ~A.RENAME_NOREPLACE) return undefined;
+        const from = at(od, 0, ol), to = at(nd, ol, nl);
+        if (typeof from !== 'string') return from;
+        if (typeof to !== 'string') return to;
+        const src = fs.lookupCached(from, false);
+        const dst = fs.lookupCached(to, false);
+        if (!src || dst === undefined || src.node.type === 'dir' || src.node.special) return undefined;
+        if (from === to || src.path === dst?.path) return 0;
+        if (dst) {
+          if (flags & A.RENAME_NOREPLACE) return -A.EEXIST;
+          if (dst.node.type === 'dir') return -A.EISDIR;
+        }
+        const real = dst ? dst.path : this.childPathSync(to);
+        if (typeof real !== 'string') return real;
+        if (isInodeOpen(fs, src.path) || isInodeOpen(fs, real) || !fs.renameNow(src.path, real)) return undefined;
+        forgetInodeNumber(fs, real);
+        renameLinkName(src.path, real);
+        return 0;
+      }
+    }
+    return undefined;
   }
 
   /** statPath from memory, encoded into `data`: 0, -errno, or undefined (use statPath). */
@@ -1443,9 +1542,14 @@ export class Kernel {
       case A.SYS_unlink:
       case A.SYS_unlinkat: {
         const [dirfd, len, flg] = nr === A.SYS_unlink ? [A.AT_FDCWD, args[0], 0] : [args[0], args[1], args[2]];
-        if (flg !== 0 || len <= 0 || len > data.length) return undefined; // AT_REMOVEDIR, bad flags: the async path
+        if (flg === A.AT_REMOVEDIR) return this.pathOpSync(proc, nr, args, data);
+        if (flg !== 0 || len <= 0 || len > data.length) return undefined; // bad flags: the async path
         return this.unlinkSync(proc, A.decodeText(data.subarray(0, len)), dirfd);
       }
+      case A.SYS_rmdir:
+      case A.SYS_mkdir: case A.SYS_mkdirat:
+      case A.SYS_rename: case A.SYS_renameat: case A.SYS_renameat2:
+        return this.pathOpSync(proc, nr, args, data);
       case A.SYS_stat:
       case A.SYS_lstat: {
         if (args[0] < 0 || args[0] > data.length) return undefined;
@@ -1725,6 +1829,69 @@ export class Kernel {
           return await this.sem.semop(proc, args[0], args[1], data, args[3] * 1000 + Math.floor(args[4] / 1e6), sig);
         }
         case A.SYS_semctl: return this.sem.semctl(proc, args[0], args[1], args[2], args[3], data);
+        case A.SYS_shiro_siginfo: { // signo → the siginfo of the one of that number last taken (a handler's, sigwait's)
+          const info = proc.lastSiginfo.get(args[0]);
+          if (!info) return -A.ENOENT;
+          A.encodeSiginfo(info, data);
+          return 0;
+        }
+        case A.SYS_rt_sigqueueinfo:
+        case A.SYS_rt_tgsigqueueinfo: { // (pid, sig) / (tgid, tid, sig); data = struct siginfo
+          const pid = args[0] | 0, signo = nr === A.SYS_rt_sigqueueinfo ? args[1] : args[2];
+          if (signo < 0 || signo > 64) return -A.EINVAL;
+          const info = A.decodeSiginfo(data);
+          const target = this.procs.get(pid);
+          if (!target || (target.state === 'zombie' && signo !== 0)) return -A.ESRCH;
+          // only the kernel may claim SI_USER, SI_TKILL or a kernel code for another process's signal
+          if ((info.code >= 0 || info.code === A.SI_TKILL) && target !== proc) return -A.EPERM;
+          if (proc.uid !== 0 && target.uid !== proc.uid && target.ruid !== proc.uid && proc.ruid !== target.uid) return -A.EPERM;
+          if (signo === 0) return 0;
+          this.deliver(target, signo, { signo, code: info.code, pid: info.pid, uid: info.uid, value: info.value });
+          return 0;
+        }
+        case A.SYS_timer_create:
+          return this.timers.create(proc, args[0] | 0, args[1] ? new DataView(data.buffer, data.byteOffset, 24) : null);
+        case A.SYS_timer_settime:
+          return this.timers.settime(proc, args[0] | 0, args[1], new DataView(data.buffer, data.byteOffset, 32));
+        case A.SYS_timer_gettime:
+          return this.timers.gettime(proc, args[0] | 0, new DataView(data.buffer, data.byteOffset, 32));
+        case A.SYS_timer_getoverrun: return this.timers.getoverrun(proc, args[0] | 0);
+        case A.SYS_timer_delete: return this.timers.delete(proc, args[0] | 0);
+        case A.SYS_mq_open: {
+          const name = str(0, args[0]);
+          const attr = args[3] ? new DataView(data.buffer, data.byteOffset + args[0], 32) : null;
+          const f = this.mq.open(proc, name, args[1], args[2], attr);
+          return typeof f === 'number' ? f : fds.alloc(f, 0, (args[1] & A.O_CLOEXEC) !== 0);
+        }
+        case A.SYS_mq_unlink: return this.mq.unlink(proc, str(0, args[0]));
+        case A.SYS_mq_timedsend: {
+          const f = file(args[0]);
+          if (!(f instanceof MqFile)) return -A.EBADF;
+          const len = args[1] >>> 0;
+          const ts = args[3] ? new DataView(data.buffer, data.byteOffset + len, 16) : null;
+          return await this.mq.send(proc, f, data.subarray(0, len), args[2] >>> 0, ts, sig);
+        }
+        case A.SYS_mq_timedreceive: {
+          const f = file(args[0]);
+          if (!(f instanceof MqFile)) return -A.EBADF;
+          const len = args[1] >>> 0;
+          const ts = args[2] ? new DataView(data.buffer.slice(data.byteOffset, data.byteOffset + 16)) : null;
+          const r = await this.mq.receive(f, data.subarray(8, 8 + len), ts, sig);
+          if (typeof r === 'number') return r;
+          new DataView(data.buffer, data.byteOffset, 8).setUint32(0, r.prio, true);
+          return r.n;
+        }
+        case A.SYS_mq_notify: {
+          const f = file(args[0]);
+          if (!(f instanceof MqFile)) return -A.EBADF;
+          return this.mq.notify(proc, f, args[1] ? new DataView(data.buffer, data.byteOffset, 16) : null);
+        }
+        case A.SYS_mq_getsetattr: {
+          const f = file(args[0]);
+          if (!(f instanceof MqFile)) return -A.EBADF;
+          const next = args[1] ? new DataView(data.buffer.slice(data.byteOffset, data.byteOffset + 32)) : null;
+          return this.mq.getsetattr(f, next, new DataView(data.buffer, data.byteOffset, 32));
+        }
         case A.SYS_msgget: return this.msg.msgget(proc, args[0], args[1]);
         case A.SYS_msgsnd: return await this.msg.msgsnd(proc, args[0], args[1], args[2], data, sig);
         case A.SYS_msgrcv: return await this.msg.msgrcv(proc, args[0], args[1], i64(args[2], args[3]), args[4], data, sig);
@@ -1951,6 +2118,34 @@ export class Kernel {
           dv.setUint32(0, lo, true);
           dv.setUint32(4, hi, true);
           return 0;
+        }
+        case A.SYS_rt_sigtimedwait: {
+          // args: timeout ms (-1: none); data: the set in, siginfo out. Takes the
+          // lowest pending blocked signal in the set without running a handler
+          // (sigwait, sigwaitinfo, sigtimedwait); EAGAIN at the timeout, EINTR
+          // when a signal the caller lets through arrives
+          const dv = new DataView(data.buffer, data.byteOffset, A.SIGINFO_SIZE);
+          const want = A.sigsetFromWords(dv.getUint32(0, true), dv.getUint32(4, true));
+          want.delete(A.SIGKILL);
+          want.delete(A.SIGSTOP);
+          const next = () => { let b = 0; for (const s of proc.deferredSignals) if (want.has(s) && (!b || s < b)) b = s; return b; };
+          const ms = args[0] | 0;
+          const end = ms >= 0 ? Date.now() + ms : Infinity;
+          let got: number;
+          while (!(got = next())) {
+            const left = end - Date.now();
+            if (left <= 0) return -A.EAGAIN;
+            const wakes = new Set<() => void>();
+            const off = pendingSignalListeners(proc).add(() => { for (const w of [...wakes]) w(); });
+            const timer = end === Infinity ? undefined : setTimeout(() => { for (const w of [...wakes]) w(); }, left);
+            const ok = await abortableWait(wakes, sig);
+            off();
+            if (timer !== undefined) clearTimeout(timer);
+            if (!ok) return -A.EINTR;
+          }
+          // one instance (a real-time signal may have more queued), with what it carries
+          A.encodeSiginfo(proc.takeSiginfo(got, proc.deferredSignals), data);
+          return got;
         }
         case A.SYS_rt_sigsuspend: {
           const dv = new DataView(data.buffer, data.byteOffset, 8);
@@ -2371,8 +2566,7 @@ export class Kernel {
       // Ignoring a signal discards it if pending
       const now = proc.dispositions.get(signum);
       if (now === 'ignore' || (now === undefined && A.defaultSignalAction(signum) === 'ignore')) {
-        proc.deferredSignals.delete(signum);
-        proc.pendingSignals.delete(signum);
+        proc.dropSignal(signum);
       }
     }
     if (hasOld) {
@@ -2685,13 +2879,14 @@ export class Kernel {
     // The point of no return: exec bookkeeping, as Linux does it
     await proc.fds.closeOnExec();
     this.shm.detachAll(proc); // exec drops SysV shm attachments
+    this.timers.clear(proc); // and POSIX timers
     proc.path = path;
     proc.argv = argv;
     proc.env = env;
     for (const [sig, d] of [...proc.dispositions]) {
       if (typeof d === 'number') { proc.dispositions.delete(sig); proc.sigactions.delete(sig); }
     }
-    proc.pendingSignals.clear();
+    for (const sig of [...proc.pendingSignals]) proc.dropSignal(sig);
     proc.signalFrames = [];
     this.notify();
     if (embryo) {

@@ -1,0 +1,102 @@
+From 48acc2fa45b1ebaf8fe1b2a66526a7618f1e00ec Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 01:47:16 +0000
+Subject: [PATCH 77/77] Shiro: System V semaphores (semget, semop, semtimedop,
+ semctl)
+
+Forwarded to the kernel's semaphores (unix/perf-kernel): semop and
+semtimedop copy the sembuf array in and block in the kernel (a signal ends
+them with EINTR, never restarted); semctl passes SETVAL's int, copies
+GETALL/SETALL arrays (sized by an IPC_STAT) and the semid_ds/seminfo
+structs. SEM_UNDO is the kernel's, at process exit. Audacity's
+single-instance lock needs them.
+---
+ blink/shiro.inc | 65 +++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 65 insertions(+)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 1b360bd..fc611db 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2705,6 +2705,67 @@ void ShiroShmForget(int pid) {
+   UNLOCK(&g_shiro_shm_lock);
+ }
+ 
++// ── System V semaphores ──────────────────────────────────────────────────
++// The kernel's (unix/perf-kernel): semop blocks there, a signal ends it
++// with EINTR (never restarted), SEM_UNDO is applied when the process exits.
++
++static i64 ShiroSemop(struct Machine *m, int semid, i64 sops, u64 nsops, i64 tsaddr) {
++  u8 *buf, ts[16];
++  int has = 0;
++  i64 sec = 0, nsec = 0;
++  if (nsops > (u64)g_shiro_chunk / 6) return -E2BIG_LINUX;
++  if (!(buf = (u8 *)ShiroAlloc(m, nsops * 6))) return -ENOMEM_LINUX;
++  if (nsops && CopyFromUserRead(m, buf, sops, nsops * 6) == -1) return -EFAULT_LINUX;
++  if (tsaddr) {
++    if (CopyFromUserRead(m, ts, tsaddr, 16) == -1) return -EFAULT_LINUX;
++    has = 1, sec = Read64(ts), nsec = Read64(ts + 8);
++    if (sec > 0x7fffffff) sec = 0x7fffffff;
++  }
++  return ShiroCall(m, has ? 220 : 65, A12(semid, (int)nsops, has, (int)sec, (int)nsec), buf,
++                   nsops * 6, 0, false, true);
++}
++
++static i64 ShiroSemNsems(struct Machine *m, int semid) {
++  u8 ds[104];
++  i64 r = ShiroCall(m, 66, A12(semid, 0, 2 /* IPC_STAT */, 0), ds, 0, sizeof(ds), false, false);
++  return r < 0 ? r : (i64)Read64(ds + 80);
++}
++
++static i64 ShiroSemctl(struct Machine *m, int semid, int semnum, int cmd, u64 arg) {
++  u8 *buf;
++  i64 r, n = 0;
++  int c = cmd & ~0x100;  // IPC_64
++  switch (c) {
++    case 0:                              // IPC_RMID
++    case 11: case 12: case 14: case 15:  // GETPID, GETVAL, GETNCNT, GETZCNT
++      return KS(m, 66, A12(semid, semnum, c, 0));
++    case 16:  // SETVAL: the int of the union
++      return KS(m, 66, A12(semid, semnum, c, (int)arg));
++    case 13:  // GETALL
++    case 17:  // SETALL
++      if ((n = ShiroSemNsems(m, semid)) < 0) return n;
++      if (n * 2 > g_shiro_chunk) return -E2BIG_LINUX;
++      buf = (u8 *)ShiroAlloc(m, n * 2 + 1);
++      if (c == 17 && n && CopyFromUserRead(m, buf, arg, n * 2) == -1) return -EFAULT_LINUX;
++      r = ShiroCall(m, 66, A12(semid, 0, c, 0), buf, c == 17 ? n * 2 : 0, c == 13 ? n * 2 : 0,
++                    false, false);
++      if (r >= 0 && c == 13 && n && CopyToUserWrite(m, arg, buf, n * 2) == -1) return -EFAULT_LINUX;
++      return r;
++    case 1:                  // IPC_SET
++    case 2: case 18: case 20:  // IPC_STAT, SEM_STAT, SEM_STAT_ANY
++    case 3: case 19: {         // IPC_INFO, SEM_INFO
++      u8 d[104] = {0};
++      int out = c == 1 ? 0 : (c == 3 || c == 19) ? 40 : 104;
++      if (c == 1 && CopyFromUserRead(m, d, arg, 104) == -1) return -EFAULT_LINUX;
++      r = ShiroCall(m, 66, A12(semid, semnum, c, 0), d, c == 1 ? 104 : 0, out, false, false);
++      if (r >= 0 && out && CopyToUserWrite(m, arg, d, out) == -1) return -EFAULT_LINUX;
++      return r;
++    }
++    default:
++      return -EINVAL_LINUX;
++  }
++}
++
+ // ── the dispatcher ───────────────────────────────────────────────────────
+ 
+ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+@@ -3229,6 +3290,10 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+     case 0x01E: r = ShiroShmat(m, a, b, c); break;                   // shmat
+     case 0x01F: r = ShiroShmctl(m, a, b, c); break;                  // shmctl
+     case 0x043: r = ShiroShmdt(m, a); break;                         // shmdt
++    case 0x040: r = KS(m, 64, A12((int)a, (int)b, (int)c)); break;    // semget
++    case 0x041: r = ShiroSemop(m, a, b, c, 0); break;                 // semop
++    case 0x0DC: r = ShiroSemop(m, a, b, c, d); break;                 // semtimedop
++    case 0x042: r = ShiroSemctl(m, a, b, c, d); break;                // semctl
+     default:
+       return false;
+   }
+-- 
+2.43.0
+

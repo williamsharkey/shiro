@@ -1,8 +1,11 @@
+import { LiveStdin } from './live-stdin';
 import type { CommandContext } from '../commands/index';
 import type { SharedState } from './types';
 import { ProcessExitError } from '../commands/jseval/utils';
 import { getShiroOrigin } from '../utils/shiro-origin';
 import { CLAUDE_CODE_DEFAULT_MODEL } from '../claude-code-version';
+import { TtyStdin, ttySessionOf } from './tty-stdin';
+import { nodeGuestOf } from '../node-worker/hooks';
 
 /**
  * Create the fake process object for the Node.js compat layer.
@@ -209,6 +212,14 @@ function createStdout(ctx: CommandContext, stdoutBuf: string[], _st: SharedState
   const stdoutObj: any = {
     write: (s: string | Uint8Array, encodingOrCb?: string | Function, cb?: Function) => {
       if (_st.outputClosed) return true;
+      // A pipe that takes bytes (a spawned child's stdout): as written, not decoded (esbuild's binary protocol)
+      if (ctx.stdoutBytes && typeof s !== 'string' && !ctx.terminal) {
+        _st.streamedToTerminal = true;
+        ctx.stdoutBytes(s.slice());
+        const done = typeof encodingOrCb === 'function' ? encodingOrCb : cb;
+        if (done) queueMicrotask(() => done());
+        return true;
+      }
       let str = typeof s === 'string' ? s : new TextDecoder().decode(s);
       // Detect OAuth URL in Claude Code login flow and append a clickable link
       // Fix redirect_uri from localhost to manual code flow
@@ -224,11 +235,9 @@ function createStdout(ctx: CommandContext, stdoutBuf: string[], _st: SharedState
       // Stream to terminal in real-time unless stdout is piped or redirected
       if (ctx.terminal && _st.stdoutToTerminal) {
         _st.streamedToTerminal = true;
-        if (str.includes('\x1b[')) {
-          ctx.terminal.writeOutput(str);
-        } else {
-          ctx.terminal.writeOutput(str.replace(/\r?\n/g, '\r\n'));
-        }
+        // \n is \r\n on a terminal, escape sequences or not (libuv keeps ONLCR even in raw mode):
+        // clack's prompts (create-vite) stepped down the screen as a staircase
+        ctx.terminal.writeOutput(str.replace(/\r?\n/g, '\r\n'));
       }
       // Auto-detect port from stdout messages like "listening on port 3000"
       if (!_st.portDetected && ctx.terminal) {
@@ -237,7 +246,10 @@ function createStdout(ctx: CommandContext, stdoutBuf: string[], _st: SharedState
           const port = parseInt(portMatch[1]);
           if (port > 0 && port < 65536) {
             _st.portDetected = true;
-            import('../split-view').then(({ createSplitView }) => {
+            // (a kernel guest has no page of its own: the page opens it)
+            const guestPage = nodeGuestOf(ctx)?.page;
+            if (guestPage) guestPage.preview(port);
+            else import('../split-view').then(({ createSplitView }) => {
               createSplitView({ port, direction: 'right', title: `Server :${port}` });
             }).catch(() => {});
           }
@@ -313,15 +325,20 @@ function createStderr(ctx: CommandContext, stderrBuf: string[], _st: SharedState
   const stderrObj: any = {
     write: (s: string | Uint8Array, encodingOrCb?: string | Function, cb?: Function) => {
       if (_st.outputClosed) return true;
+      if (ctx.stderrBytes && typeof s !== 'string' && !ctx.terminal) {
+        _st.streamedStderr = true;
+        ctx.stderrBytes(s.slice());
+        const done = typeof encodingOrCb === 'function' ? encodingOrCb : cb;
+        if (done) queueMicrotask(() => done());
+        return true;
+      }
       const str = typeof s === 'string' ? s : new TextDecoder().decode(s);
       stderrBuf.push(str);
       if (ctx.terminal) {
         _st.streamedStderr = true;
-        if (str.includes('\x1b[')) {
-          ctx.terminal.writeOutput(str);
-        } else {
-          ctx.terminal.writeOutput(str.replace(/\r?\n/g, '\r\n'));
-        }
+        // \n is \r\n on a terminal, escape sequences or not (libuv keeps ONLCR even in raw mode):
+        // clack's prompts (create-vite) stepped down the screen as a staircase
+        ctx.terminal.writeOutput(str.replace(/\r?\n/g, '\r\n'));
       }
       const callback = typeof encodingOrCb === 'function' ? encodingOrCb : cb;
       if (callback) queueMicrotask(() => (callback as Function)());
@@ -373,10 +390,101 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
   let stdinEncoding: string | null = null;
   let stdinDataTaken = false; // piped input already went to 'data' listeners
   const stdinReadBuffer: string[] = [];
-  /** Deliver piped input (once): 'data', 'readable', then 'end' and 'close' */
+  const emitData = (data: string) => {
+    stdinReadBuffer.push(data);
+    (stdinEvents['data'] || []).forEach(f => f(data));
+    (stdinEvents['readable'] || []).forEach(f => f());
+  };
+  const forceExit = (code = 130) => {
+    if (!_st.exitCalled) { _st.exitCode = code; _st.exitCalled = true; }
+    _st.deferredExitResolve?.(_st.exitCode);
+  };
+  // A terminal with a pty session: node reads the pty as its foreground job (tty-stdin.ts)
+  const session = stdinTTY ? ttySessionOf(ctx.terminal) : undefined;
+  // (a kernel guest is the process on the pty: it reads its own fd 0, node-worker/tty.ts)
+  const guestTty = stdinTTY ? nodeGuestOf(ctx)?.ttyStdin : undefined;
+  const readsPty = !!session || !!guestTty;
+  let ttyIn: Pick<TtyStdin, 'reading' | 'start' | 'pause' | 'setRaw' | 'close'> | null = null;
+  let lastCtrlC = 0;
+  const ttyReader = (): NonNullable<typeof ttyIn> => {
+    if (ttyIn) return ttyIn;
+    const handlers: ConstructorParameters<typeof TtyStdin>[1] = {
+      data: (data) => {
+        // Raw mode as the page's passthrough had it: ^C also reaches 'SIGINT'
+        // listeners, and twice within a second ends the script
+        if (stdinRawMode && data.includes('\x03')) {
+          const now = Date.now();
+          if (now - lastCtrlC < 1000) { forceExit(); return; }
+          lastCtrlC = now;
+          try { (processEvents['SIGINT'] || []).forEach(fn => fn('SIGINT')); } catch (_) {}
+        }
+        emitData(data);
+      },
+      end: () => {
+        stdinEnded = true;
+        (stdinEvents['end'] || []).forEach(f => f());
+        (stdinEvents['close'] || []).forEach(f => f());
+        releaseTerminal();
+      },
+      signal: (sig) => {
+        // (^C twice within a second ends the script whatever it does with SIGINT: the page's way out)
+        if (sig === 2) {
+          const now = Date.now();
+          if (now - lastCtrlC < 1000) { forceExit(); return; }
+          lastCtrlC = now;
+        }
+        const name = sig === 2 ? 'SIGINT' : sig === 3 ? 'SIGQUIT' : '';
+        const listeners = name ? processEvents[name] || [] : [];
+        if (listeners.length) { try { listeners.forEach(fn => fn(name)); } catch (_) {} return; }
+        forceExit(128 + sig);
+      },
+    };
+    ttyIn = guestTty ? guestTty(handlers) : new TtyStdin(session!, handlers);
+    _st.ttyStdin = ttyIn;
+    return ttyIn;
+  };
+  /** Reading the terminal keeps the script running, as an open tty does in node */
+  const holdTerminal = () => {
+    ttyReader().start();
+    _st.isInteractiveMode = true;
+    _st.ownsStdinPassthrough = true;
+    if (_st.scriptTimeoutId) { clearTimeout(_st.scriptTimeoutId); _st.scriptTimeoutId = null; }
+  };
+  /** Paused or ended: the script ends unless it reads the terminal again soon */
+  const releaseTerminal = () => {
+    ttyIn?.pause();
+    if (!_st.isInteractiveMode) return;
+    setTimeout(() => { if (!ttyIn?.reading && !_st.exitCalled) forceExit(0); }, 500);
+  };
+  // fd 0 for fs.read(0)/readSync(0), and a live pipe's chunks as they arrive
+  // (ctx.stdinStream: a spawned child's stdin; live-stdin.ts). Piped input
+  // that arrives whole is one chunk.
+  const fd0 = stdinTTY ? null : new LiveStdin(ctx.stdinStream ?? {
+    read: (() => {
+      let done = false;
+      return async () => {
+        if (done) return null;
+        done = true;
+        await loadStdin();
+        return ctx.stdin ? new TextEncoder().encode(ctx.stdin) : null;
+      };
+    })(),
+  }, (p) => pendingPromises.push(p));
+  /** Deliver piped input: 'data', 'readable', then 'end' and 'close' (a live pipe: as it arrives) */
   const flow = () => {
     if (stdinTTY || stdinEnded) return;
     stdinEnded = true;
+    if (ctx.stdinStream && fd0) {
+      const dec = new TextDecoder();
+      fd0.flow((b) => {
+        if (b) { const t = dec.decode(b, { stream: true }); if (t) emitData(t); return; }
+        const t = dec.decode();
+        if (t) emitData(t);
+        (stdinEvents['end'] || []).forEach(f => f());
+        (stdinEvents['close'] || []).forEach(f => f());
+      });
+      return;
+    }
     void loadStdin().then(() => {
       if (ctx.stdin) {
         stdinReadBuffer.push(ctx.stdin);
@@ -391,8 +499,12 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
   const stdinObj: any = {
     isTTY: stdinTTY,
     fd: 0,
+    /** fs.read(0)/readSync(0) (fs.ts); null for a terminal */
+    __fd0: fd0,
     on: (event: string, fn: Function) => {
       (stdinEvents[event] ??= []).push(fn);
+      // A 'data' or 'readable' listener sets a tty flowing, as in node
+      if (readsPty && (event === 'data' || event === 'readable') && !stdinEnded) holdTerminal();
       // Piped input flows (and then ends) once something reads it, as in
       // node: a 'data' or 'readable' listener (readline), resume(). An 'end'
       // listener alone reads nothing (vite exits on stdin 'end', its parent's exit)
@@ -418,6 +530,7 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
     emit: (event: string, ...args: any[]) => { (stdinEvents[event] || []).forEach(f => f(...args)); return false; },
     resume: () => {
       flow();
+      if (readsPty) { if (!stdinEnded) holdTerminal(); return stdinObj; }
       if (ctx.terminal && stdinTTY && !stdinEnded) {
         const forceExit = () => {
           if (!_st.exitCalled) { _st.exitCode = 130; _st.exitCalled = true; }
@@ -434,13 +547,20 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
       }
       return stdinObj;
     },
-    pause: () => stdinObj,
+    pause: () => { if (ttyIn?.reading) releaseTerminal(); return stdinObj; },
     read: (_size?: number) => {
       if (stdinReadBuffer.length === 0) return null;
       return stdinReadBuffer.shift()!;
     },
     setRawMode: (mode: boolean) => {
       stdinRawMode = mode;
+      if (readsPty) {
+        ttyReader().setRaw(mode);
+        if (mode && !stdinEnded) holdTerminal();
+        // back to cooked with nothing listening: the script may end (ink's cleanup)
+        else if (!mode && !stdinEvents['data']?.length && !stdinEvents['readable']?.length) releaseTerminal();
+        return stdinObj;
+      }
       if (mode && ctx.terminal && stdinTTY && !stdinEnded) {
         _st.isInteractiveMode = true;
         _st.ownsStdinPassthrough = true;
@@ -514,6 +634,7 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
       };
     },
     destroy: () => {
+      ttyIn?.pause();
       if (ctx.terminal) ctx.terminal.exitStdinPassthrough();
       stdinEnded = true;
       return stdinObj;

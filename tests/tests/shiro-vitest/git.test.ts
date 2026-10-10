@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
+import { DEFAULT_MIRROR } from '@shiro/pkg-manager';
 import { FileSystem } from '@shiro/filesystem';
 import { Shell } from '@shiro/shell';
 import { CommandRegistry } from '@shiro/commands/index';
@@ -6,6 +7,17 @@ import { gitCmd } from '@shiro/commands/git';
 import { createTestShell } from './helpers';
 
 describe('git commands', () => {
+  // These cover the built-in git on its own: keep the package mirror
+  // unreachable so commands it hands to the full git package don't fetch it.
+  const realFetch = globalThis.fetch;
+  beforeAll(() => {
+    globalThis.fetch = (async (input: any, init?: any) => {
+      if (String(input).startsWith(DEFAULT_MIRROR + '/pkg/')) throw new TypeError('fetch failed (offline in this test)');
+      return realFetch(input, init);
+    }) as typeof fetch;
+  });
+  afterAll(() => { globalThis.fetch = realFetch; });
+
   let fs: FileSystem;
   let shell: Shell;
   let commands: CommandRegistry;

@@ -511,6 +511,55 @@ describe('kernel loopback and listening sockets', () => {
     expect(iframeServer.isPortInUse(8099)).toBe(false);
   });
 
+  it('streams a body still being written (server-sent events, chunked, close-delimited) to the page', async () => {
+    let handler: ((r: VirtualHttpRequest) => Promise<VirtualHttpResponse>) | null = null;
+    const host: PortHost = { serve: (_p, h) => { handler = h; return () => { handler = null; }; } };
+    const stack = localStack(host);
+    const l = stream(stack);
+    l.bind(v4('0.0.0.0', 8091));
+    l.listen(16);
+    await new Promise((r) => setTimeout(r, 0));
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    /** Accept one request; answer with a head, then `parts` 150 ms apart */
+    const slowly = async (head: string, parts: string[]) => {
+      const c = await l.accept() as KSocket;
+      const buf = new Uint8Array(4096);
+      let req = '';
+      while (!req.includes('\r\n\r\n')) { const n = await c.read(buf); if (n <= 0) break; req += dec.decode(buf.subarray(0, n)); }
+      await c.write(enc.encode(head));
+      for (const p of parts) { await sleep(150); await c.write(enc.encode(p)); }
+      await c.close();
+    };
+    const readAll = async (body: ReadableStream<Uint8Array>, t0: number) => {
+      const r = body.getReader(), got: [string, boolean][] = [];
+      for (;;) { const { value, done } = await r.read(); if (done) break; got.push([dec.decode(value), Date.now() - t0 < 250]); }
+      return got;
+    };
+    // chunked server-sent events: the first event arrives long before the last
+    let served = slowly('HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n',
+      ['b\r\ndata: one\n\n\r\n', 'b\r\ndata: two\n\n\r\n', '0\r\n\r\n']);
+    let t0 = Date.now();
+    let res = await handler!({ method: 'GET', path: '/events' });
+    expect(res.status).toBe(200);
+    expect(res.headers!['content-type']).toBe('text/event-stream');
+    expect(res.headers!['transfer-encoding']).toBeUndefined();
+    expect(res.body).toBeInstanceOf(ReadableStream);
+    expect(await readAll(res.body as ReadableStream<Uint8Array>, t0)).toEqual([['data: one\n\n', true], ['data: two\n\n', false]]);
+    await served;
+    // close-delimited (no length): streamed to the end of the connection
+    served = slowly('HTTP/1.0 200 OK\r\n\r\nfirst ', ['second']);
+    t0 = Date.now();
+    res = await handler!({ method: 'GET', path: '/poll' });
+    expect((await readAll(res.body as ReadableStream<Uint8Array>, t0)).map(([s]) => s).join('')).toBe('first second');
+    await served;
+    // a whole response is still a whole body
+    served = serveOnce(l);
+    res = await handler!({ method: 'GET', path: '/whole' });
+    await served;
+    expect(dec.decode(res.body as Uint8Array)).toBe('you asked for /whole');
+    await l.close();
+  });
+
   it('parses Content-Length and close-delimited responses', () => {
     const r1 = parseHttpResponse(enc.encode('HTTP/1.1 404 Not Found\r\nContent-Length: 3\r\n\r\nabcEXTRA'), false);
     expect(r1.complete).toBe(true);

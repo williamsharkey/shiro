@@ -89,7 +89,8 @@ export interface VirtualHttpRequest {
   method: string; path: string; headers?: Record<string, string>; body?: string | Uint8Array | null; query?: Record<string, string>;
 }
 export interface VirtualHttpResponse {
-  status?: number; statusText?: string; headers?: Record<string, string>; body?: string | Uint8Array;
+  /** A ReadableStream is a body still coming (server-sent events, chunked, long-poll) */
+  status?: number; statusText?: string; headers?: Record<string, string>; body?: string | Uint8Array | ReadableStream<Uint8Array>;
 }
 
 export interface NetConfig {
@@ -1091,14 +1092,13 @@ function dechunk(b: Uint8Array): Uint8Array | null {
   }
 }
 
-/** Parse a raw HTTP/1.x response; `complete` = no more bytes are needed. */
-export function parseHttpResponse(raw: Uint8Array, eof: boolean, method = 'GET'): { complete: boolean; response?: VirtualHttpResponse } {
+/** A raw HTTP/1.x response's head: status, headers, where the body starts; null until it's all there, or 'bad' */
+function parseHttpHead(raw: Uint8Array): { status: number; statusText: string; headers: Record<string, string>; end: number } | null | 'bad' {
   const end = findHeaderEnd(raw);
-  if (end < 0) return { complete: eof, response: eof ? { status: 502, body: 'Bad gateway: incomplete response from guest' } : undefined };
+  if (end < 0) return null;
   const lines = dec.decode(raw.subarray(0, end - 4)).split('\r\n');
   const m = /^HTTP\/\d\.\d\s+(\d{3})\s*(.*)$/.exec(lines[0]);
-  if (!m) return { complete: true, response: { status: 502, body: 'Bad gateway: malformed response from guest' } };
-  const status = Number(m[1]);
+  if (!m) return 'bad';
   const headers: Record<string, string> = {};
   for (const line of lines.slice(1)) {
     const c = line.indexOf(':');
@@ -1107,6 +1107,15 @@ export function parseHttpResponse(raw: Uint8Array, eof: boolean, method = 'GET')
       headers[k] = headers[k] ? `${headers[k]}, ${line.slice(c + 1).trim()}` : line.slice(c + 1).trim();
     }
   }
+  return { status: Number(m[1]), statusText: m[2], headers, end };
+}
+
+/** Parse a raw HTTP/1.x response; `complete` = no more bytes are needed. */
+export function parseHttpResponse(raw: Uint8Array, eof: boolean, method = 'GET'): { complete: boolean; response?: VirtualHttpResponse } {
+  const head = parseHttpHead(raw);
+  if (head === null) return { complete: eof, response: eof ? { status: 502, body: 'Bad gateway: incomplete response from guest' } : undefined };
+  if (head === 'bad') return { complete: true, response: { status: 502, body: 'Bad gateway: malformed response from guest' } };
+  const { status, headers, end } = head;
   const rest = raw.subarray(end);
   let body: Uint8Array | null;
   if (method === 'HEAD' || status === 204 || status === 304 || (status >= 100 && status < 200)) body = new Uint8Array(0);
@@ -1117,7 +1126,127 @@ export function parseHttpResponse(raw: Uint8Array, eof: boolean, method = 'GET')
   } else body = eof ? rest : null;
   if (!body) return { complete: false };
   for (const h of ['transfer-encoding', 'connection', 'keep-alive', 'content-length']) delete headers[h];
-  return { complete: true, response: { status, statusText: m[2], headers, body: body.slice() } };
+  return { complete: true, response: { status, statusText: head.statusText, headers, body: body.slice() } };
+}
+
+/**
+ * Read an HTTP/1.x response from a connection: the head within
+ * `headTimeoutMs`; a body that is all there soon after comes whole, one
+ * still coming (server-sent events, chunked writes, a long poll) as a
+ * ReadableStream of its bytes as they arrive (cancelling it closes the
+ * connection). The connection is closed when the body is done.
+ */
+export async function readHttpResponse(client: { read(buf: Uint8Array): Promise<number>; close(): Promise<void> | void }, method: string, headTimeoutMs: number): Promise<VirtualHttpResponse> {
+  let raw = new Uint8Array(0);
+  const buf = new Uint8Array(64 * 1024);
+  let eof = false;
+  /** One read, or -ETIMEDOUT after `ms` (the read goes on; its bytes come with the next call) */
+  let pending: Promise<number> | null = null;
+  const readFor = async (ms: number): Promise<number> => {
+    pending ??= client.read(buf);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const n = await Promise.race([pending, new Promise<number>((res) => { timer = setTimeout(() => res(-ETIMEDOUT), ms); })]);
+    clearTimeout(timer);
+    if (n === -ETIMEDOUT) return n;
+    pending = null;
+    if (n > 0) raw = concat([raw, buf.subarray(0, n)]); else eof = true;
+    return n;
+  };
+  let streaming = false;
+  try {
+    // The head
+    const deadline = Date.now() + headTimeoutMs;
+    let head = parseHttpHead(raw);
+    while (head === null && !eof) {
+      const wait = deadline - Date.now();
+      if (wait <= 0) return { status: 504, body: 'Gateway timeout: guest did not answer' };
+      await readFor(wait);
+      head = parseHttpHead(raw);
+    }
+    if (head === null || head === 'bad') return parseHttpResponse(raw, true, method).response!;
+    // A body that is all there (or soon is) comes whole
+    const graceUntil = Date.now() + 25;
+    for (;;) {
+      const p = parseHttpResponse(raw, eof, method);
+      if (p.complete) return p.response!;
+      const wait = graceUntil - Date.now();
+      if (wait <= 0) break;
+      await readFor(wait);
+    }
+    // Still coming: stream it
+    const headers = { ...head.headers };
+    const chunked = /chunked/i.test(headers['transfer-encoding'] || '');
+    let left = !chunked && headers['content-length'] !== undefined ? Number(headers['content-length']) : Infinity;
+    for (const h of ['transfer-encoding', 'connection', 'keep-alive', 'content-length']) delete headers[h];
+    const dechunker = chunked ? new Dechunker() : null;
+    let initial = raw.subarray(head.end);
+    streaming = true;
+    const body = new ReadableStream<Uint8Array>({
+      pull: async (ctrl) => {
+        for (;;) {
+          let bytes: Uint8Array;
+          if (initial.length) { bytes = initial; initial = new Uint8Array(0); }
+          else {
+            const n = pending ? await pending : await client.read(buf);
+            pending = null;
+            if (n <= 0) { ctrl.close(); void client.close(); return; }
+            bytes = buf.slice(0, n);
+          }
+          let out: Uint8Array;
+          let done = false;
+          if (dechunker) { out = dechunker.push(bytes); done = dechunker.done; }
+          else { out = bytes.subarray(0, Math.min(bytes.length, left)); left -= out.length; done = left <= 0; }
+          if (out.length) ctrl.enqueue(out);
+          if (done) { ctrl.close(); void client.close(); return; }
+          if (out.length) return;
+        }
+      },
+      cancel: () => { void client.close(); },
+    });
+    return { status: head.status, statusText: head.statusText, headers, body };
+  } finally {
+    if (!streaming) await client.close();
+  }
+}
+
+/** Decodes a chunked body as its bytes arrive */
+class Dechunker {
+  private pending = new Uint8Array(0);
+  /** Bytes of the current chunk still to come (0: a size line is next) */
+  private left = 0;
+  /** The CRLF after a chunk's data is still to come */
+  private crlf = false;
+  done = false;
+
+  push(b: Uint8Array): Uint8Array {
+    let data = concat([this.pending, b]);
+    const out: Uint8Array[] = [];
+    let i = 0;
+    while (!this.done && i < data.length) {
+      if (this.left > 0) {
+        const n = Math.min(this.left, data.length - i);
+        out.push(data.slice(i, i + n));
+        i += n; this.left -= n;
+        if (this.left === 0) this.crlf = true;
+        continue;
+      }
+      if (this.crlf) {
+        if (data.length - i < 2) break;
+        i += 2; this.crlf = false;
+        continue;
+      }
+      let j = i;
+      while (j + 1 < data.length && !(data[j] === 13 && data[j + 1] === 10)) j++;
+      if (j + 1 >= data.length) break; // the size line isn't all here
+      const size = parseInt(dec.decode(data.subarray(i, j)).split(';')[0].trim(), 16);
+      i = j + 2;
+      if (!Number.isFinite(size) || size === 0) { this.done = true; break; }
+      this.left = size;
+    }
+    this.pending = data.slice(i);
+    data = new Uint8Array(0);
+    return concat(out);
+  }
 }
 
 // ── Stack ──
@@ -1418,32 +1547,19 @@ export class NetStack {
   }
 
   /** Turn one virtual HTTP request into an accepted connection on `listener`. */
+  /**
+   * A page request (a preview's fetch) to a kernel listener, as HTTP over a
+   * loopback connection. The head has httpBridgeTimeoutMs to come; a body
+   * that is all there soon after is returned whole, and one still coming
+   * (server-sent events, chunked writes, a long poll) is a ReadableStream of
+   * its bytes as they arrive (cancelling it closes the connection).
+   */
   async bridgeHttp(listener: KSocket, req: VirtualHttpRequest): Promise<VirtualHttpResponse> {
     const client = new KSocket(this, AF_INET, 0, 0);
     const r = await client.connect({ family: AF_INET, address: '127.0.0.1', port: listener.local!.port });
     if (r < 0) return { status: 503, body: `connect: ${errnoName(-r)}` };
     await client.write(encodeHttpRequest(req, listener.local!.port));
-    const parts: Uint8Array[] = [];
-    const buf = new Uint8Array(64 * 1024);
-    const deadline = Date.now() + this.config.httpBridgeTimeoutMs;
-    try {
-      for (;;) {
-        const wait = deadline - Date.now();
-        if (wait <= 0) return { status: 504, body: 'Gateway timeout: guest did not answer' };
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const n = await Promise.race([
-          client.read(buf),
-          new Promise<number>((res) => { timer = setTimeout(() => res(-ETIMEDOUT), wait); }),
-        ]);
-        clearTimeout(timer);
-        if (n === -ETIMEDOUT) continue;
-        if (n > 0) parts.push(buf.slice(0, n));
-        const parsed = parseHttpResponse(concat(parts), n <= 0, req.method.toUpperCase());
-        if (parsed.complete) return parsed.response!;
-      }
-    } finally {
-      await client.close();
-    }
+    return readHttpResponse(client, req.method.toUpperCase(), this.config.httpBridgeTimeoutMs);
   }
 
   // ── relay plumbing ──

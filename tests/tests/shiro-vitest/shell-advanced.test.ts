@@ -637,6 +637,14 @@ describe('Shell Advanced', () => {
   //  pipefail
   // ═══════════════════════════════════════════════════════════════════
 
+  describe('case inside if', () => {
+    it('keeps every item (;; was collapsed to ;, so the case ran nothing)', async () => {
+      expect((await run(shell, 'if true; then case x in a) echo A ;; *) echo hi ;; esac; fi')).output.trim()).toBe('hi');
+      expect((await run(shell, 'y=b\nif true; then\n  case "$y" in\n    a|b)\n      ;;\n    *)\n      echo other\n      ;;\n  esac\n  echo after\nfi')).output.trim()).toBe('after');
+      expect((await run(shell, 'if false; then :\nelse\n  case z in\n    a) echo A ;;\n    *) echo star ;;\n  esac\nfi')).output.trim()).toBe('star');
+    });
+  });
+
   describe('set -o pipefail', () => {
     it('without pipefail, pipe exit is last command', async () => {
       const { exitCode } = await run(shell, 'false | true');
@@ -653,6 +661,14 @@ describe('Shell Advanced', () => {
       await run(shell, 'set -o pipefail');
       const { exitCode } = await run(shell, 'echo hello | cat');
       expect(exitCode).toBe(0);
+    });
+
+    it('set -euo pipefail: o takes the next word (install scripts start with it)', async () => {
+      const r = await run(shell, 'set -euo pipefail; echo "n=$#"; false | true; echo "status=$?"; set +euo pipefail');
+      expect(r.output).toContain('n=0');
+      expect(r.exitCode).not.toBe(0); // errexit + pipefail: the pipeline fails the script
+      const kept = await run(shell, 'set -- a b; set -eo pipefail; echo "$# $1"; set +eo pipefail');
+      expect(kept.output.trim()).toBe('2 a');
     });
 
     it('pipefail can be disabled with set +o pipefail', async () => {
@@ -1234,7 +1250,10 @@ describe('Shell Advanced', () => {
 
     it('dirs shows the directory stack', async () => {
       const { output } = await run(shell, 'dirs');
-      expect(output.replace(/\r/g, '').trim()).toBe(shell.cwd);
+      // (as bash: $HOME is shown as ~)
+      const home = shell.env['HOME'];
+      const pwd = shell.env['PWD'] || shell.cwd;
+      expect(output.replace(/\r/g, '').trim()).toBe(home && (pwd === home || pwd.startsWith(home + '/')) ? '~' + pwd.slice(home.length) : pwd);
     });
 
     it('popd on empty stack returns error', async () => {
@@ -2112,7 +2131,7 @@ describe('Shell Advanced', () => {
 
     it('mapfile -d uses custom delimiter', async () => {
       shell.env['__PIPE_STDIN'] = 'a:b:c';
-      const { output } = await run(shell, 'mapfile -d : arr; echo ${arr[0]} ${arr[1]} ${arr[2]}');
+      const { output } = await run(shell, 'mapfile -t -d : arr; echo ${arr[0]} ${arr[1]} ${arr[2]}');
       expect(output.replace(/\r/g, '').trim()).toBe('a b c');
     });
   });
@@ -2356,10 +2375,11 @@ describe('Shell Advanced', () => {
   // === Section 60: caller and BASH_SOURCE ===
   describe('60. caller and BASH_SOURCE', () => {
     it('caller returns info inside function', async () => {
+      // (bash -c: the caller's line, then NULL for the file; caller 0 needs a frame above)
       const script = 'show() { caller; }; show';
       const { output, exitCode } = await run(shell, script);
       expect(exitCode).toBe(0);
-      expect(output).toContain('show');
+      expect(output.replace(/\r/g, '').trim()).toBe('1 NULL');
     });
 
     it('FUNCNAME tracks function name', async () => {
@@ -3028,16 +3048,18 @@ describe('Shell Advanced', () => {
     it('mapfile -C with default quantum 5000 calls once', async () => {
       await fs.writeFile('/tmp/cb2.txt', 'a\nb\nc\n');
       await run(shell, 'counter() { echo "idx:$1"; }');
-      const { output } = await run(shell, 'cat /tmp/cb2.txt | mapfile -C counter arr');
-      // Default quantum is 5000, only index 0 matches (0 % 5000 === 0)
-      expect(output).toContain('idx:0');
-      expect(output).not.toContain('idx:1');
+      // As bash: the callback runs every QUANTUM lines (5000), so not for 3; -c 1 for each
+      let { output } = await run(shell, 'cat /tmp/cb2.txt | mapfile -C counter arr');
+      expect(output).not.toContain('idx:');
+      ({ output } = await run(shell, 'cat /tmp/cb2.txt | mapfile -C counter -c 2 arr'));
+      expect(output).toContain('idx:1');
+      expect(output).not.toContain('idx:0');
     });
 
     it('mapfile still populates array with -C', async () => {
       await fs.writeFile('/tmp/cb3.txt', 'x\ny\nz\n');
       await run(shell, 'noop() { :; }');
-      await run(shell, 'cat /tmp/cb3.txt | mapfile -C noop -c 1 arr');
+      await run(shell, 'cat /tmp/cb3.txt | mapfile -t -C noop -c 1 arr');
       const arr = shell.arrays.get('arr');
       expect(arr).toEqual(['x', 'y', 'z']);
     });

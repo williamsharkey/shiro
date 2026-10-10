@@ -86,7 +86,8 @@ and v3.
 
 URLs starting with `/` are served by the tabcomputer origin (`public/pkg/` in this
 repo, copied to `dist/` by vite); outside a tabcomputer page they resolve against
-`https://shiro.computer`, or `$TABCOMPUTER_PKG_MIRROR`.
+`https://tabcomputer.com` (`DEFAULT_MIRROR`; shiro.computer no longer serves `/pkg/`), or
+`$TABCOMPUTER_PKG_MIRROR`.
 
 ## Kernel features and gating
 
