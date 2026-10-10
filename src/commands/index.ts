@@ -1,4 +1,5 @@
 import type { FileSystem } from '../filesystem';
+import { withHelpFlags } from './help-flags';
 import type { Shell } from '../shell';
 
 export interface TerminalLike {
@@ -34,6 +35,12 @@ export interface CommandContext {
    * Reading ctx.stdin instead still works (the command then runs twice).
    */
   liveStdin?: boolean;
+  /**
+   * The command's stdin read to EOF, when it is a live stream the command
+   * reads only if it wants to (node's process.stdin): awaited on first use,
+   * so a program that never reads doesn't wait for a pipe that stays open
+   */
+  readStdin?: () => Promise<string>;
   /** Writers that reach the command's stdout/stderr right away (set only where nothing captures them) */
   streamStdout?: (s: string) => void;
   streamStderr?: (s: string) => void;
@@ -55,7 +62,8 @@ export class CommandRegistry {
   private commands = new Map<string, Command>();
 
   register(cmd: Command): void {
-    this.commands.set(cmd.name, cmd);
+    // `CMD --help` / `CMD --version` work for every command (help-flags.ts)
+    this.commands.set(cmd.name, withHelpFlags(cmd));
   }
 
   registerAll(cmds: Command[]): void {

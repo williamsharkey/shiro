@@ -156,7 +156,14 @@ export class ProcFs {
   /** The node at `path` (absolute, normalized), undefined when it isn't ours. */
   private node(proc: Process, path: string): Node | undefined {
     if (path === '/proc') {
-      return { type: 'dir', list: () => [...new Set([...this.fsNames(), 'self', 'thread-self', ...this.live().map((p) => String(p.pid))])] };
+      return {
+        type: 'dir', list: () => {
+          const names = new Set([...this.fsNames(), 'self', 'thread-self', ...this.live().map((p) => String(p.pid))]);
+          // the names, then the pids in order (procps lists them as readdir returns them)
+          const pids = [...names].filter((n) => /^\d+$/.test(n)).sort((a, b) => Number(a) - Number(b));
+          return [...[...names].filter((n) => !/^\d+$/.test(n)), ...pids];
+        },
+      };
     }
     if (!path.startsWith('/proc/')) return undefined;
     const parts = path.slice(6).split('/');
@@ -214,7 +221,7 @@ export class ProcFs {
       case 'statm': return { type: 'file', text: () => '0 0 0 0 0 0 0\n' };
       case 'status': return { type: 'file', text: () => this.pidStatus(p) };
       case 'io': return { type: 'file', text: () => 'rchar: 0\nwchar: 0\nsyscr: 0\nsyscw: 0\nread_bytes: 0\nwrite_bytes: 0\ncancelled_write_bytes: 0\n' };
-      case 'mounts': return { type: 'file', text: () => 'shirofs / shirofs rw 0 0\nproc /proc proc rw 0 0\n' };
+      case 'mounts': return { type: 'file', text: () => 'rootfs / rootfs rw 0 0\nproc /proc proc rw 0 0\n' };
     }
     return undefined;
   }
@@ -224,7 +231,8 @@ export class ProcFs {
     const fsAny = this.kernel.fs as unknown as { virtualProviders?: { readdir?(p: string): string[] | null }[] } | undefined;
     for (const vp of fsAny?.virtualProviders ?? []) {
       const list = vp.readdir?.('/proc');
-      if (list) return list.filter((n) => n !== 'self' && !/^\d+$/.test(n));
+      // (with the pids of in-page shells, which the FileSystem's /proc describes)
+      if (list) return list.filter((n) => n !== 'self');
     }
     return ['cpuinfo', 'meminfo', 'version', 'filesystems', 'mounts'];
   }
@@ -293,9 +301,14 @@ export class ProcFs {
     return lines.join('\n') + '\n';
   }
 
+  /** Running processes: the load average (it doesn't decay) */
+  running(): number {
+    return this.live().filter((p) => this.stateLetter(p) === 'R').length;
+  }
+
   private loadavgText(): string {
     const procs = this.live();
-    const running = procs.filter((p) => this.stateLetter(p) === 'R').length;
+    const running = this.running();
     const l = running.toFixed(2);
     return `${l} ${l} ${l} ${Math.max(1, running)}/${procs.length} ${this.kernel.lastPid}\n`;
   }
@@ -349,7 +362,8 @@ export class ProcFs {
   /** /proc/PID/... and /proc/self/... are wholly ours (a missing entry is ENOENT, not the FileSystem's). */
   private ownsPrefix(path: string): boolean {
     const head = path.slice(6).split('/')[0];
-    return /^\d+$/.test(head) || head === 'self' || head === 'thread-self';
+    // (a pid that isn't a kernel process may be an in-page shell's: the FileSystem's /proc)
+    return (/^\d+$/.test(head) && this.kernel.procs.has(Number(head))) || head === 'self' || head === 'thread-self';
   }
 }
 
@@ -363,7 +377,7 @@ const VMSTAT_KEYS = [
 const PID_ENTRIES = ['cmdline', 'comm', 'cwd', 'environ', 'exe', 'fd', 'io', 'mounts', 'root', 'stat', 'statm', 'status', 'task'];
 
 /** What /proc/PID/fd/N points at. */
-function fdTarget(f: OpenFile): string {
+export function fdTarget(f: OpenFile): string {
   if (f.path) return f.path;
   const ino = (f as { ino?: number }).ino ?? 0;
   switch (f.kind) {

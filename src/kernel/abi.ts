@@ -53,6 +53,9 @@ export const SYS_clock_gettime = 228;
 export const SYS_uname = 63;
 /** syslog(2): args [type, len]; the read actions write text to the data area (klog.ts). */
 export const SYS_syslog = 103;
+export const SYS_sysinfo = 99;
+/** sizeof(struct sysinfo) on x86-64 */
+export const SYSINFO_SIZE = 112;
 /** struct utsname: six NUL-padded 65-byte fields */
 export const UTSNAME_FIELD = 65;
 export const SYS_exit_group = 231;
@@ -189,6 +192,13 @@ export const SYS_shiro_execve = 1011;
  * kernel (Blink's futex waits): the process shows as sleeping (S) meanwhile.
  */
 export const SYS_shiro_sleeping = 1012;
+/** SysV shm attach/detach bookkeeping (the engine maps the memory; src/kernel/sysvshm.ts). */
+export const SYS_shiro_shmat = 1013;
+export const SYS_shiro_shmdt = 1014;
+export const SYS_shmget = 29;
+export const SYS_shmat = 30;
+export const SYS_shmctl = 31;
+export const SYS_shmdt = 67;
 
 // ── errno (Linux) ──────────────────────────────────────────────────────────
 export const EPERM = 1;

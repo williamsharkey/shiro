@@ -7,7 +7,7 @@ Start with the [README](../README.md). Contributors and coding agents: [AGENTS.m
 | Doc | What it covers |
 | --- | --- |
 | [DESKTOP.md](DESKTOP.md) | The desktop: windows, dock, keyboard, phone layout, the window manager API, `/dom` |
-| [PACKAGES.md](PACKAGES.md) | `pkg`/`apt` before Debian mode: tabcomputer's index of prebuilt WASM and x86-64 programs |
+| [PACKAGES.md](PACKAGES.md) | `pkg`/`apt` before Debian mode: tabcomputer's 72 prebuilt WASM and static x86-64 programs (full list in the README's appendix) |
 | [DEBIAN.md](DEBIAN.md) | Debian mode: the streamed root filesystem, apt and dpkg in Blink, the overlay of builtins |
 | [GUI.md](GUI.md) | Linux GUI apps over X11: the X server in the page, `gui`, what runs and how fast |
 | [NETWORKING.md](NETWORKING.md) | Kernel sockets, the WebSocket-to-TCP relay, its security model and how to run it |
@@ -20,7 +20,7 @@ These record measurements. Each says how it was produced; rerun the tool to upda
 
 | Doc | Measures | Produced by |
 | --- | --- | --- |
-| [DEBIAN_SCORE.md](DEBIAN_SCORE.md) | Debian popcon top 300: install + smoke test | `npm run debian-score` |
+| [DEBIAN_SCORE.md](DEBIAN_SCORE.md) | Debian popcon top 500: install + smoke test | `npm run debian-score` |
 | [CONFORMANCE.md](CONFORMANCE.md) | Shell specs, busybox, LTP under Blink, wasi-testsuite | `npm run conformance` |
 | [COMPAT.md](COMPAT.md) | Popular tools, languages, agent CLIs, GUI apps, developer workflows | per-section smoke tests in `tests/` |
 | [WEB_SCORE.md](WEB_SCORE.md) | The Browser app against real sites | `tests/browser/web-score.mjs` |

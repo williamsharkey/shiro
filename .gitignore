@@ -13,3 +13,4 @@ bench/.cache/
 .debian-build/
 dist-dev
 .gui-score/
+.toolchain-build/

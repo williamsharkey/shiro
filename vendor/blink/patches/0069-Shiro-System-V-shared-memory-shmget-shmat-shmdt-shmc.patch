@@ -1,0 +1,300 @@
+From 65c3bd84d9fb598edcf5697d157e18e7220de1bc Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 23:13:16 +0000
+Subject: [PATCH 69/69] Shiro: System V shared memory (shmget, shmat, shmdt,
+ shmctl)
+
+shmget and shmctl go to the kernel, which keeps the segments (ids,
+permissions, attach counts; 1013/1014 count an attach and a detach).
+The bytes are here: one set of host pages per shmid in this instance,
+mapped into each attacher's page table as shared pages (PAGE_GROW), so a
+same-instance fork child inherits the attachment and sees the same
+memory. Exec and exit drop a process's attachments; once the kernel has
+destroyed a segment (IPC_RMID, nothing attached) its pages go with their
+last mapper. Processes in other Blink instances can't share a segment.
+---
+ blink/blink.c   |   6 ++
+ blink/shiro.inc | 222 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 228 insertions(+)
+
+diff --git a/blink/blink.c b/blink/blink.c
+index 1840fea..5a958b7 100644
+--- a/blink/blink.c
++++ b/blink/blink.c
+@@ -280,6 +280,12 @@ static int Exec(char *execfn, char *prog, char **argv, char **envp) {
+   sigset_t oldmask;
+   struct Machine *m, *old;
+   if ((old = g_machine)) KillOtherThreads(old->system);
++#ifdef __EMSCRIPTEN__
++  {
++    void ShiroShmForget(int);
++    if (old) ShiroShmForget(old->system->pid);  // its shmat mappings go with it
++  }
++#endif
+   unassert((g_machine = m = NewMachine(NewSystem(XED_MACHINE_MODE_LONG), 0)));
+ #ifdef HAVE_JIT
+   if (FLAG_nojit) DisableJit(&m->system->jit);
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index cd53e14..d3a4e87 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -95,6 +95,9 @@ static _Thread_local struct ShiroVfork *t_vfork;
+ bool ShiroIsInstanceChild(struct Machine *);
+ _Noreturn static void ShiroInstanceChildVanish(struct Machine *);
+ 
++static void ShiroShmFork(int, int);
++void ShiroShmForget(int);
++
+ static i64 ShiroErr(void) {
+   return -(XlatErrno(errno) & 0xfff);
+ }
+@@ -2287,6 +2290,7 @@ static i64 ShiroForkSame(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
+     free(c);
+     return pid;
+   }
++  ShiroShmFork(s->pid, pid);
+   LOCK(&s->mmap_lock);
+   for (i = 0; i < s->nshared; ++i) ShiroShareRange(s, s->shared[i][0], s->shared[i][1]);
+   UNLOCK(&s->mmap_lock);
+@@ -2334,6 +2338,7 @@ _Noreturn static void ShiroInstanceChildVanish(struct Machine *m) {
+ // memory (shared pages by reference) goes, and the instance runs on.
+ _Noreturn void ShiroInstanceChildExit(struct Machine *m, int rc) {
+   KS(m, 231, A12(rc & 255));
++  ShiroShmForget(m->system->pid);
+   ShiroDropKid(m->system);
+   ShiroKillSiblings(m);
+   ClearChildTid(m);
+@@ -2432,6 +2437,217 @@ static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
+   return addr;
+ }
+ 
++// ── System V shared memory ───────────────────────────────────────────────
++//
++// The kernel keeps the segments (ids, permissions, attach counts: shmget,
++// shmctl, and 1013/1014 to count an attach or a detach). The bytes are
++// here: one set of host pages per shmid in this instance, mapped into every
++// attacher's page table as shared pages (PAGE_GROW, ShareHostPage), so a
++// same-instance fork child inherits the attachment and sees the same
++// memory. Processes in other Blink instances can't share them.
++
++#define SHIRO_SHM_RDONLY 010000
++#define SHIRO_SHM_RND 020000
++#define SHIRO_SHM_REMAP 040000
++#define SHIRO_SHM_EXEC 0100000
++
++struct ShiroShmSeg {
++  struct ShiroShmSeg *next;
++  int shmid;
++  long npages;
++  u64 *pages;  // host page entries (AllocateAnonymousPage)
++};
++
++struct ShiroShmAt {
++  struct ShiroShmAt *next;
++  int pid, shmid;
++  i64 addr, size;
++};
++
++static pthread_mutex_t_ g_shiro_shm_lock = PTHREAD_MUTEX_INITIALIZER_;
++static struct ShiroShmSeg *g_shiro_shm_segs;
++static struct ShiroShmAt *g_shiro_shm_ats;
++
++static struct ShiroShmSeg *ShiroShmSeg(struct System *s, int shmid, long npages) {
++  struct ShiroShmSeg *g;
++  long i;
++  for (g = g_shiro_shm_segs; g; g = g->next) {
++    if (g->shmid == shmid) return g->npages >= npages ? g : 0;
++  }
++  if (!(g = (struct ShiroShmSeg *)calloc(1, sizeof(*g)))) return 0;
++  if (!(g->pages = (u64 *)calloc(npages, sizeof(u64)))) {
++    free(g);
++    return 0;
++  }
++  for (i = 0; i < npages; ++i) {
++    if ((g->pages[i] = AllocateAnonymousPage(s)) == (u64)-1) {
++      while (i--) FreeAnonymousPage(s, FindHostPage(g->pages[i]));
++      free(g->pages);
++      free(g);
++      return 0;
++    }
++    memset(FindHostPage(g->pages[i]), 0, 4096);
++    ShareHostPage(FindHostPage(g->pages[i]));  // the segment's own reference
++  }
++  g->shmid = shmid;
++  g->npages = npages;
++  g->next = g_shiro_shm_segs;
++  g_shiro_shm_segs = g;
++  return g;
++}
++
++// the kernel destroyed `shmid` (IPC_RMID and no attaches left): its pages
++// go with their last mapper
++static void ShiroShmGone(struct Machine *m, int shmid) {
++  struct ShiroShmSeg **pp, *g;
++  u8 st[112];
++  long i;
++  u8 *page;
++  if (ShiroCall(m, 31, A12(shmid, 2 /* IPC_STAT */), st, 0, sizeof(st), false, false) >= 0) return;
++  LOCK(&g_shiro_shm_lock);
++  for (pp = &g_shiro_shm_segs; (g = *pp); pp = &g->next) {
++    if (g->shmid != shmid) continue;
++    *pp = g->next;
++    for (i = 0; i < g->npages; ++i) {
++      page = FindHostPage(g->pages[i]);
++      if (!UnshareHostPage(page)) {
++        memset(page, 0, 4096);
++        FreeAnonymousPage(m->system, page);
++      }
++    }
++    free(g->pages);
++    free(g);
++    break;
++  }
++  UNLOCK(&g_shiro_shm_lock);
++}
++
++static i64 ShiroShmat(struct Machine *m, int shmid, i64 shmaddr, int shmflg) {
++  struct System *s = m->system;
++  struct ShiroShmSeg *g;
++  struct ShiroShmAt *at;
++  u8 d[8] = {0}, *slot;
++  i64 r, size, addr;
++  long i, n;
++  u64 e;
++  int prot, flags;
++  if (shmaddr && (shmaddr & 4095)) {
++    if (!(shmflg & SHIRO_SHM_RND)) return -EINVAL_LINUX;
++    shmaddr &= -4096;
++  }
++  if ((r = ShiroCall(m, 1013, A12(shmid, shmflg), d, 0, 8, false, false)) < 0) return r;
++  size = Read64(d);
++  n = (size + 4095) / 4096;
++  prot = (shmflg & SHIRO_SHM_RDONLY) ? 1 : 3;
++  if (shmflg & SHIRO_SHM_EXEC) prot |= 4;
++  flags = 2 | 0x20;  // MAP_PRIVATE | MAP_ANONYMOUS, then its pages are replaced
++  if (shmaddr) flags |= (shmflg & SHIRO_SHM_REMAP) ? 0x10 : 0x100000;  // MAP_FIXED : MAP_FIXED_NOREPLACE
++  LOCK(&g_shiro_shm_lock);
++  g = ShiroShmSeg(s, shmid, n);
++  UNLOCK(&g_shiro_shm_lock);
++  if (!g) {
++    KS(m, 1014, A12(shmid));
++    return -ENOMEM_LINUX;
++  }
++  if ((addr = SysMmap(m, shmaddr, n * 4096, prot, flags, -1, 0)) == -1) {
++    r = ShiroErr();
++    KS(m, 1014, A12(shmid));
++    return r == -EEXIST_LINUX ? -EINVAL_LINUX : r;
++  }
++  LOCK(&s->mmap_lock);
++  for (i = 0; i < n; ++i) {
++    if (!(slot = ShiroPteSlot(s, addr + i * 4096))) continue;
++    e = LoadPte(slot);
++    if (e & PAGE_RSRV) {
++      s->memstat.reserved -= 1;
++      s->memstat.committed += 1;
++    } else if ((e & (PAGE_HOST | PAGE_MAP | PAGE_MUG)) == PAGE_HOST) {
++      u8 *old = FindHostPage(e);
++      memset(old, 0, 4096);
++      FreeAnonymousPage(s, old);
++      s->rss -= 1;
++    }
++    StorePte(slot, (g->pages[i] & (PAGE_TA | PAGE_HOST)) | (e & (PAGE_U | PAGE_RW | PAGE_XD)) |
++                       PAGE_V | PAGE_GROW);
++    ShareHostPage(FindHostPage(g->pages[i]));
++  }
++  UNLOCK(&s->mmap_lock);
++  InvalidateSystem(s, true, false);
++  ResetTlb(m);
++  WjResetTlb(m);
++  if ((at = (struct ShiroShmAt *)calloc(1, sizeof(*at)))) {
++    at->pid = s->pid, at->shmid = shmid, at->addr = addr, at->size = n * 4096;
++    LOCK(&g_shiro_shm_lock);
++    at->next = g_shiro_shm_ats;
++    g_shiro_shm_ats = at;
++    UNLOCK(&g_shiro_shm_lock);
++  }
++  return addr;
++}
++
++static i64 ShiroShmdt(struct Machine *m, i64 addr) {
++  struct ShiroShmAt **pp, *at;
++  int shmid = -1;
++  i64 size = 0;
++  LOCK(&g_shiro_shm_lock);
++  for (pp = &g_shiro_shm_ats; (at = *pp); pp = &at->next) {
++    if (at->pid == m->system->pid && at->addr == addr) {
++      *pp = at->next;
++      shmid = at->shmid, size = at->size;
++      free(at);
++      break;
++    }
++  }
++  UNLOCK(&g_shiro_shm_lock);
++  if (shmid < 0) return -EINVAL_LINUX;
++  SysMunmap(m, addr, size);
++  KS(m, 1014, A12(shmid));
++  ShiroShmGone(m, shmid);
++  return 0;
++}
++
++static i64 ShiroShmctl(struct Machine *m, int shmid, int cmd, i64 buf) {
++  u8 d[112] = {0};
++  i64 r;
++  int c = cmd & ~0x100;  // IPC_64
++  int out = c == 2 || c == 13 || c == 15 ? 112 : c == 3 ? 72 : c == 14 ? 48 : 0;
++  if (c == 1 && CopyFromUser(m, d, buf, 112) == -1) return -EFAULT_LINUX;  // IPC_SET
++  r = ShiroCall(m, 31, A12(shmid, c), d, c == 1 ? 112 : 0, out ? 112 : 0, false, false);
++  if (r >= 0 && out && buf && CopyToUserWrite(m, buf, d, out) == -1) return -EFAULT_LINUX;
++  if (r >= 0 && c == 0) ShiroShmGone(m, shmid);  // IPC_RMID with nothing attached
++  return r;
++}
++
++// a same-instance fork child has its parent's attachments
++static void ShiroShmFork(int ppid, int pid) {
++  struct ShiroShmAt *at, *c;
++  LOCK(&g_shiro_shm_lock);
++  for (at = g_shiro_shm_ats; at; at = at->next) {
++    if (at->pid != ppid || !(c = (struct ShiroShmAt *)malloc(sizeof(*c)))) continue;
++    *c = *at;
++    c->pid = pid;
++    c->next = g_shiro_shm_ats;
++    g_shiro_shm_ats = c;
++  }
++  UNLOCK(&g_shiro_shm_lock);
++}
++
++// exec or exit: the mappings go with the address space (the kernel counts
++// the detaches itself)
++void ShiroShmForget(int pid) {
++  struct ShiroShmAt **pp, *at;
++  LOCK(&g_shiro_shm_lock);
++  for (pp = &g_shiro_shm_ats; (at = *pp);) {
++    if (at->pid == pid) {
++      *pp = at->next;
++      free(at);
++    } else {
++      pp = &at->next;
++    }
++  }
++  UNLOCK(&g_shiro_shm_lock);
++}
++
+ // ── the dispatcher ───────────────────────────────────────────────────────
+ 
+ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+@@ -2916,6 +3132,12 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       if (g_shiro_maps) ShiroSyncMaps(m, a, b, false);
+       r = 0;
+       break;
++    case 0x01D:                                                       // shmget
++      r = KS(m, 29, A12((int)a, (int)b, (int)(b >> 32), (int)c));
++      break;
++    case 0x01E: r = ShiroShmat(m, a, b, c); break;                   // shmat
++    case 0x01F: r = ShiroShmctl(m, a, b, c); break;                  // shmctl
++    case 0x043: r = ShiroShmdt(m, a); break;                         // shmdt
+     default:
+       return false;
+   }
+-- 
+2.43.0
+

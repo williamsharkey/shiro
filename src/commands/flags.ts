@@ -75,13 +75,14 @@ export function parseArgs(args: string[], valueFlags: string[] = []): ParsedArgs
  */
 export async function readInput(
   positional: string[],
-  stdin: string,
+  /** stdin, or a function returning it: read only when there are no files (a live stdin may never end) */
+  stdin: string | (() => string),
   fs: { readFile(path: string, encoding?: string): Promise<string | Uint8Array> },
   cwd: string,
   resolvePath: (path: string, cwd: string) => string
 ): Promise<{ content: string; files: string[] }> {
   if (positional.length === 0) {
-    return { content: stdin, files: [] };
+    return { content: typeof stdin === 'function' ? stdin() : stdin, files: [] };
   }
   const files: string[] = [];
   const parts: string[] = [];

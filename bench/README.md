@@ -14,7 +14,7 @@ Options for `node bench/run.mjs`:
 |---|---|
 | `--quick` | fewer/lighter metrics; isolated mode plus the non-isolated kernel suite |
 | `--runs N` | samples per metric (default 5; boot uses 3 in `--quick`) |
-| `--suites a,b` | default `boot shell kernel wasm x86 net node hygiene workloads`; optional `debian x86first workloads-slow` |
+| `--suites a,b` | default `boot shell kernel wasm x86 net node hygiene workloads`; optional `debian x86first workloads-slow toolchains` |
 | `--modes isolated,nonisolated` | cross-origin isolated (SAB, Workers, Blink) and/or the fallbacks |
 | `--only re1,re2` | only metrics whose name matches |
 | `--no-build` | reuse `dist/` (otherwise `vite build` first) |
@@ -53,6 +53,13 @@ JS: handy for poking at something a benchmark flagged.
   on this machine's address with a generated 5-commit repo in
   `bench/.cache/gitsrv`; needs `git` installed here), and native Claude
   Code's `--version`.
+- `toolchains` (opt-in: `--suites toolchains`): for each toolchain layer
+  (docs/DEBIAN.md "Toolchain layers"), a fresh profile, `debian install`,
+  `toolchain install ID` and the first and second real use (`gcc hello.c &&
+  ./a.out`, `python3 -c 'import json'`, `pdflatex`, ...). Layers come from
+  `TABCOMPUTER_DEBIAN_LAYERS` (default `.toolchain-build/layers`, from
+  `scripts/debian/build-layers.sh`); `BENCH_TOOLCHAINS=c,python` picks sets
+  and `BENCH_TOOLCHAIN_APT=1` also times `toolchain install ID --apt`.
 - Native Claude Code is never downloaded by the bench. To measure it, put
   the linux-x64-musl binary at `bench/.cache/fixtures/claude-native` and
   musl's loader (`usr/lib/x86_64-linux-musl/libc.so` from Debian's

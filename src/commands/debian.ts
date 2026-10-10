@@ -93,9 +93,14 @@ export const shiroAlternativesCmd: Command = {
     const ov = await import('../debian/overlay');
     const a = ctx.args;
     const out = (s: string) => { ctx.stdout += s + '\n'; };
+    // Without Debian every program is tabcomputer's: the table only means something once it is installed
+    const { ROOTFS_STATE } = await import('../debian/rootfs');
+    const debianSystem = await ctx.fs.exists(ROOTFS_STATE).catch(() => false);
     const describe = (st: Awaited<ReturnType<typeof ov.programState>>) => {
       const name = st.path;
-      const who = st.current === 'shiro' ? `tabcomputer (${st.policy?.command ?? name.slice(name.lastIndexOf('/') + 1)})` : 'debian';
+      const ours = `tabcomputer (${st.policy?.command ?? name.slice(name.lastIndexOf('/') + 1)})`;
+      if (!debianSystem) return `${name}\t${ours}`;
+      const who = st.current === 'shiro' ? ours : 'debian';
       const mode = st.manual ? 'manual' : 'auto';
       const dflt = st.policy ? `, default ${st.policy.default === 'shiro' ? 'tabcomputer' : st.policy.default}` : '';
       const inst = st.debianInstalled ? '' : ' [Debian package not installed]';
@@ -103,6 +108,7 @@ export const shiroAlternativesCmd: Command = {
     };
     try {
       if (!a.length || a[0] === '--list' || a[0] === '--get-selections') {
+        if (!debianSystem) out('Debian is not installed: every program below is tabcomputer\'s. `debian install` adds Debian\'s, then this chooses per program.');
         const divs = await ov.readDiversions(ctx.fs);
         const paths = new Set(Object.keys(ov.POLICY));
         for (const d of divs) if (d.by === ':' && d.to === d.from + '.debian') paths.add(d.from);
@@ -164,6 +170,32 @@ export const shiroPreconfigureCmd: Command = {
   async program(proc, kernel) {
     const { preconfigureProgram } = await import('../debian/preconfigure');
     return preconfigureProgram(proc, kernel);
+  },
+};
+
+/** apt and apt-get with recovery from an install that stopped part-way (src/debian/apt-guard.ts). */
+export const shiroAptCmd: Command = {
+  name: 'shiro-apt',
+  description: "Debian's apt, recovering an interrupted dpkg first",
+  // Run from Shiro's shell (the stub's interpreter as a builtin): args are [script, ...its args]
+  async exec(ctx) {
+    const [script = '/usr/bin/apt-get', ...args] = ctx.args;
+    const q = (a: string) => `'${a.replace(/'/g, `'\\''`)}'`;
+    const out = (t: string) => { if (ctx.streamStdout) ctx.streamStdout(t); else ctx.stdout += t; };
+    const err = (t: string) => { if (ctx.streamStderr) ctx.streamStderr(t); else ctx.stderr += t; };
+    const { aptGuard } = await import('../debian/apt-guard');
+    return aptGuard({
+      script, args, uid: ctx.shell.uid ?? 1000, fs: ctx.fs as any,
+      // argv[0] can't be set from the shell; apt and apt-get don't look at it
+      // the caller's stdin goes to apt itself, not to the recovery runs
+      run: (path, argv) => ctx.shell.fork().executeWithStdin([path, ...argv.slice(1)].map(q).join(' '),
+        path === script + '.debian' ? ctx.stdin : '', out, err),
+      say: err,
+    });
+  },
+  async program(proc, kernel) {
+    const { aptGuardProgram } = await import('../debian/apt-guard');
+    return aptGuardProgram(proc, kernel);
   },
 };
 

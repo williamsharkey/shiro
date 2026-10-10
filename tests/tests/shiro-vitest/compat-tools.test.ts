@@ -76,11 +76,12 @@ function fakeTerminal(rows = 24, cols = 80) {
 type Term = ReturnType<typeof fakeTerminal>;
 let lastScreen: (() => string) | undefined;
 
-async function until(cond: () => boolean, what: string, ms = 90_000): Promise<void> {
+async function until(cond: () => boolean | Promise<boolean>, what: string, ms = 90_000): Promise<void> {
   const t0 = Date.now();
-  while (!cond()) {
+  const sync = cond.constructor.name !== 'AsyncFunction';
+  while (!(await cond())) {
     if (Date.now() - t0 > ms) throw new Error(`timed out waiting for ${what}` + (process.env.SCREEN ? ': ' + JSON.stringify(lastScreen?.()) : ''));
-    await new Promise((r) => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, sync ? 10 : 250));
   }
 }
 
@@ -474,6 +475,80 @@ describe('fzf', () => {
   }, 180_000);
 });
 
+describe('the built-in git hands what it lacks to the full git', () => {
+  it('git blame, rebase: pkg git installed on first use and run on the same repository', async () => {
+    await sh('pkg remove git >/dev/null 2>&1; true');
+    await sh('mkdir -p /home/user/w/route && cd /home/user/w/route && git init -q && git config user.name A && git config user.email a@b.c'
+      + ' && echo one > f && git add f && git commit -qm init && git checkout -qb feat && echo two > g && git add g && git commit -qm two'
+      + ' && git checkout -q main && echo h > h && git add h && git commit -qm h && git checkout -q feat');
+    expect(await fs.exists('/usr/bin/git')).toBe(false);
+    const b = await sh('cd /home/user/w/route && git blame -s f');
+    expect(b.exitCode).toBe(0);
+    expect(b.out).toMatch(/^[0-9a-f^]{7,8} 1\) one\n$/);
+    expect(b.err).toContain('installed the full git');
+    expect(await fs.exists('/usr/bin/git')).toBe(true);
+    const r = await sh('cd /home/user/w/route && git rebase -q main && git log --format=%s');
+    expect(r.out).toBe('two\nh\ninit\n');
+    await sh('pkg remove git >/dev/null 2>&1; true');
+  }, 300_000);
+});
+
+describe('git UIs on the built-in git', () => {
+  // (pkg git, which the git tests installed, would replace the built-in)
+  beforeEach(async () => { await sh('pkg remove git >/dev/null 2>&1; true'); });
+  /** The screen's text, without escape sequences */
+  const text = (term: Term) => term.screen.replace(/\x1b\[[0-9;?]*[a-zA-Z]|\x1b[()][0B]|\x1b[=>]|\x1b\]8;;\x1b\\/g, '');
+  // (a repository of its own for each test: the file system outlives one)
+  const repo = (r: string) => `mkdir -p /home/user/w/${r} && cd /home/user/w/${r} && git init -q && git config user.name A && git config user.email a@b.c`
+    + ' && echo one > a.txt && git add a.txt && git commit -q -m first && echo two >> a.txt';
+
+  it('tig: the main view, the stage view, staging in the status view', async () => {
+    await install('tig');
+    await sh(`${repo('tig')} && git commit -qam second && echo three >> a.txt`);
+    const { term, done } = onTerminal('cd /home/user/w/tig && tig');
+    await until(() => text(term).includes('Unstaged changes') && text(term).includes('[main] second') && text(term).includes('first'), 'the main view');
+    term.type('\r'); // the stage view: diff-files
+    await until(() => text(term).includes('+three'), 'the unstaged diff');
+    term.type('q');
+    term.type('s'); // the status view: stage the file with u
+    await until(() => text(term).includes('Changes not staged for commit'), 'the status view');
+    for (let i = 0; i < 3; i++) { term.type('j'); await new Promise((r) => setTimeout(r, 300)); }
+    term.type('u');
+    await until(async () => (await sh('cd /home/user/w/tig && git diff --cached --name-only')).out === 'a.txt\n', 'git update-index');
+    term.type('q');
+    term.type('q');
+    expect(await done).toBe(0);
+    expect(await fs.exists('/usr/bin/git')).toBe(false); // all of it on the built-in (nothing sent to the full git)
+  }, 180_000);
+
+  it('lazygit: shows files, branches, commits and the diff; stages and commits', async () => {
+    await install('lazygit');
+    await sh(repo('lazygit'));
+    // past the first-run popups
+    await sh('mkdir -p /home/user/.local/state/lazygit && printf "startuppopupversion: 999\\nlastversion: 0.55.1\\n" > /home/user/.local/state/lazygit/state.yml');
+    const { term, done } = onTerminal('cd /home/user/w/lazygit && lazygit');
+    await until(() => /M a\.txt/.test(text(term)) && text(term).includes('+two') && /\*\s*main/.test(text(term)) && text(term).includes('first'), 'the panels');
+    // keys typed while it is still loading are dropped: again until it took
+    const staged = async () => (await sh('cd /home/user/w/lazygit && git diff --cached --name-only')).out === 'a.txt\n';
+    for (let i = 0; i < 20 && !(await staged()); i++) {
+      term.type(' '); // stage
+      await until(staged, 'git add', 3000).catch(() => {});
+    }
+    expect(await staged()).toBe(true);
+    for (let i = 0; i < 20 && !text(term).includes('Commit summary'); i++) {
+      term.type('c');
+      await until(() => text(term).includes('Commit summary'), 'the commit message panel', 3000).catch(() => {});
+    }
+    term.type('from lazygit');
+    await until(() => text(term).replace(/\s/g, '').includes('fromlazygit'), 'the message'); // (spaces drawn as cursor moves)
+    term.type('\r');
+    await until(async () => (await sh('cd /home/user/w/lazygit && git log --format=%s')).out === 'from lazygit\nfirst\n', 'git commit');
+    term.type('q');
+    expect(await done).toBe(0);
+    expect(await fs.exists('/usr/bin/git')).toBe(false);
+  }, 180_000);
+});
+
 describe('yq', () => {
   it('queries and converts YAML', async () => {
     await install('yq');
@@ -647,7 +722,8 @@ describe('procps (ps, top, free, uptime, vmstat, pgrep/pkill, watch)', () => {
     const top = (await sh('top -b -n 2 -d 0.2')).out;
     expect(top.match(/^top - \d\d:\d\d:\d\d up/gm)?.length).toBe(2);
     expect(top).toMatch(/Tasks: +\d+ total/);
-    expect(top).toMatch(/ +PID USER +PR +NI[^\n]*COMMAND\n +1 user/);
+    // (init among the tasks: ties on %CPU have no fixed order, and in-page shells are listed too)
+    expect(top).toMatch(/ +PID USER +PR +NI[^\n]*COMMAND\n(?:[^\n]*\n)*? +1 user [^\n]* init\n/);
     // pgrep/pkill a running program
     const bg = sh('vmstat 1 > /dev/null');
     for (let i = 0; i < 100 && !/vmstat/.test((await sh('pgrep -l vmstat')).out); i++) await new Promise((r) => setTimeout(r, 50));

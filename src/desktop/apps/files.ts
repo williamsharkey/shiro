@@ -1,17 +1,22 @@
 /**
  * Files: browse the Shiro filesystem (IndexedDB-backed, plus /proc, /dev and
  * /dom). Double-click a folder to enter it, a file to open it (text in an
- * editor window, images in a viewer).
+ * editor window, images in a viewer). Inside a git repository it shows the
+ * branch, ahead/behind and each entry's status (gitstatus.ts), and offers
+ * New Branch Folder; Clone… is always there (gitsheets.ts).
  */
 
 import type { AppContext } from '../index';
 import type { DesktopWindow } from '../wm';
 import { GLYPHS } from '../icons';
+import { dirStatus, findRepo, headBranch, upstreamOf, type EntryState, type Repo } from '../gitstatus';
+import { openBranchFolderSheet, openCloneSheet } from '../gitsheets';
 
 interface Entry { name: string; path: string; dir: boolean; size: number; mtime: number; link: boolean }
 
 const PLACES: { label: string; path: string }[] = [
   { label: 'Home', path: '/home/user' },
+  { label: 'Repositories', path: '/home/user/src' },
   { label: 'Computer', path: '/' },
   { label: 'Programs', path: '/usr/bin' },
   { label: 'Packages', path: '/usr/lib/pkg' },
@@ -31,6 +36,9 @@ function fmtSize(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
+const STATE_LABEL: Record<EntryState, string> = { M: 'Modified', A: 'Added', D: 'Deleted', '?': 'Untracked' };
+const GIT_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 5v14M7 15.5a4 4 0 0 1 4-4h2a4 4 0 0 0 4-4V7M5.2 4.2a1.8 1.8 0 1 0 3.6 0 1.8 1.8 0 1 0-3.6 0M5.2 19.8a1.8 1.8 0 1 0 3.6 0 1.8 1.8 0 1 0-3.6 0M15.2 5.2a1.8 1.8 0 1 0 3.6 0 1.8 1.8 0 1 0-3.6 0"/></svg>`;
+
 const dateFmt = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
 export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWindow {
@@ -46,6 +54,9 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
           <button class="sd-btn sd-icon-btn" data-act="back" title="Back" aria-label="Back">${GLYPHS.back}</button>
           <button class="sd-btn sd-icon-btn" data-act="up" title="Enclosing folder" aria-label="Up">${GLYPHS.up}</button>
           <div class="sd-path"></div>
+          <span class="sd-git-chip" hidden></span>
+          <button class="sd-btn" data-act="branchfolder" title="A folder of its own for another branch (git worktree add)" hidden>New Branch Folder…</button>
+          <button class="sd-btn" data-act="clone" title="Clone a GitHub repository into ~/src">Clone…</button>
           <button class="sd-btn" data-act="term" title="Open a terminal here">Terminal here</button>
         </div>
         <div class="sd-scroll"><table class="sd-table"><thead><tr>
@@ -58,6 +69,8 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
   const pathEl = root.querySelector<HTMLElement>('.sd-path')!;
   const tbody = root.querySelector('tbody')!;
   const empty = root.querySelector<HTMLElement>('.sd-empty')!;
+  const chip = root.querySelector<HTMLElement>('.sd-git-chip')!;
+  const branchBtn = root.querySelector<HTMLElement>('[data-act=branchfolder]')!;
   const placeBtns = PLACES.map(p => {
     const b = document.createElement('button');
     b.className = 'sd-side-item';
@@ -109,7 +122,9 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
     if (push && path !== cwd) history.push(cwd);
     cwd = path;
     selected = null;
+    if (!repo || !cwd.startsWith(repo.root)) gitState = null;
     render();
+    void refreshGit();
   }
 
   function render(): void {
@@ -125,12 +140,54 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
     for (const e of entries.slice(0, 2000)) {
       const tr = document.createElement('tr');
       tr.dataset.path = e.path;
-      tr.innerHTML = `<td><span class="sd-name">${e.dir ? GLYPHS.folder : `<span class="sd-ficon">${GLYPHS.file}</span>`}<span>${esc(e.name)}${e.link ? ' <span class="sd-muted">→</span>' : ''}</span></span></td>
+      const st = gitState?.get(e.name);
+      tr.innerHTML = `<td><span class="sd-name">${e.dir ? GLYPHS.folder : `<span class="sd-ficon">${GLYPHS.file}</span>`}<span>${esc(e.name)}${e.link ? ' <span class="sd-muted">→</span>' : ''}</span>${st ? `<span class="sd-git-badge sd-git-${st === '?' ? 'u' : st.toLowerCase()}" title="${STATE_LABEL[st]}">${st === '?' ? 'U' : st}</span>` : ''}<span class="sd-git-repo" data-repo="${esc(e.name)}"></span></span></td>
         <td class="sd-num sd-muted">${e.dir ? '—' : fmtSize(e.size)}</td><td class="sd-muted">${e.mtime ? dateFmt.format(e.mtime) : ''}</td>`;
       if (e.path === selected) tr.classList.add('sd-selected');
       frag.appendChild(tr);
     }
     tbody.appendChild(frag);
+    void decorateRepos();
+  }
+
+  // ── git: the repository this folder is in, its branch and its entries' status ──
+  let repo: Repo | null = null;
+  let gitState: Map<string, EntryState> | null = null;
+  let gitSeq = 0;
+  async function refreshGit(): Promise<void> {
+    const seq = ++gitSeq;
+    const r = cwd.startsWith('/proc') || cwd.startsWith('/dom') || cwd.startsWith('/dev') ? null : await findRepo(fs, cwd);
+    if (seq !== gitSeq) return;
+    repo = r;
+    branchBtn.hidden = !r;
+    if (!r) { chip.hidden = true; if (gitState) { gitState = null; render(); } return; }
+    const [up, state] = await Promise.all([upstreamOf(fs, r), dirStatus(fs, r, cwd)]);
+    if (seq !== gitSeq) return;
+    const branch = up.branch ?? await headBranch(fs, r);
+    chip.hidden = false;
+    chip.innerHTML = `<button class="sd-btn sd-git-branch" data-act="gitui" title="Open in Git">${GIT_ICON}<span>${esc(branch ?? 'no branch')}</span>${up.ahead ? `<span class="sd-ahead" title="${up.ahead} commit${up.ahead > 1 ? 's' : ''} to push">↑${up.ahead}</span>` : ''}${up.behind ? `<span class="sd-behind" title="${up.behind} commit${up.behind > 1 ? 's' : ''} to pull">↓${up.behind}</span>` : ''}</button>`;
+    const changed = JSON.stringify([...(gitState ?? [])]) !== JSON.stringify([...(state ?? [])]);
+    gitState = state;
+    if (changed) render();
+  }
+  /** Repository folders listed here: branch and ahead/behind, read only for what's on screen */
+  async function decorateRepos(): Promise<void> {
+    const dirs = entries.filter(e => e.dir).slice(0, 40);
+    for (const e of dirs) {
+      const r = await findRepoAt(e.path);
+      if (!r) continue;
+      const up = await upstreamOf(fs, r);
+      const cell = tbody.querySelector<HTMLElement>(`tr[data-path="${CSS.escape(e.path)}"] .sd-git-repo`);
+      if (!cell) continue;
+      const branch = up.branch ?? await headBranch(fs, r);
+      cell.innerHTML = `<span class="sd-git-tag">${GIT_ICON}${esc(branch ?? '')}</span>${up.ahead ? `<span class="sd-ahead">↑${up.ahead}</span>` : ''}${up.behind ? `<span class="sd-behind">↓${up.behind}</span>` : ''}`;
+    }
+  }
+  /** A repository whose top is exactly `path` (not one it is inside) */
+  async function findRepoAt(path: string): Promise<Repo | null> {
+    if (!(await fs.exists(`${path}/.git`).catch(() => false))) return null;
+    const r = await findRepo(fs, path);
+    return r && r.root === path ? r : null;
   }
 
   async function openFile(path: string): Promise<void> {
@@ -202,9 +259,18 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
     if (act === 'back') { const p = history.pop(); if (p) void go(p, false); }
     if (act === 'up') void go(cwd === '/' ? '/' : cwd.replace(/\/[^/]+$/, '') || '/');
     if (act === 'term') ctx.openTerminal({ cwd });
+    if (act === 'clone') openCloneSheet(ctx);
+    if (act === 'branchfolder') void openBranchFolderSheet(ctx, cwd);
+    if (act === 'gitui' && repo) void wm.openApp('git', { dir: repo.root, newWindow: true });
   });
   let refresh: ReturnType<typeof setTimeout> | null = null;
+  // Git state follows changes anywhere in the repository (its index and refs too), not a timer
+  let gitTimer: ReturnType<typeof setTimeout> | null = null;
   const off = fs.onChange((_ev, path) => {
+    if (repo && (path === repo.root || path.startsWith(repo.root + '/') || path.startsWith(repo.gitdir + '/'))) {
+      if (gitTimer) clearTimeout(gitTimer);
+      gitTimer = setTimeout(() => { gitTimer = null; void refreshGit(); }, 500);
+    }
     const parent = path.replace(/\/[^/]+$/, '') || '/';
     if (parent !== cwd || refresh) return;
     refresh = setTimeout(() => { refresh = null; void go(cwd, false); }, 250);

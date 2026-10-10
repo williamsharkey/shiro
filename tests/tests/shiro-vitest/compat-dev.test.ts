@@ -715,6 +715,47 @@ describe('node-compat modules real packages rely on', () => {
     return r.out;
   };
 
+  it('an unhandled rejection ends the script with exit code 1, unless a process listener takes it', async () => {
+    await fs.writeFile('/home/user/m/rej.js', `Promise.reject(new Error('boom'))`);
+    let r = await sh(shell, 'cd /home/user/m && node rej.js; echo "a=$?"');
+    expect(r.out).toContain('a=1');
+    expect(r.out + r.err).toContain('boom');
+    await fs.writeFile('/home/user/m/rej2.js', `process.on('unhandledRejection', (e) => console.log('caught', e.message)); Promise.reject(new Error('boom'))`);
+    r = await sh(shell, 'cd /home/user/m && node rej2.js; echo "b=$?"');
+    expect(r.out).toBe('caught boom\nb=0\n');
+    await fs.writeFile('/home/user/m/rej3.js', `(async () => { await new Promise((r) => setTimeout(r, 50)); throw new Error('late'); })(); setTimeout(() => console.log('not reached'), 500)`);
+    r = await sh(shell, 'cd /home/user/m && node rej3.js; echo "c=$?"');
+    expect(r.out).toBe('c=1\n');
+  }, 60_000);
+
+  it("a process's globalThis: process and Buffer on it; replacing a page global stays the process's", async () => {
+    await fs.writeFile('/home/user/m/g-mod.js', `globalThis.sharedByModules = 'yes'; module.exports = () => globalThis.fromEntry;`);
+    expect(await node(`const read = require('./g-mod');
+globalThis.fromEntry = 'entry';
+// a new global is also a bare identifier (mocha's global.describe, then describe())
+const out = [globalThis.process === process, global.process === process, globalThis.Buffer === Buffer, global === globalThis, read(), sharedByModules];
+delete globalThis.sharedByModules;
+const page = globalThis.crypto;
+globalThis.crypto = { getRandomValues: (b) => b.fill(7) };
+out.push(globalThis.crypto.getRandomValues(new Uint8Array(1))[0]);
+Object.defineProperty(globalThis, 'performance', { writable: true, configurable: true });
+out.push(typeof globalThis.performance.now);
+globalThis.performance = { now: () => 42 };
+out.push(globalThis.performance.now());
+out.push(typeof globalThis.setTimeout(() => {}, 0) !== 'undefined', typeof atob === 'function' && globalThis.atob('aGk='));
+delete globalThis.fromEntry;
+out.push(globalThis.fromEntry, 'fromEntry' in globalThis);
+// code compiled at run time sees the process's globals too (esbuild-wasm runs Go's wasm_exec this way)
+const f = new Function('a', 'return [typeof process, process === globalThis.process, Buffer === globalThis.Buffer, a]');
+const g = Function('process', '"use strict"; return process');
+out.push(...f(1), g('own'), f instanceof Function, Function.prototype === Object.getPrototypeOf(f));
+console.log(JSON.stringify(out));`)).toBe('[true,true,true,true,"entry","yes",7,"function",42,true,"hi",null,false,"object",true,true,1,"own",true,true]\n');
+    // The page's own crypto and performance, and a next script, never saw those
+    expect(typeof (globalThis as any).crypto?.subtle).toBe('object');
+    expect(await node(`console.log(typeof globalThis.crypto.subtle, typeof globalThis.performance.timeOrigin, typeof globalThis.sharedByModules, typeof globalThis.fromEntry)`))
+      .toBe('object number undefined undefined\n');
+  }, 60_000);
+
   it('path follows Node (relative paths stay relative)', async () => {
     expect(await node(`const p = require('path');
 console.log(JSON.stringify([p.dirname('a'), p.dirname('/a'), p.dirname('a/b/'), p.join('a', '../b', './c'), p.join(''), p.normalize('./x/../y/'),
@@ -1408,4 +1449,242 @@ describe('git (upstream, x86-64 in Blink)', () => {
     expect(r.err).toBe('');
     expect(r.out).toBe('4\n1\n');
   }, 300_000);
+});
+
+import { iframeServer } from '@shiro/iframe-server';
+import { WsClient } from '@shiro/browser/websocket';
+
+describe('in-tab servers: streamed responses and WebSocket upgrades (what a preview window reaches)', () => {
+  let shell: Shell;
+  let fs: FileSystem;
+  beforeAll(async () => {
+    ({ fs, shell } = await createTestShell());
+    const r = await sh(shell, 'mkdir -p /home/user/live && cd /home/user/live && npm init -y > /dev/null && npm install ws@8.18.0 socket.io@4.8.1 > /dev/null; echo $?');
+    expect(r.out).toBe('0\n');
+  }, 300_000);
+
+  /** Talk RFC 6455 to `port` the way the preview's WebSocket does; resolve after `want` messages */
+  const wsTalk = (port: number, path: string, onMessage: (m: string, send: (s: string) => void) => void, want: number) =>
+    new Promise<string[]>((resolve, reject) => {
+      const got: string[] = [];
+      const c: WsClient = new WsClient(iframeServer.connect(port) as any, {
+        open: () => onMessage('', (s) => void c.send(s)),
+        message: (d) => { got.push(String(d)); onMessage(String(d), (s) => void c.send(s)); if (got.length >= want) { void c.close(); resolve(got); } },
+        close: () => resolve(got),
+        error: reject,
+      });
+      c.run(new URL(`ws://localhost:${port}${path}`), [], []).catch(reject);
+      setTimeout(() => resolve(got), 10_000);
+    });
+
+  it('http.createServer is node-like: statusCode, headers, a streamed request body, bytes out, the request event', async () => {
+    await fs.writeFile('/home/user/live/plain.js', `const http = require('http');
+const srv = http.createServer();
+srv.on('request', (req, res) => {
+  const parts = [];
+  req.on('data', (c) => parts.push(c));
+  req.on('end', () => {
+    const body = Buffer.concat(parts).toString();
+    if (req.url === '/bytes') { res.setHeader('content-type', 'application/octet-stream'); res.end(Buffer.from([0, 255, 1])); return; }
+    res.statusCode = 201;
+    res.setHeader('x-seen', [req.method, req.headers['x-in']].join(' '));
+    res.write('got ');
+    res.end(body + ' at ' + req.url + ' ' + res.headersSent);
+  });
+});
+srv.listen(4801, () => console.log('up', srv.address().port, srv.listening));`);
+    expect((await sh(shell, 'cd /home/user/live && node plain.js')).out).toContain('up 4801 true');
+    const r = await iframeServer.fetch(4801, '/p?q=1', { method: 'POST', headers: { 'x-in': 'hi' }, body: 'payload' });
+    expect([r.status, r.headers?.['x-seen'], r.body]).toEqual([201, 'POST hi', 'got payload at /p?q=1 false']);
+    const b = await iframeServer.fetch(4801, '/bytes');
+    expect(Array.from(b.body as Uint8Array)).toEqual([0, 255, 1]);
+  }, 60_000);
+
+  it('server-sent events stream: the head and each write arrive before the response ends', async () => {
+    await fs.writeFile('/home/user/live/sse.js', `require('http').createServer((req, res) => {
+  res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+  let n = 0;
+  const t = setInterval(() => { res.write('event: tick\\ndata: ' + (++n) + '\\n\\n'); if (n === 3) { clearInterval(t); res.end(); } }, 100);
+}).listen(4802);`);
+    await sh(shell, 'cd /home/user/live && node sse.js');
+    const t0 = Date.now();
+    const r = await iframeServer.fetch(4802, '/events');
+    expect(r.status).toBe(200);
+    expect(r.headers?.['content-type']).toBe('text/event-stream');
+    expect(r.body).toBeInstanceOf(ReadableStream);
+    const reader = (r.body as ReadableStream<Uint8Array>).getReader();
+    const first = await reader.read();
+    // The first event comes after ~100 ms, not with the end of the response (~300 ms)
+    expect(new TextDecoder().decode(first.value)).toBe('event: tick\ndata: 1\n\n');
+    expect(Date.now() - t0).toBeLessThan(280);
+    let rest = '';
+    for (let x = await reader.read(); !x.done; x = await reader.read()) rest += new TextDecoder().decode(x.value);
+    expect(rest).toBe('event: tick\ndata: 2\n\nevent: tick\ndata: 3\n\n');
+  }, 60_000);
+
+  it('the ws package: an upgrade handler on the http server echoes messages', async () => {
+    await fs.writeFile('/home/user/live/ws.js', `const http = require('http'); const { WebSocketServer } = require('ws');
+const srv = http.createServer((req, res) => res.end('not a socket'));
+const wss = new WebSocketServer({ noServer: true });
+srv.on('upgrade', (req, socket, head) => {
+  if (req.url !== '/echo') { socket.destroy(); return; }
+  wss.handleUpgrade(req, socket, head, (ws) => ws.on('message', (m, isBinary) => ws.send(isBinary ? 'bin:' + [...m].join(',') : 'echo:' + m)));
+});
+srv.listen(4803);`);
+    await sh(shell, 'cd /home/user/live && node ws.js');
+    const got = await wsTalk(4803, '/echo', (m, send) => { if (m === '') { send('a'); send('b'); } }, 2);
+    expect(got).toEqual(['echo:a', 'echo:b']);
+    // the same port still answers plain requests
+    expect((await iframeServer.fetch(4803, '/')).body).toBe('not a socket');
+  }, 60_000);
+
+  it('Socket.IO: a WebSocket connection and the polling handshake reach the server; events echo', async () => {
+    await fs.writeFile('/home/user/live/sio.js', `const { Server } = require('socket.io');
+const io = new Server(4804);
+io.on('connection', (s) => s.on('echo', (m) => s.emit('echo', m + '!')));`);
+    await sh(shell, 'cd /home/user/live && node sio.js');
+    const got = await wsTalk(4804, '/socket.io/?EIO=4&transport=websocket', (m, send) => {
+      if (m.startsWith('0{')) send('40');
+      else if (m.startsWith('40{')) send('42["echo","hi"]');
+    }, 3);
+    expect(got[0]).toMatch(/^0\{"sid":/);
+    expect(got[1]).toMatch(/^40\{"sid":/);
+    expect(got[2]).toBe('42["echo","hi!"]');
+    const poll = await iframeServer.fetch(4804, '/socket.io/?EIO=4&transport=polling');
+    expect(poll.status).toBe(200);
+    expect(String(poll.body)).toMatch(/^0\{"sid":.*"upgrades":\["websocket"\]/);
+  }, 60_000);
+
+  it('a kernel listener (net.createServer) takes a raw connection: its own WebSocket handshake and frames', async () => {
+    await fs.writeFile('/home/user/live/raw.js', `const net = require('net'); const crypto = require('crypto');
+net.createServer((sock) => {
+  let buf = Buffer.alloc(0), open = false;
+  sock.on('data', (d) => {
+    buf = Buffer.concat([buf, d]);
+    if (!open) {
+      const end = buf.indexOf('\\r\\n\\r\\n');
+      if (end < 0) return;
+      const key = /sec-websocket-key: *(\\S+)/i.exec(buf.slice(0, end).toString())[1];
+      const accept = crypto.createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+      sock.write('HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\nSec-WebSocket-Accept: ' + accept + '\\r\\n\\r\\n');
+      buf = buf.slice(end + 4); open = true;
+    }
+    if (buf.length < 6) return;
+    const len = buf[1] & 127, mask = buf.slice(2, 6), text = Buffer.from(buf.slice(6, 6 + len).map((b, i) => b ^ mask[i & 3])).toString();
+    buf = buf.slice(6 + len);
+    const out = Buffer.from('kernel:' + text);
+    sock.write(Buffer.concat([Buffer.from([0x81, out.length]), out]));
+  });
+}).listen(4805, () => console.log('raw up'));`);
+    await sh(shell, 'cd /home/user/live && node raw.js');
+    expect(await wsTalk(4805, '/', (m, send) => { if (m === '') send('ping'); }, 1)).toEqual(['kernel:ping']);
+  }, 60_000);
+});
+
+import { buildTree, binDirOf, type PackageMetadata } from '@shiro/commands/npm-tree';
+import { initializerPackage } from '@shiro/commands/npm';
+
+describe('npm install: the node_modules tree (npm-tree.ts)', () => {
+  /** A registry of name → { version → deps/extra fields } */
+  const registry = (spec: Record<string, Record<string, any>>) => async (name: string): Promise<PackageMetadata> => {
+    const vs = spec[name];
+    if (!vs) throw new Error(`Package '${name}' not found`);
+    const versions: Record<string, any> = {};
+    for (const [v, extra] of Object.entries(vs)) versions[v] = { name, version: v, dist: { tarball: `https://r/${name}-${v}.tgz` }, ...extra };
+    const latest = Object.keys(vs).pop()!;
+    return { name, 'dist-tags': { latest, ...(vs.__tags as any ?? {}) }, versions };
+  };
+  const layout = (nodes: { dir: string; version: string; source: string }[]) =>
+    Object.fromEntries(nodes.map((n) => [n.dir, n.source === n.dir.split('node_modules/').pop() ? n.version : `${n.source}@${n.version}`]));
+
+  it('hoists what it can and nests a conflicting version under the package that needs it', async () => {
+    const t = await buildTree([{ name: 'a', range: '^1.0.0' }, { name: 'b', range: '^1.0.0' }, { name: 'c', range: '^2.0.0' }], registry({
+      a: { '1.0.0': { dependencies: { c: '^1.0.0', d: '^1.0.0' } } },
+      b: { '1.0.0': { dependencies: { d: '^1.1.0' } } },
+      c: { '1.0.0': {}, '2.0.0': {} },
+      d: { '1.0.0': {}, '1.2.0': {} },
+    }));
+    expect(layout(t.nodes)).toEqual({
+      'node_modules/a': '1.0.0', 'node_modules/b': '1.0.0', 'node_modules/c': '2.0.0',
+      'node_modules/a/node_modules/c': '1.0.0', 'node_modules/d': '1.2.0',
+    });
+    expect(binDirOf(t.nodes.find((n) => n.dir === 'node_modules/a/node_modules/c')!)).toBe('node_modules/a/node_modules/.bin');
+  });
+
+  it("doesn't hide a version another package already uses", async () => {
+    // x@1 is hoisted for p; q's x@2 can't go at the top, and r (under q) already uses the top x@1
+    const t = await buildTree([{ name: 'p', range: '1' }, { name: 'q', range: '1' }], registry({
+      p: { '1.0.0': { dependencies: { x: '1' } } },
+      q: { '1.0.0': { dependencies: { r: '1', s: '1' } } },
+      r: { '1.0.0': { dependencies: { x: '1' } } },
+      s: { '1.0.0': { dependencies: { x: '2' } } },
+      x: { '1.0.0': {}, '2.0.0': {} },
+    }));
+    const l = layout(t.nodes);
+    expect(l['node_modules/x']).toBe('1.0.0');
+    expect(l['node_modules/s/node_modules/x']).toBe('2.0.0');
+  });
+
+  it('installs peers, leaves out native builds but takes wasm32 ones, and the WebAssembly esbuild and rollup', async () => {
+    const t = await buildTree([{ name: 'vite', range: '^5.0.0' }, { name: 'plugin', range: '1' }], registry({
+      vite: { '5.4.10': { dependencies: { esbuild: '^0.21.3', rollup: '^4.20.0' }, optionalDependencies: { fsevents: '~2.3.3', '@x/binding-linux-x64-gnu': '1', '@x/binding-wasm32-wasi': '1' } } },
+      '@x/binding-linux-x64-gnu': { '1.0.0': { os: ['linux'], cpu: ['x64'] } },
+      '@x/binding-wasm32-wasi': { '1.0.0': { cpu: ['wasm32'] } },
+      'esbuild-wasm': { '0.21.5': { bin: { esbuild: 'bin/esbuild' } } },
+      '@rollup/wasm-node': { '4.24.0': { dependencies: { '@types/estree': '1.0.6' }, bin: { rollup: 'dist/bin/rollup' } } },
+      '@types/estree': { '1.0.6': {} },
+      fsevents: { '2.3.3': { os: ['darwin'] } },
+      plugin: { '1.0.0': { peerDependencies: { vite: '^5.0.0', missing: '*' }, peerDependenciesMeta: { missing: { optional: true } } } },
+    }));
+    expect(layout(t.nodes)).toEqual({
+      'node_modules/vite': '5.4.10', 'node_modules/plugin': '1.0.0',
+      'node_modules/esbuild': 'esbuild-wasm@0.21.5', 'node_modules/rollup': '@rollup/wasm-node@4.24.0',
+      'node_modules/@types/estree': '1.0.6', 'node_modules/@x/binding-wasm32-wasi': '1.0.0',
+    });
+    expect(t.skipped.sort()).toEqual(['@x/binding-linux-x64-gnu@1.0.0', 'fsevents@2.3.3']);
+    expect(t.warnings).toEqual([]);
+  });
+
+  it('follows npm: aliases and dist-tags; npm create names the create- package', async () => {
+    const t = await buildTree([{ name: 'old', range: 'npm:new@^2' }, { name: 'tagged', range: 'next' }], registry({
+      new: { '2.1.0': {} },
+      tagged: { '1.0.0': {}, '2.0.0-beta.1': {}, __tags: { next: '2.0.0-beta.1' } as any },
+    }));
+    expect(layout(t.nodes)).toEqual({ 'node_modules/old': 'new@2.1.0', 'node_modules/tagged': '2.0.0-beta.1' });
+    expect(['vite@latest', 'vite', '@vue', '@vue@3', '@scope/app@1.2.0'].map(initializerPackage))
+      .toEqual(['create-vite@latest', 'create-vite', '@vue/create', '@vue/create@3', '@scope/create-app@1.2.0']);
+  });
+});
+
+import { transformESModules } from '@shiro/commands/jseval/module-transform';
+
+describe('ES module transform: minified imports, and import text in strings left alone', () => {
+  it('rewrites import{a as b}from"x", import t from"y", import i,{s as a}from"z", and keeps template text', () => {
+    const src = 'import{createRequire as e}from"node:module";import t from"node:fs";import i,{styleText as a}from"node:util";import"./side.js";'
+      + 'const tpl=`import react from \'@vitejs/plugin-react\'\nexport default defineConfig({})`;export{tpl as x,e};export default 1;';
+    const out = transformESModules(src);
+    expect(out).toContain('const {createRequire: e} = __shiro_require("node:module");');
+    expect(out).toContain('const t = __shiro_require("node:fs");');
+    expect(out).toContain('const i = __shiro_require("node:util"); const {styleText: a} = __shiro_require("node:util");');
+    expect(out).toContain('__shiro_require("./side.js");');
+    expect(out).toContain("`import react from '@vitejs/plugin-react'\nexport default defineConfig({})`");
+    expect(out).toContain('__shiro_module.exports.x = tpl; __shiro_module.exports.e = e;');
+    expect(out).toContain('__shiro_module.exports = 1;');
+  });
+});
+
+import { liveEsbuildChunk } from '@shiro/commands/jseval/esm-live';
+
+describe('live bindings for code-split chunks: an import named like a member keyword', () => {
+  it("keeps `get name() {}` an accessor when `get` is an imported binding (vite 7's config chunk)", () => {
+    const src = 'import { __toESM as t, get, set } from "./chunk.js";\n'
+      + 'const o = { a: 1, get clients() { return get(1); }, set value(v) { set(v); }, get };\n'
+      + 'class C { static get x() { return get; } get y() { return 1; } }\n';
+    const out = liveEsbuildChunk(src);
+    expect(out).toContain('get clients() { return (0, __shiro_live');
+    expect(out).toContain('set value(v) { (0, __shiro_live');
+    expect(out).toContain('static get x() { return __shiro_live');
+    expect(out).toContain('get y() { return 1; }');
+    expect(out).toMatch(/get: __shiro_live\d+\.get \}/);
+  });
 });

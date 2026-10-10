@@ -116,6 +116,8 @@ describe.skipIf(!haveRootfs)('Debian rootfs', () => {
     const cfg = await fs.readFile('/etc/dpkg/dpkg.cfg.d/90shiro-slim', 'utf8') as string;
     expect(cfg).toMatch(/path-exclude \/usr\/share\/man\/\*\npath-include \/usr\/share\/man\/man\[1-9\]\*\/\*\n/);
     expect(cfg).toContain('path-exclude /usr/share/doc/*');
+    // update-alternatives' man-page slave links need the section directories (openjdk's postinst)
+    for (const n of [1, 5, 8]) expect(await fs.exists(`/usr/share/man/man${n}`)).toBe(true);
     expect(await fs.exists('/etc/apt/apt.conf.d/91shiro-engine')).toBe(false);
     // Maintainer scripts don't start services (invoke-rc.d asks policy-rc.d)
     expect((await run(shell, '/usr/sbin/policy-rc.d ssh start; echo "rc=$?"')).output).toContain('rc=101');
@@ -127,7 +129,13 @@ describe.skipIf(!haveRootfs)('Debian rootfs', () => {
     await new Promise((r) => setTimeout(r, 50)); // the overlay hears the write
     expect((await run(shell, 'type jq')).output).toContain('/usr/bin/jq');
     expect((await run(shell, 'jq')).output).toContain('debian-jq');
-    await fs.unlink('/usr/bin/jq');
+    // Removed (apt remove: dpkg unlinks it through the kernel): the builtin again
+    expect((await run(shell, 'sudo /usr/bin/rm /usr/bin/jq; echo rm=$?')).output).toContain('rm=0');
+    await new Promise((r) => setTimeout(r, 50));
+    const after = await run(shell, 'echo \'{"a":1}\' | jq .a');
+    expect(after.output).not.toContain('ENOENT');
+    expect(after.output.trim()).toBe('1');
+    expect((await run(shell, 'type jq')).output).not.toContain('/usr/bin/jq');
     // A command typed before the overlay is up waits for it (python3 right after load)
     let release!: () => void;
     const order: string[] = [];

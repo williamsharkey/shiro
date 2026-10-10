@@ -283,7 +283,7 @@ describe('Demo 3: Node.js Compat Deep Exercise', () => {
     expect(exitCode).toBe(0);
     expect(output).toContain('platform:linux');
     expect(output).toContain('arch:x64');
-    expect(output).toContain('version:v20.0.0');
+    expect(output).toContain('version:v22.12.0');
   });
 
   it('require missing npm package suggests npm install', async () => {
@@ -751,13 +751,13 @@ describe('Demo 9: npm Edge Cases', () => {
   it('npm --version shows version string', async () => {
     const { output, exitCode } = await run(shell, 'npm --version');
     expect(exitCode).toBe(0);
-    expect(output).toContain('npm v1.0.0-shiro');
+    expect(output.trim()).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
   it('npm -v shows version string', async () => {
     const { output, exitCode } = await run(shell, 'npm -v');
     expect(exitCode).toBe(0);
-    expect(output).toContain('npm v1.0.0-shiro');
+    expect(output.trim()).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
   it('unknown subcommand exits 1', async () => {

@@ -17,6 +17,9 @@ export function setTrustRoots(load: () => Promise<string>, extra = ''): void {
   rootsPromise = load().then((pem) => TrustedCert.databaseFromPEM(pem + '\n' + extra));
 }
 
+/** Whether setTrustRoots has run (the Browser app's, or a command's own). */
+export function hasTrustRoots(): boolean { return rootsPromise !== null; }
+
 function roots(): Promise<RootDb> {
   if (!rootsPromise) throw new Error('TLS roots not configured');
   return rootsPromise;

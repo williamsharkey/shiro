@@ -31,6 +31,10 @@ int posix_spawnattr_getflags(const posix_spawnattr_t *__restrict, short *__restr
 int posix_spawnattr_setpgroup(posix_spawnattr_t *, pid_t);
 int posix_spawnattr_setsigmask(posix_spawnattr_t *__restrict, const sigset_t *__restrict);
 int posix_spawnattr_setsigdefault(posix_spawnattr_t *__restrict, const sigset_t *__restrict);
+struct sched_param;
+/* No scheduling classes: ENOSYS */
+int posix_spawnattr_setschedpolicy(posix_spawnattr_t *, int);
+int posix_spawnattr_setschedparam(posix_spawnattr_t *__restrict, const struct sched_param *__restrict);
 int posix_spawn_file_actions_init(posix_spawn_file_actions_t *);
 int posix_spawn_file_actions_destroy(posix_spawn_file_actions_t *);
 int posix_spawn_file_actions_addopen(posix_spawn_file_actions_t *__restrict, int, const char *__restrict, int, mode_t);

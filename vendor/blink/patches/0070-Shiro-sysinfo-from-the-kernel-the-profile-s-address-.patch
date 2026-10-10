@@ -1,0 +1,119 @@
+From d959d367ffca7282fe7b5554eb667d1b4b4085c7 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 23:26:18 +0000
+Subject: [PATCH 70/70] Shiro: sysinfo from the kernel; the profile's address
+ table doesn't overflow into one slot
+
+sysinfo(2) is the kernel's (free and /proc/meminfo report the same
+memory); Blink's own when the kernel lacks it. SHIRO_BLINK_PROFILE: the
+address table has 2^17 slots, and addresses that find no slot are counted
+apart. They went to slot 0, so one address (the first one there) looked
+like 95% of the time.
+---
+ blink/shiro.inc | 40 ++++++++++++++++++++++++++++------------
+ 1 file changed, 28 insertions(+), 12 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index d3a4e87..f691172 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -1005,7 +1005,7 @@ static _Thread_local unsigned t_shiro_prof_tick;
+ // Guest addresses: a sample of where the GIL holder is each ms (a compiled
+ // block's entry or an interpreted instruction), and every interpreted
+ // instruction with its opcode
+-#define SHIRO_PROF_HOT 8192
++#define SHIRO_PROF_HOT (1 << 17)
+ static struct {
+   u64 ip;
+   u32 jit, interp;  // time samples
+@@ -1013,6 +1013,7 @@ static struct {
+   u16 op;
+ } g_shiro_prof_hot[SHIRO_PROF_HOT];
+ static long g_shiro_prof_op[4096];
++static long g_shiro_prof_lost_n, g_shiro_prof_lost_samples;  // the table was full
+ 
+ static struct ShiroProfThr *ShiroProfThr(void) {
+   struct ShiroProfThr *t;
+@@ -1039,8 +1040,10 @@ void ShiroProfGil(bool held, double t0) {
+   }
+ }
+ 
+-static unsigned ShiroProfSlot(u64 ip) {
+-  unsigned i = (ip * 0x9E3779B97F4A7C15ull) >> 51, k;
++// ip's slot, or -1 when the table is full around it (counted apart: lumping
++// those into one slot made one address look hot)
++static int ShiroProfSlot(u64 ip) {
++  unsigned i = (ip * 0x9E3779B97F4A7C15ull) >> (64 - 17), k;
+   for (k = 0; k < 64; ++k, i = (i + 1) & (SHIRO_PROF_HOT - 1)) {
+     if (g_shiro_prof_hot[i].ip == ip) return i;
+     if (!g_shiro_prof_hot[i].ip) {
+@@ -1048,13 +1051,13 @@ static unsigned ShiroProfSlot(u64 ip) {
+       return i;
+     }
+   }
+-  return 0;  // full around here: lumped with whatever is in slot 0
++  return -1;
+ }
+ 
+ // after each compiled block (at `ip`) or interpreted instruction
+ void ShiroProfStep(struct Machine *m, u64 ip, bool jit) {
+   struct ShiroProfThr *t = ShiroProfThr();
+-  unsigned i;
++  int i;
+   double now;
+   if (jit) {
+     ++t->blocks;
+@@ -1062,14 +1065,17 @@ void ShiroProfStep(struct Machine *m, u64 ip, bool jit) {
+     int op = Mopcode(m->xedd->op.rde) & 4095;
+     ++t->interp;
+     ++g_shiro_prof_op[op];
+-    i = ShiroProfSlot(ip);
+-    ++g_shiro_prof_hot[i].n;
+-    g_shiro_prof_hot[i].op = op;
++    if ((i = ShiroProfSlot(ip)) >= 0) {
++      ++g_shiro_prof_hot[i].n;
++      g_shiro_prof_hot[i].op = op;
++    } else {
++      ++g_shiro_prof_lost_n;
++    }
+   }
+   if (!(++t_shiro_prof_tick & 31) && (now = emscripten_get_now()) - t_shiro_prof_sample >= 1) {
+     t_shiro_prof_sample = now;
+-    i = ShiroProfSlot(ip);
+-    if (jit) ++g_shiro_prof_hot[i].jit;
++    if ((i = ShiroProfSlot(ip)) < 0) ++g_shiro_prof_lost_samples;
++    else if (jit) ++g_shiro_prof_hot[i].jit;
+     else ++g_shiro_prof_hot[i].interp;
+   }
+ }
+@@ -1107,8 +1113,9 @@ static int ShiroProfDumpMore(char *b, int n, int cap, double now) {
+                   t->sys - t->futex, t->futex, t->blocks, t->interp);
+   }
+   for (i = 0; i < SHIRO_PROF_HOT; ++i) idx[i] = i, samples += g_shiro_prof_hot[i].jit + g_shiro_prof_hot[i].interp;
+-  n += snprintf(b + n, cap - n, "total: %ld compiled blocks run, %ld instructions interpreted, %ld 1-ms samples\n",
+-                blocks, interp, samples);
++  n += snprintf(b + n, cap - n, "total: %ld compiled blocks run, %ld instructions interpreted, %ld 1-ms samples"
++                                 " (not in the address table: %ld instructions, %ld samples)\n",
++                blocks, interp, samples + g_shiro_prof_lost_samples, g_shiro_prof_lost_n, g_shiro_prof_lost_samples);
+   qsort(idx, SHIRO_PROF_HOT, sizeof(idx[0]), ShiroProfByTime);
+   n += snprintf(b + n, cap - n, "\nwhere the time goes (samples at a compiled block's entry or an interpreted instruction)\n"
+                                  "address               samples  in jit  interpreted\n");
+@@ -2674,6 +2681,15 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+     }
+   }
+   switch (nr) {
++    case 0x063: {                                                     // sysinfo
++      // the kernel's numbers (free and /proc/meminfo show the same); a
++      // kernel without it: Blink's own
++      u8 si[112] = {0};
++      r = ShiroCall(m, 99, A12(0), si, 0, sizeof(si), false, false);
++      if (r == -ENOSYS_LINUX) return false;
++      if (r >= 0 && CopyToUserWrite(m, a, si, sizeof(si)) == -1) r = -EFAULT_LINUX;
++      break;
++    }
+     case 0x03F:                                                       // uname
+       // Blink's answer (sysname, machine x86_64) with the Shiro kernel's
+       // host and domain names (emscripten's are "emscripten"), and its
+-- 
+2.43.0
+

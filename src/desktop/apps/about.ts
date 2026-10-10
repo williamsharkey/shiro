@@ -13,7 +13,7 @@ const REPO = 'https://github.com/williamsharkey/tabcomputer/blob/main/docs';
  * with the docs: they are claims a visitor will check.
  */
 const STATUS = [
-  { label: 'Debian 13 top-300 packages', value: '298/300', note: 'install with apt and run (popcon ranks 1–300)', doc: 'DEBIAN_SCORE.md' },
+  { label: 'Debian 13 top-500 packages', value: '496/500', note: 'install with apt and run (popcon ranks 1–500)', doc: 'DEBIAN_SCORE.md' },
   { label: 'LTP syscall tests, x86-64', value: '237/320', note: 'pass under the x86-64 engine', doc: 'CONFORMANCE.md' },
 ];
 

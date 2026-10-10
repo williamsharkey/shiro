@@ -1,0 +1,136 @@
+From 7d24b4a433052085f22df3724489025ab87b678a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 23:42:06 +0000
+Subject: [PATCH 71/71] Shiro: SHIRO_BLINK_PROFILE says why instructions ran
+ interpreted
+
+Counts, for the interpreted instructions: not at a branch target (no
+compiled entry was tried), a first visit, below the compile threshold, a
+compile that failed before (or is excluded), a compile that failed now.
+---
+ blink/machine.c |  7 ++++---
+ blink/machine.h |  2 +-
+ blink/shiro.inc |  9 ++++++++-
+ blink/wjit.c    | 14 +++++++++++++-
+ 4 files changed, 26 insertions(+), 6 deletions(-)
+
+diff --git a/blink/machine.c b/blink/machine.c
+index 77cdb4f..9d4e89c 100644
+--- a/blink/machine.c
++++ b/blink/machine.c
+@@ -2343,16 +2343,17 @@ void Actor(struct Machine *mm) {
+ #ifdef HAVE_WJIT
+       // compiled code is entered at branch targets (where wjhot is set)
+       u64 ip = m->ip;
+-      if (!m->wjhot || !WjExecute(m)) {
++      bool wjhot = m->wjhot;
++      if (!wjhot || !WjExecute(m)) {
+         if (UNLIKELY(g_shiro_trace)) {
+           g_shiro_ring[g_shiro_ringi++ & 1023] = ip;
+           if (g_shiro_probes[0]) ShiroProbe(m, ip);
+         }
+         ExecuteInstruction(m);
+         m->wjhot = g_wj_enabled && m->ip - ip != m->xedd->length;
+-        if (UNLIKELY(g_shiro_prof)) ShiroProfStep(m, ip, false);
++        if (UNLIKELY(g_shiro_prof)) ShiroProfStep(m, ip, false, wjhot);
+       } else if (UNLIKELY(g_shiro_prof)) {
+-        ShiroProfStep(m, ip, true);
++        ShiroProfStep(m, ip, true, true);
+       }
+ #else
+       ExecuteInstruction(m);
+diff --git a/blink/machine.h b/blink/machine.h
+index 2df9cfe..fe39bd8 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -669,7 +669,7 @@ void OpRetIw(P);
+ void OpSsePclmulqdq(P);
+ extern bool g_shiro_trace;
+ extern bool g_shiro_prof;
+-void ShiroProfStep(struct Machine *, u64, bool);
++void ShiroProfStep(struct Machine *, u64, bool, bool);
+ extern u64 g_shiro_ring[1024];
+ extern unsigned g_shiro_ringi;
+ extern u64 g_shiro_ring0[1024], g_shiro_fault0;
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index f691172..df78bf8 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -1055,7 +1055,10 @@ static int ShiroProfSlot(u64 ip) {
+ }
+ 
+ // after each compiled block (at `ip`) or interpreted instruction
+-void ShiroProfStep(struct Machine *m, u64 ip, bool jit) {
++static long g_shiro_prof_seq;  // interpreted: not at a branch target (no compiled entry tried)
++extern long g_wj_miss[4];
++
++void ShiroProfStep(struct Machine *m, u64 ip, bool jit, bool tried) {
+   struct ShiroProfThr *t = ShiroProfThr();
+   int i;
+   double now;
+@@ -1064,6 +1067,7 @@ void ShiroProfStep(struct Machine *m, u64 ip, bool jit) {
+   } else {
+     int op = Mopcode(m->xedd->op.rde) & 4095;
+     ++t->interp;
++    if (!tried) ++g_shiro_prof_seq;
+     ++g_shiro_prof_op[op];
+     if ((i = ShiroProfSlot(ip)) >= 0) {
+       ++g_shiro_prof_hot[i].n;
+@@ -1116,6 +1120,9 @@ static int ShiroProfDumpMore(char *b, int n, int cap, double now) {
+   n += snprintf(b + n, cap - n, "total: %ld compiled blocks run, %ld instructions interpreted, %ld 1-ms samples"
+                                  " (not in the address table: %ld instructions, %ld samples)\n",
+                 blocks, interp, samples + g_shiro_prof_lost_samples, g_shiro_prof_lost_n, g_shiro_prof_lost_samples);
++  n += snprintf(b + n, cap - n, "interpreted because: %ld not at a branch target, %ld first visit, %ld below the"
++                                 " compile threshold, %ld compile failed before, %ld compile failed now\n",
++                g_shiro_prof_seq, g_wj_miss[0], g_wj_miss[1], g_wj_miss[2], g_wj_miss[3]);
+   qsort(idx, SHIRO_PROF_HOT, sizeof(idx[0]), ShiroProfByTime);
+   n += snprintf(b + n, cap - n, "\nwhere the time goes (samples at a compiled block's entry or an interpreted instruction)\n"
+                                  "address               samples  in jit  interpreted\n");
+diff --git a/blink/wjit.c b/blink/wjit.c
+index 067eb22..483370a 100644
+--- a/blink/wjit.c
++++ b/blink/wjit.c
+@@ -3562,6 +3562,12 @@ void WjPageChanged(i64 virt) {
+ 
+ typedef void (*wj_f)(struct Machine *);
+ 
++// SHIRO_BLINK_PROFILE: why an entry ran interpreted: [0] first visit, [1]
++// below the compile threshold, [2] a compile that failed before (or is
++// excluded), [3] a compile that failed now
++extern bool g_shiro_prof;
++long g_wj_miss[4];
++
+ bool WjExecute(struct Machine *m) {
+   int fn;
+   unsigned epoch;
+@@ -3583,13 +3589,18 @@ bool WjExecute(struct Machine *m) {
+   }
+   if (!e) {
+     e = Insert(m->ip);
++    if (UNLIKELY(g_shiro_prof)) ++g_wj_miss[0];
++    return false;
++  }
++  if (e->fn || ++e->count < g_wj_thresh) {
++    if (UNLIKELY(g_shiro_prof)) ++g_wj_miss[e->fn ? 2 : 1];
+     return false;
+   }
+-  if (e->fn || ++e->count < g_wj_thresh) return false;
+   if ((g_wj_max >= 0 && g_wj_blocks >= g_wj_max) ||
+       m->ip >= 0xffffffffff600000ull ||  // the vsyscall page (instruction.c)
+       (g_wj_lo >= 0 && !(g_wj_lo <= m->ip && m->ip < g_wj_hi))) {
+     e->fn = -1;
++    if (UNLIKELY(g_shiro_prof)) ++g_wj_miss[2];
+     return false;
+   }
+   {
+@@ -3606,6 +3617,7 @@ bool WjExecute(struct Machine *m) {
+     ((wj_f)(uintptr_t)e->fn)(m);
+     return true;
+   }
++  if (UNLIKELY(g_shiro_prof)) ++g_wj_miss[3];
+   return false;
+ }
+ 
+-- 
+2.43.0
+

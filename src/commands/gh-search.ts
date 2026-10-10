@@ -31,6 +31,7 @@ Commands:
         return 1;
       }
       const items = data.items || [];
+      if (flags['json']) { ctx.stdout = JSON.stringify(items) + '\n'; return 0; }
       if (items.length === 0) {
         ctx.stdout = 'No issues found\n';
         return 0;
@@ -52,6 +53,7 @@ Commands:
         return 1;
       }
       const items = data.items || [];
+      if (flags['json']) { ctx.stdout = JSON.stringify(items) + '\n'; return 0; }
       if (items.length === 0) {
         ctx.stdout = 'No repositories found\n';
         return 0;

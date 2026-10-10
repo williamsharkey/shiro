@@ -52,7 +52,8 @@ export async function run(h) {
   });
 
   await h.try('claude.version', 'ms', async () => {
-    const r = await timed(h, 'claude --version > /tmp/node.out 2>&1', h.quick ? 2 : n, /\d+\.\d+\.\d+/);
-    h.sample('claude.version', r.ms, 'ms', { notes: `\`claude --version\` (loads the 2.1.112 cli.js bundle); first run ${Math.round(r.first)} ms` });
+    // --npm: on the tabcomputer profile plain `claude` is the native build, which the bench doesn't have
+    const r = await timed(h, 'claude --npm --version > /tmp/node.out 2>&1', h.quick ? 2 : n, /\d+\.\d+\.\d+/);
+    h.sample('claude.version', r.ms, 'ms', { notes: `\`claude --npm --version\` (the npm build: loads its cli.js bundle); first run ${Math.round(r.first)} ms` });
   });
 }

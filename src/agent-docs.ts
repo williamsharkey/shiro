@@ -58,6 +58,10 @@ export const KNOWN_ISSUES: { issue: string; workaround?: string }[] = [
     issue: "Images can't be pasted into Claude Code: `xclip` and `xsel` here are text only.",
     workaround: 'Save the image to a file and give its path.',
   },
+  {
+    issue: "In Debian mode, dpkg-deb's `.xz` decompression sometimes crashes or reports corrupt data under the x86-64 emulator, so `apt install` stops with a dpkg error.",
+    workaround: 'Run the install again.',
+  },
 ];
 
 function knownIssues(): string {
@@ -121,11 +125,27 @@ ${bootSection(ctx, name)}
 
 ## Installing software
 
-- \`apt install NAME\` (also \`pkg\`) installs from ${name}'s own index of prebuilt
-  programs: vim, htop, git, python3, curl, make, llvm, go and more.
-  \`pkg available\` lists them.
-- \`debian install\` streams in Debian 13. After that, \`sudo apt install NAME\` is
-  Debian's own apt; most popular Debian packages work, slowly.
+- Real Debian: \`debian install\` streams in Debian 13, then \`sudo apt update\` (about
+  45 s) and \`sudo apt install -y NAME\` (Debian's own apt and dpkg, x86-64 in the
+  emulator: about a minute for a small package, python3 about 4 minutes). 496 of
+  popcon's top 500 packages pass a smoke test.
+- Debian toolchains in seconds: \`toolchain install c\` (gcc, g++, make, cmake, gdb),
+  \`python\`, \`node\`, \`java\`, \`classic\` (gfortran, gnucobol, fpc, gnat) or \`tex\`
+  applies a prebuilt set of Debian packages (dpkg knows them; apt works on top).
+  \`toolchain list\` shows them. It runs \`debian install\` first if needed.
+- Whole toolchains: \`toolchain install c\` (gcc, g++, make, gdb, cmake), \`python\`,
+  \`tex\`, \`classic\` (Fortran, COBOL, Pascal, Ada), \`node\` or \`java\` puts the
+  Debian packages in place in seconds instead of apt's minutes; dpkg knows them, so
+  apt keeps working. \`toolchain list\` shows the sets. The first run of each program
+  downloads it (gcc's hello world takes about 9 s from a fresh tab).
+- Prebuilt: \`pkg install NAME\` installs one of ${name}'s 72 prebuilt programs
+  (WebAssembly or static x86-64: vim, htop, git, python3, jq, curl, make, clang,
+  go, ...) in about a second, and they start faster than Debian's. \`pkg available\`
+  lists them. Before \`debian install\`, \`apt\` is \`pkg\`; after it, \`apt\` is Debian's.
+- \`/usr/bin/NAME\` is whichever was installed last. To go back from Debian's to the
+  prebuilt one: \`sudo apt remove -y NAME && pkg install --reinstall NAME\`.
+  \`tabcomputer-alternatives --list\` shows which programs are ${name}'s builtins
+  and which are Debian's; \`--set NAME debian\` and \`--auto NAME\` switch one.
 - \`npm install\` works; \`pip install\` installs pure-Python wheels.
 - \`python3\` is Pyodide until a \`pkg\` or Debian python3 is installed.
 - \`gui\` lists X11 desktop apps; \`gui NAME\` opens one in a window.
@@ -173,6 +193,8 @@ ${knownIssues()}
 ## Claude Code here
 
 ${claude}
+- Signed out, Claude Code opens the sign-in page in a new browser tab and asks for the
+  code it shows; \`claude login\` signs in again.
 - Credentials are in \`~/.claude/.credentials.json\`; never print them or any other token.
 `;
 }

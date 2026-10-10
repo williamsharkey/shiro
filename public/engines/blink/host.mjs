@@ -503,6 +503,22 @@ function rmTree(FS, path) {
 }
 
 let exiting = false;
+let failGuest = null; // run()'s fail, once the guest is starting
+
+// An engine abort after an await (in an async syscall's continuation) is a
+// rejected promise, and a worker's unhandled rejection fires no 'error' event
+// on the page's Worker: the kernel never heard the process end and its parent
+// (dpkg under apt) waited forever with no CPU. End the guest as any abort does.
+const onRejection = (reason) => {
+  if (reason === 'unwind' || exiting) return;
+  if (reason && reason.name === 'ExitStatus') { try { exitGuest(reason.status); } catch { /* unwind */ } return; }
+  const text = String((reason && reason.stack) || reason);
+  if (failGuest) { try { failGuest(text, 134); } catch { /* unwind */ } return; }
+  setTimeout(() => { throw reason instanceof Error ? reason : new Error(text); }); // the page's onError
+};
+if (isNode) process.on('unhandledRejection', onRejection);
+else self.addEventListener('unhandledrejection', (e) => { e.preventDefault(); onRejection(e.reason); });
+
 function exitGuest(code) {
   if (exiting) return;
   exiting = true;
@@ -519,12 +535,15 @@ async function run(msg) {
   progPath = msg.path || '';
   i32 = new Int32Array(msg.sab, 0, CH_DATA / 4);
   data = new Uint8Array(msg.sab, CH_DATA);
+  const errTail = [];
   const fail = (text, code) => {
+    if (errTail.length) text = `${text}\n${errTail.join('\n')}`;
     // The page logs it to the kernel log (dmesg): an engine abort or out of memory
     if (!exiting) post({ type: 'blink-abort', text: String(text) });
     if (!exiting) writeFd(2, enc.encode(`blink: ${text}\n`));
     exitGuest(code);
   };
+  failGuest = fail;
   let M = null;
 
   // ── The channel pool for the guest's own syscalls (shiro-kernel.js) ──
@@ -655,6 +674,9 @@ async function run(msg) {
       port.postMessage({ type: 'blink-fork', pid, snapshot: bytes.buffer }, [bytes.buffer]);
       return 0;
     },
+    // a thread waiting on a direct channel has a signal to take (Blink
+    // patch 0065): the page interrupts the process's blocking calls
+    kick() { post({ type: 'blink-kick' }); },
     get data() { return data; },
     poll: (kfd, events, timeoutMs = 0) => pollFd(kfd, events, timeoutMs),
     watch(kfd, node) { watched.set(kfd, node); post({ type: 'blink-watch', fd: kfd }); },
@@ -666,11 +688,22 @@ async function run(msg) {
     M = await createBlink({
       // blink.wasm's content-hashed URL when the page has one (cached for good)
       ...(msg.wasmUrl ? { locateFile: (p, prefix) => (p.endsWith('.wasm') ? msg.wasmUrl : prefix + p) } : {}),
+      // The page's compiled blink.wasm: V8 keeps its optimized code while the
+      // page holds it, rather than dropping it whenever no Blink worker is
+      // left and compiling it again (Liftoff first) for the next process
+      ...(msg.wasmModule ? {
+        instantiateWasm: (imports, receive) => {
+          WebAssembly.instantiate(msg.wasmModule, imports).then((inst) => receive(inst, msg.wasmModule), (e) => fail(String(e), 134));
+          return {};
+        },
+      } : {}),
       shiroKernel: kernel,
       thisProgram: 'blink',
       noInitialRun: true,
       print: () => {},
-      printErr: (s) => { if (msg.debug) console.error(s); },
+      // Blink's own messages: logged with TABCOMPUTER_BLINK_DEBUG=1, and the
+      // last few go with an abort's report (an assertion's file:line)
+      printErr: (s) => { errTail.push(String(s)); if (errTail.length > 12) errTail.shift(); if (msg.debug) console.error(s); },
       // Blink calls shiroExit on this thread as soon as the guest exits;
       // onExit only fires if emscripten's own teardown completes.
       shiroExit: (code) => exitGuest(code),
@@ -712,6 +745,28 @@ async function run(msg) {
       return { wasmBytes: M.HEAPU8.buffer.byteLength, fileBytes: files };
     };
     if (pool.length) M._blink_shiro_enable(msg.pid, chunk, ignLo >>> 0, ignHi >>> 0);
+    // Direct channels (Blink patch 0065): in Blink's wasm memory, used by its
+    // threads themselves and served by the page watching their state words,
+    // so a kernel call skips the proxy to this thread and both messages.
+    // The pool above stays for the rest (other processes in this instance,
+    // all direct channels busy). Opt-in, TABCOMPUTER_BLINK_DIRECT=1: the
+    // page then holds this worker's wasm memory, which (we think) a finished
+    // process gives back only at the page's next GC (peak RSS +10-17 MiB for vim
+    // and Go's net/http in Chromium, against -11-17% time).
+    const directOn = msg.env?.TABCOMPUTER_BLINK_DIRECT === '1' || (isNode && process.env.TABCOMPUTER_BLINK_DIRECT === '1');
+    if (pool.length && M._blink_shiro_direct && directOn) {
+      // 64 KiB of data each: bigger transfers take the pool (its 1 MiB
+      // chunks), and four of them cost the process 256 KiB, not 4 MiB
+      const n = 4, size = Math.min(chunk, 65536), stride = (CH_DATA + size + 63) & ~63;
+      const raw = M._malloc(n * stride + 64);
+      if (raw) {
+        const base = (raw + 63) & ~63;
+        // only the headers: the data areas are written before they're read
+        for (let i = 0; i < n; i++) M.HEAPU8.fill(0, base + i * stride, base + i * stride + CH_DATA);
+        M._blink_shiro_direct(base, n, stride, size);
+        post({ type: 'blink-direct', buffer: M.HEAPU8.buffer, base, n, stride, size });
+      }
+    }
     if (msg.restore) {
       // This process is a fork(): Blink rebuilds the parent's snapshot instead of loading the program
       const snap = new Uint8Array(msg.restore);
