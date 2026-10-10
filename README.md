@@ -131,7 +131,7 @@ Not here: hardware devices, kernel modules, and any access to your own machine.
   ([docs/research/OPPORTUNITIES.md](docs/research/OPPORTUNITIES.md)).
 - **Prebuilt packages.** 72 programs built for the page, WebAssembly or static x86-64, that
   install in about a second ([above](#tabcomputers-prebuilt-packages), [docs/PACKAGES.md](docs/PACKAGES.md)).
-- **Conformance.** LTP syscall tests under Blink pass 272/322; the busybox testsuite
+- **Conformance.** LTP syscall tests under Blink pass 240/322 (272 with engine patches waiting for the next Blink build); the busybox testsuite
   625/635; the oils shell spec tests 1413/1567 ([docs/CONFORMANCE.md](docs/CONFORMANCE.md)).
 - **GUI apps.** `gui` lists Debian X11 apps (xterm, GTK and Qt editors and viewers, GIMP,
   Inkscape, Krita, VLC, NetSurf). They open as desktop windows. Of the 29 in the scoreboard,

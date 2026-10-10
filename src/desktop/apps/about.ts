@@ -14,7 +14,7 @@ const REPO = 'https://github.com/williamsharkey/tabcomputer/blob/main/docs';
  */
 const STATUS = [
   { label: 'Debian 13 top-500 packages', value: '496/500', note: 'install with apt and run (popcon ranks 1–500)', doc: 'DEBIAN_SCORE.md' },
-  { label: 'LTP syscall tests, x86-64', value: '272/322', note: 'pass under the x86-64 engine', doc: 'CONFORMANCE.md' },
+  { label: 'LTP syscall tests, x86-64', value: '240/322', note: 'pass under the x86-64 engine (272 with the next engine build)', doc: 'CONFORMANCE.md' },
 ];
 
 export function open(ctx: AppContext): DesktopWindow {
