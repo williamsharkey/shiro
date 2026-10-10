@@ -196,6 +196,9 @@ async function smoke(m, pkg) {
       // Debian container or on other hardware; a GUI program without the display it needs
       const absent = /Error connecting to the \S+ daemon|Failed to connect to (?:the )?bus|Could not connect to (?:D-Bus|the system bus)|Cannot connect to the \S+ daemon|extension "\S+" missing on display|X Server does not support \S+|(?:cannot|can't|could not|unable to|couldn't) (?:open|connect to) (?:the )?(?:default )?(?:X )?(?:display|X server)|Gtk-WARNING \*\*: [^\n]*cannot open display|Could not connect to any X display/i.exec(r.out);
       if (absent && !crashed) return { ok: true, how: `${bin} ${flagArg} (ran; "${absent[0]}")${who(bin)}`, ms: r.ms };
+      // Answered the flag, then stayed in its event loop (ptked: "Unknown option: version", then its window)
+      const answered = /unknown option|unrecognized option|invalid option|usage:/i.exec(r.out);
+      if (r.code === 124 && answered && !crashSig && !broken) return { ok: true, how: `${bin} ${flagArg} (ran: "${r.out.trim().split('\n')[0].slice(0, 60)}", then kept running, as an interactive program does)${who(bin)}`, ms: r.ms };
       if (crashed) return { ok: false, how: `${bin} ${flagArg}`, category: r.code === 124 ? 'timeout' : 'engine-crash', error: firstError(r.out) || `exit ${r.code}` };
       const mod = /Can't locate (\S+\.pm) in @INC/.exec(r.out)?.[1];
       if (mod && !undeclared && !(await m.run(`dpkg -S '*/${mod}' 2>/dev/null`)).out.trim()) undeclared = { bin, mod };
