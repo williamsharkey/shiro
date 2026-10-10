@@ -279,8 +279,10 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
 
     // Refresh fileCache from Shiro FS cache — shell commands may have created,
     // modified, or deleted files that fileCache still has stale entries for.
-    for (const [path] of fileCache) {
+    for (const path of [...fileCache.keys()]) {
       if (path.endsWith('/.')) continue; // skip dir markers
+      // Not read yet: it is decoded from the filesystem when read (has() drops a deleted one)
+      if ((fileCache as { isLazy?(p: string): boolean }).isLazy?.(path)) { fileCache.has(path); continue; }
       const fresh = ctx.fs.readCached(path);
       if (fresh === undefined) {
         fileCache.delete(path); // file was deleted by shell

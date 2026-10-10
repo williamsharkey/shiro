@@ -463,13 +463,30 @@ const FLUSH_MAX_DELAY_MS = 1000;
 /** Uncommitted bytes in the FileSystem beyond which a close waits for the commit (Inode.flush). */
 const WRITE_BACKLOG_BYTES = 16 << 20;
 
+/**
+ * A big file (FileSystem.blobMin or more) is held in pages of the
+ * FileSystem's block size, loaded when read and written back a block at a
+ * time (FileSystem.writeBlocks), so writing or reading one never needs all
+ * of it in memory: at most DIRTY_PAGES written pages (a writer waits for
+ * them to be stored past that) and KEEP_PAGES clean ones.
+ */
+const DIRTY_PAGES = 8;
+const KEEP_PAGES = 4;
+
 class Inode {
+  /** Small files: the bytes (capacity may exceed size). Empty for a paged file. */
   data: Uint8Array;
   /** Its own array while `data` is a shared object's buffer (attachInodeShared) */
   privateData?: Uint8Array;
   size: number;
   opens = 0;
   dirty = false;
+  /** A paged (big) file: its FileSystem blob, and its loaded pages, least recently used first. */
+  blob: string | null = null;
+  private pages = new Map<number, Uint8Array>();
+  private dirtyPages = new Set<number>();
+  /** Pages from this byte on are zeros whatever the store holds (a truncate cut them off; a new blob has none). */
+  private zeroFrom = Infinity;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private flushing: Promise<void> | null = null;
   /** The path was unlinked while open: the data lives on for the open fds only. */
@@ -480,14 +497,249 @@ class Inode {
   atimeNs = 0;
 
   constructor(public fs: FileSystem, public path: string, initial: Uint8Array, public mode: number, public mtimeMs: number, public ctimeMs: number,
-    times?: { mtimeNs?: number; atime?: number; atimeNs?: number }) {
+    times?: { mtimeNs?: number; atime?: number; atimeNs?: number }, blob?: { id: string; size: number }) {
     this.data = initial;
     this.size = initial.length;
+    if (blob) { this.blob = blob.id; this.size = blob.size; }
     this.mtimeNs = times?.mtimeNs ?? 0;
     if (times?.atime !== undefined) { this.atimeMs = times.atime; this.atimeNs = times.atimeNs ?? 0; }
   }
 
-  ensure(cap: number) {
+  private get B(): number { return this.fs.blockSize; }
+
+  // ── Reading and writing (sync: false/undefined when pages must load first) ──
+
+  /** Copy bytes at `off` into `buf`: the count, or undefined when a page isn't loaded (readAt). */
+  readSync(buf: Uint8Array, off: number): number | undefined {
+    const n = Math.max(0, Math.min(buf.length, this.size - off));
+    if (!this.blob) {
+      if (n > 0) buf.set(this.data.subarray(off, off + n));
+      return n;
+    }
+    const B = this.B;
+    for (let p = off; p < off + n; p = (Math.floor(p / B) + 1) * B) if (!this.pages.has(Math.floor(p / B))) return undefined;
+    for (let done = 0; done < n;) {
+      const p = off + done;
+      const page = this.page(Math.floor(p / B))!;
+      const k = Math.min(n - done, B - (p % B));
+      buf.set(page.subarray(p % B, p % B + k), done);
+      done += k;
+    }
+    return n;
+  }
+
+  async readAt(buf: Uint8Array, off: number): Promise<number> {
+    for (;;) {
+      const n = this.readSync(buf, off);
+      if (n !== undefined) { this.trimPages(); return n; }
+      await this.loadPages(off, Math.min(off + buf.length, this.size));
+    }
+  }
+
+  /** Write `buf` at `off`: false when pages must load or written pages be stored first (writeAt). */
+  writeSync(buf: Uint8Array, off: number): boolean {
+    const end = off + buf.length;
+    if (!this.blob && !this.shared && end >= (this.fs.blobMin ?? Infinity)) this.toPages();
+    if (!this.blob) {
+      this.ensure(end);
+      if (off > this.size) this.data.fill(0, this.size, off);
+      this.data.set(buf, off);
+      if (end > this.size) this.size = end;
+      this.touch();
+      return true;
+    }
+    if (!this.writable(off, end)) return false;
+    this.extendTo(off);
+    const B = this.B;
+    for (let done = 0; done < buf.length;) {
+      const p = off + done;
+      const i = Math.floor(p / B);
+      const page = this.page(i) ?? this.freshPage(i);
+      const k = Math.min(buf.length - done, B - (p % B));
+      page.set(buf.subarray(done, done + k), p % B);
+      this.dirtyPages.add(i);
+      done += k;
+    }
+    if (end > this.size) this.size = end;
+    this.touch();
+    this.trimPages();
+    return true;
+  }
+
+  async writeAt(buf: Uint8Array, off: number): Promise<void> {
+    while (!this.writeSync(buf, off)) {
+      if (this.dirtyPages.size >= DIRTY_PAGES) await this.flush(true);
+      else await this.loadPages(off, off + buf.length, true);
+    }
+  }
+
+  /** Set the size: false when a page must load first (truncate). */
+  truncateSync(len: number): boolean {
+    if (!this.blob) {
+      if (len >= (this.fs.blobMin ?? Infinity) && !this.shared) this.toPages();
+      else {
+        this.ensure(len);
+        if (len > this.size) this.data.fill(0, this.size, len);
+        this.size = len;
+        this.touch();
+        return true;
+      }
+    }
+    if (len === 0) {
+      // Empty again: a small file (the blob goes at the next write-back)
+      this.blob = null;
+      this.pages.clear();
+      this.dirtyPages.clear();
+      this.zeroFrom = Infinity;
+      this.data = new Uint8Array(0);
+      this.size = 0;
+      this.touch();
+      return true;
+    }
+    const B = this.B;
+    if (len > this.size) {
+      if (!this.writable(this.size, this.size)) return false;
+      this.extendTo(len);
+      this.size = len;
+      this.touch();
+      return true;
+    }
+    // Shrinking: the page holding the new end keeps zeros after it, later pages go
+    const last = Math.floor(len / B);
+    if (len % B && !this.pages.has(last) && last * B < this.zeroFrom) return false;
+    for (const i of [...this.pages.keys()]) if (i * B >= len) { this.pages.delete(i); this.dirtyPages.delete(i); }
+    if (len % B) {
+      const page = this.page(last) ?? this.freshPage(last);
+      page.fill(0, len % B);
+      this.dirtyPages.add(last);
+    }
+    this.zeroFrom = Math.min(this.zeroFrom, Math.ceil(len / B) * B);
+    this.size = len;
+    this.touch();
+    return true;
+  }
+
+  async truncate(len: number): Promise<void> {
+    while (!this.truncateSync(len)) {
+      if (this.dirtyPages.size >= DIRTY_PAGES) await this.flush(true);
+      else await this.loadPages(Math.min(len, this.size), Math.min(len, this.size) + 1, true);
+    }
+  }
+
+  /** `data` is a mapped shared object's buffer (attachInodeShared): never paged meanwhile. */
+  get shared(): boolean { return this.data.buffer instanceof SharedArrayBuffer; }
+
+  /**
+   * The file's bytes are in `view` from now (a shared object's buffer, seeded
+   * from this inode through pread): a paged file becomes a small one over it.
+   * Pages not yet written back are in it, so the inode writes it all back.
+   */
+  usePagesAsBuffer(view: Uint8Array): void {
+    const unwritten = this.dirtyPages.size > 0 || this.dirty;
+    this.blob = null;
+    this.pages.clear();
+    this.dirtyPages.clear();
+    this.zeroFrom = Infinity;
+    this.data = view;
+    if (unwritten) {
+      this.dirty = true;
+      if (!this.flushTimer) this.armFlush(FLUSH_DELAY_MS);
+    }
+  }
+
+  // ── Pages ──
+
+  /** Switch a small file to pages (it grew past blobMin): every page is new, to be written. */
+  private toPages(): void {
+    const B = this.B;
+    this.blob = this.fs.newBlobId();
+    for (let off = 0; off < this.size; off += B) {
+      const page = new Uint8Array(B);
+      page.set(this.data.subarray(off, Math.min(off + B, this.size)));
+      this.pages.set(off / B, page);
+      this.dirtyPages.add(off / B);
+    }
+    this.zeroFrom = 0;
+    this.data = new Uint8Array(0);
+  }
+
+  /** A loaded page, now the most recently used. */
+  private page(i: number): Uint8Array | undefined {
+    const page = this.pages.get(i);
+    if (page) { this.pages.delete(i); this.pages.set(i, page); }
+    return page;
+  }
+
+  /** A page that is zeros in the store: no load needed. */
+  private freshPage(i: number): Uint8Array {
+    const page = new Uint8Array(this.B);
+    this.pages.set(i, page);
+    return page;
+  }
+
+  /** Whether writing [off, end) needs no load: each page touched partially is loaded or zeros in the store. */
+  private writable(off: number, end: number): boolean {
+    if (this.dirtyPages.size >= DIRTY_PAGES) return false;
+    const B = this.B;
+    const ok = (p: number) => this.pages.has(Math.floor(p / B)) || Math.floor(p / B) * B >= Math.min(this.zeroFrom, this.size);
+    // Pages wholly overwritten need nothing; the partial ones at each end, and
+    // the one holding the old end when the write leaves a gap (it gets zeros after the end)
+    if (off % B && !ok(off)) return false;
+    if (end % B && end > off && !ok(end - 1)) return false;
+    if (off > this.size && this.size % B && !ok(this.size)) return false;
+    return true;
+  }
+
+  /** Growing to `to` (≥ size): the bytes between the old end and it read as zeros. */
+  private extendTo(to: number): void {
+    if (to <= this.size) return;
+    const B = this.B;
+    const i = Math.floor(this.size / B);
+    if (this.size % B && this.pages.has(i)) {
+      this.page(i)!.fill(0, this.size % B, Math.min(B, to - i * B));
+      this.dirtyPages.add(i);
+    }
+    // Pages past the old end that the store may still hold (cut off before)
+    this.zeroFrom = Math.min(this.zeroFrom, Math.ceil(this.size / B) * B);
+  }
+
+  /** Load the pages holding [from, to) (`partial`: only the first and last, for a write). The caller trims after using them. */
+  async loadPages(from: number, to: number, partial = false): Promise<void> {
+    const B = this.B;
+    const blob = this.blob;
+    if (!blob) return;
+    const want = new Set<number>();
+    if (partial) {
+      want.add(Math.floor(from / B));
+      if (to > from) want.add(Math.floor((to - 1) / B));
+      if (from > this.size) want.add(Math.floor(this.size / B));
+    } else {
+      for (let i = Math.floor(from / B); i * B < to; i++) want.add(i);
+    }
+    for (const i of want) {
+      if (this.pages.has(i)) continue;
+      const page = new Uint8Array(B);
+      if (i * B < Math.min(this.zeroFrom, this.size)) {
+        const stored = await this.fs.readBlock(blob, i);
+        if (this.blob !== blob || this.pages.has(i) || i * B >= this.zeroFrom) continue; // changed meanwhile
+        page.set(stored.subarray(0, Math.min(stored.length, B, this.size - i * B)));
+      }
+      this.pages.set(i, page);
+    }
+  }
+
+  /** Forget clean pages beyond KEEP_PAGES (least recently used first). */
+  private trimPages(): void {
+    let clean = this.pages.size - this.dirtyPages.size;
+    for (const i of this.pages.keys()) {
+      if (clean <= KEEP_PAGES) break;
+      if (this.dirtyPages.has(i)) continue;
+      this.pages.delete(i);
+      clean--;
+    }
+  }
+
+  private ensure(cap: number) {
     if (cap <= this.data.length) return;
     const next = new Uint8Array(Math.max(cap, this.data.length * 2, 256));
     next.set(this.data.subarray(0, this.size));
@@ -514,18 +766,36 @@ class Inode {
       this.flushTimer = null;
       const now = Date.now();
       const quiet = now - this.lastWrite;
-      // Each write-back copies the whole file: a big file being written (apt
-      // unpacking a 56 MB index) waits longer, or the copies grow quadratically
-      const mb = this.size / (1 << 20);
+      // Each write-back copies what it writes: a big small file (apt's 56 MB
+      // index before pages) waits longer, or the copies grow quadratically.
+      // A paged file writes only the pages written since.
+      const mb = (this.blob ? this.dirtyPages.size * this.B : this.size) / (1 << 20);
       const pause = Math.max(FLUSH_DELAY_MS, mb * 20);
       const most = Math.max(FLUSH_MAX_DELAY_MS, mb * 500);
       if (this.dirty && quiet < pause && now - this.dirtySince < most) this.armFlush(pause - quiet);
-      else void this.flush(true);
+      else void this.flush(true).catch(() => {});
     }, ms);
   }
 
   /** A write-back is in progress. */
   get busy(): boolean { return !!this.flushing; }
+
+  /**
+   * flush() without waiting, when the FileSystem has the node in memory and
+   * no backlog: the data goes into its cache now (stored by the next commit).
+   * False when that needs flush().
+   */
+  flushSync(): boolean {
+    if (this.flushing) return false;
+    if (!this.dirty || this.unlinked) return true;
+    if (this.blob) return false;
+    if (this.fs.pendingBytes > WRITE_BACKLOG_BYTES) return false;
+    const times = { mtime: this.mtimeMs, mtimeNs: this.mtimeNs, ...(this.atimeMs === null ? {} : { atime: this.atimeMs, atimeNs: this.atimeNs }) };
+    if (!this.fs.writeCachedSync(this.path, this.data.slice(0, this.size), times)) return false;
+    if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null; }
+    this.dirty = false;
+    return true;
+  }
 
   /**
    * Write the data back to the FileSystem. `paced` (the write-back timer, a
@@ -535,32 +805,45 @@ class Inode {
    * wait for the disk (dpkg closed ~1700 files per python3 install, ~4 ms each);
    * fsync does (RegularFile.sync).
    */
-  /**
-   * flush() without waiting, when the FileSystem has the node in memory and
-   * no backlog: the data goes into its cache now (stored by the next commit).
-   * False when that needs flush().
-   */
-  flushSync(): boolean {
-    if (this.flushing) return false;
-    if (!this.dirty || this.unlinked) return true;
-    if (this.fs.pendingBytes > WRITE_BACKLOG_BYTES) return false;
-    const times = { mtime: this.mtimeMs, mtimeNs: this.mtimeNs, ...(this.atimeMs === null ? {} : { atime: this.atimeMs, atimeNs: this.atimeNs }) };
-    if (!this.fs.writeCachedSync(this.path, this.data.slice(0, this.size), times)) return false;
-    if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null; }
-    this.dirty = false;
-    return true;
-  }
-
   async flush(paced = false): Promise<void> {
     if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null; }
     while (this.flushing) await this.flushing;
     if (!this.dirty || this.unlinked) return;
     this.dirty = false;
-    const snapshot = this.data.slice(0, this.size);
     // With the times this inode reports (the last write's, or utimensat's), not the write-back's
     const times = { mtime: this.mtimeMs, mtimeNs: this.mtimeNs, ...(this.atimeMs === null ? {} : { atime: this.atimeMs, atimeNs: this.atimeNs }) };
-    // Refused (storage full: ENOSPC): the data stays here for a retry by fsync or close
-    const written = this.fs.writeFile(this.path, snapshot, { times }).catch((e) => { this.dirty = true; throw e; });
+    let written: Promise<void>;
+    if (this.blob) {
+      // The pages written since the last write-back, as copies of their bytes
+      // in the file (the pages stay, clean); pages cut off then grown back are zeros
+      const B = this.B;
+      const blocks: [number, Uint8Array | null][] = [];
+      const sent = [...this.dirtyPages].sort((a, b) => a - b);
+      for (const i of sent) {
+        const page = this.pages.get(i);
+        if (page && i * B < this.size) blocks.push([i, page.slice(0, Math.min(B, this.size - i * B))]);
+      }
+      for (let i = Math.ceil(this.zeroFrom / B); i * B < this.size; i++) if (!this.dirtyPages.has(i)) blocks.push([i, null]);
+      const zeroFrom = this.zeroFrom;
+      this.dirtyPages.clear();
+      this.zeroFrom = Infinity;
+      this.trimPages();
+      written = this.fs.writeBlocks(this.path, this.blob, this.size, blocks, { times }).catch((e) => {
+        // Refused (storage full: ENOSPC): written again by a retry (fsync, close).
+        // Pages dropped meanwhile come back from the blocks sent
+        this.dirty = true;
+        for (const [i, b] of blocks) {
+          if (!this.pages.has(i)) { const page = new Uint8Array(B); if (b) page.set(b); this.pages.set(i, page); }
+          this.dirtyPages.add(i);
+        }
+        this.zeroFrom = Math.min(this.zeroFrom, zeroFrom);
+        throw e;
+      });
+    } else {
+      const snapshot = this.data.slice(0, this.size);
+      // Refused (storage full: ENOSPC): the data stays here for a retry by fsync or close
+      written = this.fs.writeFile(this.path, snapshot, { times }).catch((e) => { this.dirty = true; throw e; });
+    }
     // Paced: writes made meanwhile go into one later snapshot. Past a backlog of
     // uncommitted data a close waits too, or a fast writer (dpkg unpacking)
     // holds it all in memory (python3's install peaked 150 MiB higher)
@@ -588,6 +871,8 @@ const sharedFiles = new WeakMap<FileSystem, Map<string, Uint8Array>>();
  */
 function useShared(ino: Inode, view: Uint8Array): void {
   if (view.length < ino.size || ino.data.buffer === view.buffer) return; // (grown past the mapping: stays private)
+  // A big file's pages: the buffer holds its bytes; the detach copies them out
+  if (ino.blob) { ino.privateData = new Uint8Array(0); ino.usePagesAsBuffer(view); return; }
   ino.privateData = ino.data;
   ino.data = view;
 }
@@ -626,10 +911,15 @@ export async function openInode(fs: FileSystem, path: string): Promise<Inode> {
   let ino = table.get(path);
   if (!ino) {
     const st = await fs.stat(path);
-    const raw = await fs.readFile(path);
+    // A big file is read a page at a time, not loaded here
+    let blob = fs.blobOf?.(path);
+    let raw = blob ? new Uint8Array(0) : await fs.readFile(path);
+    // A lazy file the read just fetched may be stored as blocks now
+    if (!blob && (blob = fs.blobOf?.(path))) raw = new Uint8Array(0);
     const bytes = typeof raw === 'string' ? new TextEncoder().encode(raw) : raw;
     ino = table.get(path) ?? newInode(fs, path, new Inode(fs, path, bytes, st.mode, st.mtime.getTime(), st.ctime.getTime(),
-      { mtimeNs: st.mtimeNs, atime: st.atimeMs === st.mtime.getTime() && st.atimeNs === st.mtimeNs ? undefined : st.atimeMs, atimeNs: st.atimeNs }));
+      { mtimeNs: st.mtimeNs, atime: st.atimeMs === st.mtime.getTime() && st.atimeNs === st.mtimeNs ? undefined : st.atimeMs, atimeNs: st.atimeNs },
+      blob ? { id: blob, size: st.size } : undefined));
     table.set(path, ino);
   }
   ino.opens++;
@@ -639,13 +929,15 @@ export async function openInode(fs: FileSystem, path: string): Promise<Inode> {
 /** openInode for a file whose node the FileSystem has in memory (FileSystem.lookupCached). */
 export function openInodeSync(fs: FileSystem, path: string, node: {
   content: Uint8Array | null; mode: number; mtime: number; ctime: number; mtimeNs?: number; atime?: number; atimeNs?: number;
+  size?: number; blob?: string;
 }): Inode {
   let table = inodeTables.get(fs);
   if (!table) { table = new Map(); inodeTables.set(fs, table); }
   let ino = table.get(path);
   if (!ino) {
-    // Like readFile: the cached node's bytes, null meaning empty
-    ino = newInode(fs, path, new Inode(fs, path, node.content ?? new Uint8Array(0), node.mode, node.mtime, node.ctime, node));
+    // Like readFile: the cached node's bytes, null meaning empty (a big file's are read a page at a time)
+    ino = newInode(fs, path, new Inode(fs, path, node.blob ? new Uint8Array(0) : node.content ?? new Uint8Array(0), node.mode, node.mtime, node.ctime, node,
+      node.blob ? { id: node.blob, size: node.size ?? 0 } : undefined));
     table.set(path, ino);
   }
   ino.opens++;
@@ -753,11 +1045,13 @@ export async function flushInode(fs: FileSystem, path: string): Promise<void> {
  * FileSystem behind it would be overwritten by its next write-back); only
  * the bytes within the file's size. False when no inode is open.
  */
-export function writeInodeBytes(fs: FileSystem, path: string, bytes: Uint8Array): boolean {
+export async function writeInodeBytes(fs: FileSystem, path: string, bytes: Uint8Array): Promise<boolean> {
   detachInodeShared(fs, path);
   const ino = inodeTables.get(fs)?.get(path);
   if (!ino || ino.unlinked) return false;
   const n = Math.min(bytes.length, ino.size);
+  // A big file not switched to the buffer (it had grown past the mapping) is pages
+  if (ino.blob) { await ino.writeAt(bytes.subarray(0, n), 0); return true; }
   ino.data.set(bytes.subarray(0, n));
   ino.touch();
   return true;
@@ -846,56 +1140,61 @@ export class RegularFile implements OpenFile {
 
   get path(): string { return this.ino.path; }
 
-  async read(buf: Uint8Array): Promise<number> { return this.tryRead(buf); }
-
-  tryRead(buf: Uint8Array): number {
+  async read(buf: Uint8Array): Promise<number> {
     if (!canRead(this.flags)) return -EBADF;
-    const n = Math.max(0, Math.min(buf.length, this.ino.size - this.pos));
-    if (n > 0) buf.set(this.ino.data.subarray(this.pos, this.pos + n));
+    const n = await this.ino.readAt(buf, this.pos);
     this.pos += n;
     return n;
   }
 
-  async write(buf: Uint8Array): Promise<number> { return this.tryWrite(buf); }
+  /** undefined: a page of a big file must load first (read). */
+  tryRead(buf: Uint8Array): number | undefined {
+    if (!canRead(this.flags)) return -EBADF;
+    const n = this.ino.readSync(buf, this.pos);
+    if (n !== undefined) this.pos += n;
+    return n;
+  }
 
-  tryWrite(buf: Uint8Array): number {
+  async write(buf: Uint8Array): Promise<number> {
     if (!canWrite(this.flags)) return -EBADF;
     const ino = this.ino;
-    if (this.flags & O_APPEND) this.pos = ino.size;
-    const end = this.pos + buf.length;
-    ino.ensure(end);
-    if (this.pos > ino.size) ino.data.fill(0, ino.size, this.pos);
-    ino.data.set(buf, this.pos);
-    if (end > ino.size) ino.size = end;
-    this.pos = end;
-    ino.touch();
+    const at = this.flags & O_APPEND ? ino.size : this.pos;
+    if (!ino.writeSync(buf, at)) await ino.writeAt(buf, at);
+    this.pos = at;
+    return this.wrote(buf.length);
+  }
+
+  /** undefined: a big file must load a page or store written ones first (write). */
+  tryWrite(buf: Uint8Array): number | undefined {
+    if (!canWrite(this.flags)) return -EBADF;
+    const ino = this.ino;
+    const pos = this.flags & O_APPEND ? ino.size : this.pos;
+    if (!ino.writeSync(buf, pos)) return undefined;
+    this.pos = pos;
+    return this.wrote(buf.length);
+  }
+
+  private wrote(n: number): number {
+    this.pos += n;
     // O_SYNC/O_DSYNC: start the write-back now rather than after the usual delay
-    if (this.flags & O_DSYNC) void ino.flush();
-    return buf.length;
+    if (this.flags & O_DSYNC) void this.ino.flush().catch(() => {});
+    return n;
   }
 
   async pread(buf: Uint8Array, off: number): Promise<number> {
     if (!canRead(this.flags)) return -EBADF;
     if (off < 0) return -EINVAL;
-    const n = Math.max(0, Math.min(buf.length, this.ino.size - off));
-    if (n > 0) buf.set(this.ino.data.subarray(off, off + n));
-    return n;
+    return this.ino.readAt(buf, off);
   }
 
   async pwrite(buf: Uint8Array, off: number): Promise<number> {
     if (!canWrite(this.flags)) return -EBADF;
     if (off < 0) return -EINVAL;
-    const save = this.pos;
-    const append = this.flags & O_APPEND; // Linux: pwrite on O_APPEND appends
-    this.pos = off;
-    if (append) this.flags &= ~O_APPEND;
-    try {
-      if (append) this.pos = this.ino.size;
-      return this.tryWrite(buf);
-    } finally {
-      if (append) this.flags |= O_APPEND;
-      this.pos = save;
-    }
+    // Linux: pwrite on O_APPEND appends
+    const at = this.flags & O_APPEND ? this.ino.size : off;
+    if (!this.ino.writeSync(buf, at)) await this.ino.writeAt(buf, at);
+    if (this.flags & O_DSYNC) void this.ino.flush().catch(() => {});
+    return buf.length;
   }
 
   seek(off: number, whence: number): number {
@@ -910,17 +1209,18 @@ export class RegularFile implements OpenFile {
     return next;
   }
 
-  async truncate(len: number): Promise<number> { return this.truncateSync(len); }
-
-  truncateSync(len: number): number {
+  async truncate(len: number): Promise<number> {
     if (!canWrite(this.flags)) return -EINVAL;
     if (len < 0) return -EINVAL;
-    const ino = this.ino;
-    ino.ensure(len);
-    if (len > ino.size) ino.data.fill(0, ino.size, len);
-    ino.size = len;
-    ino.touch();
+    await this.ino.truncate(len);
     return 0;
+  }
+
+  /** undefined: a page of a big file must load first (truncate). Truncating to 0 never needs one. */
+  truncateSync(len: number): number | undefined {
+    if (!canWrite(this.flags)) return -EINVAL;
+    if (len < 0) return -EINVAL;
+    return this.ino.truncateSync(len) ? 0 : undefined;
   }
 
   /** Unwritten data, or a write-back under way. */
