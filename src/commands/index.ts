@@ -41,6 +41,8 @@ export interface CommandContext {
    * so a program that never reads doesn't wait for a pipe that stays open
    */
   readStdin?: () => Promise<string>;
+  /** stdin is the terminal, not a pipe, file or here-doc (set by the shell; unset: the terminal if there is one) */
+  stdinIsTTY?: boolean;
   /** Writers that reach the command's stdout/stderr right away (set only where nothing captures them) */
   streamStdout?: (s: string) => void;
   streamStderr?: (s: string) => void;

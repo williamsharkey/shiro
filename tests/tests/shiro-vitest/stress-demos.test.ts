@@ -751,13 +751,13 @@ describe('Demo 9: npm Edge Cases', () => {
   it('npm --version shows version string', async () => {
     const { output, exitCode } = await run(shell, 'npm --version');
     expect(exitCode).toBe(0);
-    expect(output).toContain('npm v1.0.0-shiro');
+    expect(output.trim()).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
   it('npm -v shows version string', async () => {
     const { output, exitCode } = await run(shell, 'npm -v');
     expect(exitCode).toBe(0);
-    expect(output).toContain('npm v1.0.0-shiro');
+    expect(output.trim()).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
   it('unknown subcommand exits 1', async () => {
@@ -766,13 +766,14 @@ describe('Demo 9: npm Edge Cases', () => {
     expect(output).toContain('unknown command');
   });
 
-  it('npm install without package.json exits 1', async () => {
+  it('npm install without package.json is up to date (as npm), and creates none', async () => {
     const dir = tmpDir('nopkg');
     await fs.mkdir(dir, { recursive: true });
     shell.cwd = dir;
     const { output, exitCode } = await run(shell, 'npm install');
-    expect(exitCode).toBe(1);
-    expect(output).toContain('package.json not found');
+    expect(exitCode).toBe(0);
+    expect(output).toContain('up to date');
+    expect(await fs.exists(dir + '/package.json')).toBe(false);
   });
 
   it('npm install -g without packages exits 1', async () => {

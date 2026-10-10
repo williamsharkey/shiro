@@ -344,7 +344,6 @@ export function createExpressFactory(deps: ExpressDeps): any {
         const cleanup = iframeServer.serve(port, app._handleRequest, `express:${port}`);
         closeServer = () => {
           cleanup();
-          fakeConsole.log(`Server on port ${port} closed`);
           // Close split-view pane
           try {
             if (typeof document !== 'undefined') {
@@ -354,15 +353,12 @@ export function createExpressFactory(deps: ExpressDeps): any {
           resolve();
         };
 
-        fakeConsole.log(`Express app listening on port ${port}`);
-
-        // Open split-view preview pane
+        // A preview pane for the app (nothing in the program's output: express prints nothing itself)
         try {
           if (typeof document !== 'undefined') {
             import('../../split-view').then(({ createSplitView }) => {
               createSplitView({ port, direction: 'right', title: `Express :${port}` });
-              fakeConsole.log('Browser window opened');
-            }).catch((err: Error) => fakeConsole.warn('Could not open browser:', err.message));
+            }).catch(() => { /* no desktop to show it in */ });
           }
         } catch {}
 

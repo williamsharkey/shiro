@@ -14,8 +14,8 @@ const INPAGE = readFileSync(join(HERE, 'inpage.js'), 'utf8');
 export const CHROMIUM = process.env.CHROMIUM || '/opt/pw-browsers/chromium';
 
 export class Harness {
-  constructor({ mode, origin, netcache, runs, quick, log, results, testServer, hostAddr, only }) {
-    Object.assign(this, { mode, origin, netcache, runs, quick, log, results, testServer, hostAddr, only });
+  constructor({ mode, origin, netcache, runs, quick, log, results, testServer, hostAddr, only, skipRe }) {
+    Object.assign(this, { mode, origin, netcache, runs, quick, log, results, testServer, hostAddr, only, skipRe });
     this.browser = null;
     this.page = null;
     this.context = null;
@@ -197,11 +197,11 @@ export class Harness {
     this.log(`  ${name.padEnd(44)} ${'—'.padStart(10)} ${unit.padEnd(6)} ${reason}`);
   }
 
-  wants(name) { return !this.only || this.only.some((re) => re.test(name)); }
+  wants(name) { return (!this.only || this.only.some((re) => re.test(name))) && !this.skipRe?.some((re) => re.test(name)); }
 
-  /** Run a measurement; record a skip if it throws. */
-  async try(name, unit, fn) {
-    if (!this.wants(name)) return;
+  /** Run a measurement; record a skip if it throws. `force`: run even if --only/--skip leave it out (setup other metrics need). */
+  async try(name, unit, fn, { force = false } = {}) {
+    if (!force && !this.wants(name)) return;
     const t0 = Date.now();
     const prof = process.env.BENCH_PROFILE && new RegExp(process.env.BENCH_PROFILE).test(name) && this.cdp;
     if (prof) await startProfile(this.cdp);

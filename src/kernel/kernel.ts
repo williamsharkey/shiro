@@ -20,7 +20,7 @@ import { packageShadows, pkgOwnShadows, packageArgsForPath, PKG_BIN_DIR } from '
 import * as A from './abi';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
-  RegularFile, DirFile, abortableWait, openInode, openInodeSync, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
+  RegularFile, DirFile, abortableWait, openInode, openInodeSync, isInodeOpen, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
   shareInodeNumber, forgetInodeNumber, renameLinkName, linkCount, writeBackAll,
 } from './fd';
 import { createPipe, Pipe, PipeEnd, FifoRdWr } from './pipe';
@@ -28,6 +28,9 @@ import type { PtyFile } from './pty';
 import { LockTable, F_RDLCK, F_WRLCK, F_UNLCK } from './locks';
 import { Process } from './process';
 import { SysvShm } from './sysvshm';
+import { SysvSem } from './sysvsem';
+import { SysvMsg } from './sysvmsg';
+import { SharedObjects, isShareablePath, type ShmObjMessage } from './shmobj';
 import { EpollFile, waitReady } from './epoll';
 import { SignalFile, notifySignalPending } from './signalfd';
 import { EventFile, MemFile, TimerFile } from './fd';
@@ -188,6 +191,28 @@ export class Kernel {
   readonly procfs = new ProcFs(this);
   /** System V shared memory segments (the engine maps them). */
   readonly shm = new SysvShm();
+  /** SysV semaphore sets (semget, semop, semctl) */
+  readonly sem = new SysvSem();
+  /** SysV message queues (msgget, msgsnd, msgrcv, msgctl) */
+  readonly msg = new SysvMsg();
+  /** Engine instances (a Blink worker each) and how to post to them: shared objects' messages */
+  private engineInstances = new Map<number, (msg: ShmObjMessage) => void>();
+  private nextEngineInstance = 1;
+  /** Shared objects across engine instances (/dev/shm files, SysV shm mapped by unrelated processes) */
+  readonly shmobj = new SharedObjects((instance, msg) => this.engineInstances.get(instance)?.(msg));
+
+  /** An engine instance (a Blink worker) that maps shared objects: its id; set it as proc.data.engineInstance. */
+  registerEngineInstance(post: (msg: ShmObjMessage) => void): number {
+    const id = this.nextEngineInstance++;
+    this.engineInstances.set(id, post);
+    return id;
+  }
+
+  /** The instance ended: its mappings go (and a last one writes a file object back). */
+  async engineInstanceGone(id: number): Promise<void> {
+    this.engineInstances.delete(id);
+    await this.shmobj.instanceGone(id);
+  }
   /** fcntl record locks (F_SETLK, F_OFD_SETLK) */
   readonly locks = new LockTable();
   private detachTable?: () => void;
@@ -266,6 +291,12 @@ export class Kernel {
   addLoader(loader: Loader): void {
     this.loaders.unshift(loader);
   }
+
+  /**
+   * Builtins that `sh -c 'NAME args'` should exec in place (findProgram)
+   * rather than run in the forked shell, when `claim(NAME, process)` says so.
+   */
+  readonly execDirect: ((name: string, proc: Process) => boolean)[] = [];
 
   registerDevice(path: string, opener: DeviceOpener): void {
     this.devices.set(path, opener);
@@ -434,6 +465,8 @@ export class Kernel {
       if (typeof p === 'string' && (await this.fs?.exists(p))) path = p;
     } else if (this.fs && this.shell?.commands.get(name) && packageShadows(this.fs).has(name)) {
       path = `${PKG_BIN_DIR}/${name}`; // an installed package replaces the builtin
+    } else if (this.shell?.commands.get(name) && this.execDirect.some(f => f(name, probe))) {
+      path = name; // a loader runs this builtin as the process itself (node as a guest)
     } else if (!this.shell?.commands.get(name)) {
       for (const dir of (probe.env.PATH ?? '/usr/local/bin:/usr/bin:/bin').split(':')) {
         if (!dir) continue;
@@ -578,6 +611,7 @@ export class Kernel {
     await proc.fds.closeAll();
     this.locks.release(proc.pid);
     this.shm.detachAll(proc);
+    this.sem.exited(proc);
     for (const child of this.procs.values()) {
       if (child.ppid === proc.pid) {
         child.ppid = 1;
@@ -964,20 +998,60 @@ export class Kernel {
    * creating or truncating: the description, -errno, or undefined when it
    * needs `open` (devices, O_CREAT/O_TRUNC, anything not cached).
    */
-  openSync(proc: Process, path: string, flags: number, dirfd = A.AT_FDCWD): OpenFile | number | undefined {
+  openSync(proc: Process, path: string, flags: number, dirfd = A.AT_FDCWD, mode = 0o666): OpenFile | number | undefined {
     const fs = this.fs;
-    if (!fs || flags & (A.O_CREAT | A.O_TRUNC | A.O_NOFOLLOW | A.O_PATH) || trailingSlash(path)) return undefined;
+    if (!fs || flags & A.O_PATH || trailingSlash(path)) return undefined;
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
     if (this.devices.has(p) || /^\/(?:dev|proc)\//.test(p)) return undefined;
+    const statusFlags = flags & ~(A.O_CREAT | A.O_EXCL | A.O_TRUNC | A.O_CLOEXEC | A.O_NOCTTY | A.O_DIRECTORY | A.O_NOFOLLOW);
+    if (flags & (A.O_CREAT | A.O_TRUNC | A.O_NOFOLLOW)) {
+      // Creating, truncating or not following: decided on the last component itself
+      const own = fs.lookupCached(p, false);
+      if (own === undefined) return undefined;
+      if (own === null) {
+        if (!(flags & A.O_CREAT)) return -A.ENOENT;
+        if (flags & A.O_DIRECTORY) return undefined; // EINVAL, as open() says
+        const name = p.slice(p.lastIndexOf('/') + 1);
+        const dir = fs.lookupCached(p.slice(0, p.lastIndexOf('/')) || '/');
+        if (!dir || dir.node.type !== 'dir') return undefined;
+        const real = dir.path === '/' ? '/' + name : dir.path + '/' + name;
+        const node = fs.createEmptyCachedSync(real, mode & ~proc.umask & 0o7777);
+        if (!node) return undefined;
+        return new RegularFile(openInodeSync(fs, real, node), statusFlags);
+      }
+      if (own.node.type === 'symlink') return flags & A.O_NOFOLLOW ? -A.ELOOP : undefined;
+      if ((flags & A.O_CREAT) && (flags & A.O_EXCL)) return -A.EEXIST;
+      if (own.node.type !== 'file' || own.node.lazy || own.node.special) return undefined;
+      if (flags & A.O_DIRECTORY) return -A.ENOTDIR;
+      const file = new RegularFile(openInodeSync(fs, own.path, own.node), statusFlags);
+      if ((flags & A.O_TRUNC) && canWrite(flags)) file.truncateSync(0);
+      return file;
+    }
     const hit = fs.lookupCached(p);
     if (hit === undefined) return undefined;
     if (hit === null) return -A.ENOENT;
-    const statusFlags = flags & ~(A.O_CREAT | A.O_EXCL | A.O_TRUNC | A.O_CLOEXEC | A.O_NOCTTY | A.O_DIRECTORY | A.O_NOFOLLOW);
     if (hit.node.type === 'dir') return canWrite(flags) ? -A.EISDIR : new DirFile(fs, hit.path, statusFlags);
     if (flags & A.O_DIRECTORY) return -A.ENOTDIR;
     if (hit.node.type !== 'file' || hit.node.lazy || hit.node.special) return undefined; // lazy: open() fetches it; FIFOs block
     return new RegularFile(openInodeSync(fs, hit.path, hit.node), statusFlags);
+  }
+
+  /** unlink(2) from memory: 0, -errno, or undefined (use the async path). */
+  private unlinkSync(proc: Process, path: string, dirfd: number): number | undefined {
+    const fs = this.fs;
+    if (!fs || !path || trailingSlash(path)) return undefined;
+    const p = this.resolvePath(proc, path, dirfd);
+    if (typeof p === 'number') return p;
+    if (this.devices.has(p) || /^\/(?:dev|proc)\//.test(p) || this.socketPaths?.has(p) || this.fifos.has(p)) return undefined;
+    const hit = fs.lookupCached(p, false);
+    if (hit === undefined) return undefined;
+    if (hit === null) return -A.ENOENT;
+    if (hit.node.type === 'dir') return -A.EISDIR;
+    if (isInodeOpen(fs, hit.path)) return undefined; // the open fds keep its data: unlinkInode
+    if (!fs.unlinkCachedSync(hit.path)) return undefined;
+    forgetInodeNumber(fs, hit.path);
+    return 0;
   }
 
   /** statPath from memory, encoded into `data`: 0, -errno, or undefined (use statPath). */
@@ -1358,13 +1432,19 @@ export class Kernel {
       }
       case A.SYS_open:
       case A.SYS_openat: {
-        const [dirfd, len, flags] = nr === A.SYS_open ? [A.AT_FDCWD, args[0], args[1]] : [args[0], args[1], args[2]];
+        const [dirfd, len, flags, mode] = nr === A.SYS_open ? [A.AT_FDCWD, args[0], args[1], args[2]] : [args[0], args[1], args[2], args[3]];
         if (len < 0 || len > data.length) return undefined;
-        const f = this.openSync(proc, A.decodeText(data.subarray(0, len)), flags, dirfd);
+        const f = this.openSync(proc, A.decodeText(data.subarray(0, len)), flags, dirfd, mode);
         if (f === undefined || typeof f === 'number') return f;
         const fd = proc.fds.alloc(f, 0, !!(flags & A.O_CLOEXEC));
         if (fd < 0 && refCount(f) === 0) f.closeSync?.();
         return fd;
+      }
+      case A.SYS_unlink:
+      case A.SYS_unlinkat: {
+        const [dirfd, len, flg] = nr === A.SYS_unlink ? [A.AT_FDCWD, args[0], 0] : [args[0], args[1], args[2]];
+        if (flg !== 0 || len <= 0 || len > data.length) return undefined; // AT_REMOVEDIR, bad flags: the async path
+        return this.unlinkSync(proc, A.decodeText(data.subarray(0, len)), dirfd);
       }
       case A.SYS_stat:
       case A.SYS_lstat: {
@@ -1629,6 +1709,54 @@ export class Kernel {
         case A.SYS_shmctl: return this.shm.shmctl(proc, args[0], args[1], data);
         case A.SYS_shiro_shmat: return this.shm.attach(proc, args[0], args[1], data);
         case A.SYS_shiro_shmdt: return this.shm.detach(proc, args[0]);
+        case A.SYS_semget: return this.sem.semget(proc, args[0], args[1], args[2]);
+        case A.SYS_semop: return await this.sem.semop(proc, args[0], args[1], data, -1, sig);
+        case A.SYS_semtimedop: {
+          // (semid, nsops, hasTimeout, tv_sec, tv_nsec): no timeout is semop
+          if (!args[2]) return await this.sem.semop(proc, args[0], args[1], data, -1, sig);
+          if (args[3] < 0 || args[4] < 0 || args[4] >= 1e9) return -A.EINVAL;
+          return await this.sem.semop(proc, args[0], args[1], data, args[3] * 1000 + Math.floor(args[4] / 1e6), sig);
+        }
+        case A.SYS_semctl: return this.sem.semctl(proc, args[0], args[1], args[2], args[3], data);
+        case A.SYS_msgget: return this.msg.msgget(proc, args[0], args[1]);
+        case A.SYS_msgsnd: return await this.msg.msgsnd(proc, args[0], args[1], args[2], data, sig);
+        case A.SYS_msgrcv: return await this.msg.msgrcv(proc, args[0], args[1], i64(args[2], args[3]), args[4], data, sig);
+        case A.SYS_msgctl: return this.msg.msgctl(proc, args[0], args[1], data);
+        case A.SYS_shiro_shmobj_map: {
+          const instance = proc.data.engineInstance as number | undefined;
+          if (!instance) return -A.ENOSYS;
+          const len = (args[2] >>> 0) + (args[3] >>> 0) * 0x100000000;
+          let key: string, size = len;
+          let initial: (() => Promise<Uint8Array>) | undefined;
+          let writeBack: ((b: Uint8Array) => Promise<void>) | undefined;
+          if (args[1] === 0) {
+            const f = proc.fds.get(args[0]);
+            if (!f) return -A.EBADF;
+            const path = f.path;
+            if (f.kind !== 'file' || !path || !isShareablePath(path) || !this.fs) return -A.EINVAL;
+            const fs = this.fs;
+            key = `file:${inodeNumber(fs, path)}`;
+            initial = async () => { const b = await fs.readFile(path); return typeof b === 'string' ? new TextEncoder().encode(b) : b; };
+            writeBack = async (b) => { if (await fs.exists(path)) await fs.writeFile(path, b); };
+          } else if (args[1] === 1) {
+            const seg = this.shm.list().find((x) => x.id === args[0]);
+            if (!seg) return -A.EINVAL;
+            key = `shm:${seg.id}`;
+            size = seg.size;
+          } else return -A.EINVAL;
+          const r = await this.shmobj.map(instance, key, size, initial, writeBack);
+          if (typeof r === 'number') return r;
+          if (data.length >= 4) new DataView(data.buffer, data.byteOffset, 4).setInt32(0, r.remote ? 1 : 0, true);
+          return r.id;
+        }
+        case A.SYS_shiro_shmobj_unmap: {
+          const instance = proc.data.engineInstance as number | undefined;
+          return instance ? await this.shmobj.unmap(instance, args[0]) : -A.ENOSYS;
+        }
+        case A.SYS_shiro_shmobj_published: {
+          const instance = proc.data.engineInstance as number | undefined;
+          return instance ? this.shmobj.published(instance, args[0]) : -A.ENOSYS;
+        }
         case A.SYS_setuid: case A.SYS_setgid: case A.SYS_setreuid: case A.SYS_setregid:
         case A.SYS_setresuid: case A.SYS_setresgid: case A.SYS_getresuid: case A.SYS_getresgid:
         case A.SYS_getgroups: case A.SYS_setgroups: case A.SYS_setfsuid: case A.SYS_setfsgid:
@@ -2474,6 +2602,7 @@ export class Kernel {
     child.gid = parent.gid;
     copyCredentials(parent, child);
     this.shm.forked(parent, child);
+    this.sem.forked(parent, child);
     child.data.embryo = true;
     child.data.forkParent = parent.pid; // startForkChild: the parent may have exited (and the child been reparented) by then
     this.procs.set(pid, child);

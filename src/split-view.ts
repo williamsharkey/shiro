@@ -1,4 +1,5 @@
 // split-view.ts — docked split pane beside/below terminal
+import { previewUI } from './preview-ui';
 
 export interface SplitView {
   pane: HTMLDivElement;
@@ -20,6 +21,16 @@ export function createSplitView(opts: {
   title?: string;
   onClose?: () => void;
 }): SplitView {
+  // On the desktop a server's preview is a window of its own, offered rather than popped up
+  // (preview-ui.ts); the pane returned here is detached, for callers that only fire and forget
+  const ui = previewUI();
+  if (ui) {
+    ui.listening(opts.port, opts.title);
+    const pane = document.createElement('div');
+    const iframe = document.createElement('iframe');
+    return { pane, iframe, port: opts.port, direction: opts.direction || 'right', close: () => {} };
+  }
+
   // Close existing split first
   if (activeSplit) closeSplitView();
 

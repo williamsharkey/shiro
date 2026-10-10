@@ -1454,6 +1454,37 @@ export class FileSystem {
     this._emitChange('write', path);
   }
 
+  /**
+   * Create an empty file from the cache alone (the kernel's synchronous
+   * O_CREAT path): `path` must be canonical, its parent a cached directory
+   * and the name known to be free. The node, or undefined: use writeFile.
+   */
+  createEmptyCachedSync(path: string, mode: number): FSNode | undefined {
+    if (this.virtualProviders.some((vp) => vp.handles(path))) return undefined;
+    const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
+    const parent = this.lookupCached(parentPath);
+    if (!parent || parent.path !== parentPath || parent.node.type !== 'dir') return undefined;
+    if (this.lookupCached(path, false) !== null) return undefined;
+    const now = Date.now();
+    const node: FSNode = { path, type: 'file', content: new Uint8Array(0), mode, mtime: now, ctime: now, size: 0 };
+    try { this._putNow(node); } catch { return undefined; } // ENOSPC: writeFile reports it
+    this._emitChange('write', path);
+    return node;
+  }
+
+  /**
+   * unlink(2) from the cache alone: `path`'s node is cached and not a
+   * directory. True when done, undefined when it must go through unlink().
+   */
+  unlinkCachedSync(path: string): true | undefined {
+    if (this.virtualProviders.some((vp) => vp.handles(path))) return undefined;
+    const hit = this.lookupCached(path, false);
+    if (!hit || hit.path !== path || hit.node.type === 'dir') return undefined;
+    this._deleteNow(path);
+    this._emitChange('delete', path);
+    return true;
+  }
+
   /** Append to a file (created if missing). Appends in one flush window are
    *  committed as a single put of the final content. */
   async appendFile(path: string, data: Uint8Array | string): Promise<void> {

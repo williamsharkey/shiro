@@ -20,7 +20,7 @@ import { Kernel, getKernel, type Runner } from '../kernel/kernel';
 import { installNet } from '../kernel/net';
 import { workerRunner, webWorker, type GuestWorker } from '../kernel/worker-host';
 import { BufferFile, DevNull } from '../kernel/fd';
-import { type KStat, S_IFIFO, shellExitCode, SIGKILL, CH_DATA, CH_STATE, CH_SYSNO, CH_ARGS, CH_NARGS, CH_RESULT, CH_SIGNAL, STATE_REQUEST, STATE_REPLY, ESRCH } from '../kernel/abi';
+import { type KStat, S_IFIFO, shellExitCode, SIGKILL, CH_DATA, CH_STATE, CH_SYSNO, CH_ARGS, CH_NARGS, CH_RESULT, CH_SIGNAL, STATE_REQUEST, STATE_REPLY, STATE_DEAD, ESRCH } from '../kernel/abi';
 import { createChannelBuffer, KernelChannel, canWatch as canWatchChannels } from '../kernel/channel';
 import type { Process } from '../kernel/process';
 
@@ -159,6 +159,12 @@ function ensureNet(kernel: Kernel): void {
 const POOL_CHANNELS = 6;
 const POOL_MAX = 64;
 const POOL_DATA = 1 << 20;
+/**
+ * After a pool channel's data area: the kernel pid the request is for (host.mjs
+ * `as`), so a watched channel needs no message (blink-sys's `as`).
+ */
+const POOL_AS_BYTES = 4;
+const poolBuffer = () => createChannelBuffer(POOL_DATA + POOL_AS_BYTES);
 
 /**
  * A kernel Runner that executes the ELF at absolute `path` in Blink. With
@@ -171,7 +177,7 @@ export function blinkRunner(path: string, restore?: ArrayBuffer): Runner {
     registerBlinkLoader(kernel); // ELF children of this guest run in Blink too
     const create = await workerFactory();
     const mounts = kernel.fs ? (await kernel.fs.readdir('/')).map((n) => '/' + n) : [];
-    const pool = Array.from({ length: POOL_CHANNELS }, () => createChannelBuffer(POOL_DATA));
+    const pool = Array.from({ length: POOL_CHANNELS }, poolBuffer);
     const wasm = await blinkWasmUrl();
     const wasmModule = proc.env?.TABCOMPUTER_BLINK_SHARED_MODULE === '0' ? undefined : await blinkWasmModule(wasm);
     const runner = workerRunner((p) => {
@@ -180,7 +186,15 @@ export function blinkRunner(path: string, restore?: ArrayBuffer): Runner {
       return w;
     }, {
       // TABCOMPUTER_BLINK_DEBUG=1: the worker logs kernel syscalls and Blink's own messages to the console
-      startData: { path, moduleUrl: defaultAssetBase() + 'blink.mjs', wasmUrl: wasm, wasmModule, mounts, pool, restore, debug: proc.env?.TABCOMPUTER_BLINK_DEBUG === '1' },
+      // poolWake 'atomics': the page watches the pool channels' state words, so
+      // host.mjs posts no blink-sys and waits for no blink-done (as WASI guests)
+      startData: {
+        path, moduleUrl: defaultAssetBase() + 'blink.mjs', wasmUrl: wasm, wasmModule, mounts, pool, poolAsBytes: POOL_AS_BYTES,
+        // Opt-in (TABCOMPUTER_BLINK_POOL_WAKE=atomics): no measurable gain on
+        // bash/dpkg in a 6-round A/B (docs/BENCHMARKS.md, perf-kernel round 10)
+        poolWake: canWatchChannels() && proc.env?.TABCOMPUTER_BLINK_POOL_WAKE === 'atomics' ? 'atomics' : 'message',
+        restore, debug: proc.env?.TABCOMPUTER_BLINK_DEBUG === '1',
+      },
     });
     return runner(proc, kernel);
   };
@@ -196,7 +210,7 @@ async function servePoolChannel(kernel: Kernel, proc: Process, sab: SharedArrayB
   if (busy.has(sab) || Atomics.load(i32, CH_STATE) !== STATE_REQUEST) return false;
   busy.add(sab);
   try {
-    const data = new Uint8Array(sab, CH_DATA);
+    const data = new Uint8Array(sab, CH_DATA, sab.byteLength - CH_DATA - POOL_AS_BYTES);
     const nr = i32[CH_SYSNO];
     const args = Array.from(i32.subarray(CH_ARGS, CH_ARGS + CH_NARGS));
     const target = as ? kernel.procs.get(as) : proc;
@@ -238,6 +252,52 @@ export function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: 
   // Direct channels' views keep Blink's whole wasm memory alive: let go of
   // them when this worker ends (an exec's new worker brings its own) or the process does
   const stopDirect = () => { for (const ch of direct) ch.stop(); direct.length = 0; };
+  // Pool channels watched by their state words (start data poolWake 'atomics'):
+  // a request is served when host.mjs sets it, with no message either way
+  const watching = new Set<SharedArrayBuffer>();
+  let watchStopped = false;
+  const watchPool = (sab: SharedArrayBuffer) => {
+    if (watchStopped || watching.has(sab) || !canWatchChannels() || proc.env?.TABCOMPUTER_BLINK_POOL_WAKE !== 'atomics') return;
+    watching.add(sab);
+    void (async () => {
+      const i32 = new Int32Array(sab, 0, CH_DATA / 4);
+      const asWord = new Int32Array(sab, sab.byteLength - POOL_AS_BYTES, 1);
+      const waitAsync = (Atomics as any).waitAsync as (a: Int32Array, i: number, v: number) => { async: boolean; value: any };
+      while (!watchStopped) {
+        const s = Atomics.load(i32, CH_STATE);
+        if (s === STATE_DEAD) break;
+        // (as -1: host.mjs asked with a blink-sys message instead)
+        if (s === STATE_REQUEST && !busy.has(sab) && asWord[0] !== -1) {
+          const answered = await servePoolChannel(kernel, proc, sab, asWord[0], busy);
+          // A request left unanswered (its process is exiting) is served once,
+          // as a blink-sys message was: wait for the state to move on. (After
+          // an answer, REQUEST again is host.mjs's next call: serve it.)
+          if (!answered && Atomics.load(i32, CH_STATE) === STATE_REQUEST) {
+            const w = waitAsync(i32, CH_STATE, STATE_REQUEST);
+            if (w.async) await w.value;
+          }
+          continue;
+        }
+        const w = waitAsync(i32, CH_STATE, s);
+        if (w.async) await w.value;
+      }
+      watching.delete(sab);
+    })();
+  };
+  // The watchers' pending waits hold the channels: wake them to end
+  const stopPool = () => {
+    watchStopped = true;
+    for (const sab of watching) {
+      const i32 = new Int32Array(sab, 0, CH_DATA / 4);
+      Atomics.store(i32, CH_STATE, STATE_DEAD);
+      Atomics.notify(i32, CH_STATE);
+    }
+  };
+  for (const sab of pool) watchPool(sab);
+  // Shared objects (docs/research/SHARED_MAPPINGS.md): this worker is one
+  // engine instance; the kernel's blink-shmobj / blink-publish go to it
+  const instance = kernel.registerEngineInstance((m) => w.postMessage(m));
+  proc.data.engineInstance = instance;
   const end = w.terminate.bind(w);
   // Fork children this engine never got to start (it aborted mid-fork, or
   // between vfork and exec) can't run any more; they would hold the parent's
@@ -248,7 +308,7 @@ export function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: 
       if (c.data.embryo && c.data.forkParent === proc.pid && !c.exiting) void kernel.exit(c, SIGKILL);
     }
   }, 1000);
-  const terminate = () => { stopDirect(); end(); sweep(); };
+  const terminate = () => { stopDirect(); stopPool(); void kernel.engineInstanceGone(instance); end(); sweep(); };
   // The engine crashed (an abort or a wasm trap ends the whole instance): the
   // children it hosted died with it.
   let crashed = false;
@@ -305,8 +365,8 @@ export function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: 
     } else if (m?.type === 'blink-grow') {
       // every channel is busy (blocked calls): one more, shared by this
       // process's workers like the rest (indices match host.mjs's order)
-      const sab = pool.length < POOL_MAX ? createChannelBuffer(POOL_DATA) : null;
-      if (sab) pool.push(sab);
+      const sab = pool.length < POOL_MAX ? poolBuffer() : null;
+      if (sab) { pool.push(sab); watchPool(sab); }
       w.postMessage({ type: 'blink-channel', sab });
     } else if (m?.type === 'blink-fork') {
       // fork(): the child (made by SYS_shiro_vfork) runs the snapshot in its own worker
@@ -316,6 +376,7 @@ export function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: 
       const child = kernel.procs.get(m.pid);
       if (!child || hosted.has(m.pid)) return;
       hosted.add(m.pid);
+      child.data.engineInstance = instance; // same wasm memory: same instance
       const off = child.addSignalListener((sig: number) => { if (sig > 0) w.postMessage({ type: 'blink-signal', sig, pid: m.pid }); });
       child.onTerminate(() => {
         off();

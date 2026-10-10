@@ -22,6 +22,9 @@ import { buildTree, binDirOf, binEntries, WASM_ALTERNATES, type BuildResult, typ
  */
 
 // Metadata cache: maps package name -> { data, timestamp }
+/** What `npm -v` says: the npm that node 20 ships with (tools parse a bare semver) */
+export const NPM_VERSION = '10.8.2';
+
 const metadataCache = new Map<string, { data: NpmPackageMetadata; timestamp: number }>();
 const METADATA_CACHE_TTL = 60 * 60 * 1000; // 1 hour in milliseconds
 
@@ -93,7 +96,8 @@ export const npmCmd: Command = {
     }
 
     if (subcommand === '--version' || subcommand === '-v') {
-      ctx.stdout += 'npm v1.0.0-shiro (browser-native)\n';
+      // a bare semver, as tools parse it (npm 10 is what node 20 ships with)
+      ctx.stdout += `${NPM_VERSION}\n`;
       return 0;
     }
 
@@ -290,7 +294,7 @@ async function installTree(
         try {
           try {
             const have = JSON.parse(await ctx.fs.readFile(`${dir}/package.json`, 'utf8') as string);
-            if (have.version === n.version && (have.name === n.source || have.name === n.name)) continue;
+            if (have.version === n.version && have.name === n.source) continue; // (an alternate's files carry its own name)
             await ctx.fs.rm(dir, { recursive: true, force: true } as any);
           } catch { /* not installed */ }
           const response = await fetch(n.tarball);
@@ -364,12 +368,13 @@ async function npmInstall(ctx: CommandContext): Promise<number> {
     const content = await ctx.fs.readFile(pkgPath, 'utf8') as string;
     pkg = JSON.parse(content);
   } catch (e: any) {
-    if (e.message.includes('ENOENT')) {
-      ctx.stderr += 'npm: package.json not found. Run "npm init" first.\n';
+    if (!e.message.includes('ENOENT')) {
+      ctx.stderr += `npm: failed to parse package.json: ${e.message}\n`;
       return 1;
     }
-    ctx.stderr += `npm: failed to parse package.json: ${e.message}\n`;
-    return 1;
+    // As npm: installing into a directory without one starts it (`npm i x` → {"dependencies": {"x": …}})
+    if (!packagesToInstall.length) { ctx.stdout += 'up to date, audited 0 packages\n'; return 0; }
+    pkg = {} as PackageJson;
   }
 
   let depsToResolve: Record<string, string> = {};

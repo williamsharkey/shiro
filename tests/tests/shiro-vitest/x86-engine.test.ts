@@ -19,6 +19,8 @@ import * as Abi from '@shiro/kernel/abi';
 const NATIVE_STROPS = 'size 1 4255477d8be3a17c\nsize 2 5ec6f1695a3da52b\nsize 4 98b24faa8cdc2e47\nsize 8 0ecf036ebe70d8d0\n';
 // fixtures/x86/sse4.c on an x86-64 host (Intel)
 const NATIVE_SSE4 = 'blendv     e4abc65e766ee19d\nptest      7ba00a6efd7a4874\npmovx      b625e06221fbec95\nint        9681ac88d1b48510\nround      15342966be7d2f10\nblend      1772b0668d5f0605\ninsext     1ed641595d55738e\ninsertps   07a824bc4eee852a\ndp         b92c2b618267d645\nmpsadbw    732e9d86324c3735\ncrc32      ed946d3299e3b67d\npcmpestr   f9d8e2fd9893018c\npcmpistr   97a98d5fb234df8d\npcmpstr64  1141d2a07ff9295d\npinsrq 1\npcmpestri 5\ncrc32 0x1900b8ca\n';
+// fixtures/x86/sse2d.c on an x86-64 host
+const NATIVE_SSE2D = "addsd      bc96350c210f6409\nsubsd      d917cbb966d42e7b\nmulsd      3fc132eaff3380e7\ndivsd      da92576571a8713f\nminsd      f9edb2f454baccc7\nmaxsd      00c42aefef0516ad\nsqrtsd     c58c80ca8efb5c23\nandpd      570233f7972d8c9e\nandnpd     e37627f65999c92e\norpd       1b152a8da83eee96\nxorpd      943724281f612f63\nunpcklpd   1a7e5547a45b561f\nunpckhpd   3b83ee4d02793243\ncmpeqsd    1659b97b6dc7d134\ncmpltsd    83e72d67db829775\ncmplesd    1a1fc4724cd7db2a\ncmpunordsd 3606b7dc1538bd86\ncmpneqsd   4f877dd0634ebd94\ncmpnltsd   6b74f23ca2872331\ncmpnlesd   e31769f1d4309796\ncmpordsd   3e45ed274a09c94a\naddpd      bc96350c210f6409\nmulpd      3fc132eaff3380e7\nminpd      f9edb2f454baccc7\nmaxpd      00c42aefef0516ad\ndivpd      da92576571a8713f\nsubpd      d917cbb966d42e7b\nsqrtpd     c58c80ca8efb5c23\nshufpd     3b83ee4d02793243\nucomisd    7ac10c2aa4d7c9ba\ncomisd     7ac10c2aa4d7c9ba\ncvt        a59b8a8c4454cb60\n";
 // fixtures/x86/bitscan.c on an x86-64 host
 const NATIVE_BITSCAN = 'bsf  zero64   reg dst=0x1122334455667788 zf=1\nbsf  zero64   mem dst=0x1122334455667788 zf=1\nbsr  zero64   reg dst=0x1122334455667788 zf=1\nbsr  zero64   mem dst=0x1122334455667788 zf=1\nbsf  val64    reg dst=0x8 zf=0\nbsf  val64    mem dst=0x8 zf=0\nbsr  val64    reg dst=0x34 zf=0\nbsr  val64    mem dst=0x34 zf=0\nbsf  zero32   reg dst=0x1122334455667788 zf=1\nbsf  zero32   mem dst=0x1122334455667788 zf=1\nbsr  zero32   reg dst=0x1122334455667788 zf=1\nbsr  zero32   mem dst=0x1122334455667788 zf=1\nbsf  val32    reg dst=0x8 zf=0\nbsf  val32    mem dst=0x8 zf=0\nbsr  val32    reg dst=0x14 zf=0\nbsr  val32    mem dst=0x14 zf=0\nbsf  zero16   reg dst=0x1122334455667788 zf=1\nbsf  zero16   mem dst=0x1122334455667788 zf=1\nbsr  zero16   reg dst=0x1122334455667788 zf=1\nbsr  zero16   mem dst=0x1122334455667788 zf=1\nbsf  val16    reg dst=0x1122334455660004 zf=0\nbsf  val16    mem dst=0x1122334455660004 zf=0\nbsr  val16    reg dst=0x1122334455660008 zf=0\nbsr  val16    mem dst=0x1122334455660008 zf=0\nclz64(0)=64 clz64(1)=63 clz64(1<<40)=23\nloop sum=5953906\n';
 
@@ -55,6 +57,8 @@ const forkBin = join(out, 'forkcopy');
 const haveFork = tryBuild('gcc', ['-static', '-O1', '-o', forkBin, 'forkcopy.c']);
 const mtchildBin = join(out, 'mtchild');
 const haveMtchild = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', mtchildBin, 'mtchild.c']);
+const psemBin = join(out, 'psem');
+const havePsem = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', psemBin, 'psem.c']);
 const fsidentBin = join(out, 'fsident');
 const haveFsident = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', fsidentBin, 'fsident.c']);
 // musl's libc (native Claude Code's) resolves paths and stats files its own way
@@ -106,6 +110,14 @@ const getcpuBin = join(out, 'getcpu');
 const haveGetcpu = tryBuild('gcc', ['-static', '-O1', '-o', getcpuBin, 'getcpu.c']);
 const sysvshmBin = join(out, 'sysvshm');
 const haveSysvshm = 'SYS_shmget' in Abi && tryBuild('gcc', ['-static', '-O1', '-o', sysvshmBin, 'sysvshm.c']);
+const sse2dBin = join(out, 'sse2d');
+const haveSse2d = tryBuild('gcc', ['-static', '-O1', '-o', sse2dBin, 'sse2d.c']);
+const futexckptBin = join(out, 'futexckpt');
+const haveFutexckpt = tryBuild('gcc', ['-static', '-O1', '-o', futexckptBin, 'futexckpt.c']);
+const sysvsemBin = join(out, 'sysvsem');
+const haveSysvsem = 'SYS_semget' in Abi && tryBuild('gcc', ['-static', '-O1', '-o', sysvsemBin, 'sysvsem.c']);
+const sysvmsgBin = join(out, 'sysvmsg');
+const haveSysvmsg = 'SYS_msgget' in Abi && tryBuild('gcc', ['-static', '-O1', '-o', sysvmsgBin, 'sysvmsg.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -913,6 +925,36 @@ describe('Blink engine: CPU and syscall fixes', () => {
       'shmdt 0\nshmdt again -1 Invalid argument\nrmid 0\nattach after rmid Invalid argument\nposix shm "from child"\n');
   }, 60_000);
 
+  // librsvg's gradients came out transparent: sqrtpd and float -> int conversions
+  it.skipIf(!haveSse2d)('SSE2 double ops match native, in the JIT and the interpreter', async () => {
+    const { shell } = await setup(readFileSync(sse2dBin));
+    for (const cmd of ['./prog', 'BLINK_WJIT=0 ./prog']) {
+      const r = await run(shell, cmd);
+      expect(r.output.replace(/\r\n/g, '\n')).toBe(NATIVE_SSE2D);
+    }
+  }, 60_000);
+
+  // LTP waitpid08/10: one of 8 forked children never woke from its checkpoint
+  it.skipIf(!haveFutexckpt)('every wake a waker counts reaches a waiter (futex in shared memory, 8 children)', async () => {
+    const { shell } = await setup(readFileSync(futexckptBin));
+    const r = await run(shell, './prog a 10; ./prog f 10');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('anon: 0 of 10 rounds bad\nfile: 0 of 10 rounds bad\n');
+  }, 120_000);
+
+  // Audacity's single-instance lock: System V semaphores (the kernel's, forwarded)
+  it.skipIf(!haveSysvsem)('System V semaphores: values, blocking semop, SEM_UNDO at exit, timeouts, IPC_RMID', async () => {
+    const { shell } = await setup(readFileSync(sysvsemBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe("semget ok\nsetval 0 getval 1\ngetall 1 0 nsems 2\nnowait while held -1 Resource temporarily unavailable\nblocking semop 0 after child exit 1\nsemtimedop -1 Resource temporarily unavailable waited 1\nrmid 0\nsemop after rmid -1 Invalid argument\n");
+  }, 60_000);
+
+  // System V message queues (the kernel's, forwarded)
+  it.skipIf(!haveSysvmsg)('System V message queues: typed receive, IPC_NOWAIT, a blocked receiver, IPC_RMID', async () => {
+    const { shell } = await setup(readFileSync(sysvmsgBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe("msgget ok\nsend 0 0\nqnum 2\nrcv type 2: 6 2 world\nrcv any: 6 1 hello\nrcv empty nowait: -1 No message of desired type\nchild got 5 7 late\nrmid 0\nsend after rmid -1 Invalid argument\n");
+  }, 60_000);
+
   // vim's typeahead check blocked for a key when two reads straddled a ms tick
   it.skipIf(!haveRealtime)('CLOCK_REALTIME and gettimeofday have sub-ms resolution', async () => {
     const { shell } = await setup(readFileSync(realtimeBin));
@@ -976,6 +1018,18 @@ describe('Blink engine: CPU and syscall fixes', () => {
       expect(typeof st).not.toBe('number');
       expect(a[i]).toBe(`${(st as any).dev}:${(st as any).ino}`);
     }
+  }, 60_000);
+
+  // The acceptance test of docs/research/SHARED_MAPPINGS.md: within a process
+  // and across fork today; an exec'd process's sem_post needs the Blink half
+  // (remote pages). it.fails until then: flip it to `it` when it lands.
+  it.skipIf(!havePsem).fails('POSIX named semaphores across exec (sem_open, /dev/shm)', async () => {
+    const { shell } = await setup(readFileSync(psemBin));
+    const r = await run(shell, './prog');
+    const out = r.output.replace(/\r\n/g, '\n');
+    expect(out).toContain('initial 1\nafter wait 0\n');
+    expect(out).toContain('after fork child post 1\n');
+    expect(out).toContain("exec'd process post seen: yes\n");
   }, 60_000);
 
   it.skipIf(!haveStatnull)('the stat family with a NULL buffer is EFAULT once the file is found', async () => {

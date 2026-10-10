@@ -197,10 +197,24 @@ export const SYS_shiro_sleeping = 1012;
 /** SysV shm attach/detach bookkeeping (the engine maps the memory; src/kernel/sysvshm.ts). */
 export const SYS_shiro_shmat = 1013;
 export const SYS_shiro_shmdt = 1014;
+/** Shared objects across engine instances (src/kernel/shmobj.ts, docs/research/SHARED_MAPPINGS.md) */
+export const SYS_shiro_shmobj_map = 1020;
+export const SYS_shiro_shmobj_unmap = 1021;
+export const SYS_shiro_shmobj_published = 1022;
 export const SYS_shmget = 29;
 export const SYS_shmat = 30;
 export const SYS_shmctl = 31;
 export const SYS_shmdt = 67;
+/** SysV semaphores (src/kernel/sysvsem.ts) */
+export const SYS_semget = 64;
+export const SYS_semop = 65;
+export const SYS_semctl = 66;
+export const SYS_semtimedop = 220;
+/** SysV message queues (src/kernel/sysvmsg.ts) */
+export const SYS_msgget = 68;
+export const SYS_msgsnd = 69;
+export const SYS_msgrcv = 70;
+export const SYS_msgctl = 71;
 
 // ── errno (Linux) ──────────────────────────────────────────────────────────
 export const EPERM = 1;
@@ -233,6 +247,8 @@ export const ESPIPE = 29;
 export const EROFS = 30;
 export const EPIPE = 32;
 export const ERANGE = 34;
+export const ENOMSG = 42;
+export const EIDRM = 43;
 export const ENAMETOOLONG = 36;
 export const ENOSYS = 38;
 export const ENOTEMPTY = 39;

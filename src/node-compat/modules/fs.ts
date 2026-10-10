@@ -1,3 +1,4 @@
+import { nodeGuestOf } from '../../node-worker/hooks';
 import type { CommandContext } from '../../commands/index';
 import { decodeUtf8Strict } from '../preload';
 import { PAGE_SET_TIMEOUT } from '../page-globals';
@@ -150,8 +151,10 @@ async function renameAfterWrites(deps: FsDeps, oldRes: string, newRes: string): 
  */
 function dirCachedChecker(deps: FsDeps): (p: string) => boolean {
   const { gone } = writeStateFor(deps.pendingPromises);
+  const guest = !!nodeGuestOf(deps.ctx);
   return (p: string) => {
     for (const g of gone) if (p === g || p.startsWith(g + '/')) return false;
+    if (guest) return !!deps.ctx.fs.isDirCached?.(p); // a stat says it all
     return !!(deps.ctx.fs.isDirCached?.(p) || deps.ctx.fs.readdirCached(p) !== undefined);
   };
 }
@@ -312,7 +315,12 @@ export function createFsModule(deps: FsDeps): any {
   // Files other processes change: the text cache follows them (it was filled
   // at start, so a watcher's re-read of a changed file got the old text).
   // Not while this script's own writes are in flight: the cache is ahead then.
-  if (deps.atExit) {
+  if (deps.atExit && nodeGuestOf(ctx)) {
+    // A guest's cache reads through: a changed path is just dropped (read again when asked),
+    // while a watcher has the page's change feed on
+    const drop = (p?: string) => { if (p) Map.prototype.delete.call(fileCache, p); };
+    deps.atExit((ctx.fs as any).onChangePassive((_event: string, path: string, newPath?: string) => { drop(path); drop(newPath); }));
+  } else if (deps.atExit) {
     const off = ctx.fs.onChange((event, path, newPath) => {
       queueMicrotask(() => {
         if (writeState.inflight.size) return;
@@ -342,8 +350,15 @@ export function createFsModule(deps: FsDeps): any {
     const dir = ctx.fs.realpathCached?.(r.slice(0, slash)) ?? r.slice(0, slash);
     return (dir === '/' ? '' : dir) + r.slice(slash);
   };
+  // A kernel guest writes through at once, so storage is the truth: one lstat
+  // answers what the page asks its caches several ways (`r` is canonical)
+  const guestLookup = nodeGuestOf(ctx) ? (r: string) => ctx.fs.lookupCached!(r) : undefined;
   /** Whether `r` (canonical) exists as this script sees it: undefined when only storage knows */
   const existsNow = (r: string): boolean | undefined => {
+    if (guestLookup) {
+      const hit = guestLookup(r);
+      return hit === null ? false : hit ? true : undefined;
+    }
     if (fileCache.has(r) || fileCache.has(r + '/.') || ctx.fs.readBytesCached(r) !== undefined || fsDirCached(r)) return true;
     if ([...fileCache.keys()].some((k) => k.startsWith(r + '/'))) return true;
     const hit = ctx.fs.lookupCached?.(r);
@@ -353,6 +368,12 @@ export function createFsModule(deps: FsDeps): any {
   const pendingModes = writeState.modes;
   /** Stats of canonical `r` from memory: null when it doesn't exist, undefined when only storage knows */
   const statNow = (r: string): any => {
+    if (guestLookup) {
+      const hit = guestLookup(r);
+      if (!hit) return hit;
+      if (hit.node.type !== 'file' && hit.node.type !== 'dir') return undefined;
+      return makeStats({ type: hit.node.type, size: hit.node.size ?? 0, mtimeMs: hit.node.mtime, mode: pendingModes.get(r) ?? hit.node.mode ?? 0o644, ino: inodeOf(hit.path) });
+    }
     const isFile = fileCache.has(r) || ctx.fs.readBytesCached(r) !== undefined;
     const isDir = !isFile && (fileCache.has(r + '/.') || fsDirCached(r) || [...fileCache.keys()].some((k) => k.startsWith(r + '/')));
     if (!isFile && !isDir) {
@@ -409,7 +430,20 @@ export function createFsModule(deps: FsDeps): any {
   };
   const writeChains = writeState.chains;
   const inflight = { push: writeState.push };
+  // A kernel guest's filesystem calls are blocking syscalls: do the write now, so a
+  // child process started right after (a really blocking execSync) sees it
+  const writeNowToo = !!nodeGuestOf(ctx);
   const queueWrite = (path: string, op: () => Promise<unknown>): Promise<void> => {
+    if (writeNowToo) {
+      let r: Promise<unknown>;
+      try { r = op(); } catch (e) { r = Promise.reject(e); }
+      // the mode writeFileSync(p, d, { mode }) asked for, now too (a child may exec the file next)
+      const m = pendingModes.get(path);
+      if (m !== undefined) { try { (ctx.fs as any).chmodSync(path, m); } catch { /* not there */ } }
+      const done = Promise.resolve(r).then(() => {}, () => {});
+      inflight.push(done);
+      return done;
+    }
     const next = (writeChains.get(path) ?? Promise.resolve()).then(op).then(() => {}, () => {});
     writeChains.set(path, next);
     inflight.push(next);
@@ -418,6 +452,12 @@ export function createFsModule(deps: FsDeps): any {
   const materializeOpenFile = (resolved: string) => {
     const content = fileCache.get(resolved) || '';
     const parentDir = resolved.substring(0, resolved.lastIndexOf('/')) || '/';
+    if (writeNowToo) {
+      // a guest: both syscalls now, in order (an await between them landed the write later)
+      try { (ctx.fs as any).mkdirSync(parentDir, true); } catch { /* there, or the write says why */ }
+      queueWrite(resolved, () => ctx.fs.writeFile(resolved, content));
+      return;
+    }
     queueWrite(resolved, async () => {
       await ctx.fs.mkdir(parentDir, { recursive: true }).catch(() => {});
       await ctx.fs.writeFile(resolved, content);
@@ -535,7 +575,8 @@ export function createFsModule(deps: FsDeps): any {
       fileMtimes.set(resolved, Date.now());
       // Skip IDB write for .tmp files — they're transient atomic-write intermediaries.
       // The data reaches IDB via renameSync which writes to the final path.
-      if (!resolved.includes('.tmp.')) {
+      // (A kernel guest's rename is rename(2): the file has to be there.)
+      if (writeNowToo || !resolved.includes('.tmp.')) {
         queueWrite(resolved, () => ctx.fs.writeFile(resolved, strData));
       }
       // localStorage WAL for critical config files (survives page close before IndexedDB flushes)
@@ -596,8 +637,9 @@ export function createFsModule(deps: FsDeps): any {
       if (fsCached) {
         for (const name of fsCached) {
           entries.add(name);
-          // Detect directories from Shiro FS cache (readdirCached returns entries for dirs)
-          if (!dirSet.has(name)) {
+          // Detect directories from Shiro FS cache (readdirCached returns entries for dirs);
+          // only withFileTypes asks
+          if (opts?.withFileTypes && !dirSet.has(name)) {
             const childPath = resolved === '/' ? '/' + name : resolved + '/' + name;
             // If it has sub-entries in FS cache, it's a directory
             if (fsDirCached(childPath)) {
@@ -706,13 +748,24 @@ export function createFsModule(deps: FsDeps): any {
         return;
       }
       // Not in memory: copy the bytes once the writes in flight (the source's
-      // among them) have landed
+      // among them) have landed (a guest's have: copy now)
+      if (writeNowToo) {
+        const data = (ctx.fs as any).readSync(srcRes);
+        (ctx.fs as any).writeSync(dstRes, data);
+        return;
+      }
       const waitFor = [...writeState.inflight];
       queueWrite(dstRes, () => Promise.allSettled(waitFor).then(() => ctx.fs.readFile(srcRes)).then((data: any) => ctx.fs.writeFile(dstRes, data)));
     },
     renameSync: (oldP: string, newP: string) => {
       const oldRes = ctx.fs.resolvePath(oldP, ctx.cwd);
       const newRes = ctx.fs.resolvePath(newP, ctx.cwd);
+      if (writeNowToo) {
+        // A kernel guest: one rename(2), at once; the cache reads both paths again
+        (ctx.fs as any).renameSync(oldRes, newRes);
+        for (const k of [...fileCache.keys()]) if (k === oldRes || k === newRes || k.startsWith(oldRes + '/') || k.startsWith(newRes + '/')) fileCache.delete(k);
+        return;
+      }
       // A directory (pnpm stages a package in name_tmp_PID, then renames it):
       // move the cached tree now, and the stored one once the writes into it
       // have landed (renaming first moved a half-written or missing tree)
@@ -785,6 +838,7 @@ export function createFsModule(deps: FsDeps): any {
     // Modes are kept (pnpm and cmd-shim make their bin shims executable)
     chmodSync: (p: string, mode: any) => {
       const resolved = ctx.fs.resolvePath(String(p), ctx.cwd);
+      if (writeNowToo) { (ctx.fs as any).chmodSync(resolved, parseMode(mode)); return; } // a guest: chmod(2) now
       inflight.push(chmodAfterWrites(deps, resolved, mode).catch(() => {}));
     },
     chownSync: () => {},

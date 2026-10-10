@@ -1,0 +1,234 @@
+{
+ "format": 1,
+ "env": {
+  "date": "2026-10-10T00:50:03.977Z",
+  "git": {
+   "sha": "ce421c63dda725eb8c0f7df10295d6b8fd258e0d",
+   "short": "ce421c6",
+   "branch": "unix/compat-tools",
+   "dirty": false
+  },
+  "node": "v22.22.0",
+  "chromium": "141.0.7390.37",
+  "os": "Linux 6.18.44-fc-v114 x64",
+  "cpu": {
+   "model": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+   "count": 4
+  },
+  "memoryGiB": 15.7,
+  "quick": false,
+  "runs": 5,
+  "machine": {
+   "id": "c7438dc4bb1e",
+   "label": "4× Intel(R) Xeon(R) Processor @ 2.10GHz, 15.7 GiB, Linux 6.18.44-fc-v114 x64, Chromium 141.0.7390.37"
+  },
+  "durationSec": 14,
+  "netcache": {
+   "hits": 1,
+   "misses": 0,
+   "failed": 0
+  }
+ },
+ "results": [
+  {
+   "name": "node.e1",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 103.1,
+   "p90": 113.8,
+   "min": 101.4,
+   "max": 113.8,
+   "n": 5,
+   "samples": [
+    103.1,
+    101.4,
+    101.7,
+    113.8,
+    111.1
+   ],
+   "notes": "`node -e 1`; first run 146 ms"
+  },
+  {
+   "name": "node.require_builtins",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 103.5,
+   "p90": 118.2,
+   "min": 102,
+   "max": 118.2,
+   "n": 5,
+   "samples": [
+    103.5,
+    118.2,
+    102,
+    102.3,
+    103.9
+   ],
+   "notes": "require fs/path/events/util/stream/crypto/http; first run 113 ms"
+  },
+  {
+   "name": "node.script_file",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 103.3,
+   "p90": 110.9,
+   "min": 99.86,
+   "max": 110.9,
+   "n": 5,
+   "samples": [
+    103.3,
+    110.9,
+    105.5,
+    101.5,
+    99.86
+   ],
+   "notes": "`node hello.js` (requires os); first run 104 ms"
+  },
+  {
+   "name": "node.fs_200",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 112.5,
+   "p90": 113.3,
+   "min": 104.8,
+   "max": 113.3,
+   "n": 5,
+   "samples": [
+    112.5,
+    113.3,
+    113.3,
+    108.4,
+    104.8
+   ],
+   "notes": "write/read/stat 200 files, readdir, unlink them; first run 110 ms"
+  },
+  {
+   "name": "node.exec_sync_10",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 105.4,
+   "p90": 127.4,
+   "min": 103.2,
+   "max": 127.4,
+   "n": 5,
+   "samples": [
+    105.4,
+    127.4,
+    116.7,
+    104.4,
+    103.2
+   ],
+   "notes": "10 execSync('echo i') at the top level; first run 111 ms"
+  },
+  {
+   "name": "node.worker.e1",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 106.3,
+   "p90": 108.9,
+   "min": 104.7,
+   "max": 108.9,
+   "n": 5,
+   "samples": [
+    108.9,
+    107.1,
+    104.7,
+    106.3,
+    105.1
+   ],
+   "notes": "`node -e 1` as a kernel guest in a Worker; first run 131 ms"
+  },
+  {
+   "name": "node.worker.require_builtins",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 105.7,
+   "p90": 115.4,
+   "min": 104.7,
+   "max": 115.4,
+   "n": 5,
+   "samples": [
+    104.7,
+    105.7,
+    115.4,
+    112.6,
+    105.6
+   ],
+   "notes": "require fs/path/events/util/stream/crypto/http, as a guest; first run 106 ms"
+  },
+  {
+   "name": "node.worker.script_file",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 104.4,
+   "p90": 106.9,
+   "min": 104,
+   "max": 106.9,
+   "n": 5,
+   "samples": [
+    104.1,
+    106.9,
+    104,
+    104.4,
+    104.4
+   ],
+   "notes": "`node hello.js` as a guest; first run 107 ms"
+  },
+  {
+   "name": "node.worker.fs_200",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 201.5,
+   "p90": 204.7,
+   "min": 164.6,
+   "max": 204.7,
+   "n": 5,
+   "samples": [
+    186.8,
+    201.5,
+    203.6,
+    164.6,
+    204.7
+   ],
+   "notes": "write/read/stat 200 files, readdir, unlink them, as a guest; first run 220 ms"
+  },
+  {
+   "name": "node.worker.exec_sync_10",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 123.7,
+   "p90": 145.8,
+   "min": 121.2,
+   "max": 145.8,
+   "n": 5,
+   "samples": [
+    122.7,
+    129.7,
+    123.7,
+    121.2,
+    145.8
+   ],
+   "notes": "10 execSync('echo i') at the top level, really blocking as a guest; first run 137 ms"
+  }
+ ]
+}

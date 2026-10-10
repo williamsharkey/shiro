@@ -1,7 +1,7 @@
-From 634503a589b8337f30f5a1bac3dabf92eb202cc7 Mon Sep 17 00:00:00 2001
+From 89c003cfdb68171eeb06c75a8ec0f06c0f39f862 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 01:01:21 +0000
-Subject: [PATCH 81/81] Shiro: record locks, pipe sizes and RLIMIT_NOFILE are
+Subject: [PATCH 81/82] Shiro: record locks, pipe sizes and RLIMIT_NOFILE are
  the kernel's; EFAULT for read-only buffers; fd checks
 
 Conformance (LTP syscalls):
@@ -52,10 +52,10 @@ index c95e3d6..26b42eb 100644
    SetWriteAddr(m, addr, n);
    return 0;
 diff --git a/blink/shiro.inc b/blink/shiro.inc
-index 53c5e19..7892bd9 100644
+index 1b536e6..20d71a8 100644
 --- a/blink/shiro.inc
 +++ b/blink/shiro.inc
-@@ -787,7 +787,9 @@ static i64 ShiroIoctl(struct Machine *m, int fd, u64 req, i64 arg) {
+@@ -816,7 +816,9 @@ static i64 ShiroIoctl(struct Machine *m, int fd, u64 req, i64 arg) {
        return 0;
      case 0x5432:                                          // TCGETS2: not supported
      default:
@@ -66,7 +66,7 @@ index 53c5e19..7892bd9 100644
    }
    if (in && CopyFromUserRead(m, buf, arg, in) == -1) return -EFAULT_LINUX;
    r = ShiroCall(m, 16, A12(fd, (int)req, value ? 4 : MAX(in, out)), buf,
-@@ -802,20 +804,20 @@ static i64 ShiroFcntl(struct Machine *m, int fd, int cmd, i64 arg) {
+@@ -831,20 +833,20 @@ static i64 ShiroFcntl(struct Machine *m, int fd, int cmd, i64 arg) {
    switch (cmd) {
      case 0: case 1: case 2: case 3: case 4: case 1030:
        return KS(m, 72, A12(fd, cmd, (int)arg));
@@ -98,7 +98,7 @@ index 53c5e19..7892bd9 100644
      case 1033: case 1034:  // F_ADD_SEALS / F_GET_SEALS
        return -EINVAL_LINUX;
      default:
-@@ -2173,6 +2175,10 @@ static void ShiroDropKid(struct System *s) {
+@@ -2202,6 +2204,10 @@ static void ShiroDropKid(struct System *s) {
    UNLOCK(&g_shiro_kids_lock);
  }
  
@@ -109,7 +109,7 @@ index 53c5e19..7892bd9 100644
  // the kernel signalled hosted child `pid` (host.mjs routes by pid)
  EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid(int pid, int sig) {
    int i;
-@@ -2444,6 +2450,11 @@ static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
+@@ -2473,6 +2479,11 @@ static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
    i64 addr, fsize, o, r;
    bool shared = (flags & 3) == 1 || (flags & 3) == 3;
    if (off < 0 || (off & 4095)) return -EINVAL_LINUX;
@@ -121,7 +121,7 @@ index 53c5e19..7892bd9 100644
    if ((r = ShiroStatAt(m, fd, 0, 0, 0x1000, st)) < 0) return r;
    if ((Read32(st + 24) & 0170000) == 0040000) return -ENODEV_LINUX;
    fsize = Read64(st + 48);
-@@ -2747,6 +2758,20 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+@@ -2872,6 +2883,20 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
          }
        }
        break;
@@ -142,7 +142,7 @@ index 53c5e19..7892bd9 100644
      case 0x07F: {                                                     // rt_sigpending
        // the kernel holds the signals the guest blocked (ShiroSyncMask), so
        // they are pending there; Blink's own pending ones count too
-@@ -2973,7 +2998,8 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+@@ -3113,7 +3138,8 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
      case 0x0E9: {                                                     // epoll_ctl
        u8 ev[12];
        memset(ev, 0, sizeof(ev));
@@ -152,7 +152,7 @@ index 53c5e19..7892bd9 100644
        r = KS(m, 233, A12(a, b, c, Read32(ev), Read32(ev + 4), Read32(ev + 8)));
        break;
      }
-@@ -3012,9 +3038,18 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+@@ -3162,9 +3188,18 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
        u8 *buf;
        i64 off = -1, done = 0, n;
        u8 offb[8];
@@ -172,7 +172,7 @@ index 53c5e19..7892bd9 100644
        }
        buf = (u8 *)ShiroAlloc(m, g_shiro_chunk);
        r = 0;
-@@ -3193,6 +3228,12 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+@@ -3343,6 +3378,12 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
        }
        break;
      }
