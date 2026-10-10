@@ -774,16 +774,29 @@ export function createFsModule(deps: FsDeps): any {
       // not when the async delete lands, or the file keeps being listed
       inflight.push(ctx.fs.unlinkNow(resolved).catch(() => {}));
     },
-    // No hard links in Shiro's filesystem: link() copies, which is what callers
-    // (atomic-write helpers, lockfiles) need from it
+    // A hard link (FileSystem.link): one file, two names
     linkSync: (src: string, dst: string) => {
+      const srcRes = real(src);
       const resolvedDst = ctx.fs.resolvePath(pathArg(dst), ctx.cwd);
-      if (fileCache.has(resolvedDst) || ctx.fs.readBytesCached(resolvedDst) !== undefined) {
+      if (existsNow(resolvedDst)) {
         const err: any = new Error(`EEXIST: file already exists, link '${src}' -> '${dst}'`);
         err.code = 'EEXIST'; err.errno = -17; err.syscall = 'link';
         throw err;
       }
-      fsShim.copyFileSync(src, dst);
+      if (writeNowToo) {
+        // A kernel guest: link(2), at once
+        (ctx.fs as any).linkSync(srcRes, resolvedDst);
+        fileCache.delete(resolvedDst);
+        return;
+      }
+      // The page: in the filesystem's cache now when it has the source, else once
+      // the writes in flight (the source's among them) have landed
+      const text = fileCache.get(srcRes);
+      if (text !== undefined) { fileCache.set(resolvedDst, text); fileMtimes.set(resolvedDst, Date.now()); }
+      if (writeState.inflight.size === 0 && (ctx.fs as any).linkNow?.(srcRes, resolvedDst)) return;
+      if (!(ctx.fs as any).link) { fsShim.copyFileSync(src, dst); return; }
+      const waitFor = [...writeState.inflight];
+      queueWrite(resolvedDst, () => Promise.allSettled(waitFor).then(() => (ctx.fs as any).link(srcRes, resolvedDst)));
     },
     copyFileSync: (src: string, dst: string) => {
       const srcRes = ctx.fs.resolvePath(pathArg(src), ctx.cwd);

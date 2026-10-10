@@ -491,6 +491,10 @@ class Inode {
   private flushing: Promise<void> | null = null;
   /** The path was unlinked while open: the data lives on for the open fds only. */
   unlinked = false;
+  /** Its key in the inode table (inodeKey): the path, or the inode number of a file with hard links. */
+  key = '';
+  /** Blocks of an unlinked big file this inode still reads (FileSystem.holdBlob), released at the last close. */
+  heldBlob: string | null = null;
   /** Nanoseconds past mtimeMs; atime when set apart from mtime (null: follows it). See FSNode. */
   mtimeNs = 0;
   atimeMs: number | null = null;
@@ -568,7 +572,7 @@ class Inode {
 
   async writeAt(buf: Uint8Array, off: number): Promise<void> {
     while (!this.writeSync(buf, off)) {
-      if (this.dirtyPages.size >= DIRTY_PAGES) await this.flush(true);
+      if (this.dirtyPages.size >= DIRTY_PAGES && !this.unlinked) await this.flush(true);
       else await this.loadPages(off, off + buf.length, true);
     }
   }
@@ -621,7 +625,7 @@ class Inode {
 
   async truncate(len: number): Promise<void> {
     while (!this.truncateSync(len)) {
-      if (this.dirtyPages.size >= DIRTY_PAGES) await this.flush(true);
+      if (this.dirtyPages.size >= DIRTY_PAGES && !this.unlinked) await this.flush(true);
       else await this.loadPages(Math.min(len, this.size), Math.min(len, this.size) + 1, true);
     }
   }
@@ -690,7 +694,7 @@ class Inode {
 
   /** Whether writing [off, end) needs no load: each page touched partially is loaded or zeros in the store. */
   private writable(off: number, end: number): boolean {
-    if (this.dirtyPages.size >= DIRTY_PAGES) return false;
+    if (this.dirtyPages.size >= DIRTY_PAGES && !this.unlinked) return false;
     const B = this.B;
     const ok = (p: number) => this.pages.has(Math.floor(p / B)) || Math.floor(p / B) * B >= Math.min(this.zeroFrom, this.size);
     // Pages wholly overwritten need nothing; the partial ones at each end, and
@@ -867,11 +871,67 @@ class Inode {
 const inodeTables = new WeakMap<FileSystem, Map<string, Inode>>();
 
 /**
+ * The inode table's key for canonical `path`: the path, or for a file with
+ * hard links its inode number, so every name's fds share one Inode.
+ */
+function inodeKey(fs: FileSystem, path: string): string {
+  const link = fs.linkOf?.(path);
+  return link === undefined ? path : `i:${link}`;
+}
+
+function tableOf(fs: FileSystem): Map<string, Inode> {
+  let table = inodeTables.get(fs);
+  if (!table) {
+    table = new Map();
+    inodeTables.set(fs, table);
+    // A link() or unlink() changes which names share a file: re-key the open ones
+    fs.onLinkChange?.(() => rekeyInodes(fs));
+  }
+  return table;
+}
+
+/** The open inode for canonical `path`, if any. */
+function findInode(fs: FileSystem, path: string): Inode | undefined {
+  const table = inodeTables.get(fs);
+  if (!table) return undefined;
+  return table.get(inodeKey(fs, path)) ?? [...table.values()].find((i) => i.path === path && !i.unlinked);
+}
+
+/** Recompute the keys of open inodes (their files gained or lost names). */
+export function rekeyInodes(fs: FileSystem): void {
+  const table = inodeTables.get(fs);
+  if (!table) return;
+  for (const ino of [...table.values()]) {
+    const k = inodeKey(fs, ino.path);
+    if (k === ino.key) continue;
+    if (table.get(ino.key) === ino) table.delete(ino.key);
+    ino.key = k;
+    if (!table.has(k)) table.set(k, ino);
+  }
+}
+
+/** An open inode whose last name went: its data stays for its fds (a big file's blocks held), never written back. */
+function orphanInode(ino: Inode): void {
+  ino.unlinked = true;
+  const table = inodeTables.get(ino.fs);
+  if (table?.get(ino.key) === ino) table.delete(ino.key);
+  if (ino.blob && !ino.heldBlob) { ino.heldBlob = ino.blob; ino.fs.holdBlob?.(ino.blob); }
+}
+
+function inodeClosed(ino: Inode): void {
+  if (ino.opens !== 0) return;
+  const table = inodeTables.get(ino.fs);
+  if (table?.get(ino.key) === ino) table.delete(ino.key);
+  if (ino.heldBlob) { ino.fs.releaseBlob?.(ino.heldBlob); ino.heldBlob = null; }
+}
+
+/**
  * /dev/shm files mapped remote (shmobj.ts): while mapped, the object's
  * SharedArrayBuffer holds the file's bytes, so the inode reads and writes
  * there (pread sees the mapping, the mapping sees pwrite), as a memfd does.
- * Kept by path so an inode opened while it is mapped (shm_open after a close)
- * uses the buffer too.
+ * Kept by inode key (the path, or the inode of a file with hard links) so
+ * an inode opened while it is mapped (shm_open after a close, or through
+ * another name) uses the buffer too.
  */
 const sharedFiles = new WeakMap<FileSystem, Map<string, Uint8Array>>();
 
@@ -898,8 +958,8 @@ export function attachInodeShared(fs: FileSystem, path: string, sab: SharedArray
   if (own?.unlinked) { useShared(own, view); return; }
   let m = sharedFiles.get(fs);
   if (!m) { m = new Map(); sharedFiles.set(fs, m); }
-  m.set(path, view);
-  const ino = inodeTables.get(fs)?.get(path);
+  m.set(inodeKey(fs, path), view);
+  const ino = findInode(fs, path);
   if (ino) useShared(ino, view);
   if (own && own !== ino) useShared(own, view);
 }
@@ -916,8 +976,8 @@ function detachInode(ino: Inode): void {
 
 /** Its last mapping went: the inode keeps a private copy of the bytes it has now. */
 function detachInodeShared(fs: FileSystem, path: string): void {
-  sharedFiles.get(fs)?.delete(path);
-  const ino = inodeTables.get(fs)?.get(path);
+  sharedFiles.get(fs)?.delete(inodeKey(fs, path));
+  const ino = findInode(fs, path);
   if (ino) detachInode(ino);
 }
 
@@ -956,16 +1016,15 @@ export function unlinkedFileKey(file: OpenFile): string | undefined {
 }
 
 function newInode(fs: FileSystem, path: string, ino: Inode): Inode {
-  const shared = sharedFiles.get(fs)?.get(path);
+  const shared = sharedFiles.get(fs)?.get(inodeKey(fs, path));
   if (shared) useShared(ino, shared);
   return ino;
 }
 
 /** Open (or share) the inode for `path`; `path` must already be resolved and exist or be created by the caller. */
 export async function openInode(fs: FileSystem, path: string): Promise<Inode> {
-  let table = inodeTables.get(fs);
-  if (!table) { table = new Map(); inodeTables.set(fs, table); }
-  let ino = table.get(path);
+  const table = tableOf(fs);
+  let ino = findInode(fs, path);
   if (!ino) {
     const st = await fs.stat(path);
     // A big file is read a page at a time, not loaded here
@@ -974,10 +1033,10 @@ export async function openInode(fs: FileSystem, path: string): Promise<Inode> {
     // A lazy file the read just fetched may be stored as blocks now
     if (!blob && (blob = fs.blobOf?.(path))) raw = new Uint8Array(0);
     const bytes = typeof raw === 'string' ? new TextEncoder().encode(raw) : raw;
-    ino = table.get(path) ?? newInode(fs, path, new Inode(fs, path, bytes, st.mode, st.mtime.getTime(), st.ctime.getTime(),
+    ino = findInode(fs, path) ?? newInode(fs, path, new Inode(fs, path, bytes, st.mode, st.mtime.getTime(), st.ctime.getTime(),
       { mtimeNs: st.mtimeNs, atime: st.atimeMs === st.mtime.getTime() && st.atimeNs === st.mtimeNs ? undefined : st.atimeMs, atimeNs: st.atimeNs },
       blob ? { id: blob, size: st.size } : undefined));
-    table.set(path, ino);
+    if (!ino.key) { ino.key = inodeKey(fs, path); table.set(ino.key, ino); }
   }
   ino.opens++;
   return ino;
@@ -988,14 +1047,14 @@ export function openInodeSync(fs: FileSystem, path: string, node: {
   content: Uint8Array | null; mode: number; mtime: number; ctime: number; mtimeNs?: number; atime?: number; atimeNs?: number;
   size?: number; blob?: string;
 }): Inode {
-  let table = inodeTables.get(fs);
-  if (!table) { table = new Map(); inodeTables.set(fs, table); }
-  let ino = table.get(path);
+  const table = tableOf(fs);
+  let ino = findInode(fs, path);
   if (!ino) {
     // Like readFile: the cached node's bytes, null meaning empty (a big file's are read a page at a time)
     ino = newInode(fs, path, new Inode(fs, path, node.blob ? new Uint8Array(0) : node.content ?? new Uint8Array(0), node.mode, node.mtime, node.ctime, node,
       node.blob ? { id: node.blob, size: node.size ?? 0 } : undefined));
-    table.set(path, ino);
+    ino.key = inodeKey(fs, path);
+    table.set(ino.key, ino);
   }
   ino.opens++;
   return ino;
@@ -1010,10 +1069,9 @@ export async function writeBackAll(fs: FileSystem): Promise<void> {
 /** closeInode when nothing needs to be written back; false = use closeInode. */
 function closeInodeSync(ino: Inode): boolean {
   // Written data goes back now when the FileSystem can take it synchronously (node in a Worker closes after each write)
-  if (ino.busy || (ino.dirty && !ino.flushSync())) return false;
+  if (ino.busy || (ino.dirty && !ino.unlinked && !ino.flushSync())) return false;
   ino.opens--;
-  const table = inodeTables.get(ino.fs);
-  if (ino.opens === 0 && table?.get(ino.path) === ino) table.delete(ino.path);
+  inodeClosed(ino);
   return true;
 }
 
@@ -1022,8 +1080,7 @@ async function closeInode(ino: Inode): Promise<void> {
   try {
     await ino.flush();
   } finally {
-    const table = inodeTables.get(ino.fs);
-    if (ino.opens === 0 && table?.get(ino.path) === ino) table.delete(ino.path);
+    inodeClosed(ino);
   }
 }
 
@@ -1037,37 +1094,47 @@ async function closeInode(ino: Inode): Promise<void> {
 export async function renameInodes(fs: FileSystem, from: string, to: string): Promise<() => void> {
   const table = inodeTables.get(fs);
   if (!table) return () => {};
-  const moved = [...table.values()].filter(ino => ino.path === from || ino.path.startsWith(from + '/'));
+  // Two names of one file: rename does nothing
+  const fromLink = fs.linkOf?.(from);
+  if (fromLink !== undefined && fs.linkOf?.(to) === fromLink) return () => {};
+  const moved = [...table.values()].filter(ino => !ino.unlinked && (ino.path === from || ino.path.startsWith(from + '/')));
   for (const ino of moved) await ino.flush();
+  const old = findInode(fs, to);
+  const oldNames = old ? fs.namesOf?.(to) ?? [to] : [];
   return () => {
-    const old = table.get(to);
-    if (old && !moved.includes(old)) { old.unlinked = true; table.delete(to); }
-    for (const ino of moved) {
-      table.delete(ino.path);
-      ino.path = to + ino.path.slice(from.length);
-      table.set(ino.path, ino);
+    if (old && !moved.includes(old)) {
+      // The name `to` goes from the file open there: its other names keep it
+      const others = oldNames.filter((n) => n !== to);
+      if (!others.length) orphanInode(old);
+      else if (old.path === to) old.path = others[0];
     }
+    for (const ino of moved) ino.path = to + ino.path.slice(from.length);
+    rekeyInodes(fs);
   };
 }
 
 /**
  * Call before unlinking `path`: open descriptions keep its data but never
- * write it back (this waits out a write-back already under way).
+ * write it back (this waits out a write-back already under way). A file
+ * with other names stays theirs.
  */
 export async function unlinkInode(fs: FileSystem, path: string): Promise<void> {
-  // A mapped object's name goes: a new file of that name is another object
-  sharedFiles.get(fs)?.delete(path);
-  const table = inodeTables.get(fs);
-  const ino = table?.get(path);
-  if (!ino || !table) return;
-  ino.unlinked = true;
-  table.delete(path);
+  const others = (fs.namesOf?.(path) ?? [path]).filter((n) => n !== path);
+  // The last name of a mapped object goes: a new file of that name is another object
+  if (!others.length) sharedFiles.get(fs)?.delete(inodeKey(fs, path));
+  const ino = findInode(fs, path);
+  if (!ino) return;
+  if (others.length) {
+    if (ino.path === path) { await ino.flush(); ino.path = others[0]; }
+    return;
+  }
+  orphanInode(ino);
   await ino.flush();
 }
 
 /** Whether `path` (resolved) is open: unlink must then hand its data to the open fds. */
 export function isInodeOpen(fs: FileSystem, path: string): boolean {
-  return !!inodeTables.get(fs)?.has(path);
+  return !!findInode(fs, path);
 }
 
 /** Whether any file of `fs` is open (inodeStat can only answer then). */
@@ -1080,7 +1147,7 @@ export function hasOpenInodes(fs: FileSystem): boolean {
  * FileSystem: its size and times are the newer ones until written back.
  */
 export function inodeStat(fs: FileSystem, path: string): KStat | undefined {
-  const ino = inodeTables.get(fs)?.get(path);
+  const ino = findInode(fs, path);
   return ino && (ino.dirty || ino.busy) ? inodeKStat(ino) : undefined;
 }
 
@@ -1095,7 +1162,7 @@ function inodeKStat(ino: Inode): KStat {
 
 /** Write back what an open inode for `path` holds (before reading the path's times from the FileSystem). */
 export async function flushInode(fs: FileSystem, path: string): Promise<void> {
-  await inodeTables.get(fs)?.get(path)?.flush();
+  await findInode(fs, path)?.flush();
 }
 
 /**
@@ -1106,7 +1173,7 @@ export async function flushInode(fs: FileSystem, path: string): Promise<void> {
  */
 export async function writeInodeBytes(fs: FileSystem, path: string, bytes: Uint8Array): Promise<boolean> {
   detachInodeShared(fs, path);
-  const ino = inodeTables.get(fs)?.get(path);
+  const ino = findInode(fs, path);
   if (!ino || ino.unlinked) return false;
   const n = Math.min(bytes.length, ino.size);
   // A big file not switched to the buffer (it had grown past the mapping) is pages
@@ -1118,7 +1185,7 @@ export async function writeInodeBytes(fs: FileSystem, path: string, bytes: Uint8
 
 /** chmod of `path`: an open inode reports (inodeStat) the new mode. */
 export function setInodeMode(fs: FileSystem, path: string, mode: number): void {
-  const ino = inodeTables.get(fs)?.get(path);
+  const ino = findInode(fs, path);
   if (ino) ino.mode = (ino.mode & ~0o7777) | (mode & 0o7777);
 }
 
@@ -1128,7 +1195,7 @@ export function setInodeMode(fs: FileSystem, path: string, mode: number): void {
  * then reports the new times. Call before FileSystem.utimes.
  */
 export async function setInodeTimes(fs: FileSystem, path: string, t: { atimeMs: number; atimeNs: number; mtimeMs: number; mtimeNs: number }): Promise<void> {
-  const ino = inodeTables.get(fs)?.get(path);
+  const ino = findInode(fs, path);
   if (!ino) return;
   await ino.flush();
   ino.mtimeMs = t.mtimeMs;
@@ -1153,40 +1220,11 @@ export function inodeNumber(fs: FileSystem | null | undefined, path: string): nu
 }
 
 /**
- * link() copies (no hard links), but the copy gets its source's inode number,
- * as a hard link would (git's local clone checks that), and both names count
- * in st_nlink.
- */
-export function shareInodeNumber(fs: FileSystem, from: string, to: string): void {
-  const n = inodeNumber(fs, from);
-  forgetInodeNumber(fs, to);
-  fs.setIno(to, n);
-  let names = linkNames.get(n);
-  if (!names) { names = new Set([from]); linkNames.set(n, names); }
-  names.add(to);
-}
-
-/** `path` is unlinked (or renamed away): it no longer counts as a link. */
-export function forgetInodeNumber(fs: FileSystem, path: string): void {
-  for (const [n, names] of linkNames) {
-    if (names.delete(path)) { if (names.size < 2) linkNames.delete(n); break; }
-  }
-}
-
-/** A rename moves a link name (the number moves with the node). */
-export function renameLinkName(from: string, to: string): void {
-  for (const names of linkNames.values()) if (names.delete(from)) { names.add(to); break; }
-}
-
-/** The names link() gave one inode number (only numbers with two or more). */
-const linkNames = new Map<number, Set<string>>();
-
-/**
- * st_nlink of a regular file: how many names link() gave it (shadow's
- * lock, link(group.PID, group.lock), checks that the count went to 2).
+ * st_nlink of a regular file: how many names it has (FileSystem.link;
+ * shadow's lock, link(group.PID, group.lock), checks that the count went to 2).
  */
 export function linkCount(fs: FileSystem | null | undefined, path: string): number {
-  return linkNames.get(inodeNumber(fs, path))?.size ?? 1;
+  return fs?.nlinkOf?.(path) ?? 1;
 }
 
 export class RegularFile implements OpenFile {

@@ -40,6 +40,8 @@ export interface NodeGuestHooks {
   ids?: { pid: number; ppid: number };
   /** kill(2) another process: 0 or -errno */
   kill?(pid: number, sig: number): number;
+  /** node:wasi's preview1 imports: blocking syscalls on this thread's channel (modules/wasi.ts) */
+  wasi?: import('../node-compat/modules/wasi').WasiSys;
 }
 
 /** A worker_threads Worker's thread, as its parent sees it */

@@ -14,7 +14,7 @@ import { nodeGuestOf } from '../node-worker/hooks';
  */
 const BUILTIN_NAMES = ['assert', 'async_hooks', 'buffer', 'child_process', 'constants', 'crypto', 'dns', 'events', 'fs',
   'http', 'https', 'module', 'net', 'os', 'path', 'perf_hooks', 'process', 'querystring', 'readline', 'stream',
-  'string_decoder', 'timers', 'tls', 'tty', 'url', 'util', 'v8', 'vm', 'worker_threads', 'zlib'];
+  'string_decoder', 'timers', 'tls', 'tty', 'url', 'util', 'v8', 'vm', 'wasi', 'worker_threads', 'zlib'];
 
 export function createFakeProcess(
   ctx: CommandContext,

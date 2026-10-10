@@ -35,6 +35,24 @@ export function isEsbuildChunk(src: string): boolean {
 const isIdentStart = (c: number) => (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c === 95 || c === 36 || c > 127;
 const isIdent = (c: number) => isIdentStart(c) || (c >= 48 && c <= 57);
 
+/** Names in `locals` the module also declares: a catch, function or arrow parameter, let/const/var/function/class */
+function redeclared(src: string, inCode: (i: number) => boolean, locals: Map<string, unknown>): Set<string> {
+  const found = new Set<string>();
+  const add = (list: string, at: number) => {
+    if (!inCode(at)) return;
+    // (simple names, defaults and rest elements; a destructured parameter's names too)
+    // (`{ key: name }`: the name after the colon)
+    for (const m of list.matchAll(/(?:^|[,{[(:]|\.\.\.)\s*([A-Za-z_$][\w$]*)\s*(?=[,}\])=]|$)/g)) if (locals.has(m[1])) found.add(m[1]);
+  };
+  for (const m of src.matchAll(/\bcatch\s*\(([^()]*)\)/g)) add(m[1], m.index!);
+  for (const m of src.matchAll(/\bfunction\b\s*\*?\s*[\w$]*\s*\(([^()]*)\)/g)) add(m[1], m.index!);
+  for (const m of src.matchAll(/\(([^()]*)\)\s*=>/g)) add(m[1], m.index!);
+  for (const m of src.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\s*=>/g)) if (inCode(m.index!) && locals.has(m[1])) found.add(m[1]);
+  for (const m of src.matchAll(/\b(?:let|const|var|function\s*\*?|class)\s+([A-Za-z_$][\w$]*)/g)) if (inCode(m.index!) && locals.has(m[1])) found.add(m[1]);
+  for (const m of src.matchAll(/\b(?:let|const|var)\s*([{[][^=;]*)=/g)) add(m[1], m.index!);
+  return found;
+}
+
 export function liveEsbuildChunk(src: string): string {
   if (!isEsbuildChunk(src)) return src;
   const mask = codeMask(src);
@@ -78,6 +96,9 @@ export function liveEsbuildChunk(src: string): string {
     }
     removals.push([m.index!, m.index! + m[0].length]);
   }
+  // An imported name the module declares again (rolldown's chunks reuse names in nested
+  // scopes, `catch (error)` beside an imported `error`; esbuild renames those) keeps the copy
+  for (const name of redeclared(src, inCode, locals)) locals.delete(name);
   if (!locals.size && !getters.length) return src;
 
   const out: string[] = [];

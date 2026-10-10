@@ -102,6 +102,26 @@ describe('esbuild chunks: live import bindings', () => {
   });
 });
 
+describe('live bindings in a rolldown chunk', () => {
+  it('an imported name declared again in a nested scope (catch, parameters, let) stays that binding there', () => {
+    // rolldown keeps short names that shadow imports; esbuild would rename them
+    const src = [
+      'import { n as __toESM, t as require_x } from "./binding.mjs";',
+      'import { n as error, o as warn } from "./logs.mjs";',
+      'function call(handler) { try { return handler(); } catch (error) { throw error; } }',
+      'const wrap = (error) => String(error);',
+      'function report({ message: error }) { return error; }',
+      'export function log() { warn("w"); return error; }',
+      '',
+    ].join('\n');
+    const out = liveEsbuildChunk(src);
+    expect(out).toContain('catch (error) { throw error; }');
+    expect(out).toContain('const wrap = (error) => String(error);');
+    expect(out).toContain('(0, __shiro_live1.o)("w")'); // an import nothing shadows stays live
+    expect(() => new Function('__shiro_require', '__shiro_module', transformESModules(src))).not.toThrow();
+  });
+});
+
 describe('node builtins used by agent CLIs', () => {
   it('node:dns/promises resolves', async () => {
     const { shell } = await shellWith({
