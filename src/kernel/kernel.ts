@@ -2094,21 +2094,18 @@ export class Kernel {
             };
             // While remote, the file's fds read and write the buffer (not the control page)
             onRemote = (sab) => attachInodeShared(fs, path, sab, sab.byteLength - CONTROL_BYTES, f);
-            // The bytes go to the file and to the names link() gave its inode
-            // number (it copies): glibc's sem_open maps a temporary file,
-            // links it to the semaphore's name and unlinks it (Open POSIX
-            // sem_close_3-2)
+            // The bytes go to the file: the mapped fd's inode follows its renames and
+            // unlinks (glibc's sem_open maps a temporary file, links it to the
+            // semaphore's name and unlinks the temporary one: Open POSIX sem_close_3-2)
             writeBack = async (b) => {
               // An unlinked object's bytes stay with its fds (the name may be another file's now)
               if (unlinkedKey) { detachOpenFileShared(f); return; }
-              const dir = path.slice(0, path.lastIndexOf('/')) || '/';
-              // (only names still this inode: unlinked since the map, the name may be a new file's)
-              const names = new Set(fs.inoOf(path) === ino ? [path] : []);
-              try {
-                for (const e of await fs.readdir(dir)) if (fs.inoOf(`${dir}/${e}`) === ino) names.add(`${dir}/${e}`);
-              } catch { /* (the directory is gone) */ }
-              for (const p of names) if (!(await writeInodeBytes(fs, p, b)) && await fs.exists(p)) await fs.writeFile(p, b);
-              detachOpenFileShared(f); // (the fd's inode may not be the path's: unlinked since the map)
+              const ownIno = f instanceof RegularFile ? f.inode : undefined;
+              const own = ownIno ? ownIno.path : path;
+              // Unlinked since the map, or closed and its name now another file's: nothing to write by name
+              const live = ownIno ? !ownIno.unlinked && (ownIno.opens > 0 || fs.inoOf(own) === ino) : fs.inoOf(own) === ino;
+              if (live && !(await writeInodeBytes(fs, own, b)) && await fs.exists(own)) await fs.writeFile(own, b);
+              detachOpenFileShared(f);
             };
           } else if (kind === 1) {
             const seg = this.shm.list().find((x) => x.id === args[0]);
