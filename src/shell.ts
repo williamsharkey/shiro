@@ -1274,6 +1274,8 @@ export class Shell {
     child.shellPid = this.shellPid;
     child.parentPid = this.parentPid;
     child.localVars = new Set(this.localVars);
+    // A subshell of a function is still in it (local works there, as in bash)
+    child.localVarStack = this.localVarStack.map((f) => new Map(f));
     child.invokedAsSh = this.invokedAsSh;
     child.exportedUnset = new Set(this.exportedUnset);
     child.arrays = new Map(Array.from(this.arrays.entries()).map(([k, v]) => [k, copyArray(v)]));
