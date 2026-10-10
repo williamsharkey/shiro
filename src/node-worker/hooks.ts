@@ -1,6 +1,6 @@
 /**
  * What node-compat does differently as a kernel guest in a Worker
- * (TABCOMPUTER_NODE_WORKER=1): `ctx.nodeGuest`, set by guest.ts. Absent in
+ * (by default; TABCOMPUTER_NODE_WORKER=0 opts out): `ctx.nodeGuest`, set by guest.ts. Absent in
  * the page, where node-compat works as before.
  */
 import type { ChildOptions, ChildResult } from './child';

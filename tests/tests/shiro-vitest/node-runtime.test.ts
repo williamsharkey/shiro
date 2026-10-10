@@ -467,7 +467,9 @@ describe('Node Runtime (jseval.ts)', () => {
 
     it('a piped node through the shell sees no FORCE_COLOR', async () => {
       let out = '';
-      await os.shell.execute('node -p "String(process.env.FORCE_COLOR)" | cat', s => { out += s; });
+      // (read through $(...): with a terminal, a pipeline of kernel programs, node as a guest
+      // included, writes on its pty rather than to this callback)
+      await os.shell.execute('echo "$(node -p "String(process.env.FORCE_COLOR)" | cat)"', s => { out += s; });
       expect(out.replace(/\r/g, '').trim()).toBe('undefined');
     });
 
