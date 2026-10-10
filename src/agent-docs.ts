@@ -79,10 +79,6 @@ export const KNOWN_ISSUES: { issue: string; workaround?: string }[] = [
     workaround: 'Run the install again.',
   },
   {
-    issue: 'The shell sets `FORCE_COLOR=3`, so Node tools print color codes even into pipes and files.',
-    workaround: 'Prefix commands whose output you parse with `NO_COLOR=1 FORCE_COLOR=0`.',
-  },
-  {
     issue: '`gh issue view --comments` is not implemented (an unknown-flag error).',
     workaround: 'Use `gh api repos/OWNER/REPO/issues/N/comments --jq ".[].body"`.',
   },
