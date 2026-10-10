@@ -8,6 +8,7 @@
 import type { Kernel } from '../kernel/kernel';
 import { canBlock } from '../kernel/channel';
 import type { GuestWorker } from '../kernel/worker-host';
+import type { Runner } from '../kernel/kernel';
 
 let factory: (() => GuestWorker) | null = null;
 
@@ -37,4 +38,22 @@ export function installNodeWorkerBoot(kernel: Kernel): void {
     if (!nodeWorkerMode(proc.env)) return null;
     return (await import('./host')).nodeLoader(path, proc, k);
   });
+}
+
+/**
+ * The shell's view (shell-kernel.ts): with the flag on, `node ARGS` is a
+ * kernel program like any other, so pipes, redirects and a kernel shell's
+ * own fds work as they do for WASM and x86 programs, and node is the
+ * child of the shell that runs it. Null otherwise (the builtin runs).
+ */
+export function nodeKernelProgram(env: Record<string, string | undefined>, name: string, args: string[]): { argv: string[]; run: Runner } | null {
+  if (name !== 'node' || !nodeWorkerMode(env)) return null;
+  return {
+    argv: ['node', ...args],
+    run: async (proc, kernel) => {
+      const host = await import('./host');
+      host.installNodeLoader(kernel); // node that this node starts runs as a guest too
+      return host.nodeWorkerRunner()(proc, kernel);
+    },
+  };
 }
