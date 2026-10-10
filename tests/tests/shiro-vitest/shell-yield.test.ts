@@ -29,14 +29,15 @@ describe('the shell yields to the page', () => {
     expect(r.ticks).toBeGreaterThan(0);
   }, 60_000);
 
-  it('runaway function recursion can be stopped (timeout)', async () => {
-    const r = await timed('timeout 1 sh -c "g() { g; }; g"; echo st=$?');
+  it('runaway function recursion can be stopped (timeout), below FUNCNEST too', async () => {
+    // (a FUNCNEST high enough that only timeout can end it)
+    const r = await timed('timeout 1 sh -c "FUNCNEST=100000000; g() { g; }; g"; echo st=$?');
     expect(r.out).toBe('st=124\n');
   }, 30_000);
 
-  it('a file sourcing itself can be stopped (timeout)', async () => {
-    const r = await timed('timeout 1 sh -c "source /tmp/self-src.sh"; echo st=$?',
+  it('a file sourcing itself ends at the nesting limit, the page alive meanwhile', async () => {
+    const r = await timed('sh -c "source /tmp/self-src.sh" 2>&1 | grep -c "maximum nesting level exceeded"',
       (fs) => fs.writeFile('/tmp/self-src.sh', 'source /tmp/self-src.sh\n'));
-    expect(r.out).toBe('st=124\n');
+    expect(r.out).toBe('1\n');
   }, 30_000);
 });
