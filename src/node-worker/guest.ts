@@ -11,6 +11,7 @@ import { decodeTermios, encodeTermios, decodeWinsize, makeRaw, TCSETS, TERMIOS_S
 import { SyscallFs } from './sys-fs';
 import { runChild, runChildSync } from './child';
 import { GuestNetStack, installGuestPorts } from './net';
+import { GuestTtyStdin } from './tty';
 import type { NodeGuestHooks, ThreadEvents } from './hooks';
 
 const dec = new TextDecoder();
@@ -32,7 +33,8 @@ function terminalFacade(sys: GuestSys, stdinTTY: boolean) {
   const buf = new Uint8Array(4096);
   return {
     tty: true,
-    writeOutput: (s: string) => { sys.write(1, s); },
+    // node-compat writes a terminal's newlines as \r\n; the pty's line discipline (ONLCR) does that here
+    writeOutput: (s: string) => { sys.write(1, s.replace(/\r\n/g, '\n')); },
     getSize: () => {
       const w = new Uint8Array(WINSIZE_SIZE);
       if (ioctl(sys, 1, A.TIOCGWINSZ, w) < 0) return { cols: 80, rows: 24 };
@@ -104,6 +106,7 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
       netStack: net,
       busy: () => net.busy,
       onUnhandledRejection: (fn) => { rejection = fn; },
+      ...(stdinTTY ? { ttyStdin: (on: ConstructorParameters<typeof GuestTtyStdin>[1]) => new GuestTtyStdin(sys, on) } : {}),
       // worker_threads: a thread of this process, a guest of its own; messages go by way of the page
       startThread(file, opts, events) {
         const id = ++lastThread;

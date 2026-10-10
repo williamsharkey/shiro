@@ -50,7 +50,7 @@ export function mayBeKernelProgram(shell: Shell, name: string): boolean {
   // An installed package's command replaces a builtin of the same name (pkg-manager.ts)
   if (!shell.commands.get(name) || (shell.pkgShadowBypass !== name && packageShadows(shell.fs).has(name))) return true;
   // node as a kernel guest (TABCOMPUTER_NODE_WORKER=1)
-  return !!nodeKernelProgram(shell.env, name, []);
+  return !!nodeKernelProgram(shell.env, name, [], (shell as any).terminal);
 }
 
 /**
@@ -62,7 +62,7 @@ export async function resolveKernelProgram(
   shell: Shell, name: string, args: string[], progress?: (msg: string) => void,
 ): Promise<KernelProgram | null> {
   if (!mayBeKernelProgram(shell, name)) return null;
-  if (shell.commands.get(name) && !(shell.pkgShadowBypass !== name && packageShadows(shell.fs).has(name))) return nodeKernelProgram(shell.env, name, args);
+  if (shell.commands.get(name) && !(shell.pkgShadowBypass !== name && packageShadows(shell.fs).has(name))) return nodeKernelProgram(shell.env, name, args, (shell as any).terminal);
   const found = await shell.findExecutableInPath(name);
   if (!found) return null;
   let path = found;

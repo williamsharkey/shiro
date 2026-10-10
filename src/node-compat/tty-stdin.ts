@@ -23,7 +23,7 @@ export function ttySessionOf(terminal: unknown): TtySession | undefined {
 }
 
 /** uv_tty_set_mode(UV_TTY_MODE_RAW): like cfmakeraw, but output keeps ONLCR */
-function uvRaw(t: Termios): Termios {
+export function uvRaw(t: Termios): Termios {
   const r = cloneTermios(t);
   r.iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
   r.oflag |= ONLCR;

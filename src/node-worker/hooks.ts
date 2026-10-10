@@ -22,6 +22,10 @@ export interface NodeGuestHooks {
   startThread?(file: string, opts: { threadId: number; eval?: boolean; workerData?: unknown; argv?: string[]; env?: Record<string, string> }, events: ThreadEvents): ThreadHandle;
   /** Set in a worker_threads thread */
   thread?: ThreadSide;
+  /** process.stdin on the terminal: fd 0 read as the process on the pty (tty.ts); set when fd 0 is a tty */
+  ttyStdin?(on: { data(text: string): void; end(): void; signal(sig: number): void }): {
+    readonly reading: boolean; start(): void; pause(): void; setRaw(on: boolean): void; close(): void;
+  };
   /** Whether open handles (sockets, servers) keep the program running */
   busy?(): boolean;
 }
