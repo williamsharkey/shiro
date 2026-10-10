@@ -3,7 +3,8 @@
 // /dev/shm object (Open POSIX mmap_11-2, mmap_11-3). Once the file has
 // grown over the page it reads the file's bytes, and what is written within
 // the file goes back to it. (The object grows by ftruncate: its pread and
-// pwrite don't see its mapping yet.)
+// pwrite don't see its mapping yet.) A PROT_NONE mapping is SIGSEGV first
+// (Open POSIX mmap_6-3).
 #include <fcntl.h>
 #include <setjmp.h>
 #include <signal.h>
@@ -13,12 +14,12 @@
 #include <unistd.h>
 
 static sigjmp_buf jb;
-static volatile int code;
+static volatile int code, signo;
 static volatile void *addr;
 
 static void onbus(int sig, siginfo_t *si, void *uc) {
-  (void)sig, (void)uc;
-  code = si->si_code, addr = si->si_addr;
+  (void)uc;
+  signo = sig, code = si->si_code, addr = si->si_addr;
   siglongjmp(jb, 1);
 }
 
@@ -53,7 +54,14 @@ int main(void) {
   sa.sa_sigaction = onbus;
   sa.sa_flags = SA_SIGINFO;
   sigaction(SIGBUS, &sa, 0);
+  sigaction(SIGSEGV, &sa, 0);
   fd = open("sigbus.tmp", O_RDWR | O_CREAT | O_TRUNC, 0600);
+  {
+    char *p = mmap(0, 4096, PROT_NONE, MAP_SHARED, fd, 0);
+    if (!sigsetjmp(jb, 1)) { *p = 'b'; printf("PROT_NONE no signal\n"); }
+    else printf("PROT_NONE %s\n", signo == SIGSEGV ? "SIGSEGV" : "SIGBUS");
+    munmap(p, 4096);
+  }
   one("file", fd, 1);
   close(fd);
   unlink("sigbus.tmp");

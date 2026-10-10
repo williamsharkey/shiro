@@ -906,11 +906,11 @@ it.skipIf(!haveThreadintr)('pthread_kill of a thread blocked in read, mq_timedse
   expect(r.output.replace(/\r\n/g, '\n')).toBe('read EINTR handled 1\nmq_timedsend EINTR handled 1\nnanosleep EINTR handled 1\nprocess signal blocked by main reached a thread\n');
 }, 60_000);
 
-it.skipIf(!haveSigbus)('a page of a shared file mapping past the end of a file or /dev/shm object is SIGBUS, until the file grows over it; writes within the file go back (Open POSIX mmap_11-2, mmap_11-3)', async () => {
+it.skipIf(!haveSigbus)('a page of a shared file mapping past the end of a file or /dev/shm object is SIGBUS (SIGSEGV if PROT_NONE), until the file grows over it; writes within the file go back (Open POSIX mmap_11-2, mmap_11-3, mmap_6-3)', async () => {
   const { shell } = await setup(readFileSync(sigbusBin));
   const r = await run(shell, './prog');
   expect(r.output.replace(/\r\n/g, '\n')).toBe(
-    'file SIGBUS code 2 at page 1\nfile SIGBUS on read\nfile grown: 0 122\nfile wrote back a\n' +
+    'PROT_NONE SIGSEGV\nfile SIGBUS code 2 at page 1\nfile SIGBUS on read\nfile grown: 0 122\nfile wrote back a\n' +
     'shm SIGBUS code 2 at page 1\nshm SIGBUS on read\nshm grown: 0 0\n');
 }, 60_000);
 
