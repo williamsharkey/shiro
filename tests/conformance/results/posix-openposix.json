@@ -1,7 +1,7 @@
 {
  "suite": "Open POSIX Test Suite",
  "title": "POSIX: Open POSIX Test Suite under Blink (x86-64)",
- "note": "The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scripts/conformance/build-openposix.sh) run as static x86-64 kernel processes in the Blink engine: signals, pthreads, semaphores, message queues, timers, clocks, mmap, scheduling. A test passes when it exits 0; only tests that pass natively on the build host as uid 1000 are scored (openposix/native-baseline.json). First run: 1173/1448, with Blink 0080–0084 built locally (raise(SIGKILL) and sigqueue/AIO fixed from this suite); the gaps are POSIX message queues (mq_*), POSIX timers (timer_*), sigwait/sigtimedwait, sched_* policies and shm_open. → 1326/1448 (kernel POSIX message queues and timers, Blink 0086–0089 and 0093 built locally: mq_*, timer_*, sigtimedwait/sigwait, sched_*; sigqueue waits on siginfo in Blink's handler frames; fork_21-1 and pthread_attr_destroy_1-1 hit a Blink page-lock assertion, fixed in perf-blink's 0092). → 1353/1448 with perf-blink's Blink 0092 (fork keeps page lock counts) and 0095 (siginfo in SA_SIGINFO frames, real-time signals queue): sigqueue, sigwait/sigwaitinfo, fork_21-1, pthread_attr_destroy_1-1, lio_listio and aio_* now pass. Left: shm_open and mmap of shared objects, mlock*, pthread_cancel and cancellation points, process-shared pthread objects, pthread_kill interrupting another thread's call (mq_timedsend_12-1). → 1379/1448 (kernel: kill/sigqueue permissions, SIGCHLD's CLD_* siginfo and SA_NOCLDSTOP/SA_NOCLDWAIT, sigtimedwait taking unblocked waited signals, timer overruns, open() owner bits; Blink 0096–0099 built locally: raise of a blocked real-time signal queues, sigprocmask/sigaltstack modes, write-only pages readable, shared kernel-file maps written back before a new map and at exit, mlock/mmap errors). Left: mmap of shared objects across instances and SIGBUS past EOF, pthread_cancel and cancellation points, process-shared pthread objects, fork cases, pthread_kill interrupting another thread's call (mq_timedsend_12-1); sigqueue_1-1 is fixed by perf-blink's 0110. Measured on integration bab5481 (perf-blink's engine through 0110, which has 0096–0098 but not this branch's 0500/0501): 1370/1448, rerun on a quiet machine; 0500 (mlock/mmap errors) and 0501 (pthread_cancel) add 15 more when built (1379 + pthread_cancel's 9 locally). → 1375/1448 on integration dff2c0d (perf-blink's engine through 0114 with 0500–0504, quiet rerun of the failures): pthread_cancel and cancellation points, CPU clock ids, mlock/mmap errors, fsync, st_ctime and the process-shared mutexes/condition variables of perf-blink's 0112 pass; 26 named-semaphore and /dev/shm tests (sem_*, shm_open_5-1/28-1/28-3, mmap_11-5) abort in 0112's munmap (memorymalloc.c:834), and clock_getcpuclockid_1-2 (another process's CPU clock) is fixed by 0506.",
+ "note": "The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scripts/conformance/build-openposix.sh) run as static x86-64 kernel processes in the Blink engine: signals, pthreads, semaphores, message queues, timers, clocks, mmap, scheduling. A test passes when it exits 0; only tests that pass natively on the build host as uid 1000 are scored (openposix/native-baseline.json). First run: 1173/1448, with Blink 0080–0084 built locally (raise(SIGKILL) and sigqueue/AIO fixed from this suite); the gaps are POSIX message queues (mq_*), POSIX timers (timer_*), sigwait/sigtimedwait, sched_* policies and shm_open. → 1326/1448 (kernel POSIX message queues and timers, Blink 0086–0089 and 0093 built locally: mq_*, timer_*, sigtimedwait/sigwait, sched_*; sigqueue waits on siginfo in Blink's handler frames; fork_21-1 and pthread_attr_destroy_1-1 hit a Blink page-lock assertion, fixed in perf-blink's 0092). → 1353/1448 with perf-blink's Blink 0092 (fork keeps page lock counts) and 0095 (siginfo in SA_SIGINFO frames, real-time signals queue): sigqueue, sigwait/sigwaitinfo, fork_21-1, pthread_attr_destroy_1-1, lio_listio and aio_* now pass. Left: shm_open and mmap of shared objects, mlock*, pthread_cancel and cancellation points, process-shared pthread objects, pthread_kill interrupting another thread's call (mq_timedsend_12-1). → 1379/1448 (kernel: kill/sigqueue permissions, SIGCHLD's CLD_* siginfo and SA_NOCLDSTOP/SA_NOCLDWAIT, sigtimedwait taking unblocked waited signals, timer overruns, open() owner bits; Blink 0096–0099 built locally: raise of a blocked real-time signal queues, sigprocmask/sigaltstack modes, write-only pages readable, shared kernel-file maps written back before a new map and at exit, mlock/mmap errors). Left: mmap of shared objects across instances and SIGBUS past EOF, pthread_cancel and cancellation points, process-shared pthread objects, fork cases, pthread_kill interrupting another thread's call (mq_timedsend_12-1); sigqueue_1-1 is fixed by perf-blink's 0110. Measured on integration bab5481 (perf-blink's engine through 0110, which has 0096–0098 but not this branch's 0500/0501): 1370/1448, rerun on a quiet machine; 0500 (mlock/mmap errors) and 0501 (pthread_cancel) add 15 more when built (1379 + pthread_cancel's 9 locally). → 1375/1448 on integration dff2c0d (perf-blink's engine through 0114 with 0500–0504, quiet rerun of the failures): pthread_cancel and cancellation points, CPU clock ids, mlock/mmap errors, fsync, st_ctime and the process-shared mutexes/condition variables of perf-blink's 0112 pass; 26 named-semaphore and /dev/shm tests (sem_*, shm_open_5-1/28-1/28-3, mmap_11-5) abort in 0112's munmap (memorymalloc.c:834), and clock_getcpuclockid_1-2 (another process's CPU clock) is fixed by 0506. → 1428/1448 on unix/conformance 55e936d (integration 38397fa: perf-blink's engine through 0119, with this branch's 0507–0509 built locally on emsdk 6.0.11; quiet rerun of the failures): perf-blink's 0117 fixes the 26 aborts in munmap and the process-shared barrier/rwlock/spinlock tests; 0507: pthread_kill interrupts another thread's blocking call, and a process signal reaches a thread that doesn't block it (mq_timedsend_12-1, pthread_kill_8-1); 0508: SIGBUS past a mapped file's end (mmap_11-2, mmap_11-3); 0509: a fork child's CPU clocks and times() start at 0, and a parent counts its children's CPU time (fork_8-1, fork_22-1); 0505/0506 in the build: fork_13-1, clock_getcpuclockid_1-2; and a dozen timing-sensitive pthread_* tests pass. Six of these come from 0507–0509, which integration's engine doesn't have yet. Left: SIGEV_THREAD timers (fork_18-1), message catalogs (fork_7-1), shared maps across a fork (mmap_3-1, mmap_7-4), aio_cancel waits, mlockall_3-6/3-7, sem_close_3-2, shm_open_23-1.",
  "files": {
   "aio_cancel": {
    "pass": 8,
@@ -70,14 +70,9 @@
    "failures": []
   },
   "clock_getcpuclockid": {
-   "pass": 3,
+   "pass": 4,
    "total": 4,
-   "failures": [
-    {
-     "name": "clock_getcpuclockid_1-2",
-     "reason": "UNRESOLVED: clock_getcpuclockid() failed: No such process"
-    }
-   ]
+   "failures": []
   },
   "clock_getres": {
    "pass": 7,
@@ -110,29 +105,16 @@
    "failures": []
   },
   "fork": {
-   "pass": 11,
+   "pass": 14,
    "total": 16,
    "failures": [
-    {
-     "name": "fork_13-1",
-     "reason": "FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/13-1.c FAILED: Child exited abnormally"
-    },
     {
      "name": "fork_18-1",
      "reason": "UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/18-1.c unresolved: got 22 (Invalid argument) on line 87 (Failed to create a ti"
     },
     {
-     "name": "fork_22-1",
-     "reason": "FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/22-1.c FAILED: Child exited abnormally"
-    },
-    {
      "name": "fork_7-1",
      "reason": "UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/7-1.c unresolved: got 2 (No such file or directory) on line 121 (Could not ope"
-    },
-    {
-     "name": "fork_8-1",
-     "reason": "timeout: ",
-     "timeout": true
     }
    ]
   },
@@ -196,7 +178,7 @@
    ]
   },
   "mmap": {
-   "pass": 24,
+   "pass": 27,
    "total": 32,
    "failures": [
     {
@@ -205,20 +187,8 @@
      "timeout": true
     },
     {
-     "name": "mmap_11-2",
-     "reason": "FAIL: Test FAILED: SIGBUS not triggered, while Memory Protection is enabled"
-    },
-    {
-     "name": "mmap_11-3",
-     "reason": "FAIL: Test FAILED: SIGBUS not triggered, while Memory Protection is enabled"
-    },
-    {
      "name": "mmap_11-4",
      "reason": "UNTESTED: From mmap(2) manpage, skip known bug on tmpfs"
-    },
-    {
-     "name": "mmap_11-5",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
     },
     {
      "name": "mmap_24-1",
@@ -271,15 +241,9 @@
    "failures": []
   },
   "mq_timedsend": {
-   "pass": 20,
+   "pass": 21,
    "total": 21,
-   "failures": [
-    {
-     "name": "mq_timedsend_12-1",
-     "reason": "timeout: ",
-     "timeout": true
-    }
-   ]
+   "failures": []
   },
   "mq_unlink": {
    "pass": 4,
@@ -307,15 +271,9 @@
    "failures": []
   },
   "pthread_atfork": {
-   "pass": 6,
+   "pass": 7,
    "total": 7,
-   "failures": [
-    {
-     "name": "pthread_atfork_3-3",
-     "reason": "timeout: ",
-     "timeout": true
-    }
-   ]
+   "failures": []
   },
   "pthread_attr_destroy": {
    "pass": 3,
@@ -418,14 +376,9 @@
    "failures": []
   },
   "pthread_barrierattr_getpshared": {
-   "pass": 1,
+   "pass": 2,
    "total": 2,
-   "failures": [
-    {
-     "name": "pthread_barrierattr_getpshared_2-1",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    }
-   ]
+   "failures": []
   },
   "pthread_barrierattr_init": {
    "pass": 2,
@@ -453,17 +406,12 @@
    "failures": []
   },
   "pthread_cond_broadcast": {
-   "pass": 5,
+   "pass": 6,
    "total": 7,
    "failures": [
     {
      "name": "pthread_cond_broadcast_1-2",
      "reason": "timeout:  MF  : 200809",
-     "timeout": true
-    },
-    {
-     "name": "pthread_cond_broadcast_4-2",
-     "reason": "timeout: ",
      "timeout": true
     }
    ]
@@ -479,18 +427,12 @@
    "failures": []
   },
   "pthread_cond_signal": {
-   "pass": 5,
+   "pass": 6,
    "total": 6,
-   "failures": [
-    {
-     "name": "pthread_cond_signal_4-2",
-     "reason": "timeout: ",
-     "timeout": true
-    }
-   ]
+   "failures": []
   },
   "pthread_cond_timedwait": {
-   "pass": 9,
+   "pass": 10,
    "total": 12,
    "failures": [
     {
@@ -502,24 +444,13 @@
      "name": "pthread_cond_timedwait_4-2",
      "reason": "timeout:  MF  : 200809",
      "timeout": true
-    },
-    {
-     "name": "pthread_cond_timedwait_4-3",
-     "reason": "timeout: ",
-     "timeout": true
     }
    ]
   },
   "pthread_cond_wait": {
-   "pass": 5,
+   "pass": 6,
    "total": 6,
-   "failures": [
-    {
-     "name": "pthread_cond_wait_4-1",
-     "reason": "timeout: ",
-     "timeout": true
-    }
-   ]
+   "failures": []
   },
   "pthread_condattr_destroy": {
    "pass": 4,
@@ -552,15 +483,9 @@
    "failures": []
   },
   "pthread_create": {
-   "pass": 13,
+   "pass": 14,
    "total": 14,
-   "failures": [
-    {
-     "name": "pthread_create_11-1",
-     "reason": "timeout: ",
-     "timeout": true
-    }
-   ]
+   "failures": []
   },
   "pthread_detach": {
    "pass": 7,
@@ -568,15 +493,9 @@
    "failures": []
   },
   "pthread_equal": {
-   "pass": 2,
+   "pass": 3,
    "total": 3,
-   "failures": [
-    {
-     "name": "pthread_equal_2-1",
-     "reason": "timeout: ",
-     "timeout": true
-    }
-   ]
+   "failures": []
   },
   "pthread_exit": {
    "pass": 10,
@@ -599,15 +518,9 @@
    "failures": []
   },
   "pthread_join": {
-   "pass": 7,
+   "pass": 8,
    "total": 8,
-   "failures": [
-    {
-     "name": "pthread_join_6-3",
-     "reason": "timeout: ",
-     "timeout": true
-    }
-   ]
+   "failures": []
   },
   "pthread_key_create": {
    "pass": 4,
@@ -620,22 +533,9 @@
    "failures": []
   },
   "pthread_kill": {
-   "pass": 3,
+   "pass": 6,
    "total": 6,
-   "failures": [
-    {
-     "name": "pthread_kill_2-1",
-     "reason": "exit 139: "
-    },
-    {
-     "name": "pthread_kill_3-1",
-     "reason": "exit 139: "
-    },
-    {
-     "name": "pthread_kill_8-1",
-     "reason": "exit 139: "
-    }
-   ]
+   "failures": []
   },
   "pthread_mutex_destroy": {
    "pass": 6,
@@ -668,15 +568,9 @@
    "failures": []
   },
   "pthread_mutex_trylock": {
-   "pass": 6,
+   "pass": 7,
    "total": 7,
-   "failures": [
-    {
-     "name": "pthread_mutex_trylock_4-3",
-     "reason": "timeout: ",
-     "timeout": true
-    }
-   ]
+   "failures": []
   },
   "pthread_mutex_unlock": {
    "pass": 5,
@@ -734,15 +628,9 @@
    "failures": []
   },
   "pthread_once": {
-   "pass": 5,
+   "pass": 6,
    "total": 6,
-   "failures": [
-    {
-     "name": "pthread_once_6-1",
-     "reason": "timeout: ",
-     "timeout": true
-    }
-   ]
+   "failures": []
   },
   "pthread_rwlock_destroy": {
    "pass": 2,
@@ -795,14 +683,9 @@
    "failures": []
   },
   "pthread_rwlockattr_getpshared": {
-   "pass": 2,
+   "pass": 3,
    "total": 3,
-   "failures": [
-    {
-     "name": "pthread_rwlockattr_getpshared_2-1",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    }
-   ]
+   "failures": []
   },
   "pthread_rwlockattr_init": {
    "pass": 2,
@@ -830,15 +713,9 @@
    "failures": []
   },
   "pthread_setschedparam": {
-   "pass": 0,
+   "pass": 1,
    "total": 1,
-   "failures": [
-    {
-     "name": "pthread_setschedparam_5-1",
-     "reason": "timeout: ",
-     "timeout": true
-    }
-   ]
+   "failures": []
   },
   "pthread_setspecific": {
    "pass": 2,
@@ -856,29 +733,14 @@
    "failures": []
   },
   "pthread_spin_init": {
-   "pass": 2,
+   "pass": 4,
    "total": 4,
-   "failures": [
-    {
-     "name": "pthread_spin_init_2-1",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    },
-    {
-     "name": "pthread_spin_init_2-2",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    }
-   ]
+   "failures": []
   },
   "pthread_spin_lock": {
-   "pass": 3,
+   "pass": 4,
    "total": 4,
-   "failures": [
-    {
-     "name": "pthread_spin_lock_1-1",
-     "reason": "timeout: ",
-     "timeout": true
-    }
-   ]
+   "failures": []
   },
   "pthread_spin_trylock": {
    "pass": 2,
@@ -921,14 +783,9 @@
    "failures": []
   },
   "sched_setparam": {
-   "pass": 7,
+   "pass": 8,
    "total": 8,
-   "failures": [
-    {
-     "name": "sched_setparam_26-1",
-     "reason": "FAIL: errno is not EPERM: Success"
-    }
-   ]
+   "failures": []
   },
   "sched_setscheduler": {
    "pass": 8,
@@ -946,7 +803,7 @@
    "failures": [
     {
      "name": "sem_close_3-2",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
+     "reason": "FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/sem_close/3-2.c FAILED: The semaphore count has changed after sem_close"
     }
    ]
   },
@@ -956,26 +813,9 @@
    "failures": []
   },
   "sem_getvalue": {
-   "pass": 1,
+   "pass": 5,
    "total": 5,
-   "failures": [
-    {
-     "name": "sem_getvalue_1-1",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    },
-    {
-     "name": "sem_getvalue_2-1",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    },
-    {
-     "name": "sem_getvalue_4-1",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    },
-    {
-     "name": "sem_getvalue_5-1",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    }
-   ]
+   "failures": []
   },
   "sem_init": {
    "pass": 9,
@@ -983,48 +823,14 @@
    "failures": []
   },
   "sem_open": {
-   "pass": 10,
+   "pass": 12,
    "total": 12,
-   "failures": [
-    {
-     "name": "sem_open_1-3",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    },
-    {
-     "name": "sem_open_1-4",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    }
-   ]
+   "failures": []
   },
   "sem_post": {
-   "pass": 0,
+   "pass": 6,
    "total": 6,
-   "failures": [
-    {
-     "name": "sem_post_1-1",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    },
-    {
-     "name": "sem_post_1-2",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    },
-    {
-     "name": "sem_post_2-1",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    },
-    {
-     "name": "sem_post_4-1",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    },
-    {
-     "name": "sem_post_5-1",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    },
-    {
-     "name": "sem_post_6-1",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    }
-   ]
+   "failures": []
   },
   "sem_timedwait": {
    "pass": 11,
@@ -1032,59 +838,17 @@
    "failures": []
   },
   "sem_unlink": {
-   "pass": 5,
+   "pass": 9,
    "total": 9,
-   "failures": [
-    {
-     "name": "sem_unlink_2-1",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    },
-    {
-     "name": "sem_unlink_6-1",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    },
-    {
-     "name": "sem_unlink_7-1",
-     "reason": "exit 134: blink: aborted:"
-    },
-    {
-     "name": "sem_unlink_9-1",
-     "reason": "exit 134: blink: aborted:"
-    }
-   ]
+   "failures": []
   },
   "sem_wait": {
-   "pass": 2,
+   "pass": 8,
    "total": 8,
-   "failures": [
-    {
-     "name": "sem_wait_1-1",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    },
-    {
-     "name": "sem_wait_1-2",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    },
-    {
-     "name": "sem_wait_11-1",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    },
-    {
-     "name": "sem_wait_12-1",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    },
-    {
-     "name": "sem_wait_3-1",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    },
-    {
-     "name": "sem_wait_5-1",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    }
-   ]
+   "failures": []
   },
   "shm_open": {
-   "pass": 22,
+   "pass": 25,
    "total": 27,
    "failures": [
     {
@@ -1096,18 +860,6 @@
      "name": "shm_open_23-1",
      "reason": "timeout: ",
      "timeout": true
-    },
-    {
-     "name": "shm_open_28-1",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    },
-    {
-     "name": "shm_open_28-3",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
-    },
-    {
-     "name": "shm_open_5-1",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
     }
    ]
   },
