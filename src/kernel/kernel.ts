@@ -239,6 +239,7 @@ export class Kernel {
   /** How long an unreaped child of init stays a zombie before it is reaped automatically. */
   initReapDelayMs = 30_000;
   private detachWriteBack?: () => void;
+  private detachContentPin?: () => void;
 
   constructor(opts: { fs?: FileSystem; shell?: Shell; allocPid?: () => number; registerWithProcessTable?: boolean } = {}) {
     this.fs = opts.fs ?? opts.shell?.fs;
@@ -246,6 +247,8 @@ export class Kernel {
     // Open files' buffered writes reach storage when the page goes away
     const wfs = this.fs;
     if (wfs?.addWriteBackHook) this.detachWriteBack = wfs.addWriteBackHook(() => writeBackAll(wfs));
+    // Open files' content stays in the FileSystem's cache
+    if (wfs?.addContentPin) this.detachContentPin = wfs.addContentPin((p) => isInodeOpen(wfs, p));
     const alloc = opts.allocPid ?? (() => processTable.allocatePid());
     this.allocPid = () => (this.lastPid = alloc());
     this.init = new Process({
@@ -302,6 +305,8 @@ export class Kernel {
     this.detachTable?.();
     this.detachWriteBack?.();
     this.detachWriteBack = undefined;
+    this.detachContentPin?.();
+    this.detachContentPin = undefined;
     this.detachTable = undefined;
   }
 
