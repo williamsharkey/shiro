@@ -2,9 +2,12 @@
 
 Written 2026-10-10 ~11:15 UTC, when the work moved from one Claude account to
 another. It is everything a fresh cloud coordinator needs to recreate the
-worker sessions and pick each one up mid-task. Integration head at handoff:
-**`5e733616`** (shiro `unix/integration` = tabcomputer `main` = live on
-tabcomputer.com).
+worker sessions and pick each one up mid-task. When this was written,
+shiro `unix/integration` was **`d739673a`**: it already includes the debian,
+docs, gl, perf-kernel, shell-stdio and toolchains commits listed as "ahead" in
+§6. Live on tabcomputer.com was `5e733616`, so run the suite and redeploy
+first. (The old coordinator kept merging for a while after the pause; check
+`git log origin/unix/integration` for anything newer.)
 
 Read this whole file once, then `AGENTS.md`, then the docs it points to.
 
