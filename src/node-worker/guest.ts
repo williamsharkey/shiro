@@ -14,6 +14,7 @@ import { runChild, runChildSync } from './child';
 import { GuestNetStack, installGuestPorts } from './net';
 import { GuestTtyStdin } from './tty';
 import type { GuestIpc, NodeGuestHooks, ThreadEvents } from './hooks';
+import { WasiGuest, runSync, ProcExit } from '../wasi/wasi-guest';
 
 const dec = new TextDecoder();
 
@@ -117,6 +118,9 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
         },
         dataSize: sys.ch.data.length,
         openDir: (path) => sys.open(path, A.O_RDONLY | A.O_DIRECTORY),
+        newGuest: (opts) => new WasiGuest(opts),
+        runSync,
+        ProcExit,
       },
       ...(ipcFd(sys, start.env) >= 0 ? { ipc: guestIpc(sys, ipcFd(sys, start.env)) } : {}),
       onUnhandledRejection: (fn) => { rejection = fn; },

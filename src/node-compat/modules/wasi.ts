@@ -14,15 +14,23 @@
  */
 import * as A from '../../kernel/abi';
 import type { SysReply, SysRequest } from '../../wasi/abi';
-import { ProcExit, WasiGuest, runSync, type Preopen } from '../../wasi/wasi-guest';
+import type { WasiGuest, GuestOptions, Preopen, runSync as RunSync } from '../../wasi/wasi-guest';
 import type { NodeGuestHooks } from '../../node-worker/hooks';
 
-/** What node:wasi needs of a guest: blocking syscalls and directory fds for preopens */
+/**
+ * What node:wasi needs of a guest: blocking syscalls, directory fds for
+ * preopens, and src/wasi's preview1 code (the guest bundle has it; the page
+ * never loads it for node, where node:wasi can't run).
+ */
 export interface WasiSys {
   call(req: SysRequest): SysReply;
   dataSize: number;
   /** Open a directory for a preopen: a kernel fd, or -errno */
   openDir(path: string): number;
+  newGuest(opts: GuestOptions): WasiGuest;
+  runSync: typeof RunSync;
+  /** wasi-guest.ts's ProcExit, for instanceof */
+  ProcExit: new (status: number) => Error & { status: number };
 }
 
 /** proc_exit: unwinds the program's stack to start() */
@@ -44,6 +52,7 @@ export function createWasiModule(deps: { guest?: NodeGuestHooks; exit: (code: nu
     private readonly returnOnExit: boolean;
     private readonly guest: WasiGuest;
     private readonly preopenFds: number[] = [];
+    private procExit!: WasiSys['ProcExit'];
     [kInstance]: WebAssembly.Instance | null = null;
     [kStarted] = false;
     [kSetMemory]: (memory: WebAssembly.Memory) => void;
@@ -74,14 +83,15 @@ export function createWasiModule(deps: { guest?: NodeGuestHooks; exit: (code: nu
         this.preopenFds.push(fd);
         preopens.push({ fd, name, path: String(path) });
       }
-      const guest = this.guest = new WasiGuest({ args, env, preopens, dataSize: sys.dataSize });
+      const guest = this.guest = sys.newGuest({ args, env, preopens, dataSize: sys.dataSize });
+      this.procExit = sys.ProcExit;
       this[kSetMemory] = (memory) => { guest.memory = memory; };
       const call = sys.call;
       const imports: Record<string, (...a: any[]) => any> = {};
       for (const [name, impl] of Object.entries(guest.functions().wasi_snapshot_preview1)) {
         imports[name] = (...a: any[]) => {
           const out = impl(...a);
-          return out && typeof out.next === 'function' ? runSync(out, call) : out;
+          return out && typeof out.next === 'function' ? sys.runSync(out, call) : out;
         };
       }
       // proc_exit ends the program, not the node running it
@@ -115,8 +125,8 @@ export function createWasiModule(deps: { guest?: NodeGuestHooks; exit: (code: nu
       try {
         exp._start();
       } catch (e) {
-        if (!(e instanceof WasiExit) && !(e instanceof ProcExit)) throw e;
-        const code = e instanceof WasiExit ? e.code : A.WEXITSTATUS(e.status);
+        if (!(e instanceof WasiExit) && !(e instanceof this.procExit)) throw e;
+        const code = e instanceof WasiExit ? e.code : A.WEXITSTATUS((e as { status: number }).status);
         if (!this.returnOnExit) deps.exit(code);
         return code;
       }
