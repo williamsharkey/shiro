@@ -150,6 +150,10 @@ const ltpErrnosBin = join(out, 'ltp-errnos');
 // (the built engine, not the patch file: perf-blink folds the patches in and rebuilds; 0081 exports blink_shiro_conformance)
 const blinkHasLtpErrnos = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_conformance');
 const haveLtpErrnos = blinkHasLtpErrnos && tryBuild('gcc', ['-static', '-O1', '-w', '-o', ltpErrnosBin, 'ltp-errnos.c']);
+// Blink 0083: raise(SIGKILL) is the kernel's (the parent's wait returned never)
+const raiseKillBin = join(out, 'raise-kill');
+const blinkHasRaiseKill = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_raise_kill');
+const haveRaiseKill = blinkHasRaiseKill && tryBuild('gcc', ['-static', '-O1', '-w', '-o', raiseKillBin, 'raise-kill.c']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -632,6 +636,13 @@ it.skipIf(!haveLtpErrnos)('errnos Linux gives; record locks, pipe sizes and RLIM
   const { shell } = await setup(readFileSync(ltpErrnosBin));
   const r = await run(shell, './prog');
   expect(r.output.replace(/\r\n/g, '\n')).toContain('rlimit-bad 1 nofile 1024/1048576 writev-len 1 pipe-sz 1 read-ro 1 waitid-opts 1 clocks 1 uname26 1 1 pending 1 locks 3\n');
+}, 60_000);
+
+// Open POSIX sigaction_4-*: a child's raise(SIGKILL), plain or from a handler whose mask names SIGKILL
+it.skipIf(!haveRaiseKill)('raise(SIGKILL) ends the child and its parent\'s wait returns', async () => {
+  const { shell } = await setup(readFileSync(raiseKillBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('-1:11 0:11 1:11 \n');
 }, 60_000);
 
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
