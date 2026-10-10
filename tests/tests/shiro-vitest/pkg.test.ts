@@ -413,6 +413,21 @@ describe('pkg install / remove', () => {
     expect((await sh(shell, 'pkg update')).exitCode).toBe(0);
   });
 
+  it("replaces Debian mode's builtin shim at /usr/bin/CMD, not other files", async () => {
+    const { builtinShim } = await import('@shiro/debian/overlay');
+    await addTestPackage('hello', 'hello from a package\n');
+    await fs.mkdir('/usr/bin', { recursive: true });
+    await fs.writeFile('/usr/bin/hello', builtinShim('hello'), { mode: 0o755 });
+    expect((await sh(shell, 'pkg install hello')).exitCode).toBe(0);
+    expect(await fs.readlink('/usr/bin/hello')).toBe('/usr/lib/pkg/hello/bin/hello.wasm');
+    await removePackage(fs, 'hello');
+    await fs.writeFile('/usr/bin/hello', '#!/bin/sh\necho mine\n', { mode: 0o755 });
+    expect((await sh(shell, 'pkg install hello')).out).toContain('not replacing /usr/bin/hello');
+    expect(await fs.readFile('/usr/bin/hello', 'utf8')).toBe('#!/bin/sh\necho mine\n');
+    await removePackage(fs, 'hello');
+    await fs.unlink('/usr/bin/hello');
+  });
+
   it('preinstalls the CA bundle at the paths OpenSSL and rustls-native-certs probe, once', async () => {
     // codex (OpenSSL via openssl-probe, and rustls-native-certs) failed its
     // TLS handshakes when nothing had installed ca-certificates
