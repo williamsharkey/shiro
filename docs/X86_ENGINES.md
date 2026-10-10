@@ -715,6 +715,21 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    another thread wanting the GIL. A computed-goto bytecode loop, one block
    per op like JSC's LLInt, went from 131 to 92 ns per op (2 ns native, 660
    ns interpreted). The x86 suite A/B is unchanged ("same" everywhere).
+83–84. unix/conformance's: raise(SIGKILL)/raise(SIGSTOP) and
+   rt_sigqueueinfo/rt_tgsigqueueinfo go to the kernel (as kill).
+86. rt_sigtimedwait (sigwait, sigwaitinfo, sigtimedwait) goes to the kernel's
+   new call 128. It takes the lowest pending signal of the set that the
+   process blocked, without running a handler. Blink first takes one sent to
+   this thread (pthread_kill), and waits in the kernel in slices of at most
+   50 ms so it sees those too. It returns EAGAIN at the timeout and EINTR
+   for a signal let through. VLC's main thread sigwaits and quit at once on
+   ENOSYS. Test: fixtures/x86/sigwait.c, identical to native output.
+87. SHIRO_BLINK_PROFILE samples its timing. 1 in SHIRO_BLINK_PROFILE_EVERY
+   (default 64) compiled entries is timed, with any compile left out. 1 in N
+   interpreted instructions goes in the address and opcode tables. Both are
+   scaled by N. Timing every entry slowed native Claude's startup by 55%
+   and inflated its "in compiled code" share. After 0085, "blocks run"
+   counts entries, each running up to 65 blocks.
 
 The page compiles blink.wasm once and gives the `WebAssembly.Module` to every
 Blink worker (src/x86-engine/blink.ts `blinkWasmModule`, host.mjs
