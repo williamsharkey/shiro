@@ -130,6 +130,7 @@ Layer rows are medians of 2 samples; apt rows are 1 sample.
 | `classic` | `gfortran h.f90 && ./hf` | 0.9 s | 9.2 s | **10.5 s** | not measured |
 | `node` | `/usr/bin/node -e` | 6.8 s | 17.0 s | **24.3 s** | not measured |
 | `java` | `javac Hello.java && java Hello` | 0.5 s | see below | — | not measured |
+| `go` | `go run hello.go` | 6.3 s | 41.4 s | **48.2 s** | ~35 min to compile std, before the link step failed (COMPAT.md) |
 
 - First use is the programs' own start-up in Blink plus fetching their
   chunks. Warm runs are 15–20 % faster (gcc 5.9 s, python 4.5 s, pdflatex
@@ -139,6 +140,11 @@ Layer rows are medians of 2 samples; apt rows are 1 sample.
   storage after the first use is 26–107 MiB; apt's python3 set left 412 MiB.
 - The apt `c` run overlapped with other browser checks on the machine for
   part of its hour. Even so, it was still unpacking when it timed out.
+- `go` (measured 2026-10-10 on the same machine, 2 samples): the standard
+  library comes precompiled in the build cache, so `go run` compiles only
+  `main`. The second `go run hello.go` takes 18.5 s. Then `go build` plus
+  running a net/http server and client over loopback takes 73.5 s (+553 MiB
+  peak). Browser storage at the end is 140 MiB.
 - `java`: at this run the JVM aborted at start (HotSpot fell back to the
   legacy vsyscall `getcpu` page; Blink had no getcpu). With Blink patch 0067
   it runs: in the Node test shell, `java -version` took 15.6 s and `javac
