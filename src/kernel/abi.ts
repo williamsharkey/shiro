@@ -79,6 +79,7 @@ export const SYS_symlink = 88;
 export const SYS_chmod = 90;
 export const SYS_fchmod = 91;
 export const SYS_rt_sigpending = 127;
+export const SYS_rt_sigtimedwait = 128;
 export const SYS_rt_sigsuspend = 130;
 export const SYS_sigaltstack = 131;
 export const SYS_gettid = 186;
@@ -430,6 +431,8 @@ export const SIGTERM = 15;
 export const SIGCHLD = 17;
 export const SIGCONT = 18;
 export const SIGSTOP = 19;
+/** sizeof(siginfo_t) */
+export const SIGINFO_SIZE = 128;
 export const SIGTSTP = 20;
 export const SIGTTIN = 21;
 export const SIGTTOU = 22;

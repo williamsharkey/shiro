@@ -776,6 +776,21 @@ const s = net.createServer().listen(5199, '0000:0000:0000:0000:0000:0000:0000:00
 s.on('error', (e) => console.log('error', e.code));`)).toBe('{"address":"::","family":"IPv6","port":5199}\n');
   }, 60_000);
 
+  it("esbuild-wasm's bin compiles its .wasm asynchronously (a page's main thread refuses a sync compile over 8 MB)", async () => {
+    const { patchPackageSource } = await import('@shiro/node-compat/source-patches');
+    const src = `function instantiate(bytes, importObject) {
+  // comment
+  const module = new WebAssembly.Module(bytes);
+  const instance = new WebAssembly.Instance(module, importObject);
+  return Promise.resolve({ instance, module });
+}`;
+    for (const path of ['/p/node_modules/esbuild/bin/esbuild', '/p/node_modules/esbuild-wasm/bin/esbuild']) {
+      expect(patchPackageSource(path, src)).toContain('return WebAssembly.instantiate(bytes, importObject);');
+      expect(patchPackageSource(path, src)).not.toContain('new WebAssembly.Module');
+    }
+    expect(patchPackageSource('/p/other/bin/esbuild', src)).toBe(src);
+  });
+
   it('path follows Node (relative paths stay relative)', async () => {
     expect(await node(`const p = require('path');
 console.log(JSON.stringify([p.dirname('a'), p.dirname('/a'), p.dirname('a/b/'), p.join('a', '../b', './c'), p.join(''), p.normalize('./x/../y/'),

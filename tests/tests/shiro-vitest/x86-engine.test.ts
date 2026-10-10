@@ -118,6 +118,8 @@ const sysvsemBin = join(out, 'sysvsem');
 const haveSysvsem = 'SYS_semget' in Abi && tryBuild('gcc', ['-static', '-O1', '-o', sysvsemBin, 'sysvsem.c']);
 const sysvmsgBin = join(out, 'sysvmsg');
 const haveSysvmsg = 'SYS_msgget' in Abi && tryBuild('gcc', ['-static', '-O1', '-o', sysvmsgBin, 'sysvmsg.c']);
+const sigwaitBin = join(out, 'sigwait');
+const haveSigwait = 'SYS_rt_sigtimedwait' in Abi && tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', sigwaitBin, 'sigwait.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -975,6 +977,14 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const { shell } = await setup(readFileSync(sysvmsgBin));
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe("msgget ok\nsend 0 0\nqnum 2\nrcv type 2: 6 2 world\nrcv any: 6 1 hello\nrcv empty nowait: -1 No message of desired type\nchild got 5 7 late\nrmid 0\nsend after rmid -1 Invalid argument\n");
+  }, 60_000);
+
+  // VLC's main thread sigwaits for SIGINT/HUP/QUIT/TERM and quits when it returns
+  it.skipIf(!haveSigwait)('sigwait, sigwaitinfo and sigtimedwait: process and thread signals, timeout, poll', async () => {
+    const { shell } = await setup(readFileSync(sigwaitBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'sigwait 0 14 waited 1\npthread_kill 0 15\nsigwaitinfo 10 signo 10 code 0\ntimeout -1 EAGAIN 1\npoll -1 EAGAIN\n');
   }, 60_000);
 
   // vim's typeahead check blocked for a key when two reads straddled a ms tick
