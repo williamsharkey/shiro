@@ -54,7 +54,7 @@ export const column: Command = {
 
     let content: string;
     try {
-      ({ content } = await readInput(files, ctx.stdin, ctx.fs, ctx.cwd, ctx.fs.resolvePath));
+      ({ content } = await readInput(files, () => ctx.stdin, ctx.fs, ctx.cwd, ctx.fs.resolvePath));
     } catch (err: any) {
       ctx.stderr += `column: ${err.message}\n`;
       return 1;

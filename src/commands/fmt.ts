@@ -18,9 +18,7 @@ export const fmt: Command = {
     }
 
     try {
-      const { content } = await readInput(
-        positional,
-        ctx.stdin,
+      const { content } = await readInput(positional, () => ctx.stdin,
         ctx.fs,
         ctx.cwd,
         ctx.fs.resolvePath

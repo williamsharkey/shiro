@@ -991,6 +991,7 @@ export const jqCmd: Command = {
     let nullInput = false;
     let exitStatus = false;
     let filterExpr = '.';
+    let haveFilter = false;
     const jqArgs: Record<string, string> = {};
     const files: string[] = [];
 
@@ -1012,8 +1013,10 @@ export const jqCmd: Command = {
         jqArgs['$' + ctx.args[i + 1]] = JSON.parse(ctx.args[i + 2]);
         i += 2;
       } else if (!arg.startsWith('-') || i === 0 || (ctx.args[i - 1] !== '--arg' && ctx.args[i - 1] !== '--argjson')) {
-        if (filterExpr === '.' && !arg.startsWith('-')) {
+        // (the first word is the filter, even `.`; the rest are files)
+        if (!haveFilter && !arg.startsWith('-')) {
           filterExpr = arg;
+          haveFilter = true;
         } else if (!arg.startsWith('-')) {
           files.push(arg);
         }
@@ -1022,7 +1025,8 @@ export const jqCmd: Command = {
     }
 
     // Read input
-    let inputText = ctx.stdin;
+    // stdin only when it is the input: not with files or -n (a live stdin may never end)
+    let inputText = files.length > 0 || nullInput ? '' : ctx.stdin;
     if (files.length > 0) {
       const parts: string[] = [];
       for (const file of files) {
