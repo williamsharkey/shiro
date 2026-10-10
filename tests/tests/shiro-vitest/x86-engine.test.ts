@@ -126,6 +126,8 @@ const futexpiBin = join(out, 'futexpi');
 const haveFutexpi = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', futexpiBin, 'futexpi.c']);
 const siginfoBin = join(out, 'siginfo');
 const haveSiginfo = tryBuild('gcc', ['-static', '-O1', '-o', siginfoBin, 'siginfo.c']);
+const hugetlbBin = join(out, 'hugetlb');
+const haveHugetlb = tryBuild('gcc', ['-static', '-O1', '-o', hugetlbBin, 'hugetlb.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -983,6 +985,13 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const { shell } = await setup(readFileSync(sysvmsgBin));
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe("msgget ok\nsend 0 0\nqnum 2\nrcv type 2: 6 2 world\nrcv any: 6 1 hello\nrcv empty nowait: -1 No message of desired type\nchild got 5 7 late\nrmid 0\nsend after rmid -1 Invalid argument\n");
+  }, 60_000);
+
+  // PostgreSQL's huge_pages=try maps MAP_HUGETLB first and falls back on ENOMEM
+  it.skipIf(!haveHugetlb)('MAP_HUGETLB is ENOMEM (no huge pages reserved), an ordinary map works', async () => {
+    const { shell } = await setup(readFileSync(hugetlbBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('hugetlb failed 12\nplain mapped\n');
   }, 60_000);
 
   // Open POSIX sigqueue 4-1..8-1: real-time signals were delivered as SIGINT (1ul << 33 in wasm32)
