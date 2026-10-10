@@ -70,7 +70,8 @@ if (process.env.HANDOFF) {
 }
 if (process.env.ROUTE) {
   console.log((await h.eval(() => window.__bench.shLimit('pkg install git > /tmp/pkg.out 2>&1; echo exit=$?', 600000))).out.trim());
-  await step('git clone http (routed, full git installed)', `cd /tmp && ${PROXY} git clone http://${hostAddr}:${hp}/axios.git r 2>&1 | tail -2 | tr '\\n' ' '`);
+  await step('git clone http (routed, full git installed)', `cd /tmp && ${PROXY} git clone http://${hostAddr}:${hp}/axios.git r 2>&1 | head -c 600 | tr '\\n' ' '`);
+  if (process.env.ROUTE === 'clone') { await h.close(); await server.close(); await gitd?.close(); hs.close(); process.exit(0); }
   await step('full git status (1st)', `cd /tmp/r && git status --short | wc -l`);
   await step('full git status (2nd)', `cd /tmp/r && git status --short | wc -l`);
   await step('full git log', `cd /tmp/r && git log --oneline | wc -l; git branch -r | wc -l; git tag | wc -l`);

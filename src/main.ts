@@ -16,6 +16,7 @@ import { FileSystem } from './filesystem';
 import { Shell } from './shell';
 import { CommandRegistry, Command } from './commands/index';
 import { registry } from './registry';
+import { builtinCloneHandles } from './commands/git-clone-route';
 import { lazyCommand } from './utils/lazy-command';
 import { shellBuiltins } from './commands/shell-builtins';
 import { shiroCmds } from './commands/shiro-cmds';
@@ -268,7 +269,7 @@ async function main() {
   // These are registered in both CommandRegistry and ModuleRegistry for hot-reload
   // Lazy: git.ts pulls in isomorphic-git (~150 KB), reload.ts esbuild-wasm's JS API
   registerCommand(commands, lazyCommand('git', 'Version control system',
-    () => import('./commands/git').then(m => m.gitCmd)), 'src/commands/git.ts');
+    () => import('./commands/git').then(m => m.gitCmd), { keepOverPackage: builtinCloneHandles }), 'src/commands/git.ts');
   registerCommand(commands, grepCmd, 'src/commands/grep.ts');
   registerCommand(commands, sedCmd, 'src/commands/sed.ts');
   registerCommand(commands, fetchCmd, 'src/commands/fetch.ts');

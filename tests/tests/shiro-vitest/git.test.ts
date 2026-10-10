@@ -478,3 +478,18 @@ describe.skipIf(!hostGit)('git clone with the full git installed', () => {
     }
   }, 60_000);
 });
+
+describe('builtinCloneHandles', () => {
+  it('takes http(s) clones with the options the built-in has, and its lazy stub carries it', async () => {
+    const { builtinCloneHandles } = await import('@shiro/commands/git-clone-route');
+    const { lazyCommand } = await import('@shiro/utils/lazy-command');
+    for (const a of ['clone https://h/r.git', 'clone -q --depth 1 -b dev http://h/r.git dir', 'clone --origin=up --no-tags --single-branch https://h/r']) {
+      expect(builtinCloneHandles(a.split(' '))).toBe(true);
+    }
+    for (const a of ['clone --bare https://h/r.git', 'clone --recurse-submodules https://h/r', 'clone git://h/r.git', 'clone ssh://h/r.git',
+      'clone /tmp/r', 'clone file:///tmp/r', 'clone --filter=blob:none https://h/r', 'clone https://h/r a b', 'clone --depth', 'status']) {
+      expect(builtinCloneHandles(a.split(' '))).toBe(false);
+    }
+    expect(lazyCommand('git', '', async () => { throw new Error('not loaded'); }, { keepOverPackage: builtinCloneHandles }).keepOverPackage).toBe(builtinCloneHandles);
+  });
+});
