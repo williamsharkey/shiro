@@ -72,6 +72,7 @@ import { processTable } from './process-table';
 import { createPathShims, installAlwaysShims } from './path-shims';
 import { getKernel } from './kernel/kernel';
 import { startDisplay } from './x11/display';
+import { startGLServer, getGLServer } from './gl/server';
 import { installNet } from './kernel/net';
 import { attachKernelTty } from './kernel/pty';
 import { sudoCmd } from './commands/sudo';
@@ -577,6 +578,8 @@ async function main() {
   // HiDPI: X apps started from the shell scale like the dock's (src/gui/display-scale.ts)
   for (const [k, v] of Object.entries(toolkitScaleEnv())) shell.env[k] ??= v;
   void startDisplay(kernel, 0).catch(e => console.warn('[Xshiro]', e));
+  // GL for X apps (docs/research/GL.md): glshiro listens on /tmp/.tabcomputer-gl/0 for libGLX_tabcomputer
+  void startGLServer(kernel).catch(e => console.warn('[glshiro]', e));
 
   // Populate API keys from localStorage so `claude` CLI picks them up
   const storedAnthropicKey = localStorage.getItem('tabcomputer_anthropic_key') || localStorage.getItem('tabcomputer_api_key');
@@ -664,6 +667,7 @@ async function main() {
     iframeServer, // Iframe-based virtual HTTP server
     processTable, // Windowed process registry
     kernel, // Process table, fds, pipes and syscalls for worker guests (src/kernel)
+    gl: getGLServer, // glshiro (src/gl/server.ts): connections and per-client command and frame counts
     desktop: desktop?.wm ?? null, // Window manager API (docs/DESKTOP.md), null in the classic UI
     uiMode: mode,
     profile, // The product profile (src/profile.ts, docs/PROFILES.md)
