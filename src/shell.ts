@@ -2715,8 +2715,31 @@ export class Shell {
             exitCode = 2;
             if (this.posixFatal()) throw new ExitSignal(2);
           } else if (evalCmd) {
-            this.injectedStdin = nestedStdin;
-            exitCode = await this.execute(evalCmd, writeStdout, stderrWriter, false, undefined, true);
+            // `eval '…' < file`: the redirect is the evaluated commands' stdin, as for a
+            // function (an empty one, like /dev/null, is EOF rather than the inherited stdin)
+            const inRedirect = redirects.find(r => r.type === '<' && (r.fd === undefined || r.fd === 0));
+            let ownStdin: string | undefined;
+            if (inRedirect && hereString === undefined) {
+              try {
+                ownStdin = inRedirect.target === '/dev/null' ? '' : await this.readInputRedirect(inRedirect.target);
+              } catch (e: any) {
+                stderrWriter(`tabcomputer: ${inRedirect.target}: ${e.message}\r\n`);
+                exitCode = 1;
+              }
+            }
+            if (exitCode === 0) {
+              const savedPipeStdin = this.env['__PIPE_STDIN'];
+              if (ownStdin !== undefined) this.env['__PIPE_STDIN'] = ownStdin;
+              this.injectedStdin = ownStdin ?? nestedStdin;
+              try {
+                exitCode = await this.execute(evalCmd, writeStdout, stderrWriter, false, undefined, true);
+              } finally {
+                if (ownStdin !== undefined) {
+                  if (savedPipeStdin === undefined) delete this.env['__PIPE_STDIN'];
+                  else this.env['__PIPE_STDIN'] = savedPipeStdin;
+                }
+              }
+            }
           }
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
