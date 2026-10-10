@@ -27,6 +27,8 @@ export interface ServerDeps {
   /** Opens the preview pane for a new server */
   onListen?: (port: number) => void;
   isHttps: boolean;
+  /** Runs `fn` when the process exits (its listening ports close, as the OS closes an exited process's sockets) */
+  atExit?: (fn: () => void) => void;
 }
 
 export const STATUS_CODES: Record<number, string> = {
@@ -280,22 +282,25 @@ export function createServerFactory(deps: ServerDeps) {
     };
 
     /** A raw connection: its request head, then 'upgrade' with a socket over it, or an ordinary request */
+    const conns = new Set<ByteChannel>();
+    const closeConn = (c: ByteChannel) => { conns.delete(c); c.close(); };
     const onConnect = async (conn: ByteChannel) => {
+      conns.add(conn);
       let buf: Uint8Array = new Uint8Array(0);
       let head: ReturnType<typeof parseHead> = null;
       while (!head) {
         const d = await conn.read();
-        if (!d) { conn.close(); return; }
+        if (!d) { closeConn(conn); return; }
         buf = concat([buf, d]);
         head = parseHead(buf);
-        if (!head && buf.length > 64 * 1024) { conn.close(); return; }
+        if (!head && buf.length > 64 * 1024) { closeConn(conn); return; }
       }
       const socket: any = new stream.Duplex({
         read() {},
         // (bytesWritten: engine.io ends an upgrade on another path that has written nothing)
         write(this: any, chunk: any, enc: any, cb: Function) { const b = toBytes(chunk, enc, B); this.bytesWritten += b.length; conn.write(b).then(() => cb(), (e) => cb(e)); },
-        final(cb: Function) { conn.close(); cb(); },
-        destroy(err: any, cb: Function) { conn.close(); cb(err); },
+        final(cb: Function) { closeConn(conn); cb(); },
+        destroy(err: any, cb: Function) { closeConn(conn); cb(err); },
       });
       Object.assign(socket, {
         remoteAddress: '127.0.0.1', remoteFamily: 'IPv4', remotePort: 40000 + Math.floor(Math.random() * 20000),
@@ -340,12 +345,12 @@ export function createServerFactory(deps: ServerDeps) {
           const rd = r.body.getReader();
           for (let x = await rd.read(); !x.done; x = await rd.read()) await conn.write(typeof x.value === 'string' ? te.encode(x.value) : x.value);
         } catch { /* the client went away */ }
-        conn.close();
+        closeConn(conn);
         return;
       }
       const bytes: Uint8Array = typeof r.body === 'string' ? te.encode(r.body) : r.body ?? new Uint8Array(0);
       await conn.write(serialize(r, bytes)).catch(() => {});
-      conn.close();
+      closeConn(conn);
     };
 
     server.listen = (...args: any[]) => {
@@ -364,6 +369,13 @@ export function createServerFactory(deps: ServerDeps) {
       }
       port = p;
       server.listening = true;
+      deps.atExit?.(() => {
+        if (unserve) { unserve(); unserve = null; server.listening = false; }
+        // (and its connections: a preview's WebSocket left open kept the ended process)
+        for (const s of [...open]) s.destroy();
+        for (const c of conns) c.close();
+        conns.clear();
+      });
       deps.log(`Server listening on port ${p}`);
       deps.onListen?.(p);
       setTimeout(() => { server.emit('listening'); cb?.(); }, 0);

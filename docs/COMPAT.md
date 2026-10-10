@@ -208,10 +208,24 @@ Shell and platform fixes these needed (all with tests in the same file):
   browser builds are let go 30 s after the last process using them ends
   (their Workers terminated, blob: URLs revoked; they run as a function, not
   an import()ed module, which the page's module map would keep): with the dev
-  server stopped, rolldown's 8 workers go and the renderer is at 727 MB.
-  Still held then: rolldown's 112 MB SharedArrayBuffer (by the browser
-  itself, not by script), the page's own esbuild-wasm (80 MB of Go memory)
-  and the files npm installed. What it took:
+  server stopped, rolldown's 8 workers go, and after a full GC the renderer
+  is at 477 MB (it was 727 MB with rolldown's 112 MB shared memory and the
+  page's esbuild still held). What's left is mostly the files npm installed.
+  An ended process used to stay reachable, and with it everything it loaded:
+  through the browser-package globals (`__shiroBuiltin` & co., now the
+  latest live requirer's), the 10-minute exit timer (now cleared), node's
+  `unhandledrejection` listener (removed on the page's timer: the global
+  `setTimeout` can be another script's, cleared when it ends), tty-stdin's
+  stand-in job left a zombie in the job table (now reaped), the preview
+  service worker's `statechange` listener holding a script's timer, and the
+  dev server's port and open WebSocket. A Chromium repro shows the browser
+  frees a 112 MB SharedArrayBuffer about a second after its worker is
+  terminated and the last reference dropped, so none of this was Chromium.
+  A process that exits (`process.exit()`, ^C, an error) closes its servers
+  and connections, as node does, and drops its module and file caches; one
+  that goes idle while serving keeps them (its servers still run its code).
+  The page's esbuild (bundling browser packages, `build`, `reload`) stops
+  after 60 s without a build and starts again on the next. What it took:
   - Rolldown runs as its browser build. `npm install` puts `@rolldown/browser`
     where `rolldown` goes (same API and versions); a process that imports it
     gets it bundled from the VFS with the page's esbuild
