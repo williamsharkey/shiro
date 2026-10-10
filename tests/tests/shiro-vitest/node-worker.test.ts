@@ -201,6 +201,39 @@ srv.listen(18491, () => {
     expect(err).toBe('');
   }, 60_000);
 
+  it.each([
+    ['node server.js > log 2>&1 &', 18495],
+    ['npm run dev > log 2>&1 &', 18496],
+  ])('`%s` serves from a guest: Running while it listens, its log written as it comes; kill ends it', async (cmd, port) => {
+    const { iframeServer } = await import('@shiro/iframe-server');
+    const { shell, fs } = await createTestShell();
+    const tty = new TtySession();
+    tty.pty.onOutput(() => {});
+    shell.setTerminal({ tty, writeOutput() {}, write() {}, getSize: () => ({ cols: 80, rows: 24 }), onResize: () => () => {},
+      enterStdinPassthrough() {}, exitStdinPassthrough() {}, enterRawMode() {}, exitRawMode() {}, isRawMode: () => false, term: { buffer: { active: { type: 'normal' } } } } as any);
+    await fs.mkdir('/tmp/bg', { recursive: true });
+    await fs.writeFile('/tmp/bg/server.js', `require('http').createServer((q, s) => { console.log('req ' + q.url); console.error('err ' + q.url); s.end('ok'); })
+  .listen(+process.env.PORT, () => console.log('listening', require('fs').readFileSync('/proc/self/stat', 'utf8').split(' ')[0]));`);
+    await fs.writeFile('/tmp/bg/package.json', JSON.stringify({ name: 'bg', scripts: { dev: 'node server.js' } }));
+    const run = async (c: string) => { let out = ''; await shell.execute(c, (t) => { out += t; }, (t) => { out += t; }); return out.replace(/\r\n/g, '\n'); };
+    const until = async (cond: () => boolean | Promise<boolean>, what: string) => {
+      const t0 = Date.now();
+      while (!(await cond())) { if (Date.now() - t0 > 20_000) throw new Error(`timed out: ${what}`); await new Promise((r) => setTimeout(r, 50)); }
+    };
+    await run(`export TABCOMPUTER_NODE_WORKER=1 PORT=${port}; cd /tmp/bg; ${cmd}`);
+    await until(() => iframeServer.isPortInUse(port), 'the port');
+    await new Promise((r) => setTimeout(r, 1500)); // (an in-page script would have returned by now)
+    expect(await run('jobs')).toMatch(/Running/);
+    expect((await iframeServer.fetch(port, '/a')).status).toBe(200);
+    await until(async () => /err \/a/.test(await fs.readFile('/tmp/bg/log', 'utf8') as string), 'the request in the log');
+    const log = await fs.readFile('/tmp/bg/log', 'utf8') as string;
+    expect(log).toMatch(/listening \d+\nreq \/a\nerr \/a\n/);
+    if (cmd.startsWith('node')) expect(log).toContain(`listening ${(await run('echo $!')).trim()}\n`); // $! is node's pid
+    await run('kill %1');
+    await until(() => !iframeServer.isPortInUse(port), 'the port to close');
+    await until(async () => !/Running/.test(await run('jobs')), 'the job to end');
+  }, 60_000);
+
   it('worker_threads: each Worker is a thread of the process, running in parallel', async () => {
     const r = await sh(`node /tmp/nt/main.js < /dev/null`, async (fs) => {
       await fs.mkdir('/tmp/nt', { recursive: true });

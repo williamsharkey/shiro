@@ -8378,15 +8378,26 @@ export class Shell {
     if (this.kernelTty) term = this.kernelTty;
     else if (ks) term = undefined;
     const onFds = !term && !!ks && writesTo(writeStdout, ks.out);
-    if ((!term?.tty && !onFds) || /[;&]|\|\||\$\(|`/.test(command)) return false;
+    if ((!term?.tty && !onFds) || /[;&]|\|\||\$\(|`/.test(command.replace(/2>&1/g, ''))) return false;
     const { mayBeKernelProgram, resolveKernelProgram, runKernelPipeline } = _shellKernel ?? await loadShellKernel();
     const segments = this.parsePipeline(await this.expandWords(command, () => {}));
     const programs = [];
-    for (const seg of segments) {
+    // The last stage's file redirects (`node server.js > log 2>&1 &`): the job's fds 1 and 2
+    let stdoutTo: { path: string; append: boolean } | undefined;
+    let stderrTo: { path: string; append: boolean } | 'stdout' | undefined;
+    for (const [i, seg] of segments.entries()) {
       const t = seg.trim();
       if (!t || splitEnvPrefix(t) || this.isControlStructure(t) || t.startsWith('(')) return false;
       const parsed = this.parseSegment(t);
-      if (parsed.redirects.length || parsed.hereString !== undefined || parsed.args.length === 0) return false;
+      if (parsed.hereString !== undefined || parsed.args.length === 0) return false;
+      if (parsed.redirects.length && (i < segments.length - 1 || this.options.has('noclobber'))) return false;
+      for (const r of parsed.redirects) {
+        if (r.type === '2>&1') { stderrTo = stdoutTo ? 'stdout' : undefined; continue; }
+        if ((r.type !== '>' && r.type !== '>>' && r.type !== '2>' && r.type !== '2>>') || fdOfRef(r.target) !== null ||
+          (r.target.startsWith('/dev/') && r.target !== '/dev/null') || /^>\(/.test(r.target)) return false;
+        const to = { path: this.fs.resolvePath(r.target, this.cwd), append: r.type.endsWith('>>') };
+        if (r.type === '>' || r.type === '>>') stdoutTo = to; else stderrTo = to;
+      }
       const words = await this.expandGlobs(parsed.args);
       if (!words || !mayBeKernelProgram(this, words[0], words.slice(1))) return false;
       const prog = await resolveKernelProgram(this, words[0], words.slice(1));
@@ -8404,6 +8415,7 @@ export class Shell {
       fds: onFds ? { 0: ks!.file(0), 1: ks!.file(1), 2: ks!.file(2) } : undefined,
       terminal: term, command, background: true, cwd: this.cwd, env: this.exportedEnv(),
       inheritFds: onFds ? this.inheritableFds(writeStdout, writeStdout) : undefined,
+      stdoutTo, stderrTo,
     });
     const job = [...this.backgroundJobs.values()].pop();
     if (job?.pids?.length) this.env['!'] = String(job.pids[job.pids.length - 1]);
