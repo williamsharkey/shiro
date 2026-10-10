@@ -237,6 +237,8 @@ struct tc_ctx {
   GLenum error;
   int swap_interval;
   /* client state the guest needs */
+  struct tc_carray { uint8_t enabled, client; GLint size; GLenum type; GLsizei stride; const uint8_t *ptr; } arrays[29];
+  GLuint client_unit, vao;
   int in_begin;
   uint32_t list_mode;
   GLsync next_sync;
@@ -1236,69 +1238,193 @@ GLuint tc_glGetDebugMessageLog(GLuint count, GLsizei bufSize, GLenum *sources, G
 }
 void tc_glGetPointerv(GLenum pname, void **params) { (void)pname; *params = NULL; }
 
-/* vertex arrays: buffer offsets go to the page; client memory is not yet supported */
-static void client_pointer_warning(const char *fn, const void *p) {
-  if (!array_buffer && p) tc_unimplemented(fn);
+/*
+ * Vertex arrays. Buffer offsets go to the page as they are. Client memory
+ * (no GL_ARRAY_BUFFER bound, VAO 0) is copied at each draw: the vertices the
+ * draw reads, from every enabled client array, go up with
+ * glClientUploadArray(which, unit, byte offset, bytes) just before it, and the
+ * page points that attribute at its copy. Client indices go up the same way.
+ * Arrays: 0-15 generic attributes, then vertex, normal, color, secondary
+ * color, fog coordinate and texture coordinates 0-7.
+ */
+enum { CA_VERTEX = 16, CA_NORMAL, CA_COLOR, CA_SECONDARY, CA_FOG, CA_TEXCOORD, CA_N = CA_TEXCOORD + 8 };
+static int client_array_of(struct tc_ctx *c, GLenum a) {
+  switch (a) {
+  case GL_VERTEX_ARRAY: return CA_VERTEX;
+  case GL_NORMAL_ARRAY: return CA_NORMAL;
+  case GL_COLOR_ARRAY: return CA_COLOR;
+  case GL_SECONDARY_COLOR_ARRAY: return CA_SECONDARY;
+  case GL_FOG_COORD_ARRAY: return CA_FOG;
+  case GL_TEXTURE_COORD_ARRAY: return CA_TEXCOORD + (int)(c->client_unit & 7);
+  }
+  return -1;
+}
+static void set_array(int i, GLint size, GLenum type, GLsizei stride, const void *pointer) {
+  struct tc_ctx *c = T.ctx;
+  if (!c || i < 0 || i >= CA_N) return;
+  struct tc_carray *a = &c->arrays[i];
+  a->size = size; a->type = type; a->stride = stride; a->ptr = pointer;
+  a->client = !array_buffer && pointer;
+}
+static size_t attrib_type_size(GLenum t) {
+  switch (t) {
+  case GL_BYTE: case GL_UNSIGNED_BYTE: return 1;
+  case GL_SHORT: case GL_UNSIGNED_SHORT: case GL_HALF_FLOAT: return 2;
+  case GL_DOUBLE: return 8;
+  default: return 4;
+  }
+}
+static size_t element_size(const struct tc_carray *a) {
+  if (a->type == GL_INT_2_10_10_10_REV || a->type == GL_UNSIGNED_INT_2_10_10_10_REV || a->type == GL_UNSIGNED_INT_10F_11F_11F_REV) return 4;
+  return (size_t)(a->size == GL_BGRA ? 4 : a->size) * attrib_type_size(a->type);
+}
+static int client_arrays_on(struct tc_ctx *c) {
+  if (c->vao) return 0;
+  for (int i = 0; i < CA_N; i++) if (c->arrays[i].enabled && c->arrays[i].client) return 1;
+  return 0;
+}
+static void upload(uint32_t which, uint32_t unit, int64_t offset, const void *p, size_t n) {
+  uint32_t *w = tc_begin(5 + ((n + 3) >> 2), OP_glClientUploadArray);
+  if (!w) return;
+  w[0] = which; w[1] = unit; memcpy(w + 2, &offset, 8); tc_put_array(w + 4, p, n); tc_end();
+}
+/* Copies vertices first .. first + count - 1 of every enabled client array to the page. */
+static void upload_arrays(struct tc_ctx *c, int64_t first, int64_t count) {
+  static const GLenum ff[] = { GL_VERTEX_ARRAY, GL_NORMAL_ARRAY, GL_COLOR_ARRAY, GL_SECONDARY_COLOR_ARRAY, GL_FOG_COORD_ARRAY };
+  if (first < 0 || count <= 0) return;
+  for (int i = 0; i < CA_N; i++) {
+    struct tc_carray *a = &c->arrays[i];
+    if (!a->enabled || !a->client) continue;
+    size_t elem = element_size(a), stride = a->stride ? (size_t)a->stride : elem;
+    int64_t off = first * (int64_t)stride;
+    size_t n = (size_t)(count - 1) * stride + elem;
+    uint32_t which = i < 16 ? (uint32_t)i : i < CA_TEXCOORD ? ff[i - CA_VERTEX] : GL_TEXTURE_COORD_ARRAY;
+    upload(which, i >= CA_TEXCOORD ? (uint32_t)(i - CA_TEXCOORD) : 0, off, a->ptr + off, n);
+  }
 }
 void tc_glVertexAttribPointer(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void *pointer) {
-  client_pointer_warning("glVertexAttribPointer with client memory", pointer);
+  set_array(index < 16 ? (int)index : -1, size, type, stride, pointer);
   uint32_t *w = tc_begin(7, OP_glVertexAttribPointer);
   if (!w) return;
   w[0] = index; w[1] = (uint32_t)size; w[2] = type; w[3] = normalized; w[4] = (uint32_t)stride;
   int64_t off = (int64_t)(intptr_t)pointer; memcpy(w + 5, &off, 8); tc_end();
 }
 void tc_glVertexAttribIPointer(GLuint index, GLint size, GLenum type, GLsizei stride, const void *pointer) {
-  client_pointer_warning("glVertexAttribIPointer with client memory", pointer);
+  set_array(index < 16 ? (int)index : -1, size, type, stride, pointer);
   uint32_t *w = tc_begin(6, OP_glVertexAttribIPointer);
   if (!w) return;
   w[0] = index; w[1] = (uint32_t)size; w[2] = type; w[3] = (uint32_t)stride;
   int64_t off = (int64_t)(intptr_t)pointer; memcpy(w + 4, &off, 8); tc_end();
 }
-#define PTR4(fn) void tc_##fn(GLint size, GLenum type, GLsizei stride, const void *pointer) { \
-  client_pointer_warning(#fn " with client memory", pointer); uint32_t *w = tc_begin(5, OP_##fn); if (!w) return; \
+#define PTR4(fn, slot) void tc_##fn(GLint size, GLenum type, GLsizei stride, const void *pointer) { \
+  if (T.ctx) set_array(slot, size, type, stride, pointer); uint32_t *w = tc_begin(5, OP_##fn); if (!w) return; \
   w[0] = (uint32_t)size; w[1] = type; w[2] = (uint32_t)stride; int64_t off = (int64_t)(intptr_t)pointer; memcpy(w + 3, &off, 8); tc_end(); }
-PTR4(glVertexPointer) PTR4(glColorPointer) PTR4(glTexCoordPointer) PTR4(glSecondaryColorPointer)
-#define PTR3(fn) void tc_##fn(GLenum type, GLsizei stride, const void *pointer) { \
-  client_pointer_warning(#fn " with client memory", pointer); uint32_t *w = tc_begin(4, OP_##fn); if (!w) return; \
+PTR4(glVertexPointer, CA_VERTEX) PTR4(glColorPointer, CA_COLOR) PTR4(glSecondaryColorPointer, CA_SECONDARY)
+PTR4(glTexCoordPointer, CA_TEXCOORD + (int)(T.ctx->client_unit & 7))
+#define PTR3(fn, slot, n) void tc_##fn(GLenum type, GLsizei stride, const void *pointer) { \
+  if (T.ctx) set_array(slot, n, type, stride, pointer); uint32_t *w = tc_begin(4, OP_##fn); if (!w) return; \
   w[0] = type; w[1] = (uint32_t)stride; int64_t off = (int64_t)(intptr_t)pointer; memcpy(w + 2, &off, 8); tc_end(); }
-PTR3(glNormalPointer) PTR3(glFogCoordPointer) PTR3(glIndexPointer)
-void tc_glEnableClientState(GLenum a) { simple1(OP_glEnableClientState, a); }
-void tc_glDisableClientState(GLenum a) { simple1(OP_glDisableClientState, a); }
-void tc_glClientActiveTexture(GLenum a) { simple1(OP_glClientActiveTexture, a); }
-void tc_glEnableVertexAttribArray(GLuint a) { simple1(OP_glEnableVertexAttribArray, a); }
-void tc_glDisableVertexAttribArray(GLuint a) { simple1(OP_glDisableVertexAttribArray, a); }
-void tc_glBindVertexArray(GLuint a) { simple1(OP_glBindVertexArray, a); }
-void tc_glVertexAttribDivisor(GLuint a, GLuint b) { simple2(OP_glVertexAttribDivisor, a, b); }
-void tc_glPrimitiveRestartIndex(GLuint a) { simple1(OP_glPrimitiveRestartIndex, a); }
+PTR3(glNormalPointer, CA_NORMAL, 3) PTR3(glFogCoordPointer, CA_FOG, 1) PTR3(glIndexPointer, -1, 1)
+static void enable_array(int i, int on) { struct tc_ctx *c = T.ctx; if (c && i >= 0 && i < CA_N) c->arrays[i].enabled = (uint8_t)on; }
+void tc_glEnableClientState(GLenum a) { if (T.ctx) enable_array(client_array_of(T.ctx, a), 1); simple1(OP_glEnableClientState, a); }
+void tc_glDisableClientState(GLenum a) { if (T.ctx) enable_array(client_array_of(T.ctx, a), 0); simple1(OP_glDisableClientState, a); }
+void tc_glClientActiveTexture(GLenum a) { if (T.ctx) T.ctx->client_unit = a - GL_TEXTURE0; simple1(OP_glClientActiveTexture, a); }
+void tc_glEnableVertexAttribArray(GLuint a) { enable_array(a < 16 ? (int)a : -1, 1); simple1(OP_glEnableVertexAttribArray, a); }
+void tc_glDisableVertexAttribArray(GLuint a) { enable_array(a < 16 ? (int)a : -1, 0); simple1(OP_glDisableVertexAttribArray, a); }
+void tc_glBindVertexArray(GLuint a) { if (T.ctx) T.ctx->vao = a; simple1(OP_glBindVertexArray, a); }
+/* glInterleavedArrays: the GL 1.1 table, as pointer and enable calls */
+void tc_glInterleavedArrays(GLenum format, GLsizei stride, const void *pointer) {
+  static const struct { GLenum f; int t, c, n, v; GLenum ct; int pc, pn, pv, s; } k[] = {
+    { GL_V2F, 0, 0, 0, 2, 0, 0, 0, 0, 8 }, { GL_V3F, 0, 0, 0, 3, 0, 0, 0, 0, 12 },
+    { GL_C4UB_V2F, 0, 4, 0, 2, GL_UNSIGNED_BYTE, 0, 0, 4, 12 }, { GL_C4UB_V3F, 0, 4, 0, 3, GL_UNSIGNED_BYTE, 0, 0, 4, 16 },
+    { GL_C3F_V3F, 0, 3, 0, 3, GL_FLOAT, 0, 0, 12, 24 }, { GL_N3F_V3F, 0, 0, 1, 3, 0, 0, 0, 12, 24 },
+    { GL_C4F_N3F_V3F, 0, 4, 1, 3, GL_FLOAT, 0, 16, 28, 40 }, { GL_T2F_V3F, 2, 0, 0, 3, 0, 0, 0, 8, 20 },
+    { GL_T4F_V4F, 4, 0, 0, 4, 0, 0, 0, 16, 32 }, { GL_T2F_C4UB_V3F, 2, 4, 0, 3, GL_UNSIGNED_BYTE, 8, 0, 12, 24 },
+    { GL_T2F_C3F_V3F, 2, 3, 0, 3, GL_FLOAT, 8, 0, 20, 32 }, { GL_T2F_N3F_V3F, 2, 0, 1, 3, 0, 0, 8, 20, 32 },
+    { GL_T2F_C4F_N3F_V3F, 2, 4, 1, 3, GL_FLOAT, 8, 24, 36, 48 }, { GL_T4F_C4F_N3F_V4F, 4, 4, 1, 4, GL_FLOAT, 16, 32, 44, 60 },
+  };
+  for (size_t i = 0; i < sizeof k / sizeof k[0]; i++) {
+    if (k[i].f != format) continue;
+    const uint8_t *p = pointer;
+    GLsizei st = stride ? stride : k[i].s;
+    tc_glDisableClientState(GL_EDGE_FLAG_ARRAY); tc_glDisableClientState(GL_INDEX_ARRAY);
+    tc_glDisableClientState(GL_FOG_COORD_ARRAY); tc_glDisableClientState(GL_SECONDARY_COLOR_ARRAY);
+    if (k[i].t) { tc_glEnableClientState(GL_TEXTURE_COORD_ARRAY); tc_glTexCoordPointer(k[i].t, GL_FLOAT, st, p); }
+    else tc_glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    if (k[i].c) { tc_glEnableClientState(GL_COLOR_ARRAY); tc_glColorPointer(k[i].c, k[i].ct, st, p + k[i].pc); }
+    else tc_glDisableClientState(GL_COLOR_ARRAY);
+    if (k[i].n) { tc_glEnableClientState(GL_NORMAL_ARRAY); tc_glNormalPointer(GL_FLOAT, st, p + k[i].pn); }
+    else tc_glDisableClientState(GL_NORMAL_ARRAY);
+    tc_glEnableClientState(GL_VERTEX_ARRAY); tc_glVertexPointer(k[i].v, GL_FLOAT, st, p + k[i].pv);
+    return;
+  }
+  local_error(GL_INVALID_ENUM);
+}
 void tc_glDeleteBuffers(GLsizei n, const GLuint *b) { uint32_t *w = tc_begin(1 + (size_t)(n > 0 ? n : 0), OP_glDeleteBuffers); if (w) { tc_put_array(w, b, (size_t)(n > 0 ? n : 0) * 4); tc_end(); } }
 void tc_glDeleteVertexArrays(GLsizei n, const GLuint *b) { uint32_t *w = tc_begin(1 + (size_t)(n > 0 ? n : 0), OP_glDeleteVertexArrays); if (w) { tc_put_array(w, b, (size_t)(n > 0 ? n : 0) * 4); tc_end(); } }
-void tc_glDrawArrays(GLenum mode, GLint first, GLsizei count) { uint32_t *w = tc_begin(3, OP_glDrawArrays); if (w) { w[0] = mode; w[1] = (uint32_t)first; w[2] = (uint32_t)count; tc_end(); } }
+void tc_glDrawArrays(GLenum mode, GLint first, GLsizei count) {
+  if (T.ctx && client_arrays_on(T.ctx)) upload_arrays(T.ctx, first, count);
+  uint32_t *w = tc_begin(3, OP_glDrawArrays); if (w) { w[0] = mode; w[1] = (uint32_t)first; w[2] = (uint32_t)count; tc_end(); }
+}
 void tc_glDrawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei inst) {
+  if (T.ctx && client_arrays_on(T.ctx)) upload_arrays(T.ctx, first, count);
   uint32_t *w = tc_begin(4, OP_glDrawArraysInstanced); if (w) { w[0] = mode; w[1] = (uint32_t)first; w[2] = (uint32_t)count; w[3] = (uint32_t)inst; tc_end(); }
 }
-static void draw_elements(unsigned op, GLenum mode, GLsizei count, GLenum type, const void *indices, const uint32_t *extra, int nextra) {
-  if (!element_buffer) tc_unimplemented("glDrawElements with client indices");
+static void index_range(const void *p, GLsizei count, GLenum type, uint32_t *lo, uint32_t *hi) {
+  uint32_t a = 0xffffffffu, b = 0;
+  for (GLsizei i = 0; i < count; i++) {
+    uint32_t v = type == GL_UNSIGNED_BYTE ? ((const uint8_t *)p)[i] : type == GL_UNSIGNED_SHORT ? ((const uint16_t *)p)[i] : ((const uint32_t *)p)[i];
+    if (v == (type == GL_UNSIGNED_BYTE ? 0xffu : type == GL_UNSIGNED_SHORT ? 0xffffu : 0xffffffffu)) continue; /* a restart index */
+    if (v < a) a = v;
+    if (v > b) b = v;
+  }
+  *lo = a; *hi = b;
+}
+/* range: the vertices the draw reads when the app said (glDrawRangeElements), else NULL */
+static void draw_elements(unsigned op, GLenum mode, GLsizei count, GLenum type, const void *indices, const uint32_t *extra, int nextra,
+                          const uint32_t *range, GLint base) {
+  struct tc_ctx *c = T.ctx;
+  if (!c || count <= 0) return;
+  size_t isize = type == GL_UNSIGNED_BYTE ? 1 : type == GL_UNSIGNED_SHORT ? 2 : 4;
+  size_t n = (size_t)count * isize;
+  int client_indices = !element_buffer && !c->vao;
+  if (client_indices && !indices) { local_error(GL_INVALID_OPERATION); return; }
+  if (client_arrays_on(c)) {
+    uint32_t lo, hi;
+    if (range) { lo = range[0]; hi = range[1]; }
+    else if (client_indices) index_range(indices, count, type, &lo, &hi);
+    else {
+      /* indices in a buffer the page has: ask for them (rare: client vertices with buffer indices) */
+      void *tmp = malloc(n);
+      if (!tmp) return;
+      tc_glGetBufferSubData(GL_ELEMENT_ARRAY_BUFFER, (GLintptr)indices, (GLsizeiptr)n, tmp);
+      index_range(tmp, count, type, &lo, &hi);
+      free(tmp);
+    }
+    if (lo <= hi) upload_arrays(c, (int64_t)lo + base, (int64_t)hi - lo + 1);
+  }
+  if (client_indices) { upload(GL_ELEMENT_ARRAY_BUFFER, 0, 0, indices, n); indices = NULL; }
   uint32_t *w = tc_begin(5 + (size_t)nextra, op);
   if (!w) return;
   w[0] = mode; w[1] = (uint32_t)count; w[2] = type; int64_t off = (int64_t)(intptr_t)indices; memcpy(w + 3, &off, 8);
   for (int i = 0; i < nextra; i++) w[5 + i] = extra[i];
   tc_end();
 }
-void tc_glDrawElements(GLenum mode, GLsizei count, GLenum type, const void *indices) { draw_elements(OP_glDrawElements, mode, count, type, indices, NULL, 0); }
+void tc_glDrawElements(GLenum mode, GLsizei count, GLenum type, const void *indices) { draw_elements(OP_glDrawElements, mode, count, type, indices, NULL, 0, NULL, 0); }
 void tc_glDrawElementsInstanced(GLenum mode, GLsizei count, GLenum type, const void *indices, GLsizei inst) {
-  uint32_t x = (uint32_t)inst; draw_elements(OP_glDrawElementsInstanced, mode, count, type, indices, &x, 1);
+  uint32_t x = (uint32_t)inst; draw_elements(OP_glDrawElementsInstanced, mode, count, type, indices, &x, 1, NULL, 0);
 }
 void tc_glDrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const void *indices, GLint base) {
-  uint32_t x = (uint32_t)base; draw_elements(OP_glDrawElementsBaseVertex, mode, count, type, indices, &x, 1);
+  uint32_t x = (uint32_t)base; draw_elements(OP_glDrawElementsBaseVertex, mode, count, type, indices, &x, 1, NULL, base);
 }
 void tc_glDrawElementsInstancedBaseVertex(GLenum mode, GLsizei count, GLenum type, const void *indices, GLsizei inst, GLint base) {
-  uint32_t x[2] = { (uint32_t)inst, (uint32_t)base }; draw_elements(OP_glDrawElementsInstancedBaseVertex, mode, count, type, indices, x, 2);
+  uint32_t x[2] = { (uint32_t)inst, (uint32_t)base }; draw_elements(OP_glDrawElementsInstancedBaseVertex, mode, count, type, indices, x, 2, NULL, base);
 }
 void tc_glDrawRangeElements(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, const void *indices) {
-  (void)start; (void)end; tc_glDrawElements(mode, count, type, indices);
+  uint32_t r[2] = { start, end }; draw_elements(OP_glDrawElements, mode, count, type, indices, NULL, 0, r, 0);
 }
 void tc_glDrawRangeElementsBaseVertex(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, const void *indices, GLint base) {
-  (void)start; (void)end; tc_glDrawElementsBaseVertex(mode, count, type, indices, base);
+  uint32_t r[2] = { start, end }, x = (uint32_t)base; draw_elements(OP_glDrawElementsBaseVertex, mode, count, type, indices, &x, 1, r, base);
 }
 void tc_glMultiDrawArrays(GLenum mode, const GLint *first, const GLsizei *count, GLsizei n) {
   for (GLsizei i = 0; i < n; i++) tc_glDrawArrays(mode, first[i], count[i]);

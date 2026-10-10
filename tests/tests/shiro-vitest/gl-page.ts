@@ -112,12 +112,12 @@ function ffVariants(): Record<string, string | null> {
 /** An executor on its own WebGL2 context; batches in, replies and frames out. */
 const execs = new Map<number, { ex: Executor; out: Uint8Array[]; frames: { xid: number; width: number; height: number; pixels: number[] }[]; logs: string[] }>();
 let nextExec = 1;
-function execOpen(width: number, height: number): number {
+function execOpen(width: number, height: number, mode: 'pixels' | 'async-pixels' = 'pixels'): number {
   const id = nextExec++;
   const g = new OffscreenCanvas(1, 1).getContext('webgl2', { antialias: false, depth: false, stencil: false, premultipliedAlpha: false })!;
   const st = { out: [] as Uint8Array[], frames: [] as { xid: number; width: number; height: number; pixels: number[] }[], logs: [] as string[], ex: null as unknown as Executor };
   st.ex = new Executor(g, {
-    presentMode: 'pixels',
+    presentMode: mode,
     send: (d) => st.out.push(d.slice()),
     drawableSize: () => ({ width, height }),
     present: (xid, f) => st.frames.push({ xid, width: f.width, height: f.height, pixels: Array.from(f.pixels!) }),
@@ -134,4 +134,12 @@ function execRun(id: number, bytes: number[]) {
   return r;
 }
 
-Object.assign(globalThis, { glTest: { corpus, ffVariants, execOpen, execRun } });
+/** Frames delivered so far (async-pixels delivers them after the batch that swapped) */
+function execFrames(id: number) {
+  const st = execs.get(id)!;
+  const r = { out: st.out.map((o) => Array.from(o)), frames: st.frames };
+  st.out = []; st.frames = [];
+  return r;
+}
+
+Object.assign(globalThis, { glTest: { corpus, ffVariants, execOpen, execRun, execFrames } });

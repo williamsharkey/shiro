@@ -130,20 +130,22 @@ it('drops a connection whose stream is broken', async () => {
   expect((await good.read(12))).toHaveLength(1);
 });
 
-it('turns GL on for an X server only with WebGL2, writing the vendor library once', async () => {
+it('turns GL on only with WebGL2, writing the vendor library once', async () => {
   const { fs } = await createTestShell();
   const { Kernel } = await import('@shiro/kernel/kernel');
-  const { XServer } = await import('@shiro/x11/server');
   const { prepareGL, installVendorLibrary, VENDOR_LIBRARY } = await import('@shiro/gl/setup');
+  const glx = await import('@shiro/x11/glx');
+  glx.resetGLX();
   const kernel = new Kernel({ fs, registerWithProcessTable: false });
-  const off = new XServer({ width: 100, height: 100 });
-  expect(await prepareGL(kernel, off, false)).toBe(false);
-  expect(off.extensions.has('GLX')).toBe(false);
+  expect(await prepareGL(kernel, false)).toBe(false);
+  expect(glx.glxEnabled()).toBe(false);
   let fetches = 0;
   const lib = new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 1, 2, 3]);
   expect(await installVendorLibrary(kernel, async () => { fetches++; return lib; })).toBe(true);
   expect(new Uint8Array(await fs.readFile(VENDOR_LIBRARY) as Uint8Array)).toEqual(lib);
-  // unreachable: keeps the one it has
+  // unreachable, or not a library: keeps the one it has
   expect(await installVendorLibrary(kernel, async () => null)).toBe(true);
+  expect(await installVendorLibrary(kernel, async () => new TextEncoder().encode('<!doctype html>'))).toBe(true);
+  expect(new Uint8Array(await fs.readFile(VENDOR_LIBRARY) as Uint8Array)).toEqual(lib);
   expect(fetches).toBe(1);
 });

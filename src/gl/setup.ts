@@ -1,12 +1,13 @@
 /**
- * Turns on GL for an X session when the page has WebGL2 (docs/research/GL.md):
- * Xshiro gets the GLX extension naming the tabcomputer vendor, and the guest
- * gets libGLX_tabcomputer.so.0 where libglvnd looks for it. Without WebGL2
- * neither happens and GL apps get Mesa (llvmpipe), the slow fallback.
+ * Turns on GL when the page has WebGL2 (docs/research/GL.md): the guest gets
+ * libGLX_tabcomputer.so.0 where libglvnd looks for it, and Xshiro's GLX
+ * (src/x11/glx.ts) is enabled, naming the tabcomputer vendor. Done before
+ * Xshiro serves its first client, so programs started from a terminal find
+ * both. Without WebGL2 neither happens and GL apps get Mesa (llvmpipe), the
+ * slow fallback.
  */
 import type { Kernel } from '../kernel/kernel';
-import type { XServer } from '../x11/server';
-import { installGLX } from './glx-ext';
+import { enableGLX } from '../x11/glx';
 
 export const VENDOR_LIBRARY = '/usr/lib/x86_64-linux-gnu/libGLX_tabcomputer.so.0';
 
@@ -34,7 +35,8 @@ export async function installVendorLibrary(kernel: Kernel, fetchLib: () => Promi
   const fs = kernel.fs;
   if (!fs) return false;
   const lib = await fetchLib().catch(() => null);
-  if (!lib) return fs.exists(VENDOR_LIBRARY).catch(() => false);
+  // missing, or not a library (a dev server's index.html): keep what's there
+  if (!lib || lib[0] !== 0x7f || lib[1] !== 0x45 || lib[2] !== 0x4c || lib[3] !== 0x46) return fs.exists(VENDOR_LIBRARY).catch(() => false);
   const have = await fs.readFile(VENDOR_LIBRARY).catch(() => null) as Uint8Array | null;
   if (!have || have.length !== lib.length || have.some((b, i) => b !== lib[i])) {
     await fs.mkdir(VENDOR_LIBRARY.slice(0, VENDOR_LIBRARY.lastIndexOf('/')), { recursive: true }).catch(() => {});
@@ -49,15 +51,15 @@ async function defaultFetch(): Promise<Uint8Array | null> {
   return r.ok ? new Uint8Array(await r.arrayBuffer()) : null;
 }
 
-const prepared = new WeakMap<XServer, Promise<boolean>>();
-/** Once per X server, before its first client is served: GLX and the vendor library, if WebGL2 is there. */
-export function prepareGL(kernel: Kernel, server: XServer, available = webgl2Available()): Promise<boolean> {
-  let p = prepared.get(server);
+const prepared = new WeakMap<Kernel, Promise<boolean>>();
+/** Once per kernel, before Xshiro's first client is served: the vendor library and GLX, if WebGL2 is there. */
+export function prepareGL(kernel: Kernel, available = webgl2Available()): Promise<boolean> {
+  let p = prepared.get(kernel);
   if (!p) {
     p = available
-      ? installVendorLibrary(kernel).then((ok) => { if (ok) installGLX(server); return ok; }).catch(() => false)
+      ? installVendorLibrary(kernel).then((ok) => { if (ok) enableGLX(); return ok; }).catch(() => false)
       : Promise.resolve(false);
-    prepared.set(server, p);
+    prepared.set(kernel, p);
   }
   return p;
 }
