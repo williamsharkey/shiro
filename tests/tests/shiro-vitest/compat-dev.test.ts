@@ -15,6 +15,7 @@ import type { Shell } from '@shiro/shell';
 import type { FileSystem } from '@shiro/filesystem';
 import type { GuestWorker } from '@shiro/kernel/worker-host';
 import { setGuestWorkerFactory, forceWasmProcessMode } from '@shiro/wasi/host';
+import { nodeWorkerFactory } from '@shiro/node-worker/boot';
 import { readTarball } from '@shiro/utils/tar';
 import { createPathShims } from '@shiro/path-shims';
 import { simpleCommandWords } from '@shiro/kernel/kernel';
@@ -24,6 +25,7 @@ const REPO = path.resolve(here, '../../..');
 const srcWasi = path.join(REPO, 'src/wasi');
 const CACHE = `${REPO}/tests/.pkg-cache`;
 let tmp: string;
+let guestFactory: (() => GuestWorker) | null = null;
 const realFetch = globalThis.fetch;
 
 beforeAll(async () => {
@@ -38,7 +40,7 @@ beforeAll(async () => {
   `);
   const workerFile = path.join(tmp, 'guest-worker.mjs');
   await build({ entryPoints: [entry], bundle: true, platform: 'node', format: 'esm', outfile: workerFile, logLevel: 'error' });
-  setGuestWorkerFactory((): GuestWorker => {
+  setGuestWorkerFactory(guestFactory = (): GuestWorker => {
     const w = new Worker(workerFile);
     return {
       postMessage: (m) => w.postMessage(m),
@@ -1306,8 +1308,13 @@ w.on('all', (e, p) => { ev.push(e + ' ' + p); if (p.endsWith('stop')) setTimeout
 w.on('ready', () => console.log('ready'));`);
     const watcher = sh(shell, 'cd /home/user/ck && node w.js');
     await new Promise((res) => setTimeout(res, 2000));
-    await sh((shell as any).fork(), 'cd /home/user/ck/src && echo b > b.js && echo aa >> a.js && mkdir lib/deep && echo c > lib/c.js && rm b.js && sleep 0.5 && touch stop');
+    // (b.js lives long enough for chokidar's stat of it: one created and removed at once may be
+    // reported as neither, on Linux too)
+    await sh((shell as any).fork(), 'cd /home/user/ck/src && echo b > b.js && echo aa >> a.js && mkdir lib/deep && echo c > lib/c.js && sleep 0.5 && rm b.js && sleep 0.5 && touch stop');
     r = await watcher;
+    // (`echo c > c.js` creates the file, then writes it: chokidar may report the write as a change
+    // when its stat for the add came first, as it may on Linux; a guest's stat comes later than the page's)
+    r.out = r.out.replace('change src/lib/c.js\n', '');
     expect(r.out).toBe('ready\nadd src/b.js\nadd src/lib/c.js\naddDir src/lib/deep\nchange src/a.js\nunlink src/b.js\n');
   }, 180_000);
 
@@ -1984,6 +1991,9 @@ describe('npm install: install scripts and platform packages', () => {
 describe("the page's esbuild is let go when idle", () => {
   it('stops after the idle time and starts again for the next build', async () => {
     // The page's esbuild is esbuild-wasm's browser build (here in this thread, from esbuild.wasm)
+    // (after resetModules, modules a later test imports are new copies: they get this file's and
+    // the setup's guest factories again in `finally`, or node and WASM there would run without them)
+    const nodeFactory = nodeWorkerFactory();
     vi.resetModules();
     vi.doMock('esbuild-wasm', () => import(`${REPO}/node_modules/esbuild-wasm/esm/browser.js`));
     const saved = globalThis.fetch;
@@ -2009,6 +2019,10 @@ describe("the page's esbuild is let go when idle", () => {
       setEsbuildIdleMs(60_000);
       globalThis.fetch = saved;
       vi.doUnmock('esbuild-wasm');
+      (await import('@shiro/node-worker/boot')).setNodeWorkerFactory(nodeFactory);
+      const wasi = await import('@shiro/wasi/host');
+      wasi.setGuestWorkerFactory(guestFactory);
+      wasi.forceWasmProcessMode('sab');
     }
   }, 120_000);
 });
@@ -2208,11 +2222,14 @@ describe('http: ServerResponse internals middleware uses', () => {
         gz.end('compressed hello');
       }).listen(4813);
     `);
-    await sh(shell, 'cd /home/user/gz && node s.js');
+    // (in the background: node as a guest stays running while it listens, as node does)
+    await sh(shell, 'cd /home/user/gz && node s.js &');
+    for (let t = 0; t < 200 && !iframeServer.isPortInUse(4813); t++) await new Promise((res) => setTimeout(res, 100));
     const r = await iframeServer.fetch(4813, '/');
     const body = typeof r.body === 'string' ? new TextEncoder().encode(r.body) : new Uint8Array(r.body as Uint8Array);
     const text = await new Response(new Blob([body]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
     expect([r.status, r.headers?.['x-before'], r.headers?.['content-encoding'], text]).toEqual([200, 'null', 'gzip', 'compressed hello']);
+    await sh(shell, 'kill %1');
     iframeServer.close(4813);
   }, 60_000);
 });

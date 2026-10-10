@@ -203,9 +203,9 @@ ${bootSection(ctx, name)}
   only say "Could not connect".
 - A command that hangs: press Ctrl-C at the terminal. Linux and WASM programs are
   kernel processes: \`ps\` lists them, \`kill PID\` (or \`kill -9 PID\`) stops
-  them. Builtins (including \`node\` and the Pyodide
-  \`python3\`) run inside the page, not as kernel processes: their \`$!\` has no
-  \`/proc\` entry and \`ps\` doesn't list them. In the shell that started one in
+  them; \`node\` is one too. Builtins (the Pyodide \`python3\`, and \`node\` with
+  \`TABCOMPUTER_NODE_WORKER=0\`) run inside the page, not as kernel processes:
+  their \`$!\` has no \`/proc\` entry and \`ps\` doesn't list them. In the shell that started one in
   the background, \`jobs -l\` shows its PID and \`kill PID\` stops it; from
   anywhere else, a reload is the only way.
 - \`console -g PATTERN\` searches the page's console log (\`--prev\` includes the
