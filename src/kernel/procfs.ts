@@ -158,7 +158,7 @@ export class ProcFs {
     if (path === '/proc') {
       return {
         type: 'dir', list: () => {
-          const names = new Set([...this.fsNames(), 'self', 'thread-self', ...this.live().map((p) => String(p.pid))]);
+          const names = new Set([...this.fsNames(), 'self', 'thread-self', 'sysvipc', ...this.live().map((p) => String(p.pid))]);
           // the names, then the pids in order (procps lists them as readdir returns them)
           const pids = [...names].filter((n) => /^\d+$/.test(n)).sort((a, b) => Number(a) - Number(b));
           return [...[...names].filter((n) => !/^\d+$/.test(n)), ...pids];
@@ -176,6 +176,14 @@ export class ProcFs {
       const p = this.kernel.procs.get(Number(head));
       if (!p) return undefined;
       return parts.length === 1 ? { type: 'dir', list: () => PID_ENTRIES } : this.pidNode(proc, p, parts.slice(1));
+    }
+    if (head === 'sysvipc') {
+      if (parts.length === 1) return { type: 'dir', list: () => ['msg', 'sem', 'shm'] };
+      if (parts.length === 2 && (parts[1] === 'shm' || parts[1] === 'sem' || parts[1] === 'msg')) {
+        const which = parts[1];
+        return { type: 'file', text: () => this.sysvipcText(which) };
+      }
+      return undefined;
     }
     if (parts.length !== 1) return undefined;
     switch (head) {
@@ -224,6 +232,23 @@ export class ProcFs {
       case 'mounts': return { type: 'file', text: () => 'rootfs / rootfs rw 0 0\nproc /proc proc rw 0 0\n' };
     }
     return undefined;
+  }
+
+  /** /proc/sysvipc/{shm,sem,msg}, in Linux's columns (util-linux's ipcs reads them) */
+  private sysvipcText(which: 'shm' | 'sem' | 'msg'): string {
+    const k = this.kernel;
+    const o = (n: number) => n.toString(8).padStart(4);
+    const r = (n: number | string, w: number) => String(n).padStart(w);
+    if (which === 'shm') {
+      return '       key      shmid perms                  size  cpid  lpid nattch   uid   gid  cuid  cgid      atime      dtime      ctime                   rss                  swap\n'
+        + k.shm.list().map((s) => `${r(s.key, 10)} ${r(s.id, 10)}  ${o(s.mode)} ${r(s.size, 21)} ${r(s.cpid, 5)} ${r(s.lpid, 5)}  ${r(s.nattch, 5)} ${r(s.uid, 5)} ${r(s.gid, 5)} ${r(s.cuid, 5)} ${r(s.cgid, 5)} ${r(s.atime, 10)} ${r(s.dtime, 10)} ${r(s.ctime, 10)} ${r(Math.ceil(s.size / 4096) * 4096, 21)} ${r(0, 21)}\n`).join('');
+    }
+    if (which === 'sem') {
+      return '       key      semid perms      nsems   uid   gid  cuid  cgid      otime      ctime\n'
+        + k.sem.list().map((s) => `${r(s.key, 10)} ${r(s.id, 10)}  ${o(s.mode)} ${r(s.vals.length, 10)} ${r(s.uid, 5)} ${r(s.gid, 5)} ${r(s.cuid, 5)} ${r(s.cgid, 5)} ${r(s.otime, 10)} ${r(s.ctime, 10)}\n`).join('');
+    }
+    return '       key      msqid perms      cbytes       qnum lspid lrpid   uid   gid  cuid  cgid      stime      rtime      ctime\n'
+      + k.msg.list().map((q) => `${r(q.key, 10)} ${r(q.id, 10)}  ${o(q.mode)}  ${r(q.bytes, 10)} ${r(q.qnum, 10)} ${r(q.lspid, 5)} ${r(q.lrpid, 5)} ${r(q.uid, 5)} ${r(q.gid, 5)} ${r(q.cuid, 5)} ${r(q.cgid, 5)} ${r(q.stime, 10)} ${r(q.rtime, 10)} ${r(q.ctime, 10)}\n`).join('');
   }
 
   private fsNames(): string[] {
