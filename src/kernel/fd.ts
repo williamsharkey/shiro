@@ -250,6 +250,7 @@ export class ReadyListeners {
    * the edge-triggered entries watching them. 0 = anything may have changed.
    */
   fire(mask = 0): void {
+    if (!this.cbs.size) return; // (every pipe read and write fires: no copy when nobody listens)
     for (const cb of [...this.cbs]) {
       try { cb(mask); } catch { /* listener errors must not break I/O */ }
     }
