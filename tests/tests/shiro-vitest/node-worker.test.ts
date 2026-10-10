@@ -52,6 +52,46 @@ describe('node as a kernel guest', () => {
     expect(r.out).toBe('"hi\\n"\n"piped" 0\n4\nthrew 4\nx y\n');
   }, 60_000);
 
+  it('cached files and directories see what children change', async () => {
+    const r = await sh(`mkdir -p /tmp/nc/d /tmp/nc/o && echo aaa > /tmp/nc/d/f && echo bbb > /tmp/nc/o/f && node -e '
+      const fs = require("fs"), cp = require("child_process");
+      const read = () => fs.readFileSync("/tmp/nc/d/f", "utf8").trim();
+      const first = read();
+      cp.execSync("echo ccc > /tmp/nc/d/f");                        // same size, new content
+      const second = read();
+      cp.execSync("mv /tmp/nc/d /tmp/nc/d2 && ln -s o /tmp/nc/d");  // the directory is now a link
+      console.log(first, second, read(), fs.realpathSync("/tmp/nc/d/f"), fs.lstatSync("/tmp/nc/d").isSymbolicLink());
+      fs.writeFileSync("/tmp/nc/x.tmp.1", "atomic");                 // write-then-rename
+      fs.renameSync("/tmp/nc/x.tmp.1", "/tmp/nc/x");
+      fs.symlinkSync("/tmp/nc/x", "/tmp/nc/y");
+      fs.unlinkSync("/tmp/nc/x");
+      console.log(fs.existsSync("/tmp/nc/y"), fs.existsSync("/tmp/nc/x.tmp.1"));
+      fs.writeFileSync("/tmp/nc/x", "back");
+      console.log(fs.readFileSync("/tmp/nc/y", "utf8"), fs.statSync("/tmp/nc/y").size);
+    ' < /dev/null`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('aaa ccc bbb /tmp/nc/o/f true\nfalse false\nback 4\n');
+  }, 60_000);
+
+  it('node the kernel starts (sh -c, a #! script) is the guest itself', async () => {
+    const r = await sh(`chmod +x /tmp/nk/inner.js && node /tmp/nk/outer.js < /dev/null`, async (fs) => {
+      await fs.mkdir('/tmp/nk', { recursive: true });
+      await fs.writeFile('/tmp/nk/inner.js', `#!/usr/bin/env node
+const fs = require('fs');
+console.log(process.argv.slice(2).join(','), fs.readFileSync('/proc/self/stat', 'utf8').split(' ')[3]);
+`);
+      await fs.writeFile('/tmp/nk/outer.js', `const fs = require('fs'), cp = require('child_process');
+const me = fs.readFileSync('/proc/self/stat', 'utf8').split(' ')[0];
+const a = cp.execSync('node /tmp/nk/inner.js x').toString().trim().split(' ');
+const b = cp.execSync('/tmp/nk/inner.js y z').toString().trim().split(' ');
+console.log(a[0], a[1] === me, b[0], b[1] === me);
+`);
+    });
+    // the inner node's parent is the outer node: sh -c exec'd it in place, no node in between
+    expect(r.err).toBe('');
+    expect(r.out).toBe('x true y,z true\n');
+  }, 60_000);
+
   it('stdin from a pipe; async exec', async () => {
     const r = await sh(`printf 'a\\nb\\n' | node -e '
       let t = ""; process.stdin.on("data", (d) => t += d).on("end", () => {

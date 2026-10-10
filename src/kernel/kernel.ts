@@ -273,6 +273,12 @@ export class Kernel {
     this.loaders.unshift(loader);
   }
 
+  /**
+   * Builtins that `sh -c 'NAME args'` should exec in place (findProgram)
+   * rather than run in the forked shell, when `claim(NAME, process)` says so.
+   */
+  readonly execDirect: ((name: string, proc: Process) => boolean)[] = [];
+
   registerDevice(path: string, opener: DeviceOpener): void {
     this.devices.set(path, opener);
   }
@@ -440,6 +446,8 @@ export class Kernel {
       if (typeof p === 'string' && (await this.fs?.exists(p))) path = p;
     } else if (this.fs && this.shell?.commands.get(name) && packageShadows(this.fs).has(name)) {
       path = `${PKG_BIN_DIR}/${name}`; // an installed package replaces the builtin
+    } else if (this.shell?.commands.get(name) && this.execDirect.some(f => f(name, probe))) {
+      path = name; // a loader runs this builtin as the process itself (node as a guest)
     } else if (!this.shell?.commands.get(name)) {
       for (const dir of (probe.env.PATH ?? '/usr/local/bin:/usr/bin:/bin').split(':')) {
         if (!dir) continue;
