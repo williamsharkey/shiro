@@ -803,6 +803,24 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
 102. MAP_HUGETLB is ENOMEM, as on Linux with no huge pages reserved.
    PostgreSQL's huge_pages=try then maps ordinary pages; Blink used to
    accept the flag silently. Test: fixtures/x86/hugetlb.c.
+103. SHIRO_BLINK_PROFILE also lists compiled code's calls to Blink's
+   handlers (the instructions not inlined), by count.
+104. rol/ror by a constant are inline: 8-, 32- and 64-bit, registers and
+   memory, with CF/OF as alu.c's Rol/Ror. 16-bit and by-%cl rotates still
+   call.
+105. Hint nops (0F 18–1E, including endbr64 at every function of a CET
+   build) and prefetch are inline as nothing.
+106. SSE2/SSSE3 integer ops with a 66 prefix are inline as wasm SIMD:
+   padd/psub b/w/d/q, pand/pandn/por/pxor, pcmpeq/pcmpgt b/w/d,
+   pminub/pmaxub, punpck{l,h}{bw,wd,dq,qdq}, pshufd, pshufb (selector
+   bytes with the top bit set give 0), palignr up to 16, psrl/psra/psll
+   w/d/q and psrldq/pslldq by immediates (counts past the lane width as
+   on x86), pmovmskb. Memory operands must be 16-byte aligned: otherwise
+   the interpreter runs the instruction and raises the #GP.
+107. movaps/movapd/movdqa with a memory operand are inline, with the same
+   alignment check. OpenSSL's SSSE3 SHA-1 runs 5x faster (3300 → 650 ms
+   for 16 MB); see BENCHMARKS.md "unix/perf-blink 11". Tests:
+   fixtures/x86/rotates.c and ssei.c, identical to native.
 
 The page compiles blink.wasm once and gives the `WebAssembly.Module` to every
 Blink worker (src/x86-engine/blink.ts `blinkWasmModule`, host.mjs
