@@ -55,6 +55,10 @@ function bootSection(ctx: ShiroRuntimeContext, name: string): string {
  */
 export const KNOWN_ISSUES: { issue: string; workaround?: string }[] = [
   {
+    issue: "The shell ignores `< /dev/null` on `eval` (tabcomputer#12). Claude Code's Bash tool runs every command as `eval '<command>' < /dev/null`, so commands inherit an open stdin that never ends, and anything that reads stdin (`cat`, `node`, `npx`, `claude --npm`) hangs until the tool's timeout.",
+    workaround: 'Wrap a command that may read stdin as `{ cmd; } </dev/null`; a group\'s redirect works.',
+  },
+  {
     issue: "Images can't be pasted into Claude Code: `xclip` and `xsel` here are text only.",
     workaround: 'Save the image to a file and give its path.',
   },
@@ -167,7 +171,7 @@ ${bootSection(ctx, name)}
   gh takes \`--body-file FILE\` and \`--json FIELDS --jq EXPR\`; a flag it doesn't
   implement is an error, never silently ignored.
 - If a prebuilt package misbehaves, run \`pkg upgrade\` first: fixed builds ship as
-  new versions.
+  new versions (a stale python3 caused tabcomputer#5).
 
 ## What doesn't work
 
@@ -180,8 +184,9 @@ ${bootSection(ctx, name)}
 - Concurrency: an x86-64 process runs one guest thread at a time, and every
   process shares this one browser tab's CPU and memory. The tab uses about 220 MB
   booted; \`apt-get update\` adds about 580 MB at its peak and an install up to
-  about 880 MB. Run one \`apt\` or build at a time, and at most a few tool calls in
-  parallel (Claude Code here is set to 4). Running the same apt work in four
+  about 880 MB. Run one \`apt\` or build at a time, at most one subagent, gh and curl
+  calls one after another, and at most 4 tool calls in parallel (Claude Code
+  here is set to 4). Running the same apt work in four
   tabs at once made each step 1.4–1.7 times slower.
 
 ## When something is wrong
@@ -193,9 +198,11 @@ ${bootSection(ctx, name)}
   only say "Could not connect".
 - A command that hangs: press Ctrl-C at the terminal. Linux and WASM programs are
   kernel processes: \`ps\` lists them, \`kill PID\` (or \`kill -9 PID\`) stops
-  them. Builtins and node scripts run inside the page and don't appear in \`ps\`;
-  in the shell that started one in the background, \`jobs -l\` shows its PID and
-  \`kill PID\` stops it. A reload stops everything.
+  them. Builtins (including \`node\` and the Pyodide
+  \`python3\`) run inside the page, not as kernel processes: their \`$!\` has no
+  \`/proc\` entry and \`ps\` doesn't list them. In the shell that started one in
+  the background, \`jobs -l\` shows its PID and \`kill PID\` stops it; from
+  anywhere else, a reload is the only way.
 - \`console -g PATTERN\` searches the page's console log (\`--prev\` includes the
   load before the last reload).
 - Report bugs at ${source}/issues (\`gh issue create\` works here): the command,
@@ -207,7 +214,9 @@ ${name} is open source: ${source}. The source is not checked out on this
 machine; \`git clone --depth 1 ${source}\` if you need to read it. Its docs/
 folder has the details and the measured scoreboards. Where things live:
 
-- the shell: \`src/shell.ts\` and \`src/shell-*.ts\`; builtins: \`src/commands/NAME.ts\`
+- the shell: \`src/shell.ts\` and \`src/shell-*.ts\` (some builtins, like \`eval\`,
+  are special-cased in shell.ts); other commands: \`src/commands/NAME.ts\` (a few
+  files there, like \`eval.ts\`, are unused stubs)
 - the kernel (processes, fds, pipes, ptys, signals, sockets, IPC): \`src/kernel/\`;
   \`/proc\`: \`src/kernel/procfs.ts\`
 - the filesystem: \`src/filesystem.ts\`; the Node runtime: \`src/node-compat/\`
