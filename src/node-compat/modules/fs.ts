@@ -1395,7 +1395,38 @@ export function createFsModule(deps: FsDeps): any {
     },
     opendir: (p: string, optsOrCb?: any, cb?: any) => {
       const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
-      callback?.(null, { read: (readCb: any) => { readCb(null, null); }, close: (closeCb: any) => { closeCb?.(null); } });
+      let dir: any;
+      try { dir = fsShim.opendirSync(p); } catch (e) { callback?.(e); return; }
+      callback?.(null, dir);
+    },
+    /** A Dir over the directory's entries: read()/readSync(), close(), `for await` (Next's page discovery) */
+    opendirSync: (p: any) => {
+      const path = pathArg(p);
+      const entries: any[] = fsShim.readdirSync(path, { withFileTypes: true });
+      const parent = ctx.fs.resolvePath(path, ctx.cwd);
+      for (const e of entries) { e.parentPath ??= parent; e.path ??= parent; }
+      let i = 0, closed = false;
+      const next = () => (closed ? null : entries[i++] ?? null);
+      const dir: any = {
+        path,
+        readSync: next,
+        read: (cb?: (e: any, d: any) => void) => {
+          const d = next();
+          if (cb) { queueMicrotask(() => cb(null, d)); return undefined; }
+          return Promise.resolve(d);
+        },
+        closeSync: () => { closed = true; },
+        close: (cb?: (e: any) => void) => {
+          closed = true;
+          if (cb) { queueMicrotask(() => cb(null)); return undefined; }
+          return Promise.resolve();
+        },
+        async *[Symbol.asyncIterator]() {
+          try { for (let d = next(); d; d = next()) yield d; } finally { closed = true; }
+        },
+        *[Symbol.iterator]() { for (let d = next(); d; d = next()) yield d; },
+      };
+      return dir;
     },
     exists: (p: string, cb?: any) => {
       ctx.fs.exists(ctx.fs.resolvePath(pathArg(p), ctx.cwd))
@@ -1408,6 +1439,7 @@ export function createFsModule(deps: FsDeps): any {
     // Async promises API
     promises: {
       link: async (src: string, dst: string) => { fsShim.linkSync(src, dst); },
+      opendir: async (p: any) => fsShim.opendirSync(p),
       readFile: async (p: string | number, opts?: any) => {
         const resolved = typeof p === 'number'
           ? ((globalThis as any).__shiroFds?.[p]?.path || ctx.fs.resolvePath(pathArg(p), ctx.cwd))
@@ -1546,6 +1578,7 @@ export function createFsPromisesModule(deps: FsDeps): any {
   const shared = () => getBuiltinModule('fs')[ASYNC];
   // Async fs promises API
   return {
+    opendir: async (p: any) => getBuiltinModule('fs').opendirSync(p),
     readFile: async (p: string | number, opts?: any) => {
       const resolved = typeof p === 'number'
         ? ((globalThis as any).__shiroFds?.[p]?.path || ctx.fs.resolvePath(pathArg(p), ctx.cwd))

@@ -166,6 +166,15 @@ async function npmMain(ctx: CommandContext): Promise<number> {
         return await npmUninstall(ctx);
       case 'cache':
         return await npmCache(ctx);
+      case 'config':
+      case 'c':
+        return await npmConfig(ctx);
+      case 'get':
+        ctx.args = ['config', 'get', ...ctx.args.slice(1)];
+        return await npmConfig(ctx);
+      case 'prefix':
+        ctx.stdout += (ctx.args.includes('-g') || ctx.args.includes('--global') ? '/usr/local' : ctx.cwd) + '\n';
+        return 0;
       case 'update':
       case 'up':
         ctx.stdout += 'up to date, audited 0 packages\n';
@@ -777,6 +786,61 @@ async function npmCache(ctx: CommandContext): Promise<number> {
 
     default:
       ctx.stderr += `npm cache: unknown command '${action}'\n`;
+      return 1;
+  }
+}
+
+/**
+ * npm config get|set|delete|list: ~/.npmrc (key=value lines), with npm's
+ * defaults for what isn't set. Tools ask it things: Next.js downloads its
+ * SWC binary from `npm config get registry`.
+ */
+async function npmConfig(ctx: CommandContext): Promise<number> {
+  const home = ctx.env['HOME'] || '/home/user';
+  const rcPath = `${home}/.npmrc`;
+  const defaults: Record<string, string> = {
+    registry: 'https://registry.npmjs.org/',
+    prefix: '/usr/local',
+    cache: `${home}/.npm`,
+    'user-agent': `npm/${NPM_VERSION} node/v22.12.0 linux x64 workspaces/false`,
+  };
+  let text = '';
+  try { text = await ctx.fs.readFile(rcPath, 'utf8') as string; } catch { /* none */ }
+  const rc = new Map<string, string>();
+  for (const line of text.split('\n')) {
+    const m = /^\s*([^#;=\s][^=]*?)\s*=\s*(.*?)\s*$/.exec(line);
+    if (m) rc.set(m[1], m[2]);
+  }
+  const save = () => ctx.fs.writeFile(rcPath, [...rc].map(([k, v]) => `${k}=${v}`).join('\n') + (rc.size ? '\n' : ''));
+  const [, action = 'list', ...rest] = ctx.args.filter((a) => a !== '--global' && a !== '-g' && a !== '--location=user');
+  switch (action) {
+    case 'get': {
+      if (!rest.length) { for (const [k, v] of rc) ctx.stdout += `${k}=${v}\n`; return 0; }
+      for (const k of rest) ctx.stdout += `${rc.get(k) ?? defaults[k] ?? 'undefined'}\n`;
+      return 0;
+    }
+    case 'set': {
+      for (const kv of rest) {
+        const i = kv.indexOf('=');
+        if (i > 0) rc.set(kv.slice(0, i), kv.slice(i + 1));
+        else if (rest.length >= 2) { rc.set(rest[0], rest[1]); break; }
+      }
+      await save();
+      return 0;
+    }
+    case 'delete':
+    case 'rm':
+      for (const k of rest) rc.delete(k);
+      await save();
+      return 0;
+    case 'list':
+    case 'ls':
+      ctx.stdout += `; "user" config from ${rcPath}\n\n`;
+      for (const [k, v] of rc) ctx.stdout += `${k} = ${JSON.stringify(v)}\n`;
+      ctx.stdout += `\n; node bin location = /usr/local/bin/node\n; cwd = ${ctx.cwd}\n; HOME = ${home}\n`;
+      return 0;
+    default:
+      ctx.stderr += `npm config: unknown command '${action}'\n`;
       return 1;
   }
 }

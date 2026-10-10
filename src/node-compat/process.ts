@@ -67,7 +67,19 @@ export function createFakeProcess(
   const fp: any = {
     env: processEnv,
     cwd: () => ctx.shell.cwd,
-    chdir: (dir: string) => { ctx.shell.cwd = ctx.fs.resolvePath(dir, ctx.shell.cwd); ctx.shell.env['PWD'] = ctx.shell.cwd; },
+    // The process's own: its fs and the children it starts use it, and the shell
+    // that ran it is back where it was when it ends (create-next-app chdirs into
+    // the new app, and the shell was left there)
+    chdir: (dir: string) => {
+      const to = ctx.fs.resolvePath(dir, ctx.shell.cwd);
+      if (!_st.restoreCwd) {
+        const was = { cwd: ctx.shell.cwd, pwd: ctx.shell.env['PWD'] };
+        _st.restoreCwd = () => { ctx.shell.cwd = was.cwd; if (was.pwd === undefined) delete ctx.shell.env['PWD']; else ctx.shell.env['PWD'] = was.pwd; };
+      }
+      ctx.shell.cwd = to;
+      ctx.shell.env['PWD'] = to;
+      ctx.cwd = to;
+    },
     exit: (c?: number) => {
       if (_st.exitCalled) throw new ProcessExitError(_st.exitCode); // Prevent re-entrant exit
       _st.exitCode = c ?? 0;
@@ -123,6 +135,13 @@ export function createFakeProcess(
     removeAllListeners: (event?: string) => { if (event) { delete processEvents[event]; } else { Object.keys(processEvents).forEach(k => delete processEvents[k]); } return fp; },
     addListener: (event: string, fn: Function) => fp.on(event, fn),
     prependListener: (event: string, fn: Function) => { (processEvents[event] ??= []).unshift(fn); return fp; },
+    // (Next.js wraps each of process's emitter methods and needs them all)
+    prependOnceListener: (event: string, fn: Function) => {
+      const w = (...a: any[]) => { fp.removeListener(event, w); return fn(...a); };
+      (w as any).listener = fn;
+      (processEvents[event] ??= []).unshift(w);
+      return fp;
+    },
     eventNames: () => Object.keys(processEvents),
     setMaxListeners: () => fp,
     getMaxListeners: () => 10,

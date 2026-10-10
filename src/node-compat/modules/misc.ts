@@ -203,7 +203,7 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
           'assert', 'assert/strict', 'async_hooks', 'buffer', 'child_process', 'constants', 'crypto',
           'diagnostics_channel', 'dns', 'dns/promises', 'events', 'fs', 'fs/promises', 'http', 'https',
           'module', 'net', 'os', 'path', 'perf_hooks', 'process', 'querystring',
-          'readline', 'stream', 'stream/consumers', 'stream/promises', 'string_decoder', 'timers', 'timers/promises', 'tls',
+          'readline', 'stream', 'stream/consumers', 'stream/promises', 'stream/web', 'string_decoder', 'timers', 'timers/promises', 'tls',
           'tty', 'url', 'util', 'v8', 'worker_threads', 'zlib',
         ],
         isBuiltin: (name: string) => {
@@ -218,6 +218,7 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
           return mk(dir).resolve(request);
         },
         _cache: moduleCache,
+        _extensions: (requireModule as any).extensions ?? {},
         Module: class Module {
           id: string;
           exports: any = {};
