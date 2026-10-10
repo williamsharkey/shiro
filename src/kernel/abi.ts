@@ -202,6 +202,8 @@ export const SYS_shiro_shmdt = 1014;
 export const SYS_shiro_shmobj_map = 1020;
 export const SYS_shiro_shmobj_unmap = 1021;
 export const SYS_shiro_shmobj_published = 1022;
+/** shiro_shmobj_map kind flag: remote from the first map (no publish round) */
+export const SHMOBJ_EAGER = 0x100;
 export const SYS_shmget = 29;
 export const SYS_shmat = 30;
 export const SYS_shmctl = 31;

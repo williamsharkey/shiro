@@ -1,6 +1,16 @@
-# Shared mappings between unrelated Blink processes (design, not built)
+# Shared mappings between unrelated Blink processes
 
-Status: approved 2026-10-10 (coordinator). Kernel half in progress (perf-kernel); Blink half queued behind perf-blink's regressions.
+Status:
+- 2026-10-10: approved by the coordinator.
+- Kernel half: perf-kernel (src/kernel/shmobj.ts).
+- Blink half: Blink patch 0112 (docs/X86_ENGINES.md §112).
+- Blink always asks for remote at the first mapping (kind 0x100), so the
+  publish handshake below is never needed. A holder parked in a blocking
+  call couldn't answer it in time.
+- memfds are shareable objects too (Firefox). While one is remote, its
+  read/write go through the buffer.
+- Not yet built: read/write coherence for a mapped /dev/shm file, and SysV
+  shm across instances.
 
 ## The gap
 
@@ -126,6 +136,14 @@ Remote mode is per object, chosen at map time:
   what was mapped and stored). While an object is remote, `read`/`write`
   syscalls on that file go to the SAB too, so a mapping and `write()` stay
   coherent.
+- Also shareable: a memfd (Firefox passes its font list as one over
+  SCM_RIGHTS). It is keyed by its description. While remote, its
+  read/write/pread/pwrite go through the buffer, and the last unmap copies
+  the bytes back.
+- Eager mapping (`kind | 0x100`, what Blink passes for now): remote from
+  the first map, so no publish round. A holder parked in a blocking call
+  (Firefox's parent waiting on its IPC socket) can't reach a safe point to
+  publish. The price is the slow path for a single instance too.
 - New calls: 1020 map, 1021 unmap, 1022 published (1023 spare). perf-blink
   agreed these on 2026-10-10; Blink keeps its own calls to 1015–1019.
   - `shiro_shmobj_map(fd|shmid, kind, len)`. Result: 0 for a fast mapping,

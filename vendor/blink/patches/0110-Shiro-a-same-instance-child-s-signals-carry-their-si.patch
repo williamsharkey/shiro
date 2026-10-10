@@ -1,8 +1,8 @@
 From 4dd75ef9319cec4a6c7144c6c5dfbe03232dcd45 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 07:21:58 +0000
-Subject: [PATCH] Shiro: a same-instance child's signals carry their siginfo
- too
+Subject: [PATCH 110/111] Shiro: a same-instance child's signals carry their
+ siginfo too
 
 ---
  blink/shiro.inc | 17 +++++++++++++++++

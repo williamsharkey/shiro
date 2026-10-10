@@ -3181,7 +3181,7 @@
    "toolkit": "gtk3"
   },
   "libreoffice-writer": {
-   "bin": "/usr/lib/libreoffice/program/soffice.bin",
+   "bin": "/usr/lib/libreoffice/program/oosplash",
    "closureSize": 165995352,
    "description": "Word processor (LibreOffice)",
    "dropped": [
@@ -3212,6 +3212,36 @@
     "gpg-wks-client",
     "dirmngr",
     "gnupg-utils"
+   ],
+   "links": [
+    [
+     "/etc/libreoffice/registry/Langpack-en-US.xcd",
+     "/usr/lib/libreoffice/share/.registry/Langpack-en-US.xcd"
+    ],
+    [
+     "/etc/libreoffice/registry/lingucomponent.xcd",
+     "/usr/lib/libreoffice/share/.registry/lingucomponent.xcd"
+    ],
+    [
+     "/etc/libreoffice/registry/main.xcd",
+     "/usr/lib/libreoffice/share/.registry/main.xcd"
+    ],
+    [
+     "/etc/libreoffice/registry/pdfimport.xcd",
+     "/usr/lib/libreoffice/share/.registry/pdfimport.xcd"
+    ],
+    [
+     "/etc/libreoffice/registry/res/fcfg_langpack_en-US.xcd",
+     "/usr/lib/libreoffice/share/.registry/res/fcfg_langpack_en-US.xcd"
+    ],
+    [
+     "/etc/libreoffice/registry/writer.xcd",
+     "/usr/lib/libreoffice/share/.registry/writer.xcd"
+    ],
+    [
+     "/etc/libreoffice/registry/xsltfilter.xcd",
+     "/usr/lib/libreoffice/share/.registry/xsltfilter.xcd"
+    ]
    ],
    "packages": [
     "librsvg2-common",
@@ -3839,6 +3869,36 @@
    "pkg": "netsurf-gtk",
    "size": 56629128,
    "toolkit": "gtk3"
+  },
+  "osmesa-probe": {
+   "bin": "/usr/lib/x86_64-linux-gnu/libOSMesa.so.8",
+   "closureSize": 47974740,
+   "description": "Mesa off-screen rendering (llvmpipe)",
+   "dropped": [
+    "gcc-12-base"
+   ],
+   "packages": [
+    "libosmesa6",
+    "zlib1g",
+    "libc6",
+    "libgcc-s1",
+    "libzstd1",
+    "libstdc++6",
+    "libllvm15",
+    "libz3-4",
+    "libxml2",
+    "liblzma5",
+    "libicu72",
+    "libtinfo6",
+    "libffi8",
+    "libedit2",
+    "libbsd0",
+    "libmd0",
+    "libglapi-mesa"
+   ],
+   "pkg": "libosmesa6",
+   "size": 47937144,
+   "toolkit": "service"
   },
   "pcmanfm": {
    "bin": "/usr/bin/pcmanfm",
@@ -5194,6 +5254,191 @@
   }
  },
  "arch": "amd64",
+ "fontDirs": {
+  "fonts-dejavu-core": {
+   "/usr/share/fonts/truetype/dejavu": [
+    "DejaVuSans-Bold.ttf",
+    "DejaVuSans.ttf",
+    "DejaVuSansMono-Bold.ttf",
+    "DejaVuSansMono.ttf",
+    "DejaVuSerif-Bold.ttf",
+    "DejaVuSerif.ttf"
+   ]
+  },
+  "fonts-dejavu-extra": {
+   "/usr/share/fonts/truetype/dejavu": [
+    "DejaVuMathTeXGyre.ttf",
+    "DejaVuSans-BoldOblique.ttf",
+    "DejaVuSans-ExtraLight.ttf",
+    "DejaVuSans-Oblique.ttf",
+    "DejaVuSansCondensed-Bold.ttf",
+    "DejaVuSansCondensed-BoldOblique.ttf",
+    "DejaVuSansCondensed-Oblique.ttf",
+    "DejaVuSansCondensed.ttf",
+    "DejaVuSansMono-BoldOblique.ttf",
+    "DejaVuSansMono-Oblique.ttf",
+    "DejaVuSerif-BoldItalic.ttf",
+    "DejaVuSerif-Italic.ttf",
+    "DejaVuSerifCondensed-Bold.ttf",
+    "DejaVuSerifCondensed-BoldItalic.ttf",
+    "DejaVuSerifCondensed-Italic.ttf",
+    "DejaVuSerifCondensed.ttf"
+   ]
+  },
+  "fonts-opensymbol": {
+   "/usr/share/fonts/truetype/libreoffice": [
+    "opens___.ttf"
+   ]
+  },
+  "fonts-urw-base35": {
+   "/usr/share/fonts/X11/Type1": [
+    "C059-BdIta.pfb",
+    "C059-Bold.pfb",
+    "C059-Italic.pfb",
+    "C059-Roman.pfb",
+    "D050000L.pfb",
+    "NimbusMonoPS-Bold.pfb",
+    "NimbusMonoPS-BoldItalic.pfb",
+    "NimbusMonoPS-Italic.pfb",
+    "NimbusMonoPS-Regular.pfb",
+    "NimbusRoman-Bold.pfb",
+    "NimbusRoman-BoldItalic.pfb",
+    "NimbusRoman-Italic.pfb",
+    "NimbusRoman-Regular.pfb",
+    "NimbusSans-Bold.pfb",
+    "NimbusSans-BoldItalic.pfb",
+    "NimbusSans-Italic.pfb",
+    "NimbusSans-Regular.pfb",
+    "NimbusSansNarrow-Bold.pfb",
+    "NimbusSansNarrow-BoldOblique.pfb",
+    "NimbusSansNarrow-Oblique.pfb",
+    "NimbusSansNarrow-Regular.pfb",
+    "P052-Bold.pfb",
+    "P052-BoldItalic.pfb",
+    "P052-Italic.pfb",
+    "P052-Roman.pfb",
+    "StandardSymbolsPS.pfb",
+    "URWBookman-Demi.pfb",
+    "URWBookman-DemiItalic.pfb",
+    "URWBookman-Light.pfb",
+    "URWBookman-LightItalic.pfb",
+    "URWGothic-Book.pfb",
+    "URWGothic-BookOblique.pfb",
+    "URWGothic-Demi.pfb",
+    "URWGothic-DemiOblique.pfb",
+    "Z003-MediumItalic.pfb"
+   ],
+   "/usr/share/fonts/opentype/urw-base35": [
+    "C059-BdIta.otf",
+    "C059-Bold.otf",
+    "C059-Italic.otf",
+    "C059-Roman.otf",
+    "D050000L.otf",
+    "NimbusMonoPS-Bold.otf",
+    "NimbusMonoPS-BoldItalic.otf",
+    "NimbusMonoPS-Italic.otf",
+    "NimbusMonoPS-Regular.otf",
+    "NimbusRoman-Bold.otf",
+    "NimbusRoman-BoldItalic.otf",
+    "NimbusRoman-Italic.otf",
+    "NimbusRoman-Regular.otf",
+    "NimbusSans-Bold.otf",
+    "NimbusSans-BoldItalic.otf",
+    "NimbusSans-Italic.otf",
+    "NimbusSans-Regular.otf",
+    "NimbusSansNarrow-Bold.otf",
+    "NimbusSansNarrow-BoldOblique.otf",
+    "NimbusSansNarrow-Oblique.otf",
+    "NimbusSansNarrow-Regular.otf",
+    "P052-Bold.otf",
+    "P052-BoldItalic.otf",
+    "P052-Italic.otf",
+    "P052-Roman.otf",
+    "StandardSymbolsPS.otf",
+    "URWBookman-Demi.otf",
+    "URWBookman-DemiItalic.otf",
+    "URWBookman-Light.otf",
+    "URWBookman-LightItalic.otf",
+    "URWGothic-Book.otf",
+    "URWGothic-BookOblique.otf",
+    "URWGothic-Demi.otf",
+    "URWGothic-DemiOblique.otf",
+    "Z003-MediumItalic.otf"
+   ],
+   "/usr/share/fonts/type1/urw-base35": [
+    "C059-BdIta.afm",
+    "C059-BdIta.t1",
+    "C059-Bold.afm",
+    "C059-Bold.t1",
+    "C059-Italic.afm",
+    "C059-Italic.t1",
+    "C059-Roman.afm",
+    "C059-Roman.t1",
+    "D050000L.afm",
+    "D050000L.t1",
+    "NimbusMonoPS-Bold.afm",
+    "NimbusMonoPS-Bold.t1",
+    "NimbusMonoPS-BoldItalic.afm",
+    "NimbusMonoPS-BoldItalic.t1",
+    "NimbusMonoPS-Italic.afm",
+    "NimbusMonoPS-Italic.t1",
+    "NimbusMonoPS-Regular.afm",
+    "NimbusMonoPS-Regular.t1",
+    "NimbusRoman-Bold.afm",
+    "NimbusRoman-Bold.t1",
+    "NimbusRoman-BoldItalic.afm",
+    "NimbusRoman-BoldItalic.t1",
+    "NimbusRoman-Italic.afm",
+    "NimbusRoman-Italic.t1",
+    "NimbusRoman-Regular.afm",
+    "NimbusRoman-Regular.t1",
+    "NimbusSans-Bold.afm",
+    "NimbusSans-Bold.t1",
+    "NimbusSans-BoldItalic.afm",
+    "NimbusSans-BoldItalic.t1",
+    "NimbusSans-Italic.afm",
+    "NimbusSans-Italic.t1",
+    "NimbusSans-Regular.afm",
+    "NimbusSans-Regular.t1",
+    "NimbusSansNarrow-Bold.afm",
+    "NimbusSansNarrow-Bold.t1",
+    "NimbusSansNarrow-BoldOblique.afm",
+    "NimbusSansNarrow-BoldOblique.t1",
+    "NimbusSansNarrow-Oblique.afm",
+    "NimbusSansNarrow-Oblique.t1",
+    "NimbusSansNarrow-Regular.afm",
+    "NimbusSansNarrow-Regular.t1",
+    "P052-Bold.afm",
+    "P052-Bold.t1",
+    "P052-BoldItalic.afm",
+    "P052-BoldItalic.t1",
+    "P052-Italic.afm",
+    "P052-Italic.t1",
+    "P052-Roman.afm",
+    "P052-Roman.t1",
+    "StandardSymbolsPS.afm",
+    "StandardSymbolsPS.t1",
+    "URWBookman-Demi.afm",
+    "URWBookman-Demi.t1",
+    "URWBookman-DemiItalic.afm",
+    "URWBookman-DemiItalic.t1",
+    "URWBookman-Light.afm",
+    "URWBookman-Light.t1",
+    "URWBookman-LightItalic.afm",
+    "URWBookman-LightItalic.t1",
+    "URWGothic-Book.afm",
+    "URWGothic-Book.t1",
+    "URWGothic-BookOblique.afm",
+    "URWGothic-BookOblique.t1",
+    "URWGothic-Demi.afm",
+    "URWGothic-Demi.t1",
+    "URWGothic-DemiOblique.afm",
+    "URWGothic-DemiOblique.t1",
+    "Z003-MediumItalic.afm",
+    "Z003-MediumItalic.t1"
+   ]
+  }
+ },
  "mirror": "https://deb.debian.org/debian/",
  "overlays": [
   {
@@ -5232,6 +5477,24 @@
    "sha256": "8d8e759db5b791606eda2b3ea43e8def8c2f8dbbbd8004d233db51228a09d4a8",
    "size": 2988,
    "when": "librsvg2-common"
+  },
+  {
+   "path": "/etc/firefox-esr/shared-memory.js",
+   "sha256": "6841b52604d147a01d889654c856c1e91504cfd521a6541c094f964e0ae912f9",
+   "size": 373,
+   "when": "firefox-esr"
+  },
+  {
+   "path": "/var/cache/fontconfig/d589a48862398ed80a3d6066f4f56f4c-le64.cache-8",
+   "sha256": "ef2debd82c04cbcf82b01ff5847540a7fa5314bf090e0318e09863e3ec042695",
+   "size": 16136,
+   "when": "fonts-dejavu-core"
+  },
+  {
+   "path": "/var/cache/fontconfig/da43223dd54fb3bb4243ae19d4b583b2-le64.cache-8",
+   "sha256": "ca66cc599592bac040caf057be5d88296a9973a7bd201b65dbf349303172c9a5",
+   "size": 2552,
+   "when": "fonts-opensymbol"
   }
  ],
  "packages": {
@@ -6063,6 +6326,12 @@
    "size": 266012,
    "version": "3.46.4-2"
   },
+  "libedit2": {
+   "filename": "pool/main/libe/libedit/libedit2_3.1-20221030-2_amd64.deb",
+   "sha256": "1cf14abf2716d3279db12d0657a5737cf70074a1e71d3bdf73206625e3c89ce6",
+   "size": 92992,
+   "version": "3.1-20221030-2"
+  },
   "libelf1": {
    "filename": "pool/main/e/elfutils/libelf1_0.188-2.1_amd64.deb",
    "sha256": "619add379c606b3ac6c1a175853b918e6939598a83d8ebadf3bdfd50d10b3c8c",
@@ -6380,6 +6649,12 @@
    "sha256": "6f89b1702c48e9a2437bb3c1ffac8e1ab2d828fc28b3d14b2eecd4cc19b2c790",
    "size": 88448,
    "version": "1.6.0-1"
+  },
+  "libglapi-mesa": {
+   "filename": "pool/main/m/mesa/libglapi-mesa_22.3.6-1+deb12u2_amd64.deb",
+   "sha256": "2db5b13a6b7f4042f9a417ad7fa4338b6c47528dc64d7f89cfd5e53d07d76bc4",
+   "size": 35900,
+   "version": "22.3.6-1+deb12u2"
   },
   "libglib2.0-0": {
    "filename": "pool/main/g/glib2.0/libglib2.0-0_2.74.6-2+deb12u9_amd64.deb",
@@ -7053,6 +7328,12 @@
    "size": 49424,
    "version": "0.24.14-1"
   },
+  "libllvm15": {
+   "filename": "pool/main/l/llvm-toolchain-15/libllvm15_15.0.6-4+b1_amd64.deb",
+   "sha256": "9f0751109ba89e65b1313a4f3e34a29977a0db6fa30ed475e2c6bd555fa9e866",
+   "size": 23115156,
+   "version": "1:15.0.6-4+b1"
+  },
   "liblog4cplus-2.0.5": {
    "filename": "pool/main/l/log4cplus/liblog4cplus-2.0.5_2.0.8-1_amd64.deb",
    "sha256": "f33a6fa06ceac7bbc159820b565687a7cf1c56c9861ed66e63b9d7ef10b527d9",
@@ -7424,6 +7705,12 @@
    "sha256": "18bedc2e89f15f7428442402201776ab4f432a9abffe00e77a2b68f62431f3b3",
    "size": 134992,
    "version": "3.5.0-2"
+  },
+  "libosmesa6": {
+   "filename": "pool/main/m/mesa/libosmesa6_22.3.6-1+deb12u2_amd64.deb",
+   "sha256": "3d1f76857a314f2d30e91628fccb4bbac3623ddde6b66d7d785a13199b8b0b65",
+   "size": 2906728,
+   "version": "22.3.6-1+deb12u2"
   },
   "libp11-kit0": {
    "filename": "pool/main/p/p11-kit/libp11-kit0_0.24.1-2_amd64.deb",
@@ -8840,6 +9127,12 @@
    "sha256": "d80c71f81907e51cb004b8f1bd3855f18d5e0c50a2724e2cef0d4142e3c3f663",
    "size": 110080,
    "version": "0.7.0+dfsg-8+b1"
+  },
+  "libz3-4": {
+   "filename": "pool/main/z/z3/libz3-4_4.8.12-3.1_amd64.deb",
+   "sha256": "6221ca25ad5abcfbe1965801029d85a88b4775320384b4b716de8fab7a4d2f7a",
+   "size": 7216172,
+   "version": "4.8.12-3.1"
   },
   "libzimg2": {
    "filename": "pool/main/z/zimg/libzimg2_3.0.4+ds1-1_amd64.deb",

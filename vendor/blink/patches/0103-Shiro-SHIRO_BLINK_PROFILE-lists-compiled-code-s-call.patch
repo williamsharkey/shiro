@@ -1,7 +1,7 @@
 From 1f55bace8eebf4edff64d5a6c6bc55621cf09090 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 05:50:49 +0000
-Subject: [PATCH 103/109] Shiro: SHIRO_BLINK_PROFILE lists compiled code's
+Subject: [PATCH 103/111] Shiro: SHIRO_BLINK_PROFILE lists compiled code's
  calls to Blink's handlers
 
 ---

@@ -110,6 +110,9 @@ export function groupStatements(src: string): Statement[] {
         lineOut += ch; i++;
         continue;
       }
+      // A backslash ending the line is the continuation (joined below), not a
+      // word: after `cmd | \` the next line's `{` still opens a group
+      if (ch === '\\' && i === n - 1) { lineOut += ch; i++; continue; }
       if (ch === '\\') { lineOut += line.slice(i, i + 2); i += 2; cmdPos = false; lastWord = 'x'; lastWasPatternClose = false; continue; }
       if (ch === ' ' || ch === '\t') { lineOut += ch; i++; continue; }
       if (ch === "'") { quote = "'"; lineOut += ch; i++; cmdPos = false; lastWord = 'x'; lastWasPatternClose = false; continue; }

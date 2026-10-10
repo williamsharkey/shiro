@@ -1,7 +1,7 @@
 From 647944bf44c87df3dee8eb50bdbd1d5ed4f08e92 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 05:15:40 +0000
-Subject: [PATCH 101/109] Shiro: SHIRO_BLINK_MMLOG=3 also logs each write's
+Subject: [PATCH 101/111] Shiro: SHIRO_BLINK_MMLOG=3 also logs each write's
  source and first bytes
 
 ---

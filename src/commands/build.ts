@@ -127,6 +127,46 @@ export async function ensureEsbuildInitialized(): Promise<void> {
 }
 
 /**
+ * The page's esbuild (its Go heap is ~80 MB) is stopped after this long with
+ * no build or transform running, and started again when one is next asked
+ * for (from the IndexedDB copy of esbuild.wasm: about a second).
+ */
+let idleMs = 60_000;
+let inUse = 0;
+let idleTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** Run `fn` with the page's esbuild started, keeping it until `fn` settles */
+export async function withEsbuild<T>(fn: (e: typeof esbuild) => Promise<T>): Promise<T> {
+  inUse++;
+  clearTimeout(idleTimer);
+  try {
+    await ensureEsbuildInitialized();
+    return await fn(esbuild);
+  } finally {
+    if (--inUse === 0) idleTimer = setTimeout(stopEsbuild, idleMs);
+  }
+}
+
+/** Let go of the page's esbuild now if nothing is using it (also what the idle timer does) */
+export async function stopEsbuild(): Promise<void> {
+  if (inUse || !initPromise) return;
+  clearTimeout(idleTimer);
+  try { await initPromise; } catch { return; }
+  if (inUse) return;
+  esbuild.stop();
+  esbuildInitialized = false;
+  initPromise = null;
+}
+
+/** Is the page's esbuild running; how long it stays idle (for tests) */
+export function esbuildRunning(): boolean {
+  return esbuildInitialized;
+}
+export function setEsbuildIdleMs(ms: number): void {
+  idleMs = ms;
+}
+
+/**
  * Create a virtual filesystem plugin for esbuild that reads from Shiro's filesystem
  */
 export function createVirtualFSPlugin(ctx: CommandContext): esbuild.Plugin {
@@ -239,7 +279,7 @@ async function runBuild(
   options: any,
   write: (msg: string) => void,
 ): Promise<{ ok: boolean; inputs: string[] }> {
-  const result = await esbuild.build({
+  const result = await withEsbuild((esbuild) => esbuild.build({
     entryPoints: [entryPath],
     bundle: options.bundle,
     minify: options.minify,
@@ -250,7 +290,7 @@ async function runBuild(
     metafile: true,
     plugins: [createVirtualFSPlugin(ctx)],
     logLevel: 'silent',
-  });
+  }));
 
   if (result.errors.length > 0) {
     for (const error of result.errors) {
@@ -311,7 +351,7 @@ export const buildCmd: Command = {
 
     try {
       ctx.stdout += 'Initializing esbuild...\n';
-      await ensureEsbuildInitialized();
+      await withEsbuild(async () => {});
 
       const entryPoint = ctx.args[0];
       const options: any = {
