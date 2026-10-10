@@ -1,4 +1,5 @@
 import { createReadline } from './readline';
+import { asyncContext } from '../async-context';
 import { createQuerystringModule } from './querystring';
 import { createZlibModule } from './zlib';
 import { createAssertModule } from './assert';
@@ -221,41 +222,40 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
     case 'async_hooks':
     case 'node:async_hooks': {
       // AsyncLocalStorage: context propagation for async operations
-      // Every live instance, for snapshot(): the stores in effect when it was taken
-      const instances = new Set<WeakRef<AsyncLocalStorage>>();
+      // Stores live in the page's async context (async-context.ts), carried across awaits
       class AsyncLocalStorage {
-        private _store: any = undefined;
-        constructor() { instances.add(new WeakRef(this)); }
-        /** A function that runs `fn` with the stores every instance has now (Next's prerender) */
+        private _enabled = true;
+        constructor() { asyncContext.activate(); }
+        /** A function that runs `fn` in the stores in effect now (Next's prerender) */
         static snapshot() {
-          const saved: [AsyncLocalStorage, any][] = [];
-          for (const r of instances) { const a = r.deref(); if (a) saved.push([a, a._store]); else instances.delete(r); }
-          return (fn: Function, ...args: any[]) => {
-            const prev = saved.map(([a]) => a._store);
-            for (const [a, v] of saved) a._store = v;
-            try { return fn(...args); } finally { saved.forEach(([a], i) => { a._store = prev[i]; }); }
-          };
+          const frame = asyncContext.capture();
+          return (fn: Function, ...args: any[]) => asyncContext.inFrame(frame, () => fn(...args));
         }
         /** `fn` bound to the stores in effect now */
         static bind(fn: Function) {
-          const run = AsyncLocalStorage.snapshot();
-          return (...args: any[]) => run(fn, ...args);
+          const frame = asyncContext.capture();
+          return function (this: unknown, ...args: any[]) { return asyncContext.inFrame(frame, () => fn.apply(this, args)); };
         }
-        getStore() { return this._store; }
-        run(store: any, fn: Function, ...args: any[]) { const prev = this._store; this._store = store; try { return fn(...args); } finally { this._store = prev; } }
-        enterWith(store: any) { this._store = store; }
-        disable() { this._store = undefined; }
-        exit(fn: Function, ...args: any[]) { const prev = this._store; this._store = undefined; try { return fn(...args); } finally { this._store = prev; } }
+        getStore() { return this._enabled ? asyncContext.get(this) : undefined; }
+        run(store: any, fn: Function, ...args: any[]) { this._enabled = true; return asyncContext.with(this, store, () => fn(...args)); }
+        enterWith(store: any) { this._enabled = true; asyncContext.enter(this, store); }
+        disable() { this._enabled = false; }
+        exit(fn: Function, ...args: any[]) { return asyncContext.with(this, undefined, () => fn(...args), true); }
       }
+      // (the stores in effect where it was made are the ones its scope runs in)
       class AsyncResource {
         type: string;
+        private _frame = asyncContext.capture();
         constructor(type: string) { this.type = type; }
-        runInAsyncScope(fn: Function, thisArg?: any, ...args: any[]) { return fn.apply(thisArg, args); }
+        runInAsyncScope(fn: Function, thisArg?: any, ...args: any[]) { return asyncContext.inFrame(this._frame, () => fn.apply(thisArg, args)); }
         emitDestroy() { return this; }
         asyncId() { return 0; }
         triggerAsyncId() { return 0; }
-        bind(fn: Function) { return AsyncLocalStorage.bind(fn); }
-        static bind(fn: Function) { return AsyncLocalStorage.bind(fn); }
+        bind(fn: Function, thisArg?: any) {
+          const self = this;
+          return function (this: unknown, ...args: any[]) { return self.runInAsyncScope(fn, thisArg ?? this, ...args); };
+        }
+        static bind(fn: Function, type?: string, thisArg?: any) { return new AsyncResource(type ?? 'bound-anonymous-fn').bind(fn, thisArg); }
       }
       return {
         AsyncLocalStorage,

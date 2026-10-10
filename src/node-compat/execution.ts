@@ -12,6 +12,7 @@ import { ProcessExitError } from '../commands/jseval/utils';
 import { transformESModules, transformTS, transformJSX } from '../commands/jseval/module-transform';
 import type { SharedState } from './types';
 import { createFakeBuffer } from './buffer';
+import { asyncContext, carryAsyncContext } from './async-context';
 import { createFakeConsole, formatLog } from './console';
 import { createFakeProcess } from './process';
 import { createFileCache } from './file-cache';
@@ -281,7 +282,7 @@ export async function executeNodeScript(
         case 'url':
         case 'node:url': return createUrlModule(() => fakeProcess.cwd());
         case 'stream':
-        case 'node:stream': return createStreamModule(getBuiltinModule('events'));
+        case 'node:stream': return createStreamModule(getBuiltinModule('events'), FakeBuffer);
         case 'stream/promises':
         case 'node:stream/promises': return getBuiltinModule('stream').promises;
         // The WHATWG streams node has as stream/web are the page's (Next's edge runtime)
@@ -427,6 +428,8 @@ export async function executeNodeScript(
     transformedCode = transformESModules(transformedCode);
     // spawnSync/execSync results are read right away: await them where the script can
     if (!isClaudeCodeScript(scriptPath)) transformedCode = awaitSyncCalls(transformedCode);
+    // Once a process uses AsyncLocalStorage, awaits carry its stores (async-context.ts)
+    if (asyncContext.active || code.includes('AsyncLocalStorage')) transformedCode = carryAsyncContext(transformedCode);
 
     // Stash real browser console on globalThis so injected code can use it
     if (code.length > 500000) {
@@ -709,6 +712,7 @@ export async function executeNodeScript(
     if (code.length <= 500000) {
       const settle = () => { if (_activeTimers <= 0 && _timersResolve) { _timersResolve(); _timersResolve = null; _timersDone = null; } };
       globalThis.setTimeout = _st.installedSetTimeout = function(fn: any, ms?: number, ...args: any[]) {
+        fn = asyncContext.bind(fn); // (runs in the async context it was set in)
         _activeTimers++;
         if (!_timersDone) _timersDone = new Promise(r => { _timersResolve = r; });
         let counted = true; // keeps the script alive until it fires (not once unref'd)
@@ -749,6 +753,7 @@ export async function executeNodeScript(
       // shell); they still answer unref() etc. A kernel guest is a process that can be
       // killed, so there, as in node, a ref'd interval keeps it running until cleared.
       globalThis.setInterval = _st.installedSetInterval = function(fn: any, ms?: number, ...args: any[]) {
+        fn = asyncContext.bind(fn); // (runs in the async context it was set in)
         const raw = PAGE_SET_INTERVAL(fn, ms, ...args);
         _intervalIds.add(raw);
         if (!guest) return nodeTimer(raw, {});

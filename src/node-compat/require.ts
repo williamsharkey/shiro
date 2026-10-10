@@ -7,6 +7,7 @@
 import type { CommandContext } from '../commands/index';
 import { patchPackageSource } from './source-patches';
 import { transformESModules, transformTS, transformJSX } from '../commands/jseval/module-transform';
+import { asyncContext, carryAsyncContext } from './async-context';
 import { ProcessExitError } from '../commands/jseval/utils';
 
 export interface RequireDeps {
@@ -459,6 +460,8 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
         transformedContent = transformJSX(transformedContent);
       }
       transformedContent = transformESModules(transformedContent);
+      // Once a process uses AsyncLocalStorage, awaits carry its stores (async-context.ts)
+      if (asyncContext.active || content.includes('AsyncLocalStorage')) transformedContent = carryAsyncContext(transformedContent);
 
       const modImportMeta = {
         url: `file://${resolved}`,
