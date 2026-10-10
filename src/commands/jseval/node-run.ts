@@ -2,7 +2,7 @@ import type { CommandContext } from '../index';
 import { executeNodeScript } from '../../node-compat/execution';
 import { NODE_REPL } from './node-repl';
 import { CLAUDE_CODE_CLI_JS } from '../../claude-code-version';
-import { readClaudeTransform } from '../../claude-transform-cache';
+import { readClaudeTransform, ensureClaudeTransform, CACHE_FLAG } from '../../claude-transform-cache';
 
 /**
  * node (node-cmd.ts runs it here, or in a Worker as a kernel guest): executes JS files from the virtual filesystem.
@@ -33,6 +33,10 @@ export async function runNode(ctx: CommandContext): Promise<number> {
     } else if (ctx.args[i] === '-p' || ctx.args[i] === '--print') {
       code = ctx.args[++i] || '';
       printResult = true;
+    } else if (ctx.args[i] === CACHE_FLAG) {
+      // (internal: Claude Code's transformed cli.js, written where this node runs)
+      await ensureClaudeTransform(ctx.fs as any).catch((e) => { ctx.stderr += `node: ${e?.message ?? e}\n`; });
+      return 0;
     } else if (ctx.args[i] === '--version' || ctx.args[i] === '-v') {
       // The version the runtime reports (process.version), as node prints it
       ctx.stdout += 'v22.12.0\n';

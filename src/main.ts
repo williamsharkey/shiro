@@ -918,6 +918,8 @@ async function main() {
   if (!safe && profile.preinstall.includes('claude-code')) setTimeout(() => {
     ensureClaudeCodeInstalled(fs)
       .then(() => console.log('[tabcomputer] Claude Code ready'))
+      // its cli.js as node runs it, written by a node guest (claude-transform-cache.ts)
+      .then(() => import('./claude-transform-cache').then(async (c) => { if (!(await c.claudeTransformExists(fs as any))) c.writeClaudeTransformInBackground(shell); }))
       .catch((e) => console.warn('[tabcomputer] Claude Code background install failed:', e?.message || e));
   }, 3000);
   // The other preinstall names are pkg packages (ca-certificates: the CA bundle

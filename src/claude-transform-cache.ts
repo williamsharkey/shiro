@@ -5,9 +5,12 @@
  *
  * Each pass makes a full-size copy of the 13.7 MB source; a node guest that
  * did them while loading cli.js peaked well above the page doing the same
- * (bench: workload.peak_rss.claude_npm_first). The page writes the file at
- * install and, when it is missing or stale, before `claude` starts node, so
- * the guest only reads it.
+ * (bench: workload.peak_rss.claude_npm_first), and every launch redid them.
+ * `node --tabcomputer-claude-cache` writes the file, in a guest Worker where
+ * node runs as one (off the page's main thread): started in the background
+ * after the boot install and after a `claude` run that found none, never in
+ * a run's way. A run without it transforms as before (execution.ts, the same
+ * function).
  *
  * Keyed by this build's commit (the transforms are this build's code), the
  * pinned version and cli.js's size; a build without a commit (tests) keeps none.
@@ -46,9 +49,8 @@ export async function transformClaudeSource(code: string): Promise<string> {
   const [{ transformESModules }, { carryAsyncContext }] = await Promise.all([
     import('./commands/jseval/module-transform'), import('./node-compat/async-context'),
   ]);
-  let out = transformESModules(patchClaudeCodeSource(code));
-  if (code.includes('AsyncLocalStorage')) out = carryAsyncContext(out);
-  return out;
+  // (the AsyncLocalStorage rewrite as the transform's pass, on its code mask: one scan)
+  return transformESModules(patchClaudeCodeSource(code), code.includes('AsyncLocalStorage') ? carryAsyncContext : undefined);
 }
 
 /** The cached text for the installed cli.js, or null (none, stale, or not kept by this build) */
@@ -64,6 +66,16 @@ export async function readClaudeTransform(fs: Pick<CacheFs, 'readFile' | 'stat'>
 }
 
 let writing: Promise<void> | null = null;
+
+/** Is the file there for the installed cli.js (false when this build keeps none) */
+export async function claudeTransformExists(fs: Pick<CacheFs, 'stat'>): Promise<boolean> {
+  try {
+    const path = claudeTransformPath((await fs.stat(CLAUDE_CODE_CLI_JS)).size);
+    return !!path && !!(await fs.stat(path));
+  } catch {
+    return false;
+  }
+}
 
 /** Write the cached text for the installed cli.js unless it is there; older ones are removed */
 export function ensureClaudeTransform(fs: CacheFs): Promise<void> {
@@ -87,3 +99,15 @@ async function writeClaudeTransform(fs: CacheFs): Promise<void> {
   await fs.writeFile(tmp, await transformClaudeSource(code));
   await fs.rename(tmp, path);
 }
+
+/** Write it in the background, by `node --tabcomputer-claude-cache` (a guest Worker where node runs as one) */
+export function writeClaudeTransformInBackground(shell: { fork(): any }): void {
+  try {
+    const sh = shell.fork();
+    sh.terminal = null;
+    void Promise.resolve(sh.execute(`node ${CACHE_FLAG} < /dev/null > /dev/null 2>&1`, () => {}, () => {})).catch(() => {});
+  } catch { /* no shell */ }
+}
+
+/** node's internal option that writes the file and exits (node-run.ts) */
+export const CACHE_FLAG = '--tabcomputer-claude-cache';

@@ -41,6 +41,17 @@ describe('the cached transform of cli.js', () => {
     expect(names).toEqual([claudeTransformPath(CLI.length)!.split('/').pop()]);
   }, 60_000);
 
+  it('`node --tabcomputer-claude-cache` writes it where node runs (a guest under test:worker)', async () => {
+    g.__BUILD_SHA__ = TEST_BUILD_SHA;
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir(CLAUDE_CODE_DIR, { recursive: true });
+    await fs.writeFile(CLAUDE_CODE_CLI_JS, CLI + '// another\n');
+    for (const n of await fs.readdir(CLAUDE_CODE_DIR)) if (n.startsWith('.tabcomputer-cli-')) await fs.unlink(`${CLAUDE_CODE_DIR}/${n}`);
+    expect(await shell.execute('node --tabcomputer-claude-cache < /dev/null', () => {}, () => {})).toBe(0);
+    const path = claudeTransformPath((CLI + '// another\n').length)!;
+    expect(await fs.readFile(path, 'utf8')).toBe(await transformClaudeSource(CLI + '// another\n'));
+  }, 60_000);
+
   it('a build without a commit keeps none', async () => {
     const { fs } = await createTestShell();
     await fs.mkdir(CLAUDE_CODE_DIR, { recursive: true });
