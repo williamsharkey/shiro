@@ -33,6 +33,7 @@ import { createChildProcessModule } from './modules/child-process';
 import { createStreamModule } from './modules/stream';
 import { createCryptoModule } from './modules/crypto';
 import { createProcessGlobal, createProcessFunction } from './process-global';
+import { loadBrowserPackages } from './browser-packages';
 import { createHttpModule, createHttpsModule, createHttp2Module } from './modules/http';
 import { createNetModule, createTlsModule } from './modules/net-tls';
 import { createMiscModule } from './modules/misc';
@@ -160,6 +161,21 @@ export async function executeNodeScript(
     // Deferred exit: resolves when process.exit is called from async code
     const deferredExitPromise = new Promise<number>((resolve) => { _st.deferredExitResolve = resolve; });
 
+    // A kernel guest without a terminal: output goes to fds 1 and 2 as it is produced
+    // (a pipe's reader, like an agent running an npm script, sees it now, not at exit)
+    const writeOut = nodeGuestOf(ctx)?.writeOut;
+    if (writeOut && !ctx.terminal) {
+      const stream = (buf: string[], fd: 1 | 2, mark: () => void) => {
+        buf.push = (...items: string[]) => {
+          mark();
+          for (const it of items) writeOut(fd, it);
+          return Array.prototype.push.apply(buf, items);
+        };
+      };
+      stream(stdoutBuf, 1, () => { _st.streamedToTerminal = true; });
+      stream(stderrBuf, 2, () => { _st.streamedStderr = true; });
+    }
+
     // Console and process
     const fakeConsole = createFakeConsole(ctx, stdoutBuf, stderrBuf, _st);
     const fakeProcess = createFakeProcess(ctx, fileArgs, scriptPath, stdoutBuf, stderrBuf, _st, processEvents, pendingPromises);
@@ -177,8 +193,10 @@ export async function executeNodeScript(
     // Buffer shim
     const FakeBuffer = createFakeBuffer();
     // The process's own globalThis (its writes stay its own; globalThis.process is its process)
-    const processGlobal = createProcessGlobal({ process: fakeProcess, Buffer: FakeBuffer });
+    const processGlobal = createProcessGlobal({ process: fakeProcess, Buffer: FakeBuffer, console: fakeConsole });
     const processFunction = createProcessFunction(processGlobal, fakeProcess, FakeBuffer);
+    /** Packages this script reaches that run as their browser builds (rolldown): filled before it starts */
+    const browserModules = new Map<string, any>();
 
     // Built-in module registry with caching
     const _builtinCache = new Map<string, any>();
@@ -210,7 +228,7 @@ export async function executeNodeScript(
         case 'events':
         case 'node:events': return createEventsModule();
         case 'url':
-        case 'node:url': return createUrlModule();
+        case 'node:url': return createUrlModule(() => fakeProcess.cwd());
         case 'stream':
         case 'node:stream': return createStreamModule(getBuiltinModule('events'));
         case 'stream/promises':
@@ -246,7 +264,7 @@ export async function executeNodeScript(
     // Require function (module resolver + loader)
     const requireModule = createRequireFunction({
       ctx, fileCache, fileMtimes, moduleCache, pendingPromises, processEvents,
-      getBuiltinModule, fakeConsole, fakeProcess, FakeBuffer, processGlobal, processFunction,
+      getBuiltinModule, fakeConsole, fakeProcess, FakeBuffer, processGlobal, processFunction, browserModules,
       createExpressShim: expressFactory,
       createSqliteShim: () => createSqliteShim({ ctx }),
       createAutoStub,
@@ -332,6 +350,15 @@ export async function executeNodeScript(
     // Fake import.meta for ES modules
     const entryFilename = scriptPath || ctx.cwd + '/repl.js';
     const entryDirname = scriptPath ? scriptPath.substring(0, scriptPath.lastIndexOf('/')) : ctx.cwd;
+    // Browser builds a package here runs as (rolldown → @rolldown/browser): loaded before the script needs them
+    try {
+      for (const [spec, ns] of await loadBrowserPackages(ctx.fs, entryDirname, getBuiltinModule, fakeProcess, trackAsync)) browserModules.set(spec, ns);
+    } catch (e: any) {
+      console.warn('[node] browser build:', e);
+      const err = e?.errors?.[0];
+      const at = err?.location ? ` (${err.location.file}:${err.location.line}: ${String(err.location.lineText).trim().slice(0, 160)})` : '';
+      stderrBuf.push(`node: loading a browser build failed: ${err?.text ?? e?.message ?? e}${at}\n`);
+    }
     const fakeImportMeta = {
       url: `file://${entryFilename}`,
       dirname: entryDirname,
@@ -581,6 +608,8 @@ export async function executeNodeScript(
     let _timersDone: Promise<void> | null = null;
     const _timerIds = new Set<any>();
     const _intervalIds = new Set<any>();
+    const _refdIntervals = new Set<any>(); // a guest's ref'd intervals: activity, as in node
+    const intervalsAlive = () => _refdIntervals.size > 0;
     if (code.length <= 500000) {
       const settle = () => { if (_activeTimers <= 0 && _timersResolve) { _timersResolve(); _timersResolve = null; _timersDone = null; } };
       globalThis.setTimeout = _st.installedSetTimeout = function(fn: any, ms?: number, ...args: any[]) {
@@ -620,19 +649,27 @@ export async function executeNodeScript(
         }
         _baseCT(rawTimer(id));
       };
-      // Intervals never kept a script alive here; they still answer unref() etc.
+      // Intervals never kept a script alive in the page (one left running would hold the
+      // shell); they still answer unref() etc. A kernel guest is a process that can be
+      // killed, so there, as in node, a ref'd interval keeps it running until cleared.
       globalThis.setInterval = _st.installedSetInterval = function(fn: any, ms?: number, ...args: any[]) {
         const raw = PAGE_SET_INTERVAL(fn, ms, ...args);
         _intervalIds.add(raw);
-        return nodeTimer(raw, {});
+        if (!guest) return nodeTimer(raw, {});
+        _refdIntervals.add(raw);
+        return nodeTimer(raw, {
+          onUnref: () => { _refdIntervals.delete(raw); },
+          onRef: () => { if (_intervalIds.has(raw)) _refdIntervals.add(raw); },
+        });
       } as typeof setInterval;
-      globalThis.clearInterval = _st.installedClearInterval = function(id: any) { _intervalIds.delete(rawTimer(id)); PAGE_CLEAR_INTERVAL(rawTimer(id)); };
+      globalThis.clearInterval = _st.installedClearInterval = function(id: any) { _intervalIds.delete(rawTimer(id)); _refdIntervals.delete(rawTimer(id)); PAGE_CLEAR_INTERVAL(rawTimer(id)); };
       // When the script ends its timers go with it, as with a process: an
       // interval left running fired into the next script and, through that
       // script's setTimeout, kept it from ever going idle
       atExit(() => {
         for (const raw of _intervalIds) PAGE_CLEAR_INTERVAL(raw);
         _intervalIds.clear();
+        _refdIntervals.clear();
         for (const t of _timerIds) _baseCT(rawTimer(t));
         _timerIds.clear();
       });
@@ -649,7 +686,7 @@ export async function executeNodeScript(
       let outSeen = stdoutBuf.length + stderrBuf.length;
       const check = () => {
         const out = stdoutBuf.length + stderrBuf.length;
-        if (activity.pending > 0 || _activeTimers > 0 || pendingPromises.length > 0 || out !== outSeen) {
+        if (activity.pending > 0 || _activeTimers > 0 || intervalsAlive() || pendingPromises.length > 0 || out !== outSeen) {
           outSeen = out;
           _st.scriptTimeoutId = setTimeout(check, SCRIPT_TIMEOUT);
           return;
@@ -705,7 +742,8 @@ export async function executeNodeScript(
       try {
         // (an exit meanwhile ends the wait: process.exit() or an unhandled
         // rejection in async code, and the timers left go with the script)
-        await Promise.race([_timersDone, deferredExitPromise, new Promise((_, rej) => _baseST(() => rej('timer-wait-timeout'), 5000))]);
+        // (a guest waits them out, as node does)
+        await Promise.race([_timersDone, deferredExitPromise, guest ? new Promise(() => {}) : new Promise((_, rej) => _baseST(() => rej('timer-wait-timeout'), 5000))]);
       } catch { timersOutlasted = true; }
     }
 
@@ -726,7 +764,7 @@ export async function executeNodeScript(
         let outSeen = stdoutBuf.length + stderrBuf.length;
         const check = () => {
           const out = stdoutBuf.length + stderrBuf.length;
-          if (!_st.isInteractiveMode && (activity.pending > 0 || out !== outSeen)) {
+          if (!_st.isInteractiveMode && (activity.pending > 0 || intervalsAlive() || out !== outSeen)) {
             outSeen = out;
             _baseST(check, DEFERRED_TIMEOUT);
             return;
@@ -760,7 +798,7 @@ export async function executeNodeScript(
           // fs work queued by sync calls after the drain above: in flight
           // until it settles, then no longer activity
           if (pendingPromises.length > 0) trackAsync(Promise.all(pendingPromises.splice(0)));
-          if (out !== outSeen || activity.pending > 0 || (_activeTimers > 0 && !timersOutlasted)) {
+          if (out !== outSeen || activity.pending > 0 || (_activeTimers > 0 && !timersOutlasted) || intervalsAlive()) {
             outSeen = out;
             quietSince = now;
             quietPolls = 0;

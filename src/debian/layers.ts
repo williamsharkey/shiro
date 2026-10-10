@@ -213,6 +213,7 @@ function mergeText(path: string, mine: string, layer: string): string | null {
   if (path === '/var/lib/apt/extended_states') return mergeStanzas(mine, layer, pkgKey);
   if (path.startsWith('/var/cache/debconf/')) return mergeStanzas(mine, layer, (s) => field(s, 'Name'));
   if (/^\/etc\/(passwd|group|shadow|gshadow|subuid|subgid)$/.test(path)) return mergeLines(mine, layer, (l) => l.split(':')[0]);
+  if (path.endsWith('/.config/go/env')) return mergeLines(mine, layer, (l) => l.split('=')[0]); // the user's own go env -w wins
   return mergeLines(mine, layer, (l) => l); // /etc/shells, statoverride, dpkg triggers
 }
 

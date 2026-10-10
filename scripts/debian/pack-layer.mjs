@@ -80,6 +80,7 @@ const MERGED = new Set([
   '/var/lib/apt/extended_states', '/var/lib/dpkg/diversions', '/var/lib/dpkg/statoverride',
   '/var/cache/debconf/config.dat', '/var/cache/debconf/templates.dat', '/var/cache/debconf/passwords.dat',
   '/etc/passwd', '/etc/group', '/etc/shadow', '/etc/gshadow', '/etc/shells', '/etc/subuid', '/etc/subgid',
+  '/home/user/.config/go/env', // go env -w's file: the go layer's CGO_ENABLED=0 joins the user's settings
 ]);
 const isMerged = (p) => MERGED.has(p) || (p.startsWith('/var/lib/dpkg/triggers/') && !/\/(Lock|Unincorp)$/.test(p));
 // Never carried: locks, dpkg's scratch files, files the page provides

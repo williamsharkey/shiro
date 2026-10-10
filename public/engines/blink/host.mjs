@@ -59,6 +59,8 @@ const MAP_SHARED = 1, PROT_WRITE = 2;
 const DIRECT_MIN = 1 << 20;
 
 let i32 = null, data = null, debug = false, debugPid = 0, progPath = '';
+// The kernel watches the channel's state word (Atomics.waitAsync): no message per call
+let atomicsWake = false;
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
@@ -67,7 +69,7 @@ function sys(nr, ...args) {
   i32[CH_SYSNO] = nr;
   Atomics.store(i32, CH_STATE, 1);
   Atomics.notify(i32, CH_STATE);
-  post('sys');
+  if (!atomicsWake) post('sys');
   while (Atomics.load(i32, CH_STATE) === 1) Atomics.wait(i32, CH_STATE, 1);
   const r = i32[CH_RESULT];
   Atomics.store(i32, CH_STATE, 0);
@@ -533,6 +535,7 @@ async function run(msg) {
   debug = !!msg.debug;
   debugPid = msg.pid;
   progPath = msg.path || '';
+  atomicsWake = msg.wake === 'atomics';
   i32 = new Int32Array(msg.sab, 0, CH_DATA / 4);
   data = new Uint8Array(msg.sab, CH_DATA);
   const errTail = [];

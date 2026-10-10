@@ -9,7 +9,7 @@ import type { CommandContext } from '../commands/index';
 import * as A from '../kernel/abi';
 import { canBlock } from '../kernel/channel';
 import { BufferFile, type OpenFile } from '../kernel/fd';
-import type { Runner } from '../kernel/kernel';
+import type { Kernel, Runner } from '../kernel/kernel';
 import { webWorker, workerRunner, type GuestWorker } from '../kernel/worker-host';
 
 let factory: (() => GuestWorker) | null = null;
@@ -34,10 +34,63 @@ export function nodeWorkerRunner(): Runner {
   return workerRunner(() => createNodeWorker(), { dataSize: 1 << 20 });
 }
 
+/** `#!/usr/bin/env node`, `#!/usr/bin/env -S node --flag`, `#!/usr/local/bin/node`: the flags after node, or null */
+export function nodeShebangArgs(head: string): string[] | null {
+  if (!head.startsWith('#!')) return null;
+  const words = head.slice(2).split('\n')[0].replace(/\r$/, '').trim().split(/\s+/);
+  let i = 0;
+  if (/^\/(usr\/)?bin\/env$/.test(words[0])) {
+    i = 1;
+    if (words[1] === '-S') i = 2;
+  }
+  return /^(\/(usr\/)?(local\/)?bin\/)?node$/.test(words[i] ?? '') && (i > 0 || words[i].startsWith('/')) ? words.slice(i + 1) : null;
+}
+
+const loaderInstalled = new WeakSet<Kernel>();
+
+/**
+ * With TABCOMPUTER_NODE_WORKER=1 in its environment, a process the kernel
+ * starts as `node` (or as a `#!...node` script) runs the guest itself: its
+ * fds are the node's stdio and it is the process its parent waits for (not a
+ * builtin that starts a second process for the guest). Otherwise (the flag off, no blocking channel, a packaged node
+ * on PATH) the usual loaders run it as before.
+ */
+export function installNodeLoader(kernel: Kernel): void {
+  if (loaderInstalled.has(kernel)) return;
+  loaderInstalled.add(kernel);
+  // `sh -c 'node ...'` (execSync, npm scripts) execs node in place, so this loader sees it
+  kernel.execDirect.push((name, proc) => name === 'node' && proc.env.TABCOMPUTER_NODE_WORKER === '1' && nodeWorkerMode(proc.env));
+  kernel.addLoader(async (path, proc, k) => {
+    if (proc.env.TABCOMPUTER_NODE_WORKER !== '1' || !nodeWorkerMode(proc.env) || !k.shell?.commands.get('node')) return null;
+    const fs = k.fs;
+    const base = path.slice(path.lastIndexOf('/') + 1);
+    if (base === 'node' && (!path.includes('/') || /^\/(usr\/)?(local\/)?bin\/node$/.test(path))) {
+      if (fs && (await import('../pkg-manager')).packageShadows(fs).has('node')) return null;
+      return nodeWorkerRunner();
+    }
+    if (!fs || !path.includes('/')) return null;
+    let flags: string[] | null;
+    try {
+      const abs = fs.resolvePath(path, proc.cwd);
+      const raw = await fs.readFile(abs);
+      const head = typeof raw === 'string' ? raw.slice(0, 256) : A.decodeText(raw.subarray(0, 256));
+      flags = nodeShebangArgs(head);
+    } catch { return null; }
+    if (!flags || (await import('../pkg-manager')).packageShadows(fs).has('node')) return null;
+    const run = nodeWorkerRunner();
+    return (p, kk) => {
+      p.argv = ['node', ...flags!, path, ...p.argv.slice(1)];
+      return run(p, kk);
+    };
+  });
+}
+
 /** `node ARGS` from the shell as a kernel process: a foreground job on the terminal's pty, or on the shell's stdio */
 export async function runNodeInWorker(ctx: CommandContext): Promise<number> {
   const argv = ['node', ...ctx.args];
   const env = { ...ctx.env };
+  const { kernelForContext } = await import('../wasi/run-command');
+  installNodeLoader(kernelForContext(ctx)); // node that this node starts runs as a guest too
   const term = ctx.terminal;
   const toTerminal = !!term && ctx.stdoutIsTTY !== false;
   const readStdin = (ctx as any).readStdin as (() => Promise<string>) | undefined;
@@ -58,7 +111,6 @@ export async function runNodeInWorker(ctx: CommandContext): Promise<number> {
     });
     return r.exitCode;
   }
-  const { kernelForContext } = await import('../wasi/run-command');
   const { SinkFile } = await import('../wasi/stdio');
   const kernel = kernelForContext(ctx);
   const fds: Record<number, OpenFile> = {

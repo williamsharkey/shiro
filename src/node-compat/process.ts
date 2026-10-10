@@ -436,6 +436,21 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
     if (!_st.isInteractiveMode) return;
     setTimeout(() => { if (!ttyIn?.reading && !_st.exitCalled) forceExit(0); }, 500);
   };
+  /** Deliver piped input (once): 'data', 'readable', then 'end' and 'close' */
+  const flow = () => {
+    if (stdinTTY || stdinEnded) return;
+    stdinEnded = true;
+    void loadStdin().then(() => {
+      if (ctx.stdin) {
+        stdinReadBuffer.push(ctx.stdin);
+        if (stdinEvents['data']?.length) stdinDataTaken = true;
+        (stdinEvents['data'] || []).forEach(f => f(ctx.stdin));
+        (stdinEvents['readable'] || []).forEach(f => f());
+      }
+      (stdinEvents['end'] || []).forEach(f => f());
+      (stdinEvents['close'] || []).forEach(f => f());
+    });
+  };
   const stdinObj: any = {
     isTTY: stdinTTY,
     fd: 0,
@@ -443,20 +458,10 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
       (stdinEvents[event] ??= []).push(fn);
       // A 'data' or 'readable' listener sets a tty flowing, as in node
       if (session && (event === 'data' || event === 'readable') && !stdinEnded) holdTerminal();
-      // Piped input flows once something listens: 'end', or 'data'/'readable' as in Node (readline)
-      if (!stdinTTY && (event === 'end' || event === 'data' || event === 'readable') && !stdinEnded) {
-        stdinEnded = true;
-        void loadStdin().then(() => {
-          if (ctx.stdin) {
-            stdinReadBuffer.push(ctx.stdin);
-            if (stdinEvents['data']?.length) stdinDataTaken = true;
-            (stdinEvents['data'] || []).forEach(f => f(ctx.stdin));
-            (stdinEvents['readable'] || []).forEach(f => f());
-          }
-          (stdinEvents['end'] || []).forEach(f => f());
-          (stdinEvents['close'] || []).forEach(f => f());
-        });
-      }
+      // Piped input flows (and then ends) once something reads it, as in
+      // node: a 'data' or 'readable' listener (readline), resume(). An 'end'
+      // listener alone reads nothing (vite exits on stdin 'end', its parent's exit)
+      if (event === 'data' || event === 'readable') flow();
       return stdinObj;
     },
     once: (event: string, fn: Function) => {
@@ -477,6 +482,7 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
     },
     emit: (event: string, ...args: any[]) => { (stdinEvents[event] || []).forEach(f => f(...args)); return false; },
     resume: () => {
+      flow();
       if (session) { if (!stdinEnded) holdTerminal(); return stdinObj; }
       if (ctx.terminal && stdinTTY && !stdinEnded) {
         const forceExit = () => {

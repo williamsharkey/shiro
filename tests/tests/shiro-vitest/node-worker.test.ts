@@ -52,6 +52,79 @@ describe('node as a kernel guest', () => {
     expect(r.out).toBe('"hi\\n"\n"piped" 0\n4\nthrew 4\nx y\n');
   }, 60_000);
 
+  it('cached files and directories see what children change', async () => {
+    const r = await sh(`mkdir -p /tmp/nc/d /tmp/nc/o && echo aaa > /tmp/nc/d/f && echo bbb > /tmp/nc/o/f && node -e '
+      const fs = require("fs"), cp = require("child_process");
+      const read = () => fs.readFileSync("/tmp/nc/d/f", "utf8").trim();
+      const first = read();
+      cp.execSync("echo ccc > /tmp/nc/d/f");                        // same size, new content
+      const second = read();
+      cp.execSync("mv /tmp/nc/d /tmp/nc/d2 && ln -s o /tmp/nc/d");  // the directory is now a link
+      console.log(first, second, read(), fs.realpathSync("/tmp/nc/d/f"), fs.lstatSync("/tmp/nc/d").isSymbolicLink());
+      fs.writeFileSync("/tmp/nc/x.tmp.1", "atomic");                 // write-then-rename
+      fs.renameSync("/tmp/nc/x.tmp.1", "/tmp/nc/x");
+      fs.symlinkSync("/tmp/nc/x", "/tmp/nc/y");
+      fs.unlinkSync("/tmp/nc/x");
+      console.log(fs.existsSync("/tmp/nc/y"), fs.existsSync("/tmp/nc/x.tmp.1"));
+      fs.writeFileSync("/tmp/nc/x", "back");
+      console.log(fs.readFileSync("/tmp/nc/y", "utf8"), fs.statSync("/tmp/nc/y").size);
+    ' < /dev/null`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('aaa ccc bbb /tmp/nc/o/f true\nfalse false\nback 4\n');
+  }, 60_000);
+
+  it('node the kernel starts (sh -c, a #! script) is the guest itself', async () => {
+    const r = await sh(`chmod +x /tmp/nk/inner.js && node /tmp/nk/outer.js < /dev/null`, async (fs) => {
+      await fs.mkdir('/tmp/nk', { recursive: true });
+      await fs.writeFile('/tmp/nk/inner.js', `#!/usr/bin/env node
+const fs = require('fs');
+console.log(process.argv.slice(2).join(','), fs.readFileSync('/proc/self/stat', 'utf8').split(' ')[3]);
+`);
+      await fs.writeFile('/tmp/nk/outer.js', `const fs = require('fs'), cp = require('child_process');
+const me = fs.readFileSync('/proc/self/stat', 'utf8').split(' ')[0];
+const a = cp.execSync('node /tmp/nk/inner.js x').toString().trim().split(' ');
+const b = cp.execSync('/tmp/nk/inner.js y z').toString().trim().split(' ');
+console.log(a[0], a[1] === me, b[0], b[1] === me);
+`);
+    });
+    // the inner node's parent is the outer node: sh -c exec'd it in place, no node in between
+    expect(r.err).toBe('');
+    expect(r.out).toBe('x true y,z true\n');
+  }, 60_000);
+
+  it('output to a pipe streams, and spawn() delivers it as it comes', async () => {
+    // inner node waits for a file its parent makes on seeing inner's first line:
+    // with output held until exit (either end) that never happens
+    const r = await sh(`node /tmp/ns/outer.js < /dev/null`, async (fs) => {
+      await fs.mkdir('/tmp/ns', { recursive: true });
+      await fs.writeFile('/tmp/ns/inner.js', `const fs = require('fs');
+console.log('early'); process.stderr.write('err-early\\n');
+const t0 = Date.now();
+const t = setInterval(() => {
+  if (fs.existsSync('/tmp/ns/go')) { clearInterval(t); console.log('late'); }
+  else if (Date.now() - t0 > 8000) { clearInterval(t); console.log('timed out'); }
+}, 20);
+`);
+      await fs.writeFile('/tmp/ns/outer.js', `const fs = require('fs'), cp = require('child_process');
+const c = cp.spawn('node', ['/tmp/ns/inner.js']);
+let out = '', err = '';
+c.stdout.on('data', (d) => { out += d; if (out.includes('early')) fs.writeFileSync('/tmp/ns/go', ''); });
+c.stderr.on('data', (d) => { err += d; });
+c.on('close', (code) => console.log(JSON.stringify(out), JSON.stringify(err), code));
+`);
+    });
+    expect(r.err).toBe('');
+    expect(r.out).toBe('"early\\nlate\\n" "err-early\\n" 0\n');
+  }, 60_000);
+
+  it('a ref\'d interval keeps the guest running until cleared; an unref\'d one does not', async () => {
+    const r = await sh(`node -e '
+      const t0 = Date.now(); let n = 0;
+      const t = setInterval(() => { if (++n === 30) { clearInterval(t); console.log("ticks", n, Date.now() - t0 >= 500); } }, 20);
+    ' < /dev/null; node -e 'setInterval(() => console.log("never"), 5000).unref(); console.log("bye")' < /dev/null`);
+    expect(r.out).toBe('ticks 30 true\nbye\n');
+  }, 60_000);
+
   it('stdin from a pipe; async exec', async () => {
     const r = await sh(`printf 'a\\nb\\n' | node -e '
       let t = ""; process.stdin.on("data", (d) => t += d).on("end", () => {

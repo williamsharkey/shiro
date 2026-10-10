@@ -151,8 +151,10 @@ async function renameAfterWrites(deps: FsDeps, oldRes: string, newRes: string): 
  */
 function dirCachedChecker(deps: FsDeps): (p: string) => boolean {
   const { gone } = writeStateFor(deps.pendingPromises);
+  const guest = !!nodeGuestOf(deps.ctx);
   return (p: string) => {
     for (const g of gone) if (p === g || p.startsWith(g + '/')) return false;
+    if (guest) return !!deps.ctx.fs.isDirCached?.(p); // a stat says it all
     return !!(deps.ctx.fs.isDirCached?.(p) || deps.ctx.fs.readdirCached(p) !== undefined);
   };
 }
@@ -343,8 +345,15 @@ export function createFsModule(deps: FsDeps): any {
     const dir = ctx.fs.realpathCached?.(r.slice(0, slash)) ?? r.slice(0, slash);
     return (dir === '/' ? '' : dir) + r.slice(slash);
   };
+  // A kernel guest writes through at once, so storage is the truth: one lstat
+  // answers what the page asks its caches several ways (`r` is canonical)
+  const guestLookup = nodeGuestOf(ctx) ? (r: string) => ctx.fs.lookupCached!(r) : undefined;
   /** Whether `r` (canonical) exists as this script sees it: undefined when only storage knows */
   const existsNow = (r: string): boolean | undefined => {
+    if (guestLookup) {
+      const hit = guestLookup(r);
+      return hit === null ? false : hit ? true : undefined;
+    }
     if (fileCache.has(r) || fileCache.has(r + '/.') || ctx.fs.readBytesCached(r) !== undefined || fsDirCached(r)) return true;
     if ([...fileCache.keys()].some((k) => k.startsWith(r + '/'))) return true;
     const hit = ctx.fs.lookupCached?.(r);
@@ -354,6 +363,12 @@ export function createFsModule(deps: FsDeps): any {
   const pendingModes = writeState.modes;
   /** Stats of canonical `r` from memory: null when it doesn't exist, undefined when only storage knows */
   const statNow = (r: string): any => {
+    if (guestLookup) {
+      const hit = guestLookup(r);
+      if (!hit) return hit;
+      if (hit.node.type !== 'file' && hit.node.type !== 'dir') return undefined;
+      return makeStats({ type: hit.node.type, size: hit.node.size ?? 0, mtimeMs: hit.node.mtime, mode: pendingModes.get(r) ?? hit.node.mode ?? 0o644, ino: inodeOf(hit.path) });
+    }
     const isFile = fileCache.has(r) || ctx.fs.readBytesCached(r) !== undefined;
     const isDir = !isFile && (fileCache.has(r + '/.') || fsDirCached(r) || [...fileCache.keys()].some((k) => k.startsWith(r + '/')));
     if (!isFile && !isDir) {
@@ -546,7 +561,8 @@ export function createFsModule(deps: FsDeps): any {
       fileMtimes.set(resolved, Date.now());
       // Skip IDB write for .tmp files — they're transient atomic-write intermediaries.
       // The data reaches IDB via renameSync which writes to the final path.
-      if (!resolved.includes('.tmp.')) {
+      // (A kernel guest's rename is rename(2): the file has to be there.)
+      if (writeNowToo || !resolved.includes('.tmp.')) {
         queueWrite(resolved, () => ctx.fs.writeFile(resolved, strData));
       }
       // localStorage WAL for critical config files (survives page close before IndexedDB flushes)
@@ -607,8 +623,9 @@ export function createFsModule(deps: FsDeps): any {
       if (fsCached) {
         for (const name of fsCached) {
           entries.add(name);
-          // Detect directories from Shiro FS cache (readdirCached returns entries for dirs)
-          if (!dirSet.has(name)) {
+          // Detect directories from Shiro FS cache (readdirCached returns entries for dirs);
+          // only withFileTypes asks
+          if (opts?.withFileTypes && !dirSet.has(name)) {
             const childPath = resolved === '/' ? '/' + name : resolved + '/' + name;
             // If it has sub-entries in FS cache, it's a directory
             if (fsDirCached(childPath)) {
