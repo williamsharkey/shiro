@@ -34,6 +34,11 @@ describe('redirected output with a terminal attached', () => {
     await run('node /tmp/e.js > /tmp/both 2>&1');
     expect(await fs.readFile('/tmp/both', 'utf8')).toBe('e1\ne2\no1\n');
     expect(screen()).toBe('');
+    // tty.isatty answers per fd
+    await run(`node -e "console.log(require('tty').isatty(1), require('tty').isatty(2))" > /tmp/tty.out`);
+    expect(await fs.readFile('/tmp/tty.out', 'utf8')).toBe('false true\n');
+    await run(`node -e "console.error(require('tty').isatty(1), require('tty').isatty(2))" 2> /tmp/tty.err`);
+    expect(await fs.readFile('/tmp/tty.err', 'utf8')).toBe('true false\n');
     // (still on the screen when not redirected)
     await run('node /tmp/e.js');
     expect(screen().replace(/\r\n/g, '\n')).toBe('e1\ne2\no1\n');

@@ -42,6 +42,9 @@ export async function run(h) {
   const batch = h.quick ? 20 : 50;
   await h.try('shell.true', 'ms', async () => h.sample('shell.true', await perCall(h, 'true', batch, n), 'ms', { notes: `per call, mean of ${batch}` }));
   await h.try('shell.echo', 'ms', async () => h.sample('shell.echo', await perCall(h, 'echo hello', batch, n), 'ms', { notes: `per call, mean of ${batch}` }));
+  // `> f` opens the file before the command runs: a file with data is truncated first
+  await h.try('shell.redirect_overwrite', 'ms', async () => h.sample('shell.redirect_overwrite', await perCall(h, 'echo hello > /tmp/bench-redir', batch, n), 'ms', { notes: `\`echo hello > f\` over an existing f, per call, mean of ${batch}` }));
+  await h.try('shell.redirect_new', 'ms', async () => h.sample('shell.redirect_new', await perCall(h, 'rm -f /tmp/bench-redir-new; echo hello > /tmp/bench-redir-new', batch, n), 'ms', { notes: `\`rm -f f; echo hello > f\` per call, mean of ${batch}` }));
   await h.try('shell.cmd_subst', 'ms', async () => h.sample('shell.cmd_subst', await perCall(h, 'x=$(echo hi)', batch, n), 'ms', { notes: `\`x=$(echo hi)\` per call, mean of ${batch}` }));
   await h.try('shell.fs_write_after_burst', 'ms', async () => {
     await drainFs(h);

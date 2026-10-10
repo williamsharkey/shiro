@@ -2,11 +2,9 @@ import type { CommandContext } from '../commands/index';
 import { getShiroOrigin } from '../utils/shiro-origin';
 import { DEFAULT_CLAUDE_THEME, ensureClaudeBootstrap } from '../claude-config';
 import { ensureClaudeAuthState } from '../claude-auth';
+import { LazyTextMap, decodeUtf8Strict } from './file-cache';
 
-/** UTF-8 text, or null for bytes that aren't valid UTF-8 (binary files). */
-export function decodeUtf8Strict(bytes: Uint8Array): string | null {
-  try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { return null; }
-}
+export { decodeUtf8Strict };
 
 /**
  * Pre-load files from the virtual filesystem into the memory cache.
@@ -42,7 +40,10 @@ export async function preloadDir(
           const raw = await ctx.fs.readFile(fp);
           const content = typeof raw === 'string' ? raw : decodeUtf8Strict(raw);
           if (content === null) continue;
-          fileCache.set(fp, content);
+          // The page's cache decodes it again when it is read (most files never are), from
+          // the FileSystem's cache under this path (not through a symlink: pnpm's store)
+          if (fileCache instanceof LazyTextMap && ctx.fs.readBytesCached(fp) === raw) fileCache.setLazy(fp);
+          else fileCache.set(fp, content);
           fileMtimes.set(fp, st.mtime?.getTime?.() || Date.now());
         }
       } catch { /* skip */ }

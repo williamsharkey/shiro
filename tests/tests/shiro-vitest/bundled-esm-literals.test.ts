@@ -42,3 +42,19 @@ describe('bundled ESM transform leaves literals alone', () => {
     expect(m[src.indexOf('import')]).toBe(0);
   });
 });
+
+// Next's dev server chunks (webpack eval-source-map) carry inline source maps: runs of
+// 100 000+ identifier characters. Patterns that start with an identifier were tried at
+// every character of them, and its 8 MB vendor chunk took 171 s to load.
+describe('bundled ESM transform in linear time', () => {
+  it('a 2 MB bundle with long identifier runs transforms in well under a second, and still patches', () => {
+    const run = 'A'.repeat(150_000);
+    const body = Array.from({ length: 12 }, (_, i) => `var s${i} = "${run}";`).join('\n');
+    const src = 'var R=(A,q)=>()=>(q||A((q={exports:{}}).exports,q),q.exports);\n' + body + '\nmain();\n';
+    const t0 = performance.now();
+    const out = transformBundledESM(src);
+    expect(performance.now() - t0).toBeLessThan(2000);
+    expect(out).toContain('R=(A,q)=>()=>{if(!q){q={exports:{}};try{');
+    expect(out.trimEnd().endsWith('await main();')).toBe(true);
+  });
+});

@@ -1,0 +1,146 @@
+From be2cedc140b2790c3c5a88ccbb14691a8a6597d8 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 13:43:42 +0000
+Subject: [PATCH] Shiro: a writable shared mapping of a kernel file keeps a
+ hash per 128 bytes, not a copy
+
+0098 kept a shadow of each writable MAP_SHARED kernel-file mapping (up to
+64 MiB) so write-back sends only what this process changed: apt-get update
+maps pkgcache.bin and srcpkgcache.bin (27 MB each) and held each twice, plus
+a whole-size copy made to fill the shadow. A 64-bit hash per 128-byte block
+(6% of the size, filled a chunk at a time) decides the same: write-back sends
+the runs of blocks whose hash changed. Mappings up to 1 GiB (was 64 MiB) get
+them; larger ones still go back whole.
+---
+ blink/shiro.inc | 78 ++++++++++++++++++++++++++++++++++++++-----------
+ 1 file changed, 61 insertions(+), 17 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 509d9d9..7e78d6c 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2340,7 +2340,7 @@ struct ShiroSharedMap {
+   i64 addr, size, off;
+   int fd;  // a kernel dup of the mapped fd
+   struct System *sys;  // the process that mapped it (same-instance children share the list)
+-  u8 *shadow;  // the bytes as last read or written back (NULL above 64 MiB): only changes go back
++  u64 *hash;  // a hash per kShiroBlk bytes as last read or written back (NULL above 1 GiB): only changes go back
+ };
+ static pthread_mutex_t_ g_shiro_maps_lock = PTHREAD_MUTEX_INITIALIZER_;
+ 
+@@ -3134,34 +3134,74 @@ static bool ShiroRemoteFutex(struct Machine *m, i64 uaddr, int op, u32 val,
+   }
+ }
+ 
++// A writable shared mapping remembers a 64-bit hash per kShiroBlk bytes (not a
++// copy: apt's pkgcache.bin and srcpkgcache.bin are 27 MB each), and writes
++// back only the blocks whose hash changed
++#define kShiroBlk 128
++
++static u64 ShiroBlkHash(const u8 *p, int n) {
++  u64 h = 0x9e3779b97f4a7c15ull ^ (u64)n, w;
++  int i;
++  for (i = 0; i + 8 <= n; i += 8) {
++    memcpy(&w, p + i, 8);
++    h = (h ^ (w * 0xff51afd7ed558ccdull)) * 0xc4ceb9fe1a85ec53ull;
++    h ^= h >> 29;
++  }
++  for (; i < n; ++i) h = (h ^ p[i]) * 0x100000001b3ull;
++  return h ^ (h >> 32);
++}
++
++// the hashes of [s->addr + lo, s->addr + hi) (lo a multiple of kShiroBlk)
++static void ShiroHashMap(struct Machine *m, struct ShiroSharedMap *s, u8 *buf, i64 lo, i64 hi) {
++  i64 o, chunk = g_shiro_chunk & -4096;
++  int n, i;
++  for (o = lo; o < hi; o += n) {
++    n = MIN(hi - o, chunk);
++    if (CopyFromUser(m, buf, s->addr + o, n) == -1) break;
++    for (i = 0; i < n; i += kShiroBlk) {
++      s->hash[(o + i) / kShiroBlk] = ShiroBlkHash(buf + i, MIN(kShiroBlk, n - i));
++    }
++  }
++}
++
+ static void ShiroWriteBack(struct Machine *m, struct ShiroSharedMap *s, i64 addr,
+                            i64 size) {
+-  u8 *buf = (u8 *)malloc(g_shiro_chunk);
+-  i64 lo = MAX(addr, s->addr), hi = MIN(addr + size, s->addr + s->size), o;
++  i64 chunk = g_shiro_chunk & -4096;
++  u8 *buf = (u8 *)malloc(chunk);
++  // whole blocks of the map ([lo, hi) relative to its start)
++  i64 lo = MAX(addr, s->addr) - s->addr, o;
++  i64 hi = MIN(ROUNDUP(addr + size - s->addr, kShiroBlk), s->size);
+   bool insyscall = m->insyscall;
+   int rc;
+-  for (o = lo; buf && o < hi; o += g_shiro_chunk) {
+-    int n = MIN(hi - o, (i64)g_shiro_chunk), i, j;
+-    i64 at = s->off + (o - s->addr);
+-    u8 *was = s->shadow ? s->shadow + (o - s->addr) : 0;
++  lo &= -kShiroBlk;
++  for (o = lo; buf && o < hi; o += chunk) {
++    int n = MIN(hi - o, chunk), i, j;
++    i64 at = s->off + o;
+     // without page locks: a syscall's locks last until it returns, and the
+     // munmap this is part of waits for the pages' locks to drain
+     m->insyscall = false;
+-    rc = CopyFromUser(m, buf, o, n);
++    rc = CopyFromUser(m, buf, s->addr + o, n);
+     m->insyscall = insyscall;
+     if (rc == -1) break;
+-    if (!was) {
++    if (!s->hash) {
+       ShiroCall(m, 18, A12(s->fd, n, (int)at, (int)(at >> 32)), buf, n, 0, false, false);
+       continue;
+     }
+-    // only the runs this process changed: another's writes to the file
++    // only the blocks this process changed: another's writes to the file
+     // (a child's, through its own mapping) aren't undone by a stale copy
+     for (i = 0; i < n; i = j) {
+-      if (buf[i] == was[i]) { j = i + 1; continue; }
+-      for (j = i; j < n && (buf[j] != was[j] || (j + 64 < n && memcmp(buf + j, was + j, 64))); ++j) {}
++      u64 *h = s->hash + (o + i) / kShiroBlk, k;
++      if ((k = ShiroBlkHash(buf + i, MIN(kShiroBlk, n - i))) == *h) {
++        j = i + kShiroBlk;
++        continue;
++      }
++      for (j = i; j < n; j += kShiroBlk, ++h) {
++        if ((k = ShiroBlkHash(buf + j, MIN(kShiroBlk, n - j))) == *h) break;
++        *h = k;
++      }
++      j = MIN(j, n);
+       i64 a2 = at + i;
+       ShiroCall(m, 18, A12(s->fd, j - i, (int)a2, (int)(a2 >> 32)), buf + i, j - i, 0, false, false);
+-      memcpy(was + i, buf + i, j - i);
+     }
+   }
+   free(buf);
+@@ -3176,7 +3216,7 @@ static void ShiroSyncMaps(struct Machine *m, i64 addr, i64 size, bool drop) {
+       if (drop && addr <= s->addr && s->addr + s->size <= addr + size) {
+         *pp = s->next;
+         KS(m, 3, A12(s->fd));
+-        free(s->shadow);
++        free(s->hash);
+         free(s);
+         continue;
+       }
+@@ -3243,9 +3283,13 @@ static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
+     struct ShiroSharedMap *s = (struct ShiroSharedMap *)calloc(1, sizeof(*s));
+     if (s) {
+       s->addr = addr, s->size = size, s->off = off, s->sys = m->system;
+-      if (size <= (64 << 20) && (s->shadow = (u8 *)malloc(size)) &&
+-          CopyFromUser(m, s->shadow, addr, size) == -1) {
+-        free(s->shadow), s->shadow = 0;
++      if (size <= ((u64)1 << 30) &&
++          (s->hash = (u64 *)malloc((size + kShiroBlk - 1) / kShiroBlk * 8)) &&
++          (buf = (u8 *)malloc(g_shiro_chunk & -4096))) {
++        ShiroHashMap(m, s, buf, 0, size);
++        free(buf);
++      } else {
++        free(s->hash), s->hash = 0;
+       }
+       s->fd = KS(m, 72, A12(fd, 1030, 3));
+       LOCK(&g_shiro_maps_lock);
+-- 
+2.43.0
+

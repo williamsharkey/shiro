@@ -152,6 +152,8 @@ const sse41bBin = join(out, 'sse41b');
 const haveSse41b = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', sse41bBin, 'sse41b.c']);
 const ssefloatBin = join(out, 'ssefloat');
 const haveSsefloat = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', ssefloatBin, 'ssefloat.c', '-lm']);
+const sharedmapBin = join(out, 'sharedmap');
+const haveSharedmap = tryBuild('gcc', ['-static', '-O1', '-o', sharedmapBin, 'sharedmap.c']);
 const roundingBin = join(out, 'rounding');
 const haveRounding = tryBuild('gcc', ['-static', '-O1', '-frounding-math', '-o', roundingBin, 'rounding.c', '-lm']);
 const cowforkBin = join(out, 'cowfork');
@@ -230,6 +232,9 @@ const haveSigmodes = blinkHasSigmodes && tryBuild('gcc', ['-static', '-O1', '-w'
 const sharedmapsBin = join(out, 'sharedmaps');
 const blinkHasSharedmaps = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_sharedmaps');
 const haveSharedmaps = blinkHasSharedmaps && tryBuild('gcc', ['-static', '-O1', '-w', '-o', sharedmapsBin, 'sharedmaps.c']);
+// The same with a big file (the kernel holds it as pages: FileSystem.BLOB_MIN)
+const bigsharedBin = join(out, 'bigshared');
+const haveBigshared = blinkHasSharedmaps && tryBuild('gcc', ['-static', '-O1', '-w', '-o', bigsharedBin, 'bigshared.c']);
 // Blink 0099: mlock/munlock/mlockall and mmap errors as Linux's
 const memerrsBin = join(out, 'memerrs');
 const blinkHasMemerrs = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_memerrs');
@@ -881,6 +886,19 @@ it.skipIf(!haveSharedmaps)('MAP_SHARED /dev/shm mappings: write-only pages, a se
   expect(r.output.replace(/\r\n/g, '\n')).toBe('second qwerty\nchild from child\n');
 }, 60_000);
 
+it.skipIf(!haveBigshared)('a 6 MiB file mapped MAP_SHARED, written through the mapping and pwrite, reads back whole after munmap', async () => {
+  const { fs, shell } = await setup(readFileSync(bigsharedBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe(
+    'big.bin size 6291456 read 6291456 pread-sees-map 1 bad 0 first -1\n');
+  // And in the FileSystem, stored as blocks
+  await fs.sync();
+  const back = await fs.readFile('/home/user/work/big.bin') as Uint8Array;
+  expect(back.length).toBe(6 << 20);
+  expect([back[0], back[4096 * 5], back[(3 << 20) + 200], back[(6 << 20) - 1], back[1]]).toEqual([0, 5, 80, 69, 0]);
+  expect(fs.blobOf('/home/user/work/big.bin')).toBeTruthy();
+}, 120_000);
+
 it.skipIf(!haveMemerrs)('mlock, munlock, mlockall and mmap refuse bad arguments with Linux\'s errors (Open POSIX)', async () => {
   const { shell } = await setup(readFileSync(memerrsBin));
   const r = await run(shell, './prog');
@@ -1286,6 +1304,15 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe('arith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\narith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\narith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\n');
   }, 60_000);
+
+  // apt's pkgcache.bin: a 27 MB writable MAP_SHARED file mapping; msync and
+  // munmap write back only this process's changes, so a child's writes
+  // through its own mapping stay (0098; a hash per 128 bytes since 0120)
+  it.skipIf(!haveSharedmap)('a big writable shared file mapping writes back only what changed', async () => {
+    const { shell } = await setup(readFileSync(sharedmapBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe("msync 0 file 'header' child 'child' parent 'P' sum dc7153090c0f509a\n");
+  }, 120_000);
 
   // fesetround's directed modes (MXCSR.RC), as CGAL checks at startup:
   // SSE add/sub/mul/div/sqrt and conversions as native, compiled and not (0119)

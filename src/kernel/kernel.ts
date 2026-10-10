@@ -1729,7 +1729,8 @@ export class Kernel {
   readinessFile(proc: Process, nr: number, args: ArrayLike<number>): OpenFile | undefined {
     if ((nr !== A.SYS_read && nr !== A.SYS_write) || proc.state !== 'running' || proc.exiting || this.syscallTable.has(nr)) return undefined;
     const f = proc.fds.get(args[0]);
-    if (!f || f.flags & A.O_NONBLOCK) return undefined;
+    // A regular file never becomes ready: its tryRead/tryWrite fail only while a page of a big file must load (syscall loads it)
+    if (!f || f.flags & A.O_NONBLOCK || f.kind === 'file') return undefined;
     if (nr === A.SYS_read) return f.tryRead ? f : undefined;
     return f.tryWrite && (args[1] >>> 0) <= A.PIPE_BUF ? f : undefined;
   }
@@ -2071,7 +2072,7 @@ export class Kernel {
               try {
                 for (const e of await fs.readdir(dir)) if (fs.inoOf(`${dir}/${e}`) === ino) names.add(`${dir}/${e}`);
               } catch { /* (the directory is gone) */ }
-              for (const p of names) if (!writeInodeBytes(fs, p, b) && await fs.exists(p)) await fs.writeFile(p, b);
+              for (const p of names) if (!(await writeInodeBytes(fs, p, b)) && await fs.exists(p)) await fs.writeFile(p, b);
             };
           } else if (kind === 1) {
             const seg = this.shm.list().find((x) => x.id === args[0]);
