@@ -1,5 +1,5 @@
 #define _GNU_SOURCE
-// Blink 0089 (and 0086) + kernel posixtimers.ts: a POSIX timer's signal, taken with
+// Blink 0089 (and 0087) + kernel posixtimers.ts: a POSIX timer's signal, taken with
 // sigtimedwait while blocked, with its overruns; sched_* as Linux answers
 // an unprivileged process (Open POSIX timer_*, sigwait*, sched_*).
 #include <errno.h>

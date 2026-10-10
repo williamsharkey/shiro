@@ -172,11 +172,11 @@ const haveRaiseKill = blinkHasRaiseKill && tryBuild('gcc', ['-static', '-O1', '-
 const aioSigqueueBin = join(out, 'aio-sigqueue');
 const blinkHasSigqueue = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_sigqueue');
 const haveAioSigqueue = blinkHasSigqueue && tryBuild('gcc', ['-static', '-O1', '-w', '-o', aioSigqueueBin, 'aio-sigqueue.c', '-lrt', '-pthread']);
-// Blink 0088: POSIX message queues are the kernel's
+// Blink 0086: POSIX message queues are the kernel's
 const mqueueBin = join(out, 'mqueue');
 const blinkHasMqueue = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_mqueue');
 const haveMqueue = blinkHasMqueue && tryBuild('gcc', ['-static', '-O1', '-w', '-o', mqueueBin, 'mqueue.c', '-lrt', '-pthread']);
-// Blink 0089: POSIX timers are the kernel's (0086 sigtimedwait); sched_* as Linux answers
+// Blink 0089: POSIX timers are the kernel's (0087 sigtimedwait); sched_* as Linux answers
 const timersBin = join(out, 'timers');
 const blinkHasTimers = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_timers');
 const haveTimers = blinkHasTimers && tryBuild('gcc', ['-static', '-O1', '-w', '-o', timersBin, 'timers.c', '-lrt']);
