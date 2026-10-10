@@ -4,6 +4,7 @@
  * argument) stops all output. Shared by the `printf` command, the shell's
  * `printf -v`, and anything else that needs it.
  */
+import { decodeBytes } from './byte-text';
 
 export interface PrintfResult {
   out: string;
@@ -16,10 +17,25 @@ class Stop { }
 /** Backslash escapes of a printf format (`octalMax` 3) or a %b argument (`\0NNN`, `\NNN`) */
 function escapes(s: string, forB: boolean): { text: string; stop: boolean } {
   let out = '';
+  // \xHH and \NNN are bytes: a run of them is decoded together (byte-exact
+  // text), so \xc3\xa9 is é and a lone \377 stays one byte when written
+  const bytes = new EscapedBytes();
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
-    if (c !== '\\' || i + 1 >= s.length) { out += c; continue; }
+    if (c !== '\\' || i + 1 >= s.length) { out += bytes.flush() + c; continue; }
     const n = s[++i];
+    if (n === 'x') {
+      const m = /^[0-9a-fA-F]{1,2}/.exec(s.slice(i + 1));
+      if (m) { bytes.push(parseInt(m[0], 16)); i += m[0].length; continue; }
+    } else if (n >= '0' && n <= '7') {
+      // format: \NNN; %b: \0NNN (and \NNN)
+      const rest = forB && n === '0' ? s.slice(i + 1) : s.slice(i);
+      const m = /^[0-7]{0,3}/.exec(rest)![0];
+      bytes.push(parseInt(m || '0', 8) & 0xff);
+      i += forB && n === '0' ? m.length : m.length - 1;
+      continue;
+    }
+    out += bytes.flush();
     switch (n) {
       case 'a': out += '\x07'; continue;
       case 'b': out += '\b'; continue;
@@ -33,29 +49,27 @@ function escapes(s: string, forB: boolean): { text: string; stop: boolean } {
       case '\\': out += '\\'; continue;
       case '"': if (!forB) { out += '"'; continue; } break;
       case "'": if (!forB) { out += "'"; continue; } break;
-      case 'x': {
-        const m = /^[0-9a-fA-F]{1,2}/.exec(s.slice(i + 1));
-        if (m) { out += String.fromCharCode(parseInt(m[0], 16)); i += m[0].length; continue; }
-        break;
-      }
       case 'u': case 'U': {
         const m = (n === 'u' ? /^[0-9a-fA-F]{1,4}/ : /^[0-9a-fA-F]{1,8}/).exec(s.slice(i + 1));
         if (m) { out += String.fromCodePoint(parseInt(m[0], 16)); i += m[0].length; continue; }
         break;
       }
-      default:
-        if (n >= '0' && n <= '7') {
-          // format: \NNN; %b: \0NNN (and \NNN)
-          const rest = forB && n === '0' ? s.slice(i + 1) : s.slice(i);
-          const m = /^[0-7]{0,3}/.exec(rest)![0];
-          out += String.fromCharCode(parseInt(m || '0', 8) & 0xff);
-          i += forB && n === '0' ? m.length : m.length - 1;
-          continue;
-        }
     }
     out += '\\' + n;
   }
-  return { text: out, stop: false };
+  return { text: out + bytes.flush(), stop: false };
+}
+
+/** Bytes from escapes, as byte-exact text (src/utils/byte-text.ts) once the run ends */
+export class EscapedBytes {
+  private b: number[] = [];
+  push(byte: number): void { this.b.push(byte); }
+  flush(): string {
+    if (!this.b.length) return '';
+    const t = decodeBytes(new Uint8Array(this.b));
+    this.b = [];
+    return t;
+  }
 }
 
 /** Shell-quote for %q */
