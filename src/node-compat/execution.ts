@@ -451,11 +451,16 @@ export async function executeNodeScript(
     if (scriptPath && (scriptPath.endsWith('.tsx') || scriptPath.endsWith('.jsx'))) {
       transformedCode = transformJSX(transformedCode);
     }
-    transformedCode = transformESModules(transformedCode);
+    // Once a process uses AsyncLocalStorage, awaits carry its stores (async-context.ts):
+    // with the transform's code mask, unless awaits are added after it
+    const carry = asyncContext.active || code.includes('AsyncLocalStorage');
+    const syncAwaits = !isClaudeCodeScript(scriptPath);
+    transformedCode = transformESModules(transformedCode, carry && !syncAwaits ? carryAsyncContext : undefined);
     // spawnSync/execSync results are read right away: await them where the script can
-    if (!isClaudeCodeScript(scriptPath)) transformedCode = awaitSyncCalls(transformedCode);
-    // Once a process uses AsyncLocalStorage, awaits carry its stores (async-context.ts)
-    if (asyncContext.active || code.includes('AsyncLocalStorage')) transformedCode = carryAsyncContext(transformedCode);
+    if (syncAwaits) {
+      transformedCode = awaitSyncCalls(transformedCode);
+      if (carry) transformedCode = carryAsyncContext(transformedCode);
+    }
 
     // Stash real browser console on globalThis so injected code can use it
     if (code.length > 500000) {

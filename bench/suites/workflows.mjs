@@ -76,7 +76,7 @@ const side = (h, cmd) => h.eval(async (c) => {
 async function vite(h, add) {
   await h.page?.context().close().catch(() => {});
   await h.boot({ path: '/?ui=terminal' });
-  const create = await termStep(h, 'cd ~ && npm create vite@latest app -- --template react --no-interactive', 300000);
+  const create = await termStep(h, 'cd ~ && npm create vite@7 app -- --template react --no-interactive', 300000);
   add('create', create.ms); add('create_peak', create.peak);
   const inst = await termStep(h, 'cd ~/app && npm i', 600000);
   add('npm_i', inst.ms); add('npm_i_peak', inst.peak); if (inst.net != null) add('npm_i_net', inst.net);
@@ -112,7 +112,7 @@ export async function run(h) {
     for (let i = 0; i < rounds; i++) {
       try { await vite(h, add); } catch (e) { h.skip('workflow.vite.round', '', `round ${i + 1} failed: ${String(e.message).slice(0, 300)}`); }
     }
-    S(R, 'workflow.vite.create', 'create', 'ms', '`npm create vite@latest app -- --template react --no-interactive` typed at the terminal, fresh profile');
+    S(R, 'workflow.vite.create', 'create', 'ms', '`npm create vite@7 app -- --template react --no-interactive` typed at the terminal, fresh profile (pinned: @latest moves to new majors)');
     S(R, 'workflow.vite.npm_i', 'npm_i', 'ms', '`npm i` in the new app (react, vite, plugins; registry from the bench cache)');
     S(R, 'workflow.vite.dev_ready', 'dev_ready', 'ms', '`npm run dev` until vite prints ready');
     S(R, 'workflow.vite.preview', 'preview', 'ms', '`serve open 5173` until the preview renders the app');
