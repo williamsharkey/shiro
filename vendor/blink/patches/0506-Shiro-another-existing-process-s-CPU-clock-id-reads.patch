@@ -1,0 +1,74 @@
+From 9252409380bbec41bca9b640af1f1f50d0e98361 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 11:03:16 +0000
+Subject: [PATCH] Shiro: another existing process's CPU clock id reads
+
+0502 made every CPU clock id of another process EINVAL; Linux reads one
+of any process that exists, and clock_getcpuclockid(1) checks that way
+(glibc turns the EINVAL into ESRCH: Open POSIX clock_getcpuclockid_1-2).
+The kernel's kill(pid, 0) says whether it exists; it reads the same
+stand-in as ours. An id of no process stays EINVAL.
+
+Exports blink_shiro_othercpuclock.
+---
+ blink/shiro.inc |  7 +++++++
+ blink/syscall.c | 11 ++++++++---
+ 2 files changed, 15 insertions(+), 3 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 4981701..11290bd 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2420,6 +2420,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_tkill0(void) { return 1; }
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_schedperm(void) { return 1; }
+ // 0505: ITIMER_VIRTUAL/PROF are the kernel's, per process
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_itimers(void) { return 1; }
++// 0506: another existing process's CPU clock reads
++EMSCRIPTEN_KEEPALIVE int blink_shiro_othercpuclock(void) { return 1; }
+ 
+ // the same with the signal's siginfo (the kernel's call 1030, made as `pid`)
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid_info(int pid, int sig, int w0, int w1, int w2,
+@@ -3177,6 +3179,11 @@ static void ShiroSyncMaps(struct Machine *m, i64 addr, i64 size, bool drop) {
+   UNLOCK(&g_shiro_maps_lock);
+ }
+ 
++// Does process `pid` exist? (the kernel's kill(pid, 0): only ESRCH says no)
++bool ShiroPidExists(struct Machine *m, int pid) {
++  return KS(m, 62, A12(pid, 0)) != -ESRCH_LINUX;
++}
++
+ // exit_group: what the process's writable shared mappings of kernel files
+ // hold goes to the files (Linux's page cache keeps it past the exit)
+ void ShiroExitMaps(struct Machine *m) {
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 4ab60a3..11ec882 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -4802,8 +4802,8 @@ static int SysSigaltstack(struct Machine *m, i64 newaddr, i64 oldaddr) {
+ // (GHC's runtime: "getCurrentThreadCPUTime: no supported"). They count the
+ // time since the first such read, a stand-in that only ever moves forward.
+ // A negative id is ~pid << 3 | thread << 2 | type (clock_getcpuclockid,
+-// pthread_getcpuclockid): pid 0 is the caller; otherwise it's this process,
+-// or one of its threads. Type 3, or another process's clock, is EINVAL
++// pthread_getcpuclockid): pid 0 is the caller; otherwise a process that
++// exists, or one of our threads. Type 3, or no such process, is EINVAL
+ // (Open POSIX clock_gettime_8-2, clock_getres_6-2).
+ static bool IsValidThreadId(struct System *, int);
+ static bool IsCpuClock(struct Machine *m, int clock) {
+@@ -4813,7 +4813,12 @@ static bool IsCpuClock(struct Machine *m, int clock) {
+   id = ~clock >> 3;
+   if (!id) return true;
+   if (clock & 4) return id == m->tid || IsValidThreadId(m->system, id);
+-  return id == m->system->pid;
++  {
++    // another process's clock: it must exist (the kernel's kill(pid, 0));
++    // it reads the same stand-in (clock_getcpuclockid_1-2 asks for init's)
++    bool ShiroPidExists(struct Machine *, int);
++    return id == m->system->pid || ShiroPidExists(m, id);
++  }
+ }
+ static struct timespec g_cpuclock0;
+ static void InitCpuClock(void) {
+-- 
+2.43.0
+

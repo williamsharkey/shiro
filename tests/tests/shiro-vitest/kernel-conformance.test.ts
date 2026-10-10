@@ -253,6 +253,28 @@ describe('kernel syscalls found by LTP', () => {
     for (const f of [fd, ep]) await call(A.SYS_close, [f]);
   });
 
+  it('memfd seals: F_ADD_SEALS/F_GET_SEALS with MFD_ALLOW_SEALING, enforced on truncate and write (memfd_create01)', async () => {
+    const fd = await call(A.SYS_memfd_create, [L('s'), A.MFD_ALLOW_SEALING], 's');
+    expect(await call(A.SYS_ftruncate, [fd, 4096, 0])).toBe(0);
+    expect(await call(A.SYS_fcntl, [fd, A.F_GET_SEALS, 0])).toBe(0);
+    expect(await call(A.SYS_fcntl, [fd, A.F_ADD_SEALS, A.F_SEAL_GROW | A.F_SEAL_SHRINK])).toBe(0);
+    expect(await call(A.SYS_fcntl, [fd, A.F_GET_SEALS, 0])).toBe(A.F_SEAL_GROW | A.F_SEAL_SHRINK);
+    expect(await call(A.SYS_ftruncate, [fd, 8192, 0])).toBe(-A.EPERM);
+    expect(await call(A.SYS_ftruncate, [fd, 10, 0])).toBe(-A.EPERM);
+    expect(await kernel.syscall(proc, A.SYS_pwrite64, [fd, 5, 4094, 0], enc.encode('hello'))).toBe(-A.EPERM);
+    expect(await kernel.syscall(proc, A.SYS_pwrite64, [fd, 5, 0, 0], enc.encode('hello'))).toBe(5);
+    expect(await call(A.SYS_fcntl, [fd, A.F_ADD_SEALS, A.F_SEAL_WRITE | A.F_SEAL_SEAL])).toBe(0);
+    expect(await kernel.syscall(proc, A.SYS_pwrite64, [fd, 5, 0, 0], enc.encode('hello'))).toBe(-A.EPERM);
+    expect(await call(A.SYS_fcntl, [fd, A.F_ADD_SEALS, A.F_SEAL_FUTURE_WRITE])).toBe(-A.EPERM);
+    // without MFD_ALLOW_SEALING it starts sealed against seals; other files have none
+    const plain = await call(A.SYS_memfd_create, [L('p'), 0], 'p');
+    expect(await call(A.SYS_fcntl, [plain, A.F_GET_SEALS, 0])).toBe(A.F_SEAL_SEAL);
+    expect(await call(A.SYS_fcntl, [plain, A.F_ADD_SEALS, A.F_SEAL_GROW])).toBe(-A.EPERM);
+    const ep = await call(A.SYS_epoll_create1, [0]);
+    expect(await call(A.SYS_fcntl, [ep, A.F_GET_SEALS, 0])).toBe(-A.EINVAL);
+    for (const f of [fd, plain, ep]) await call(A.SYS_close, [f]);
+  });
+
   it('Open POSIX mq_*: POSIX message queues by priority, full/empty, timeouts, attributes, notify', async () => {
     const attr = (maxmsg: number, msgsize: number) => {
       const b = new Uint8Array(32); const v = new DataView(b.buffer);
@@ -555,6 +577,28 @@ describe('kernel syscalls found by LTP', () => {
     await fs.chmod(name, 0o600);
     expect((await fs.stat(name)).ctime.getTime()).toBeGreaterThan(before);
     await fs.unlink(name);
+  });
+
+  it('Open POSIX fork_13-1: ITIMER_VIRTUAL and ITIMER_PROF are per process, signal SIGVTALRM/SIGPROF, and a fork child has none', async () => {
+    const t = kernel.vfork(proc);
+    kernel.setSigmask(t, new Set([A.SIGVTALRM, A.SIGPROF]));
+    const it = (which: number, ms: number) => {
+      const d = new Uint8Array(32); const dv = new DataView(d.buffer);
+      dv.setBigInt64(16, BigInt(Math.floor(ms / 1000)), true); dv.setBigInt64(24, BigInt((ms % 1000) * 1000), true);
+      return kernel.syscall(t, A.SYS_setitimer, [which, 1], d);
+    };
+    expect(await it(1, 20)).toBe(0);
+    expect(await it(2, 20)).toBe(0);
+    expect(await it(3, 20)).toBe(-A.EINVAL);
+    const got = new Uint8Array(32);
+    expect(await kernel.syscall(t, A.SYS_getitimer, [1], got)).toBe(0);
+    expect(Number(new DataView(got.buffer).getBigInt64(24, true))).toBeGreaterThan(0);
+    const child = kernel.vfork(t);
+    expect(await kernel.syscall(child, A.SYS_getitimer, [1], got)).toBe(0);
+    expect(new DataView(got.buffer).getBigInt64(24, true)).toBe(0n);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(t.deferredSignals.has(A.SIGVTALRM) && t.deferredSignals.has(A.SIGPROF)).toBe(true);
+    for (const p of [child, t]) { kernel.kill(p.pid, A.SIGKILL); await kernel.syscall(proc, A.SYS_wait4, [p.pid, 0], new Uint8Array(8)); }
   });
 
   it('Open POSIX sigqueue_3-1/12-1, LTP kill05: signalling another user\'s process (or init) is EPERM', async () => {

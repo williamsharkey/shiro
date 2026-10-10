@@ -230,3 +230,24 @@ describe('dmesg builtin', () => {
     expect((await run('dmesg')).out).toBe('');
   });
 });
+
+describe('signal lines', () => {
+  it('a group signal from a process and a stop are logged (who sent what to whom)', async () => {
+    const kernel = new Kernel({ registerWithProcessTable: false });
+    const a = kernel.spawn({ path: '/usr/bin/codex', argv: ['codex'], fds: {}, run: () => new Promise<number>(() => {}) });
+    const b = kernel.spawn({ path: 'child', argv: ['child'], fds: {}, run: () => new Promise<number>(() => {}) });
+    a.pgid = a.pid; b.pgid = a.pid;
+    expect(kernel.kill(0, A.SIGCONT, a)).toBe(0);
+    expect(klog.all().at(-1)!.text).toBe(`signal: codex[${a.pid}] sent SIGCONT to its own process group ${a.pgid} (2 processes)`);
+    expect(kernel.kill(-a.pgid, A.SIGTSTP, a)).toBe(0);
+    const lines = klog.all().slice(-3).map((r) => r.text);
+    expect(lines).toContain(`signal: codex[${a.pid}] sent SIGTSTP to process group ${a.pgid} (2 processes)`);
+    expect(lines).toContain(`signal: child[${b.pid}] stopped by SIGTSTP`);
+    // signals to one process aren't logged
+    const before = klog.lastSeq;
+    kernel.kill(b.pid, A.SIGCONT, a);
+    expect(klog.lastSeq).toBe(before);
+    kernel.kill(a.pid, A.SIGKILL); kernel.kill(b.pid, A.SIGKILL);
+    kernel.dispose();
+  });
+});
