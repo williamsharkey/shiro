@@ -1,0 +1,177 @@
+From 39871811e05648f6330814329899fedb996de436 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 12:35:37 +0000
+Subject: [PATCH] Shiro: tkill interrupts another thread's kernel call; the
+ kernel's mask is what every thread blocks
+
+pthread_kill of a thread blocked in a kernel call (read, mq_timedsend)
+left it blocked: the signal is queued in Blink, and only a direct channel
+asked the page to interrupt. Interruptible calls now count in
+m->shiro_incall, and tkill of another thread that is in one asks the page
+(shiro_kick) to end the process's blocking calls with EINTR; that thread
+takes its signal, the others call again (Open POSIX mq_timedsend_12-1).
+
+The kernel held a process-directed signal whenever the main thread
+blocked it, although another thread didn't (Linux blocks it only when
+every thread does). ShiroSyncMask now sends what all threads block, from
+whichever thread's mask changed, one thread at a time (two sends could
+reach the kernel in the wrong order), and marks it (args[3] = 1) as the
+process's mask so that the kernel doesn't restore an older one at the
+rt_sigreturn of a signal it handed over meanwhile (Open POSIX
+pthread_kill_8-1).
+
+Exports blink_shiro_threadintr.
+---
+ blink/machine.h |  5 +++-
+ blink/shiro.inc | 68 +++++++++++++++++++++++++++++++++++++++++--------
+ blink/syscall.c |  3 +++
+ 3 files changed, 65 insertions(+), 11 deletions(-)
+
+diff --git a/blink/machine.h b/blink/machine.h
+index 7fdf1c0..77ff7b0 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -320,7 +320,7 @@ struct System {
+   u32 persona;  // personality(2) (Shiro: UNAME26 changes uname's release)
+   int sched_policy;  // sched_setscheduler (Shiro: SCHED_OTHER/BATCH/IDLE; nothing is scheduled by it)
+   bool kmask_ok;  // Shiro: the kernel has this process's signal mask...
+-  u64 kmask;      // ...this one (the main thread's)
++  u64 kmask;      // ...this one (what every thread blocks)
+   void *shiro_sigq;  // Shiro: siginfo of the kernel's signals not yet delivered
+ #ifdef HAVE_THREADS
+   pthread_cond_t_ machines_cond;
+@@ -447,6 +447,9 @@ struct Machine {               //
+   struct JitPath path;                   // under construction jit route
+   _Atomicish(u64) signals;               // [attention] pending delivery
+   u64 tkills;                            // [Shiro] of those, sent by tkill/tgkill (SI_TKILL)
++  _Atomic(int) shiro_incall;             // [Shiro] interruptible kernel calls this thread is in
++  bool shiro_kmask_ok;                   // [Shiro] ShiroSyncMask has looked at...
++  u64 shiro_kmask;                       // [Shiro] ...this sigmask of this thread
+   _Atomicish(u64) sigmask;               // signals that've been blocked
+   i64 bofram[2];                         // helps debug bootloading code
+   i64 faultaddr;                         // used for tui error reporting
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 11290bd..268624c 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -267,8 +267,33 @@ static int ShiroKsys(int nr, int args[12], int as, void *data, int inlen, int ou
+   return r;
+ }
+ 
++static i64 ShiroCallIn(struct Machine *, int, const int[12], void *, int, int, bool, bool);
++
++// An interruptible call counts in m->shiro_incall while it's in the kernel,
++// so that another thread's tkill knows to interrupt it (ShiroInterruptThread)
+ static i64 ShiroCall(struct Machine *m, int nr, const int a[12], void *data,
+                      int inlen, int outcap, bool restart, bool intr) {
++  i64 r;
++  if (!m || !intr || t_vfork) return ShiroCallIn(m, nr, a, data, inlen, outcap, restart, intr);
++  atomic_fetch_add(&m->shiro_incall, 1);
++  r = ShiroCallIn(m, nr, a, data, inlen, outcap, restart, intr);
++  atomic_fetch_sub(&m->shiro_incall, 1);
++  return r;
++}
++
++// tkill/tgkill queued a signal for m2, another of our threads: on Linux it
++// interrupts the call m2 is blocked in. The page ends the process's blocking
++// calls with EINTR (as for a kernel signal); m2's takes its signal, the
++// others' see none and call again (ShiroCallIn).
++static void ShiroInterruptThread(struct Machine *m2) {
++  atomic_thread_fence(memory_order_seq_cst);
++  if ((m2->signals & ~m2->sigmask) && atomic_load(&m2->shiro_incall) > 0) {
++    shiro_kick();
++  }
++}
++
++static i64 ShiroCallIn(struct Machine *m, int nr, const int a[12], void *data,
++                       int inlen, int outcap, bool restart, bool intr) {
+   int args[12], r, as;
+   bool held;
+   i64 res;
+@@ -312,19 +337,40 @@ static i64 ShiroCall(struct Machine *m, int nr, const int a[12], void *data,
+ 
+ #define A12(...) ((const int[12]){__VA_ARGS__})
+ 
+-// The kernel learns the process's signal mask (the main thread's): it holds
+-// a signal the guest blocked (for signalfd, sigwait, sigpending) instead of
+-// delivering, ignoring or dying of it. Sent before a kernel call when it
+-// changed, and right after the calls that change it.
++// The kernel learns the process's signal mask: it holds a signal the guest
++// blocked (for signalfd, sigwait, sigpending) instead of delivering,
++// ignoring or dying of it. As on Linux, a process-directed signal is blocked
++// only when every thread blocks it (ShiroSignalSystem gives it to one that
++// doesn't), so the mask is what all of them block. Sent before a kernel call
++// when this thread's mask changed, and right after the calls that change it.
++// One thread at a time works it out and sends it, or two could reach the
++// kernel in the wrong order and leave it holding a signal nobody blocks.
++static pthread_mutex_t g_shiro_kmask_lock = PTHREAD_MUTEX_INITIALIZER;
+ static void ShiroSyncMask(struct Machine *m) {
+   u8 d[16];
++  u64 mask = ~(u64)0;
++  bool held;
++  struct Dll *e;
+   struct System *s = m->system;
+-  if (!g_shiro_pid || t_vfork || m->tid != s->pid) return;
+-  if (s->kmask_ok && s->kmask == m->sigmask) return;
+-  s->kmask_ok = true;
+-  s->kmask = m->sigmask;
+-  Write32(d, (u32)m->sigmask), Write32(d + 4, (u32)(m->sigmask >> 32));
+-  ShiroCall(m, 14, A12(2, 1, 0), d, 8, 0, false, false);  // SIG_SETMASK
++  if (!g_shiro_pid || t_vfork) return;
++  if (m->shiro_kmask_ok && m->shiro_kmask == m->sigmask && s->kmask_ok) return;
++  m->shiro_kmask_ok = true;
++  m->shiro_kmask = m->sigmask;
++  if ((held = GilHeld())) GilRelease();  // (the sender may need the GIL back)
++  LOCK(&g_shiro_kmask_lock);
++  LOCK(&s->machines_lock);
++  for (e = dll_first(s->machines); e; e = dll_next(s->machines, e)) {
++    mask &= MACHINE_CONTAINER(e)->sigmask;
++  }
++  UNLOCK(&s->machines_lock);
++  if (!s->kmask_ok || s->kmask != mask) {
++    s->kmask_ok = true;
++    s->kmask = mask;
++    Write32(d, (u32)mask), Write32(d + 4, (u32)(mask >> 32));
++    ShiroCall(m, 14, A12(2, 1, 0, 1), d, 8, 0, false, false);  // SIG_SETMASK, the process's
++  }
++  UNLOCK(&g_shiro_kmask_lock);
++  if (held) GilAcquire();
+ }
+ 
+ static i64 KS(struct Machine *m, int nr, const int a[12]) {
+@@ -2422,6 +2468,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_schedperm(void) { return 1; }
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_itimers(void) { return 1; }
+ // 0506: another existing process's CPU clock reads
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_othercpuclock(void) { return 1; }
++// 0507: tkill interrupts another thread's kernel call; the kernel's mask is what every thread blocks
++EMSCRIPTEN_KEEPALIVE int blink_shiro_threadintr(void) { return 1; }
+ 
+ // the same with the signal's siginfo (the kernel's call 1030, made as `pid`)
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid_info(int pid, int sig, int w0, int w1, int w2,
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 11ec882..0ccbfe9 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -776,9 +776,11 @@ static int LoadTimespecRW(struct Machine *m, i64 addr, struct timespec *ts) {
+ static void ShiroSleeping(struct Machine *, int);
+ static double ShiroRealtime(void);
+ static void ShiroSyncMask(struct Machine *);
++static void ShiroInterruptThread(struct Machine *);
+ #else
+ #define ShiroSleeping(m, n) (void)0
+ #define ShiroSyncMask(m) (void)0
++#define ShiroInterruptThread(m) (void)0
+ #endif
+ 
+ static int SysFutexWait(struct Machine *m,  //
+@@ -5674,6 +5676,7 @@ static int SysTkill(struct Machine *m, int tid, int sig) {
+           m2->tkills |= (u64)1 << (sig - 1);
+           EnqueueSignal(m2, sig);
+           err = pthread_kill(m2->thread, SIGSYS);
++          ShiroInterruptThread(m2);
+         } else {
+           err = pthread_kill(m2->thread, 0);
+         }
+-- 
+2.43.0
+

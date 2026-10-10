@@ -248,6 +248,11 @@ const haveItimers = blinkHasItimers && tryBuild('gcc', ['-static', '-O1', '-w', 
 const othercpuclockBin = join(out, 'othercpuclock');
 const blinkHasOthercpuclock = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_othercpuclock');
 const haveOthercpuclock = blinkHasOthercpuclock && tryBuild('gcc', ['-static', '-O1', '-w', '-o', othercpuclockBin, 'othercpuclock.c']);
+// Blink 0507: pthread_kill of a thread blocked in a kernel call interrupts it; a process
+// signal the main thread blocks reaches a thread that doesn't (the kernel's mask is what all block)
+const threadintrBin = join(out, 'threadintr');
+const blinkHasThreadintr = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_threadintr');
+const haveThreadintr = blinkHasThreadintr && tryBuild('gcc', ['-static', '-O1', '-w', '-o', threadintrBin, 'threadintr.c', '-lpthread', '-lrt']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -887,6 +892,12 @@ it.skipIf(!haveOthercpuclock)('clock_getcpuclockid of another existing process (
   const { shell } = await setup(readFileSync(othercpuclockBin));
   const r = await run(shell, './prog');
   expect(r.output.replace(/\r\n/g, '\n')).toBe('init 0 read 0 none No such process\n');
+}, 60_000);
+
+it.skipIf(!haveThreadintr)('pthread_kill of a thread blocked in read, mq_timedsend or nanosleep ends the call with EINTR; a process signal the main thread blocks reaches one that does not (Open POSIX mq_timedsend_12-1, pthread_kill_8-1)', async () => {
+  const { shell } = await setup(readFileSync(threadintrBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('read EINTR handled 1\nmq_timedsend EINTR handled 1\nnanosleep EINTR handled 1\nprocess signal blocked by main reached a thread\n');
 }, 60_000);
 
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink

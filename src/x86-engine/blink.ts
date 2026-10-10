@@ -358,10 +358,11 @@ export function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: 
         void ch.watch();
       }
     } else if (m?.type === 'blink-kick') {
-      // A guest thread waits on a direct channel with a signal to take (it
-      // came between the call's start and the kernel's interrupt): end the
-      // process's blocking calls with EINTR, as a signal would
-      if (direct.some(ch => ch.pending)) proc.interruptSyscalls();
+      // A guest thread is in a kernel call with a signal to take (it came
+      // between the call's start and the kernel's interrupt, or another
+      // thread's tkill queued it in Blink): end the process's blocking calls
+      // with EINTR, as a signal would; the threads it wasn't for call again
+      if (busy.size || direct.some(ch => ch.pending)) proc.interruptSyscalls();
     } else if (m?.type === 'blink-grow') {
       // every channel is busy (blocked calls): one more, shared by this
       // process's workers like the rest (indices match host.mjs's order)

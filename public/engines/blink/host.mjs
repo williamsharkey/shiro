@@ -722,8 +722,8 @@ async function run(msg) {
       port.postMessage({ type: 'blink-fork', pid, snapshot: bytes.buffer }, [bytes.buffer]);
       return 0;
     },
-    // a thread waiting on a direct channel has a signal to take (Blink
-    // patch 0065): the page interrupts the process's blocking calls
+    // a thread in a kernel call has a signal to take (Blink patches 0065,
+    // 0507): the page interrupts the process's blocking calls
     kick() { post({ type: 'blink-kick' }); },
     get data() { return data; },
     poll: (kfd, events, timeoutMs = 0) => pollFd(kfd, events, timeoutMs),
