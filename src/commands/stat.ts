@@ -41,7 +41,7 @@ export const stat: Command = {
 
             output.push(`  File: ${path}`);
             output.push(`  Size: ${statInfo.size}\tBlocks: 0\tIO Block: 4096\t${typeStr}`);
-            output.push(`Device: 0\tInode: 0\tLinks: 1`);
+            output.push(`Device: 0\tInode: ${statInfo.ino ?? 0}\tLinks: ${statInfo.nlink ?? 1}`);
             output.push(`Access: (${modeStr})\tUid: (0/root)\tGid: (0/root)`);
             output.push(`Access: ${dateStr}`);
             output.push(`Modify: ${dateStr}`);
@@ -91,8 +91,8 @@ function formatStat(path: string, stat: any, format: string): string {
     .replace(/%g/g, "0") // group ID
     .replace(/%U/g, "root") // user name
     .replace(/%G/g, "root") // group name
-    .replace(/%i/g, "0") // inode
-    .replace(/%h/g, "1") // hard links
+    .replace(/%i/g, String(stat.ino ?? 0)) // inode
+    .replace(/%h/g, String(stat.nlink ?? 1)) // hard links
     .replace(/%W/g, String(Math.floor(stat.mtime / 1000))) // mtime epoch
     .replace(/%X/g, String(Math.floor(stat.mtime / 1000))) // atime epoch
     .replace(/%Y/g, String(Math.floor(stat.mtime / 1000))) // ctime epoch

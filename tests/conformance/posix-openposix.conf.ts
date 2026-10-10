@@ -16,6 +16,7 @@ import { join, resolve } from 'node:path';
 import { Shell } from '@shiro/shell';
 import { getKernel } from '@shiro/kernel/kernel';
 import { createTestShell } from '../tests/shiro-vitest/helpers';
+import { startWatchdog } from './lib/watchdog.mjs';
 
 const CONF = resolve(__dirname, 'openposix');
 const BIN = resolve(__dirname, '.cache/openposix-bin');
@@ -56,12 +57,14 @@ async function runAll(): Promise<Record<string, AreaResult>> {
     if (ok) res.pass++; else res.failures.push({ name, ...f });
     if (!done.has(name)) appendFileSync(journal, JSON.stringify({ name, ok, ...f }) + '\n');
   };
+  const watchdog = startWatchdog({ journal, detailDir: join(RESULTS, 'detail', 'openposix') });
   for (const name of names) {
     const prev = done.get(name);
     if (prev) { record(name, prev.ok, { ...(prev.reason ? { reason: prev.reason } : {}), ...(prev.timeout ? { timeout: true } : {}) }); continue; }
     if (hangs.includes(name)) { record(name, false, { reason: 'skipped: hangs tabcomputer', timeout: true }); continue; }
     if (!existsSync(join(BIN, name))) { record(name, false, { reason: 'not built' }); continue; }
     progress(name);
+    watchdog.arm(name, timeoutFor(name));
     await fs.writeFile(`/openposix/bin/${name}`, new Uint8Array(readFileSync(join(BIN, name))), { mode: 0o755 });
     const dir = `/tmp/openposix/${name}`;
     await fs.mkdir(dir, { recursive: true });
@@ -87,7 +90,9 @@ async function runAll(): Promise<Record<string, AreaResult>> {
     if (status === 0) record(name, true);
     else if (status === undefined) record(name, false, { reason: `timeout: ${last}`.slice(0, 200), timeout: true });
     else record(name, false, { reason: `${STATUS[status] ?? `exit ${status}`}: ${last}`.slice(0, 200) });
+    watchdog.disarm();
   }
+  watchdog.stop();
   return files;
 }
 

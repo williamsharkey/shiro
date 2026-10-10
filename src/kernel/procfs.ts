@@ -152,7 +152,9 @@ export class ProcFs {
     if (!p.syscalls) return 0;
     const end = p.state === 'zombie' && p.exitTime ? p.exitTime : now;
     const asleep = p.engineSleeps > 0 ? Math.max(0, end - p.engineSleepSince) : 0;
-    return Math.max(0, end - p.startTime - p.kernelMs - asleep);
+    // and a call it is blocked in now (wait4, a read): counted once it ends, as kernelMs
+    const blocked = p.state !== 'zombie' && p.inSyscall > 0 && end - p.syscallSince >= 2 ? end - p.syscallSince : 0;
+    return Math.max(0, end - p.startTime - p.kernelMs - Math.max(asleep, blocked));
   }
 
   private live(): Process[] {

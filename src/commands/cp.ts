@@ -20,6 +20,8 @@ interface Opts {
   symbolic: boolean;
   preserveMode: boolean;
   preserveTime: boolean;
+  /** -a, -d, --preserve=links: names of one file copied together stay one file */
+  preserveLinks: boolean;
   update: boolean;
   verbose: boolean;
   parents: boolean;
@@ -61,17 +63,20 @@ export const cp: Command = {
   async exec(ctx) {
     const o: Opts = {
       recursive: false, deref: 'default', force: false, interactive: false, noClobber: false,
-      link: false, symbolic: false, preserveMode: false, preserveTime: false, update: false,
+      link: false, symbolic: false, preserveMode: false, preserveTime: false, preserveLinks: false, update: false,
       verbose: false, parents: false, removeDest: false, backup: false, suffix: '~',
       noTargetDir: false, targetDir: null, attributesOnly: false,
     };
     const args = ctx.args;
     const operands: string[] = [];
     const usage = (msg: string) => { ctx.stderr += `cp: ${msg}\nTry 'cp --help' for more information.\n`; return 1; };
+    /** --preserve=links: the copy made of each multiply-linked source inode */
+    const copiedInodes = new Map<number, string>();
     const preserve = (list: string, on: boolean) => {
       for (const it of list.split(',')) {
         if (it === 'mode' || it === 'all') o.preserveMode = on;
         if (it === 'timestamps' || it === 'all') o.preserveTime = on;
+        if (it === 'links' || it === 'all') o.preserveLinks = on;
       }
     };
     let opts = true;
@@ -85,7 +90,7 @@ export const cp: Command = {
         const val = eq >= 0 ? a.slice(eq + 1) : undefined;
         const need = () => (val !== undefined ? val : args[++i]);
         switch (name) {
-          case 'archive': o.recursive = true; o.deref = 'never'; o.preserveMode = o.preserveTime = true; break;
+          case 'archive': o.recursive = true; o.deref = 'never'; o.preserveMode = o.preserveTime = o.preserveLinks = true; break;
           case 'no-dereference': o.deref = 'never'; break;
           case 'dereference': o.deref = 'always'; break;
           case 'force': o.force = true; break;
@@ -114,8 +119,8 @@ export const cp: Command = {
       for (let j = 1; j < a.length; j++) {
         const c = a[j];
         switch (c) {
-          case 'a': o.recursive = true; o.deref = 'never'; o.preserveMode = o.preserveTime = true; break;
-          case 'd': o.deref = 'never'; break;
+          case 'a': o.recursive = true; o.deref = 'never'; o.preserveMode = o.preserveTime = o.preserveLinks = true; break;
+          case 'd': o.deref = 'never'; o.preserveLinks = true; break;
           case 'P': o.deref = 'never'; break;
           case 'L': o.deref = 'always'; break;
           case 'H': o.deref = 'cmdline'; break;
@@ -285,6 +290,27 @@ export const cp: Command = {
         try { await fs.symlink(target, dstAbs); } catch (e: any) { err(`cannot create symbolic link ${q(dstName)}: ${errText(e)}`); return; }
         if (o.verbose) ctx.stdout += `${q(srcName)} -> ${q(dstName)}\n`;
         return;
+      }
+      if (o.link) {
+        // -l: a hard link to the file instead of a copy (-f replaces an existing name)
+        if (await tryLstat(ctx, dstAbs)) {
+          if (!o.force && !o.removeDest) { err(`cannot create hard link ${q(dstName)} to ${q(srcName)}: File exists`); return; }
+          await fs.unlink(dstAbs).catch(() => {});
+        }
+        try { await fs.link(srcAbs, dstAbs); } catch (e: any) { err(`cannot create hard link ${q(dstName)} to ${q(srcName)}: ${errText(e)}`); return; }
+        if (o.verbose) ctx.stdout += `${q(srcName)} -> ${q(dstName)}\n`;
+        return;
+      }
+      // Another name of a file already copied in this run: link to that copy
+      if (o.preserveLinks && (st.nlink ?? 1) > 1 && st.ino) {
+        const first = copiedInodes.get(st.ino);
+        if (first !== undefined) {
+          await fs.unlink(dstAbs).catch(() => {});
+          try { await fs.link(first, dstAbs); } catch (e: any) { err(`cannot create hard link ${q(dstName)} to ${q(first)}: ${errText(e)}`); return; }
+          if (o.verbose) ctx.stdout += `${q(srcName)} -> ${q(dstName)}\n`;
+          return;
+        }
+        copiedInodes.set(st.ino, dstAbs);
       }
       if (!(st.mode & 0o400) && !o.link) {
         err(`cannot open ${q(srcName)} for reading: Permission denied`);

@@ -379,6 +379,9 @@ export const F_OFD_SETLKW = 38;
 export const FLOCK_SIZE = 32;
 export const F_SETPIPE_SZ = 1031;
 export const F_GETPIPE_SZ = 1032;
+/** fcntl leases (F_RDLCK/F_WRLCK/F_UNLCK as the argument) */
+export const F_SETLEASE = 1024;
+export const F_GETLEASE = 1025;
 export const F_ADD_SEALS = 1033;
 export const F_GET_SEALS = 1034;
 export const F_SEAL_SEAL = 1;
@@ -448,6 +451,7 @@ export const SIGPIPE = 13;
 export const SIGALRM = 14;
 export const SIGVTALRM = 26;
 export const SIGPROF = 27;
+export const SIGXCPU = 24;
 export const SIGTERM = 15;
 export const SIGCHLD = 17;
 export const SIGCONT = 18;
@@ -686,6 +690,7 @@ export const OPEN_MAX = 1024;
 /** fs.nr_open: the most fds RLIMIT_NOFILE can allow (Linux's default) */
 export const NR_OPEN = 1048576;
 export const RLIMIT_NOFILE = 7;
+export const RLIMIT_CPU = 0;
 export const SYS_prlimit64 = 302;
 export const SYS_memfd_create = 319;
 /** POSIX message queues (src/kernel/mqueue.ts) */

@@ -71,6 +71,8 @@ const shmobjBin = join(out, 'shmobj');
 const haveShmobj = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', shmobjBin, 'shmobj.c']);
 const shmoddBin = join(out, 'shmodd');
 const haveShmodd = tryBuild('gcc', ['-static', '-O1', '-o', shmoddBin, 'shmodd.c']);
+const fdreopenBin = join(out, 'fdreopen');
+const haveFdreopen = tryBuild('gcc', ['-static', '-O1', '-o', fdreopenBin, 'fdreopen.c']);
 const statpathBin = join(out, 'statpath');
 const haveStatpath = tryBuild('gcc', ['-static', '-O1', '-o', statpathBin, 'statpath.c']);
 const execenvBin = join(out, 'execenv');
@@ -204,6 +206,8 @@ const rawepollBin = join(out, 'rawepoll');
 const haveRawepoll = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', rawepollBin, 'rawepoll.c']);
 const bigfileBin = join(out, 'bigfile');
 const haveBigfile = tryBuild('gcc', ['-static', '-O1', '-o', bigfileBin, 'bigfile.c']);
+const bigwriteBin = join(out, 'bigwrite');
+const haveBigwrite = tryBuild('gcc', ['-static', '-O1', '-o', bigwriteBin, 'bigwrite.c']);
 const getgroupsBin = join(out, 'getgroups');
 const haveGetgroups = tryBuild('gcc', ['-static', '-O1', '-o', getgroupsBin, 'getgroups.c']);
 const fionbioBin = join(out, 'fionbio');
@@ -296,6 +300,15 @@ const haveTimerthread = blinkHasTimerthread && tryBuild('gcc', ['-static', '-O1'
 const mmaptailBin = join(out, 'mmaptail');
 const blinkHasMmaptail = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_mmaptail');
 const haveMmaptail = blinkHasMmaptail && tryBuild('gcc', ['-static', '-O1', '-w', '-o', mmaptailBin, 'mmaptail.c']);
+// Blink 0515: leases and RLIMIT_CPU are the kernel's; a CLONE_VM process
+const blinkHas0515 = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_cpulimit');
+const clonevmBin = join(out, 'clonevm');
+const haveClonevm = blinkHas0515 && tryBuild('gcc', ['-static', '-O1', '-w', '-o', clonevmBin, 'clonevm.c']);
+const cpulimitBin = join(out, 'cpulimit');
+const haveCpulimit = blinkHas0515 && tryBuild('gcc', ['-static', '-O1', '-w', '-o', cpulimitBin, 'cpulimit.c']);
+// (and the kernel's leases: perf-kernel's F_SETLEASE)
+const leaseBin = join(out, 'lease');
+const haveLease = blinkHas0515 && (Abi as Record<string, unknown>).F_SETLEASE !== undefined && tryBuild('gcc', ['-static', '-O1', '-w', '-o', leaseBin, 'lease.c']);
 // a named semaphore's count survives sem_close (the kernel writes a /dev/shm object back to its linked names)
 const semreopenBin = join(out, 'semreopen');
 const haveSemreopen = tryBuild('gcc', ['-static', '-O1', '-w', '-o', semreopenBin, 'semreopen.c', '-lpthread']);
@@ -980,6 +993,24 @@ it.skipIf(!haveTimerthread)('a SIGEV_THREAD timer runs its function in another t
   expect(r.output.replace(/\r\n/g, '\n')).toBe('runs 1 value 42 other thread 1\nchild runs 0\nparent runs 1\n');
 }, 60_000);
 
+it.skipIf(!haveClonevm)('clone(CLONE_VM | CLONE_PARENT_SETTID) on its own stack: a process sharing its parent\'s memory, ptid set first, reaped by its parent (LTP clone08)', async () => {
+  const { shell } = await setup(readFileSync(clonevmBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('ptid 1 shared 1 exit 7\n');
+}, 60_000);
+
+it.skipIf(!haveCpulimit)('RLIMIT_CPU: SIGXCPU at the soft limit and SIGKILL at the hard one, inherited by a fork child; time asleep or blocked in wait() is not CPU time (LTP setrlimit06)', async () => {
+  const { shell } = await setup(readFileSync(cpulimitBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('limit 1 2\nafter sleep 0\ngrandchild SIGKILL xcpu 1\n');
+}, 60_000);
+
+it.skipIf(!haveLease)('fcntl leases: a read lease on a file open for writing is EAGAIN; on a read-only open it is granted and F_GETLEASE reports it (LTP fcntl27)', async () => {
+  const { shell } = await setup(readFileSync(leaseBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('rdwr rdlck Resource temporarily unavailable\nwronly rdlck Resource temporarily unavailable\nrdonly rdlck ok get 0\nunlck ok get 2\n');
+}, 60_000);
+
 it.skipIf(!haveMmaptail)('a file mapping whose length ends mid-page shows the file to the end of the page; MAP_FIXED over it shows the new file (Open POSIX mmap_3-1)', async () => {
   const { shell } = await setup(readFileSync(mmaptailBin));
   const r = await run(shell, './prog');
@@ -1076,6 +1107,13 @@ describe('Blink engine: CPU and syscall fixes', () => {
     expect(new TextDecoder().decode(after.subarray(size - 4))).toBe('WXYZ');
     expect(Buffer.compare(after.subarray(0, size - 4), big.subarray(0, size - 4))).toBe(0);
     expect((await fs.readFile('/home/user/work/trunc.bin') as Uint8Array).length).toBe(1);
+  }, 60_000);
+
+  // host.mjs's chunk is a pool channel's data area exactly (not the page's word after it)
+  it.skipIf(!haveBigwrite)('a 10 MiB write goes whole to a file, linked or unlinked; a 3 MiB pwrite too (Open POSIX aio_suspend_1-1)', async () => {
+    const { shell } = await setup(readFileSync(bigwriteBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('unlinked 10485760\nwrite 10485760\npwrite 3145728\nbyte 1\nsize 10485760\n');
   }, 60_000);
 
   // LTP futex_wake02, futex_wait_bitset01
@@ -1559,6 +1597,13 @@ describe('Blink engine: CPU and syscall fixes', () => {
       "anon after fork 'c' munmap rounded 0\nshm after close 'qwerty' mapped 'qwerty'\ndone\nrc 0\n";
     expect(r.output.replace(/\r\n/g, '\n')).toBe(ok + ok);
   }, 120_000);
+
+  // open() of /proc/self/fd/N reopens what the fd refers to (LTP splice07, bash's <(…))
+  it.skipIf(!haveFdreopen)('opening /proc/self/fd/N and /dev/fd/N: a pipe\'s other end, a file at its own offset, a memfd', async () => {
+    const { shell } = await setup(readFileSync(fdreopenBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('pipe pipe\nfile file offset 4\nmemfd memfd ro-write refused\n');
+  }, 60_000);
 
   // Path lookup errors (LTP lstat02), as uid 1000
   it.skipIf(!haveStatpath)('stat and lstat: EACCES, ENOENT for "", ENAMETOOLONG, ENOTDIR, ELOOP past 40 links', async () => {

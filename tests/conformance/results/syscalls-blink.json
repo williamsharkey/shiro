@@ -1,7 +1,7 @@
 {
  "suite": "LTP syscalls",
  "title": "Syscalls: LTP under Blink (x86-64)",
- "note": "Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel processes in the Blink engine; only tests that pass natively on the build host as an unprivileged user (uid 1000, like tabcomputer) are scored. Blink forks within one instance by default (patch 0048), so the child shares MAP_SHARED pages, where LTP keeps its result counts and checkpoints; with BLINK_SAME_INSTANCE_FORK=0 (snapshot fork) they are not shared, so when the Summary reads all zeros the TPASS/TFAIL/TBROK lines are counted instead (tests/conformance/lib/ltp.mjs). Trend: 146 (first run) → 172 → 148 (TBROK/TFAIL lines counted, snapshot fork) → 197 (same-instance fork opt-in, A/B against 155 without it) → 222 (same-instance fork the default, Blink 0034–0048, kernel O_PATH/locks/pipe sizes/epoll/errno fixes) → 229 (AF_UNIX DGRAM/SEQPACKET sockets, timeouts that never end early, unlinkat/wait4 errnos; bind04 now reaches its abstract-name cases, which Blink truncates) → 237 (Blink 0050–0054: same-instance children no longer stall each other, sleeps show S and end on signals, abstract AF_UNIX names keep their length) → 240/322 (Blink 0058–0070 and signalfd01/02 added to the scored set: nanosleep04 and signalfd pass; UDP over loopback, AF_UNIX datagram backpressure and socket errnos fix bind05, sendfile07, connect03, accept03 and epoll_wait05; ppoll01 and waitpid08/10 newly fail, both Blink regressions reported to perf-blink) → 272/322 (Blink 0080/0081, built locally until perf-blink folds them into its build: record locks, pipe sizes and RLIMIT_NOFILE are the kernel's, read-only output buffers are EFAULT, LTP errnos for clocks, rlimits, iovs, waitid, sendfile, O_PATH fds, personality; waitpid13 fails like waitpid08/10) → 280/322 (measured on integration a8bf453, perf-blink's build with 0080–0082 and its 0075–0077: ppoll takes its sigmask, a futex wake is no longer counted twice (waitpid08/10/13), /proc/self/maps is a memfd, pipes are writable by the page, nanosleep writes rem before the signal frame; futex_cmp_requeue01 now crashes the test worker). → 282/322 measured on integration bab5481 (perf-blink's engine through 0110: futex requeue, copy-on-write fork): futex_cmp_requeue02/03 and waitpid01 pass; clock_gettime04 failed once on CLOCK_BOOTTIME jitter under load (8 ms > 6 ms). → 283/322 on integration dff2c0d (perf-blink's engine through 0114 with this branch's 0500–0504): execve06 passes. → 283/322 again on unix/conformance 55e936d (perf-blink's engine through 0119 with this branch's 0505–0509, as for Open POSIX): no change; clock_gettime04 (CLOCK_BOOTTIME jitter) and futex_wake02 still fail.",
+ "note": "Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel processes in the Blink engine; only tests that pass natively on the build host as an unprivileged user (uid 1000, like tabcomputer) are scored. Blink forks within one instance by default (patch 0048), so the child shares MAP_SHARED pages, where LTP keeps its result counts and checkpoints; with BLINK_SAME_INSTANCE_FORK=0 (snapshot fork) they are not shared, so when the Summary reads all zeros the TPASS/TFAIL/TBROK lines are counted instead (tests/conformance/lib/ltp.mjs). Trend: 146 (first run) → 172 → 148 (TBROK/TFAIL lines counted, snapshot fork) → 197 (same-instance fork opt-in, A/B against 155 without it) → 222 (same-instance fork the default, Blink 0034–0048, kernel O_PATH/locks/pipe sizes/epoll/errno fixes) → 229 (AF_UNIX DGRAM/SEQPACKET sockets, timeouts that never end early, unlinkat/wait4 errnos; bind04 now reaches its abstract-name cases, which Blink truncates) → 237 (Blink 0050–0054: same-instance children no longer stall each other, sleeps show S and end on signals, abstract AF_UNIX names keep their length) → 240/322 (Blink 0058–0070 and signalfd01/02 added to the scored set: nanosleep04 and signalfd pass; UDP over loopback, AF_UNIX datagram backpressure and socket errnos fix bind05, sendfile07, connect03, accept03 and epoll_wait05; ppoll01 and waitpid08/10 newly fail, both Blink regressions reported to perf-blink) → 272/322 (Blink 0080/0081, built locally until perf-blink folds them into its build: record locks, pipe sizes and RLIMIT_NOFILE are the kernel's, read-only output buffers are EFAULT, LTP errnos for clocks, rlimits, iovs, waitid, sendfile, O_PATH fds, personality; waitpid13 fails like waitpid08/10) → 280/322 (measured on integration a8bf453, perf-blink's build with 0080–0082 and its 0075–0077: ppoll takes its sigmask, a futex wake is no longer counted twice (waitpid08/10/13), /proc/self/maps is a memfd, pipes are writable by the page, nanosleep writes rem before the signal frame; futex_cmp_requeue01 now crashes the test worker). → 282/322 measured on integration bab5481 (perf-blink's engine through 0110: futex requeue, copy-on-write fork): futex_cmp_requeue02/03 and waitpid01 pass; clock_gettime04 failed once on CLOCK_BOOTTIME jitter under load (8 ms > 6 ms). → 283/322 on integration dff2c0d (perf-blink's engine through 0114 with this branch's 0500–0504): execve06 passes. → 283/322 again on unix/conformance 55e936d (perf-blink's engine through 0119 with this branch's 0505–0509, as for Open POSIX): no change; clock_gettime04 (CLOCK_BOOTTIME jitter) and futex_wake02 still fail. → 431/534 on unix/conformance d3049611 with the scored set widened to the calls real tools use (212 more: memory maps and locks, file metadata and sync, splice/tee/copy_file_range, eventfd/timerfd/inotify, socket messages and options, queued and per-thread signals, POSIX timers and itimers, prctl, ids, rusage, affinity; perf-blink's engine through 0121 with this branch's 0514 built locally: Linux's argument checks before the call, mincore, mlock; and host.mjs's chunk fix, without which writes over 1 MiB came back short): the first 322 at 285 (clock_gettime04 and futex_wake02 pass this time), the new 212 at 146. Left among the new: inotify (not implemented), ioctl_pidfd/ioctl_ns, mmap/mremap edge cases, prctl options, fallocate modes, multicast/packet socket options, readlinkat of an O_PATH symlink, splice07 (/proc/self/fd reopen), splice08/09 (Linux 6.7).",
  "files": {
   "accept": {
    "pass": 2,
@@ -23,6 +23,16 @@
    "total": 4,
    "failures": []
   },
+  "brk": {
+   "pass": 1,
+   "total": 2,
+   "failures": [
+    {
+     "name": "brk01",
+     "reason": "brk01.c:59: TFAIL: brk() failed to set address have 0x88024000 expected 0x88023fff"
+    }
+   ]
+  },
   "chdir": {
    "pass": 2,
    "total": 2,
@@ -34,14 +44,9 @@
    "failures": []
   },
   "clock_gettime": {
-   "pass": 0,
+   "pass": 1,
    "total": 1,
-   "failures": [
-    {
-     "name": "clock_gettime04",
-     "reason": "clock_gettime04.c:169: TFAIL: CLOCK_BOOTTIME(vDSO or syscall with libc spec): Difference between successive readings greater than 6 ms (0): 8"
-    }
-   ]
+   "failures": []
   },
   "clock_nanosleep": {
    "pass": 3,
@@ -63,9 +68,24 @@
    "total": 2,
    "failures": []
   },
+  "close_range": {
+   "pass": 0,
+   "total": 1,
+   "failures": [
+    {
+     "name": "close_range02",
+     "reason": "close_range02.c:84: TBROK: clone failed: EINVAL (22)"
+    }
+   ]
+  },
   "connect": {
    "pass": 2,
    "total": 2,
+   "failures": []
+  },
+  "copy_file_range": {
+   "pass": 1,
+   "total": 1,
    "failures": []
   },
   "creat": {
@@ -103,6 +123,16 @@
    "total": 7,
    "failures": []
   },
+  "epoll_pwait": {
+   "pass": 5,
+   "total": 6,
+   "failures": [
+    {
+     "name": "epoll_pwait03",
+     "reason": "tst_timer_test.c:314: TFAIL: do_epoll_pwait() slept for too long"
+    }
+   ]
+  },
   "epoll_wait": {
    "pass": 14,
    "total": 15,
@@ -113,20 +143,49 @@
     }
    ]
   },
+  "eventfd": {
+   "pass": 5,
+   "total": 5,
+   "failures": []
+  },
+  "eventfd2": {
+   "pass": 3,
+   "total": 3,
+   "failures": []
+  },
   "execve": {
-   "pass": 1,
+   "pass": 2,
    "total": 2,
-   "failures": [
-    {
-     "name": "execve01",
-     "reason": "execve01_child.c:32: TFAIL: PATH is in environment"
-    }
-   ]
+   "failures": []
+  },
+  "exit": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "exit_group": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
   },
   "faccessat": {
    "pass": 2,
    "total": 2,
    "failures": []
+  },
+  "fallocate": {
+   "pass": 0,
+   "total": 2,
+   "failures": [
+    {
+     "name": "fallocate02",
+     "reason": "passed 0 failed 0 broken 0"
+    },
+    {
+     "name": "fallocate03",
+     "reason": "fallocate03.c:81: TFAIL: fallocate(fd, DEFAULT_MODE, 8192, 4096) failed: EOPNOTSUPP (95)"
+    }
+   ]
   },
   "fchdir": {
    "pass": 2,
@@ -138,19 +197,22 @@
    "total": 1,
    "failures": []
   },
+  "fchmodat": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
   "fcntl": {
    "pass": 26,
    "total": 36,
    "failures": [
     {
      "name": "fcntl14",
-     "reason": "no summary",
-     "timeout": true
+     "reason": "no summary"
     },
     {
      "name": "fcntl14_64",
-     "reason": "no summary",
-     "timeout": true
+     "reason": "no summary"
     },
     {
      "name": "fcntl27",
@@ -162,19 +224,19 @@
     },
     {
      "name": "fcntl38",
-     "reason": "tst_kconfig.c:289: TBROK: Cannot parse kernel .config"
+     "reason": "passed 0 failed 0 broken 0"
     },
     {
      "name": "fcntl38_64",
-     "reason": "tst_kconfig.c:289: TBROK: Cannot parse kernel .config"
+     "reason": "passed 0 failed 0 broken 0"
     },
     {
      "name": "fcntl39",
-     "reason": "tst_kconfig.c:289: TBROK: Cannot parse kernel .config"
+     "reason": "passed 0 failed 0 broken 0"
     },
     {
      "name": "fcntl39_64",
-     "reason": "tst_kconfig.c:289: TBROK: Cannot parse kernel .config"
+     "reason": "passed 0 failed 0 broken 0"
     },
     {
      "name": "fcntl40",
@@ -186,6 +248,11 @@
      "reason": "passed 0 failed 0 broken 0"
     }
    ]
+  },
+  "flock": {
+   "pass": 5,
+   "total": 5,
+   "failures": []
   },
   "fork": {
    "pass": 8,
@@ -201,6 +268,16 @@
   "fstat": {
    "pass": 4,
    "total": 4,
+   "failures": []
+  },
+  "fstatfs": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "fsync": {
+   "pass": 2,
+   "total": 2,
    "failures": []
   },
   "ftruncate": {
@@ -249,9 +326,39 @@
     }
    ]
   },
+  "getcpu": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
   "getcwd": {
    "pass": 4,
    "total": 4,
+   "failures": []
+  },
+  "geteuid": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "getgid": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "getitimer": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "getpeername": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "getpgid": {
+   "pass": 2,
+   "total": 2,
    "failures": []
   },
   "getpid": {
@@ -264,15 +371,137 @@
    "total": 2,
    "failures": []
   },
+  "getrandom": {
+   "pass": 5,
+   "total": 5,
+   "failures": []
+  },
   "getrlimit": {
    "pass": 3,
    "total": 3,
+   "failures": []
+  },
+  "getrusage": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "getsockname": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "getsockopt": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "gettid": {
+   "pass": 2,
+   "total": 2,
    "failures": []
   },
   "gettimeofday": {
    "pass": 2,
    "total": 2,
    "failures": []
+  },
+  "getuid": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "inotify": {
+   "pass": 0,
+   "total": 8,
+   "failures": [
+    {
+     "name": "inotify01",
+     "reason": "passed 0 failed 0 broken 0"
+    },
+    {
+     "name": "inotify02",
+     "reason": "passed 0 failed 0 broken 0"
+    },
+    {
+     "name": "inotify04",
+     "reason": "passed 0 failed 0 broken 0"
+    },
+    {
+     "name": "inotify05",
+     "reason": "passed 0 failed 0 broken 0"
+    },
+    {
+     "name": "inotify09",
+     "reason": "passed 0 failed 0 broken 0"
+    },
+    {
+     "name": "inotify10",
+     "reason": "passed 0 failed 0 broken 0"
+    },
+    {
+     "name": "inotify11",
+     "reason": "passed 0 failed 0 broken 0"
+    },
+    {
+     "name": "inotify12",
+     "reason": "passed 0 failed 0 broken 0"
+    }
+   ]
+  },
+  "ioctl": {
+   "pass": 1,
+   "total": 13,
+   "failures": [
+    {
+     "name": "ioctl01",
+     "reason": "ioctl01.c:62: TFAIL: Termio address is invalid expected EFAULT: ENOTTY (25)"
+    },
+    {
+     "name": "ioctl07",
+     "reason": "ioctl07.c:27: TBROK: ioctl(3,((((2U) << (((0+8)+8)+14)) | ((('R')) << (0+8)) | (((0x00)) << 0) | ((((sizeof(int)))) << ((0+8)+8)))),...) failed: ENOTTY (25)"
+    },
+    {
+     "name": "ioctl10",
+     "reason": "passed 0 failed 0 broken 0"
+    },
+    {
+     "name": "ioctl_ns02",
+     "reason": "ioctl_ns02.c:33: TBROK: open(/proc/self/ns/uts,0,0000) failed: ENOENT (2)"
+    },
+    {
+     "name": "ioctl_ns03",
+     "reason": "ioctl_ns03.c:32: TBROK: open(/proc/self/ns/uts,0,0000) failed: ENOENT (2)"
+    },
+    {
+     "name": "ioctl_ns04",
+     "reason": "ioctl_ns04.c:32: TBROK: open(/proc/self/ns/user,0,0000) failed: ENOENT (2)"
+    },
+    {
+     "name": "ioctl_pidfd01",
+     "reason": "ioctl_pidfd.h:58: TBROK: pidfd_open(6489, 0) failed: ENOSYS (38)"
+    },
+    {
+     "name": "ioctl_pidfd02",
+     "reason": "passed 0 failed 0 broken 0"
+    },
+    {
+     "name": "ioctl_pidfd03",
+     "reason": "passed 0 failed 0 broken 0"
+    },
+    {
+     "name": "ioctl_pidfd04",
+     "reason": "passed 0 failed 0 broken 0"
+    },
+    {
+     "name": "ioctl_pidfd05",
+     "reason": "passed 0 failed 0 broken 0"
+    },
+    {
+     "name": "ioctl_pidfd06",
+     "reason": "passed 0 failed 0 broken 0"
+    }
+   ]
   },
   "kill": {
    "pass": 4,
@@ -300,13 +529,131 @@
    "failures": [
     {
      "name": "lstat02",
-     "reason": "lstat02.c:66: TFAIL: lstat() returned 0, expected -1: SUCCESS (0)"
+     "reason": "lstat02.c:74: TFAIL: lstat() failed unexpectedly; expected: EFAULT - got: EBADF (9)"
     },
     {
      "name": "lstat02_64",
-     "reason": "lstat02.c:66: TFAIL: lstat() returned 0, expected -1: SUCCESS (0)"
+     "reason": "lstat02.c:74: TFAIL: lstat() failed unexpectedly; expected: EFAULT - got: EBADF (9)"
     }
    ]
+  },
+  "madvise": {
+   "pass": 2,
+   "total": 3,
+   "failures": [
+    {
+     "name": "madvise10",
+     "reason": "madvise10.c:81: TFAIL: In PID 6512, addr[1] = 0x01, expected[1] = 0x00"
+    }
+   ]
+  },
+  "memfd_create": {
+   "pass": 1,
+   "total": 3,
+   "failures": [
+    {
+     "name": "memfd_create01",
+     "reason": "memfd_create01.c:65: TFAIL: mmap((nil), 8192, 3, 1, 3, 0) succeeded unexpectedly"
+    },
+    {
+     "name": "memfd_create04",
+     "reason": "passed 0 failed 0 broken 0"
+    }
+   ]
+  },
+  "mincore": {
+   "pass": 3,
+   "total": 3,
+   "failures": []
+  },
+  "mknod": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "mlock": {
+   "pass": 2,
+   "total": 3,
+   "failures": [
+    {
+     "name": "mlock05",
+     "reason": "mlock05.c:30: TBROK: fopen(/proc/self/smaps,r) failed: ENOENT (2)"
+    }
+   ]
+  },
+  "mmap": {
+   "pass": 8,
+   "total": 18,
+   "failures": [
+    {
+     "name": "mmap01",
+     "reason": "mmap01.c:43: TFAIL: Read 16 expected 12"
+    },
+    {
+     "name": "mmap04",
+     "reason": "mmap04.c:63: TBROK: Expected 1 conversions got 0 FILE '/proc/self/maps'"
+    },
+    {
+     "name": "mmap06",
+     "reason": "mmap06.c:57: TFAIL: mmap(NULL, tc->length, tc->prot, tc->flags, fd, 0) expected EINVAL: EACCES (13)"
+    },
+    {
+     "name": "mmap12",
+     "reason": "mmap12.c:47: TFAIL: pen dev pagemap failed: ENOENT (2)"
+    },
+    {
+     "name": "mmap15",
+     "reason": "mmap15.c:34: TFAIL: mmap() into high mem region succeeded unexpectedly"
+    },
+    {
+     "name": "mmap18",
+     "reason": "mmap18.c:92: TBROK: mmap(0x8011d000,16384,PROT_READ | PROT_WRITE(3),306,-1,0) failed: EOPNOTSUPP (95)"
+    },
+    {
+     "name": "mmap20",
+     "reason": "mmap20.c:46: TFAIL: mmap() is successful, but it should have failed: ENOENT (2)"
+    },
+    {
+     "name": "mmap21",
+     "reason": "mmap21.c:58: TFAIL: Mapped file has not been updated at byte 1048577"
+    },
+    {
+     "name": "mmap23",
+     "reason": "mmap23.c:21: TFAIL: mmap(2GB) with MAP_32BIT succeeded"
+    },
+    {
+     "name": "mmap24",
+     "reason": "mmap24.c:71: TFAIL: mapping at 0x80001000 + 33554432 exceeds 2GB limit"
+    }
+   ]
+  },
+  "mprotect": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "mremap": {
+   "pass": 6,
+   "total": 9,
+   "failures": [
+    {
+     "name": "mremap01",
+     "reason": "mremap01.c:67: TFAIL: mremap()'d region did not sync to the file. file[8191999] == 0x00, expected 0xff"
+    },
+    {
+     "name": "mremap06",
+     "reason": "mremap06.c:110: TBROK: fallocate() failed"
+    },
+    {
+     "name": "mremap07",
+     "reason": "passed 0 failed 0 broken 0"
+    }
+   ]
+  },
+  "munmap": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
   },
   "nanosleep": {
    "pass": 3,
@@ -358,7 +705,43 @@
    "total": 1,
    "failures": []
   },
+  "prctl": {
+   "pass": 2,
+   "total": 7,
+   "failures": [
+    {
+     "name": "prctl02",
+     "reason": "prctl02.c:155: TFAIL: prctl() succeeded unexpectedly"
+    },
+    {
+     "name": "prctl03",
+     "reason": "prctl03.c:101: TBROK: waitpid(6682,(nil),0) failed: EINTR (4)"
+    },
+    {
+     "name": "prctl05",
+     "reason": "prctl05.c:67: TFAIL: /proc/self/task/6686/comm != 'prctl05_test' got 'prctl05'"
+    },
+    {
+     "name": "prctl08",
+     "reason": "prctl08.c:105: TFAIL: prctl(PR_SET_TIMERSLACK, 0) failed: EINVAL (22)"
+    },
+    {
+     "name": "prctl09",
+     "reason": "prctl09.c:38: TBROK: prctl set timerslack 200us failed: EINVAL (22)"
+    }
+   ]
+  },
   "pread": {
+   "pass": 4,
+   "total": 4,
+   "failures": []
+  },
+  "preadv": {
+   "pass": 4,
+   "total": 4,
+   "failures": []
+  },
+  "preadv2": {
    "pass": 4,
    "total": 4,
    "failures": []
@@ -388,20 +771,84 @@
     }
    ]
   },
+  "pwritev": {
+   "pass": 4,
+   "total": 4,
+   "failures": []
+  },
+  "pwritev2": {
+   "pass": 4,
+   "total": 4,
+   "failures": []
+  },
   "read": {
    "pass": 4,
    "total": 4,
    "failures": []
+  },
+  "readahead": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "readlinkat": {
+   "pass": 0,
+   "total": 2,
+   "failures": [
+    {
+     "name": "readlinkat01",
+     "reason": "readlinkat01.c:72: TBROK: open(readlink_symlink,2228224,0000) failed: ELOOP (40)"
+    },
+    {
+     "name": "readlinkat02",
+     "reason": "readlinkat02.c:54: TFAIL: readlinkat(3, test_file/test_file, NULL, 256) expected ENOTDIR: ENOENT (2)"
+    }
+   ]
   },
   "readv": {
    "pass": 2,
    "total": 2,
    "failures": []
   },
+  "recvmsg": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
   "rmdir": {
    "pass": 1,
    "total": 1,
    "failures": []
+  },
+  "rt_sigqueueinfo": {
+   "pass": 1,
+   "total": 2,
+   "failures": [
+    {
+     "name": "rt_sigqueueinfo01",
+     "reason": "rt_sigqueueinfo01.c:70: TFAIL: rt_sigqueueinfo() failed: ESRCH (3)"
+    }
+   ]
+  },
+  "rt_sigtimedwait": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "sbrk": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "sched_getaffinity": {
+   "pass": 0,
+   "total": 1,
+   "failures": [
+    {
+     "name": "sched_getaffinity01",
+     "reason": "sched_getaffinity01.c:33: TFAIL: sched_getaffinity() should fail with ESRCH: EPERM (1)"
+    }
+   ]
   },
   "select": {
    "pass": 3,
@@ -432,6 +879,46 @@
     }
    ]
   },
+  "sendmsg": {
+   "pass": 0,
+   "total": 1,
+   "failures": [
+    {
+     "name": "sendmsg03",
+     "reason": "passed 0 failed 0 broken 0"
+    }
+   ]
+  },
+  "sendto": {
+   "pass": 0,
+   "total": 1,
+   "failures": [
+    {
+     "name": "sendto03",
+     "reason": "passed 0 failed 0 broken 0"
+    }
+   ]
+  },
+  "set_tid_address": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "setitimer": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "setpgid": {
+   "pass": 2,
+   "total": 3,
+   "failures": [
+    {
+     "name": "setpgid03",
+     "reason": "setpgid03.c:56: TFAIL: setpgid(child_pid, getppid()) succeeded"
+    }
+   ]
+  },
   "setrlimit": {
    "pass": 1,
    "total": 2,
@@ -442,6 +929,38 @@
     }
    ]
   },
+  "setsockopt": {
+   "pass": 1,
+   "total": 5,
+   "failures": [
+    {
+     "name": "setsockopt05",
+     "reason": "passed 0 failed 0 broken 0"
+    },
+    {
+     "name": "setsockopt07",
+     "reason": "passed 0 failed 0 broken 0"
+    },
+    {
+     "name": "setsockopt08",
+     "reason": "passed 0 failed 0 broken 0"
+    },
+    {
+     "name": "setsockopt09",
+     "reason": "passed 0 failed 0 broken 0"
+    }
+   ]
+  },
+  "shutdown": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "sigaltstack": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
   "signal": {
    "pass": 5,
    "total": 5,
@@ -450,6 +969,21 @@
   "signalfd": {
    "pass": 2,
    "total": 2,
+   "failures": []
+  },
+  "sigpending": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "sigsuspend": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "sigwait": {
+   "pass": 1,
+   "total": 1,
    "failures": []
   },
   "socket": {
@@ -462,7 +996,35 @@
    "total": 2,
    "failures": []
   },
+  "splice": {
+   "pass": 5,
+   "total": 8,
+   "failures": [
+    {
+     "name": "splice07",
+     "reason": "tst_test.c:1969: TBROK: Test killed! (timeout?)"
+    },
+    {
+     "name": "splice08",
+     "reason": "passed 0 failed 0 broken 0"
+    },
+    {
+     "name": "splice09",
+     "reason": "passed 0 failed 0 broken 0"
+    }
+   ]
+  },
   "stat": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "statfs": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "statx": {
    "pass": 2,
    "total": 2,
    "failures": []
@@ -472,9 +1034,79 @@
    "total": 2,
    "failures": []
   },
+  "sync_file_range": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
+  "sysinfo": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "tee": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "tgkill": {
+   "pass": 1,
+   "total": 3,
+   "failures": [
+    {
+     "name": "tgkill02",
+     "reason": "tgkill02.c:57: TFAIL: tgkill() should have failed with EAGAIN: SUCCESS (0)"
+    },
+    {
+     "name": "tgkill03",
+     "reason": "tgkill03.c:103: TFAIL: Defunct tid should have failed with ESRCH: EPERM (1)"
+    }
+   ]
+  },
   "time": {
    "pass": 1,
    "total": 1,
+   "failures": []
+  },
+  "timer_create": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "timer_settime": {
+   "pass": 0,
+   "total": 1,
+   "failures": [
+    {
+     "name": "timer_settime03",
+     "reason": "timer_settime03.c:114: TFAIL: Timer overrun counter is wrong: 0; expected 2147483647 or negative number"
+    }
+   ]
+  },
+  "timerfd": {
+   "pass": 5,
+   "total": 6,
+   "failures": [
+    {
+     "name": "timerfd_settime02",
+     "reason": "no summary",
+     "timeout": true
+    }
+   ]
+  },
+  "times": {
+   "pass": 1,
+   "total": 2,
+   "failures": [
+    {
+     "name": "times03",
+     "reason": "times03.c:116: TFAIL: buf2.tms_stime = 0"
+    }
+   ]
+  },
+  "tkill": {
+   "pass": 2,
+   "total": 2,
    "failures": []
   },
   "truncate": {
@@ -502,9 +1134,19 @@
    "total": 1,
    "failures": []
   },
+  "utime": {
+   "pass": 1,
+   "total": 1,
+   "failures": []
+  },
   "vfork": {
    "pass": 2,
    "total": 2,
+   "failures": []
+  },
+  "vmsplice": {
+   "pass": 4,
+   "total": 4,
    "failures": []
   },
   "wait4": {
