@@ -398,6 +398,9 @@ export async function executeNodeScript(
 
     if (typeof window !== 'undefined') {
       window.addEventListener('unhandledrejection', suppressRejection);
+    } else {
+      // a kernel guest: the worker hears them
+      nodeGuestOf(ctx)?.onUnhandledRejection?.((reason, promise) => suppressRejection({ reason, promise, preventDefault() {} } as unknown as PromiseRejectionEvent));
     }
     runningScripts++;
     let counted = true;

@@ -42,11 +42,22 @@ function openPreview(port: number): void {
 
 /** The kernel Runner: the process's program is a node guest worker */
 export function nodeWorkerRunner(): Runner {
-  return workerRunner(() => {
+  return (proc, kernel) => workerRunner((p) => {
     const w = createNodeWorker();
-    w.onMessage((m: any) => { if (m?.type === 'node-guest-listen' && typeof m.port === 'number') openPreview(m.port); });
+    let watching = false;
+    w.onMessage((m: any) => {
+      if (m?.type === 'node-guest-listen' && typeof m.port === 'number') openPreview(m.port);
+      // fs.watch in the guest: the filesystem's changes (every process's writes) go to it
+      if (m?.type === 'node-guest-watch' && !watching && kernel.fs) {
+        watching = true;
+        const off = kernel.fs.onChange((event, path, newPath) => {
+          try { w.postMessage({ type: 'node-guest-fs', event, path, newPath }); } catch { /* gone */ }
+        });
+        p.onTerminate(off);
+      }
+    });
     return w;
-  }, { dataSize: 1 << 20 });
+  }, { dataSize: 1 << 20 })(proc, kernel);
 }
 
 /** `#!/usr/bin/env node`, `#!/usr/bin/env -S node --flag`, `#!/usr/local/bin/node`: the flags after node, or null */

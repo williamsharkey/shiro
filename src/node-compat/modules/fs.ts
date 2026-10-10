@@ -315,7 +315,12 @@ export function createFsModule(deps: FsDeps): any {
   // Files other processes change: the text cache follows them (it was filled
   // at start, so a watcher's re-read of a changed file got the old text).
   // Not while this script's own writes are in flight: the cache is ahead then.
-  if (deps.atExit) {
+  if (deps.atExit && nodeGuestOf(ctx)) {
+    // A guest's cache reads through: a changed path is just dropped (read again when asked),
+    // while a watcher has the page's change feed on
+    const drop = (p?: string) => { if (p) Map.prototype.delete.call(fileCache, p); };
+    deps.atExit((ctx.fs as any).onChangePassive((_event: string, path: string, newPath?: string) => { drop(path); drop(newPath); }));
+  } else if (deps.atExit) {
     const off = ctx.fs.onChange((event, path, newPath) => {
       queueMicrotask(() => {
         if (writeState.inflight.size) return;
