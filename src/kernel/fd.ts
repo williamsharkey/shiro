@@ -890,28 +890,69 @@ function useShared(ino: Inode, view: Uint8Array): void {
 
 /** The shared object for the file at `path` turned remote: its fds use `sab`'s first `length` bytes. */
 export function attachInodeShared(fs: FileSystem, path: string, sab: SharedArrayBuffer, length: number, file?: OpenFile): void {
+  const view = new Uint8Array(sab, 0, length);
+  // the mapped fd's own inode: once unlinked (shm_open then shm_unlink, Open
+  // POSIX mmap_7-4) it's no longer the path's, and the path (a new file of
+  // that name, maybe) has nothing to do with this object
+  const own = file instanceof RegularFile ? file.inode : undefined;
+  if (own?.unlinked) { useShared(own, view); return; }
   let m = sharedFiles.get(fs);
   if (!m) { m = new Map(); sharedFiles.set(fs, m); }
-  const view = new Uint8Array(sab, 0, length);
   m.set(path, view);
   const ino = inodeTables.get(fs)?.get(path);
   if (ino) useShared(ino, view);
-  // the mapped fd's own inode too: once unlinked (shm_open then shm_unlink,
-  // Open POSIX mmap_7-4) it's no longer the path's
-  const own = file instanceof RegularFile ? file.inode : undefined;
   if (own && own !== ino) useShared(own, view);
+}
+
+/** Back to its own array, with the bytes it has now. */
+function detachInode(ino: Inode): void {
+  if (!(ino.data.buffer instanceof SharedArrayBuffer)) return;
+  const own = ino.privateData;
+  ino.privateData = undefined;
+  if (own && own.length >= ino.size) { own.set(ino.data.subarray(0, ino.size)); ino.data = own; }
+  else ino.data = ino.data.slice(0, ino.size);
+  ino.pageIfBig();
 }
 
 /** Its last mapping went: the inode keeps a private copy of the bytes it has now. */
 function detachInodeShared(fs: FileSystem, path: string): void {
   sharedFiles.get(fs)?.delete(path);
   const ino = inodeTables.get(fs)?.get(path);
-  if (!ino || !(ino.data.buffer instanceof SharedArrayBuffer)) return;
-  const own = ino.privateData;
-  ino.privateData = undefined;
-  if (own && own.length >= ino.size) { own.set(ino.data.subarray(0, ino.size)); ino.data = own; }
-  else ino.data = ino.data.slice(0, ino.size);
-  ino.pageIfBig();
+  if (ino) detachInode(ino);
+}
+
+/**
+ * The last mapping of the object `file` mapped went: its own inode leaves the
+ * buffer too (an unlinked one isn't the path's; it would keep the buffer alive).
+ */
+export function detachOpenFileShared(file: OpenFile): void {
+  if (!(file instanceof RegularFile)) return;
+  const ino = file.inode;
+  // A closed one (no fd has it, nothing to write back) just lets go of the buffer
+  if (ino.opens === 0) {
+    if (ino.data.buffer instanceof SharedArrayBuffer) { ino.data = new Uint8Array(0); ino.privateData = undefined; }
+    return;
+  }
+  detachInode(ino);
+}
+
+/** The shared object's buffer `file`'s inode reads and writes, if it is attached to one. */
+export function sharedBufferOf(file: OpenFile): ArrayBufferLike | undefined {
+  return file instanceof RegularFile && file.inode.shared ? file.inode.data.buffer : undefined;
+}
+
+const inodeIds = new WeakMap<Inode, number>();
+let nextInodeId = 1;
+/**
+ * A shared-object key for `file` when it is an unlinked file (its own inode,
+ * not its old name's number: a new file of that name is another object), else
+ * undefined.
+ */
+export function unlinkedFileKey(file: OpenFile): string | undefined {
+  if (!(file instanceof RegularFile) || !file.inode.unlinked) return undefined;
+  let id = inodeIds.get(file.inode);
+  if (!id) { id = nextInodeId++; inodeIds.set(file.inode, id); }
+  return `unlinked:${id}`;
 }
 
 function newInode(fs: FileSystem, path: string, ino: Inode): Inode {
@@ -1014,6 +1055,8 @@ export async function renameInodes(fs: FileSystem, from: string, to: string): Pr
  * write it back (this waits out a write-back already under way).
  */
 export async function unlinkInode(fs: FileSystem, path: string): Promise<void> {
+  // A mapped object's name goes: a new file of that name is another object
+  sharedFiles.get(fs)?.delete(path);
   const table = inodeTables.get(fs);
   const ino = table?.get(path);
   if (!ino || !table) return;

@@ -22,7 +22,7 @@ import { elfInterpreter } from '../elf-interp';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
   RegularFile, DirFile, abortableWait, openInode, openInodeSync, isInodeOpen, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
-  shareInodeNumber, forgetInodeNumber, renameLinkName, linkCount, writeBackAll, attachInodeShared,
+  shareInodeNumber, forgetInodeNumber, renameLinkName, linkCount, writeBackAll, attachInodeShared, detachOpenFileShared, unlinkedFileKey, sharedBufferOf,
 } from './fd';
 import { createPipe, Pipe, PipeEnd, FifoRdWr } from './pipe';
 import type { PtyFile } from './pty';
@@ -2050,7 +2050,12 @@ export class Kernel {
             if (f.kind !== 'file' || !path || !isShareablePath(path) || !this.fs) return -A.EINVAL;
             const fs = this.fs;
             const ino = inodeNumber(fs, path);
-            key = `file:${ino}`;
+            // (unlinked before it was mapped: its own inode is the object, not its old name's)
+            // (mapped before the unlink, it still is that object)
+            const attached = sharedBufferOf(f);
+            const existing = attached ? this.shmobj.keyOfBuffer(attached) : undefined;
+            const unlinkedKey = existing ? undefined : unlinkedFileKey(f);
+            key = existing ?? unlinkedKey ?? `file:${ino}`;
             // (through the fd: writes it holds may not have reached the filesystem yet)
             initial = async () => {
               if (f.pread) {
@@ -2067,12 +2072,16 @@ export class Kernel {
             // links it to the semaphore's name and unlinks it (Open POSIX
             // sem_close_3-2)
             writeBack = async (b) => {
+              // An unlinked object's bytes stay with its fds (the name may be another file's now)
+              if (unlinkedKey) { detachOpenFileShared(f); return; }
               const dir = path.slice(0, path.lastIndexOf('/')) || '/';
-              const names = new Set([path]);
+              // (only names still this inode: unlinked since the map, the name may be a new file's)
+              const names = new Set(fs.inoOf(path) === ino ? [path] : []);
               try {
                 for (const e of await fs.readdir(dir)) if (fs.inoOf(`${dir}/${e}`) === ino) names.add(`${dir}/${e}`);
               } catch { /* (the directory is gone) */ }
               for (const p of names) if (!(await writeInodeBytes(fs, p, b)) && await fs.exists(p)) await fs.writeFile(p, b);
+              detachOpenFileShared(f); // (the fd's inode may not be the path's: unlinked since the map)
             };
           } else if (kind === 1) {
             const seg = this.shm.list().find((x) => x.id === args[0]);
