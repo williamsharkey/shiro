@@ -124,6 +124,11 @@ Not here: hardware devices, kernel modules, and any access to your own machine.
 - **Debian.** `debian install` streams in Debian 13 "trixie" amd64; then `sudo apt install` is
   Debian's apt against a Debian mirror. 496 of popcon's top 500 packages install and pass a
   smoke test ([docs/DEBIAN_SCORE.md](docs/DEBIAN_SCORE.md), [docs/DEBIAN.md](docs/DEBIAN.md)).
+  Heavier tools work too, slowly: `tesseract` (OCR; 4 min to install, 7.5 s for a line of text)
+  and LibreOffice headless (`libreoffice-writer-nogui`: 10 min to install, then
+  `soffice --headless --convert-to pdf note.txt` in 37 s; measured in headless Chromium with
+  two installs running). calibre doesn't work yet: its install fails or hangs
+  ([docs/research/OPPORTUNITIES.md](docs/research/OPPORTUNITIES.md)).
 - **Prebuilt packages.** 72 programs built for the page, WebAssembly or static x86-64, that
   install in about a second ([above](#tabcomputers-prebuilt-packages), [docs/PACKAGES.md](docs/PACKAGES.md)).
 - **Conformance.** LTP syscall tests under Blink pass 272/322; the busybox testsuite
