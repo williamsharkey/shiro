@@ -281,6 +281,12 @@ export interface ProcInfoSource {
   get(pid: number): ProcInfo | undefined;
   /** The pids to list in /proc */
   list?(): number[];
+  /**
+   * The entry at a /proc path when this source generates it itself (the
+   * kernel's ProcFs: /proc/PID/syscall, wchan, task/, /proc/stat …), so
+   * in-page commands read the same /proc as programs do.
+   */
+  node?(path: string): ProcPidNode | undefined;
 }
 const procInfoSources: ProcInfoSource[] = [];
 /** Let /proc/PID describe processes from a process table (the kernel registers one, shell.ts another) */
@@ -289,6 +295,11 @@ export function addProcInfoSource(src: ProcInfoSource | ((pid: number) => ProcIn
 }
 function procInfo(pid: number): ProcInfo | undefined {
   for (const s of procInfoSources) { const i = s.get(pid); if (i) return i; }
+  return undefined;
+}
+/** A source's own entry at `path` (see ProcInfoSource.node) */
+function sourceNode(path: string): ProcPidNode | undefined {
+  for (const s of procInfoSources) { const n = s.node?.(path); if (n) return n; }
   return undefined;
 }
 function procPids(): number[] {
@@ -307,6 +318,8 @@ export function setProcSelf(fn: () => number | undefined): void {
 const PROC_PID_RE = /^\/proc\/(\d+|self|thread-self)(?:\/(.*))?$/;
 const PROC_PID_FILES = ['cmdline', 'comm', 'cwd', 'environ', 'exe', 'fd', 'io', 'limits', 'mounts', 'root', 'stat', 'statm', 'status', 'syscall', 'task', 'wchan'];
 type ProcPidNode = { dir: string[] } | { text: string } | { link: string };
+/** Top-level /proc files the kernel generates from its process table (ProcInfoSource.node) */
+const SYSTEM_NAMES = ['stat', 'loadavg', 'uptime', 'vmstat', 'sysvipc'];
 
 /** /proc virtual provider — dynamic system info from Shiro */
 class ProcProvider implements VirtualFSProvider {
@@ -320,6 +333,8 @@ class ProcProvider implements VirtualFSProvider {
     const pid = self ? procSelfPid() : Number(m[1]);
     if (pid === undefined) return null;
     if (self && m[2] === undefined) return { link: String(pid) };
+    const own = sourceNode(m[2] === undefined ? `/proc/${pid}` : `/proc/${pid}/${m[2]}`);
+    if (own) return own;
     const info = procInfo(pid);
     if (!info) return null;
     let rest = m[2] ?? '';
@@ -418,7 +433,13 @@ class ProcProvider implements VirtualFSProvider {
 
   handles(path: string): boolean {
     return path === '/proc' || path.startsWith('/proc/')
-      && (path in this.entries || this.dirs.includes(path) || this.pidNode(path) !== null);
+      && (path in this.entries || this.dirs.includes(path) || this.pidNode(path) !== null || this.systemNode(path) !== undefined);
+  }
+
+  /** /proc/stat, /proc/uptime, /proc/sysvipc/… as the kernel generates them, when there is one */
+  private systemNode(path: string): ProcPidNode | undefined {
+    const head = path.slice(6).split('/')[0];
+    return path.startsWith('/proc/') && SYSTEM_NAMES.includes(head) ? sourceNode(path) : undefined;
   }
 
   readFile(path: string, encoding?: 'utf8'): string | Uint8Array | null {
@@ -430,6 +451,7 @@ class ProcProvider implements VirtualFSProvider {
       if (!t.startsWith('/proc/') && /^\d+$/.test(t)) node = this.pidNode(`/proc/${t}`);
       else return null;
     }
+    node ??= this.systemNode(path) ?? null;
     if (node && 'dir' in node) return null;
     const gen = this.entries[path];
     if (!gen && !node) return null;
@@ -454,7 +476,7 @@ class ProcProvider implements VirtualFSProvider {
   }
 
   stat(path: string, follow = true): StatResult | null {
-    const node = this.pidNode(path);
+    const node = this.pidNode(path) ?? this.systemNode(path);
     if (node) return this.nodeStat(path, node, follow);
     if (this.dirs.includes(path)) return makeStat({ path, type: 'dir', content: null, mode: 0o555, mtime: Date.now(), ctime: this.startTime, size: 0 });
     if (path in this.entries) {
@@ -473,13 +495,15 @@ class ProcProvider implements VirtualFSProvider {
         if (!rest.includes('/')) entries.push(rest);
       }
       entries.push('self', 'sys');
+      // (the kernel's own files: stat, uptime, vmstat, sysvipc …)
+      for (const n of SYSTEM_NAMES) if (this.systemNode(`/proc/${n}`)) entries.push(n);
       return [...new Set(entries)].sort().concat(procPids().map(String));
     }
     if (this.dirs.includes(path)) {
       const prefix = path + '/';
       return [...new Set(Object.keys(this.entries).filter((k) => k.startsWith(prefix)).map((k) => k.slice(prefix.length).split('/')[0]))].sort();
     }
-    let node = this.pidNode(path);
+    let node = this.pidNode(path) ?? this.systemNode(path) ?? null;
     if (node && 'link' in node && /^\d+$/.test(node.link)) node = this.pidNode(`/proc/${node.link}`);
     return node && 'dir' in node ? node.dir : null;
   }
