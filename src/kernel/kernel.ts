@@ -240,6 +240,8 @@ export class Kernel {
   }
   /** fcntl record locks (F_SETLK, F_OFD_SETLK) */
   readonly locks = new LockTable();
+  /** flock(2) locks: whole-file, an open file description's, apart from fcntl's (as on Linux) */
+  readonly flocks = new LockTable();
   private detachTable?: () => void;
   /** How long an unreaped child of init stays a zombie before it is reaped automatically. */
   initReapDelayMs = 30_000;
@@ -651,8 +653,11 @@ export class Kernel {
   /** Terminate `proc` with a wait status: close its fds, reparent its children, notify its parent. */
   async exit(proc: Process, status: number): Promise<void> {
     if (proc.pid === 1 || !proc.beginExit()) return;
+    const files = new Set(proc.fds.entries().map(([, f]) => f));
     await proc.fds.closeAll();
     this.locks.release(proc.pid);
+    // the descriptions it held last: their OFD and flock locks go
+    for (const f of files) if (refCount(f) === 0) { this.locks.release(f); this.flocks.release(f); }
     this.shm.detachAll(proc);
     this.sem.exited(proc);
     for (const child of this.procs.values()) {
@@ -2364,6 +2369,17 @@ export class Kernel {
         }
         case A.SYS_fcntl:
           return this.fcntl(proc, args[0], args[1], args[2], data);
+        case A.SYS_flock: {
+          // whole-file locks of the open file description: shared or
+          // exclusive, waiting unless LOCK_NB (EWOULDBLOCK), interrupted by a
+          // signal (EINTR); converting replaces the description's own lock
+          const f = file(args[0]);
+          if (!f) return -A.EBADF;
+          const op = args[1] & ~A.LOCK_NB;
+          if (op !== A.LOCK_SH && op !== A.LOCK_EX && op !== A.LOCK_UN) return -A.EINVAL;
+          const type = op === A.LOCK_SH ? F_RDLCK : op === A.LOCK_EX ? F_WRLCK : F_UNLCK;
+          return this.flocks.set(f.path ?? `anon:${fileKey(f)}`, f, -1, type, 0, Infinity, !(args[1] & A.LOCK_NB), proc.syscallSignal);
+        }
         case A.SYS_fsync: { // (and fdatasync: Blink sends both here)
           const f = file(args[0]);
           if (!f) return -A.EBADF;
@@ -2796,7 +2812,7 @@ export class Kernel {
   /** Closing any fd for a file drops the process's POSIX locks on it; the last close of a description, its OFD locks */
   private releaseLocks(proc: Process, f: OpenFile): void {
     if (f.path) this.locks.release(proc.pid, f.path);
-    if (refCount(f) === 0) this.locks.release(f);
+    if (refCount(f) === 0) { this.locks.release(f); this.flocks.release(f); }
   }
 
   /** fcntl record locks; `data` holds the struct flock (l_type, l_whence, l_start, l_len, l_pid) */

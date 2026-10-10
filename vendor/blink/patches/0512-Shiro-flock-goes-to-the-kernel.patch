@@ -1,0 +1,45 @@
+From cd35ef4bd67f127a840866448796e931669c9f88 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 17:00:27 +0000
+Subject: [PATCH] Shiro: flock goes to the kernel
+
+flock only checked its fd: no process ever waited for another's lock (LTP
+flock02-04). It is now the kernel's call 73 (whole-file locks of the open
+file description, apart from fcntl's), interruptible and restartable; a
+kernel without it, the old check.
+
+Exports blink_shiro_flock.
+---
+ blink/shiro.inc | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 1deccf2..c2e2dd3 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2494,6 +2494,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_forkcpu(void) { return 1; }
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_timerthread(void) { return 1; }
+ // 0511: a file mapping's last page is the file's to its end
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_mmaptail(void) { return 1; }
++// 0512: flock goes to the kernel
++EMSCRIPTEN_KEEPALIVE int blink_shiro_flock(void) { return 1; }
+ 
+ // the same with the signal's siginfo (the kernel's call 1030, made as `pid`)
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid_info(int pid, int sig, int w0, int w1, int w2,
+@@ -4227,7 +4229,12 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+     case 0x008: r = KS(m, 8, A12(a, (int)b, (int)((i64)b >> 32), c)); break;  // lseek
+     case 0x010: r = ShiroIoctl(m, a, b, c); break;
+     case 0x048: r = ShiroFcntl(m, a, b, c); break;
+-    case 0x049: r = KS(m, 72, A12(a, 1, 0)) < 0 ? -EBADF_LINUX : 0; break;  // flock
++    case 0x049:                                                       // flock
++      // the kernel's (whole-file locks of the open file description); a
++      // kernel without them: only the fd is checked
++      r = ShiroCall(m, 73, A12((int)a, (int)b), 0, 0, 0, true, true);
++      if (r == -ENOSYS_LINUX) r = KS(m, 72, A12(a, 1, 0)) < 0 ? -EBADF_LINUX : 0;
++      break;
+     case 0x04A: case 0x04B: r = KS(m, 74, A12(a)); break;            // fsync, fdatasync
+     case 0x0A2: case 0x132: r = 0; break;                            // sync, syncfs
+     case 0x0DD: case 0x0BB: case 0x115: r = 0; break;                // fadvise, readahead, sync_file_range
+-- 
+2.43.0
+

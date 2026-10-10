@@ -912,6 +912,34 @@ describe('kernel syscalls found by LTP', () => {
     off();
   });
 
+  it('flock: whole-file locks of the open file description, apart from fcntl locks; LOCK_NB, conversion, release at the last close and at exit (LTP flock02-04)', async () => {
+    await fs.writeFile('/tmp/kc/flk', 'x');
+    const a = await open('/tmp/kc/flk', A.O_RDWR), b = await open('/tmp/kc/flk', A.O_RDWR);
+    expect(await call(A.SYS_flock, [a, 0])).toBe(-A.EINVAL);
+    expect(await call(A.SYS_flock, [a, A.LOCK_SH])).toBe(0);
+    expect(await call(A.SYS_flock, [b, A.LOCK_SH | A.LOCK_NB])).toBe(0);
+    expect(await call(A.SYS_flock, [b, A.LOCK_EX | A.LOCK_NB])).toBe(-A.EAGAIN);
+    expect(await call(A.SYS_flock, [a, A.LOCK_UN])).toBe(0);
+    expect(await call(A.SYS_flock, [b, A.LOCK_EX | A.LOCK_NB])).toBe(0); // (converted)
+    expect(await call(A.SYS_flock, [a, A.LOCK_SH | A.LOCK_NB])).toBe(-A.EAGAIN);
+    // a dup shares the description (and its lock); the last close drops it
+    const c = await call(A.SYS_dup, [b]);
+    expect(await call(A.SYS_close, [b])).toBe(0);
+    expect(await call(A.SYS_flock, [a, A.LOCK_SH | A.LOCK_NB])).toBe(-A.EAGAIN);
+    expect(await call(A.SYS_close, [c])).toBe(0);
+    expect(await call(A.SYS_flock, [a, A.LOCK_EX | A.LOCK_NB])).toBe(0);
+    // a waiter gets it once the holder exits
+    const p = kernel.spawn({ path: 'flk', cwd: '/tmp/kc', fds: {}, run: () => new Promise<number>(() => {}) });
+    const d = new Uint8Array(64); d.set(new TextEncoder().encode('/tmp/kc/flk'));
+    const pf = await kernel.syscall(p, A.SYS_openat, [A.AT_FDCWD, 11, A.O_RDWR, 0], d);
+    const waiting = kernel.syscall(p, A.SYS_flock, [pf, A.LOCK_EX], new Uint8Array(0));
+    expect(await call(A.SYS_close, [a])).toBe(0);
+    expect(await waiting).toBe(0);
+    expect(await call(A.SYS_flock, [await open('/tmp/kc/flk', A.O_RDWR), A.LOCK_EX | A.LOCK_NB])).toBe(-A.EAGAIN);
+    await kernel.exit(p, 0);
+    expect(await call(A.SYS_flock, [await open('/tmp/kc/flk', A.O_RDWR), A.LOCK_EX | A.LOCK_NB])).toBe(0);
+  });
+
   it('timer_create SIGEV_THREAD_ID to a thread the engine vouches for; its signal\'s siginfo names the thread in its last word (Blink 0510, Open POSIX fork_18-1)', async () => {
     const p = kernel.spawn({ path: 'tt', cwd: '/tmp/kc', fds: {}, run: () => new Promise<number>(() => {}) });
     p.dispositions.set(34, 0x1234);

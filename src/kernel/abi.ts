@@ -30,6 +30,12 @@ export const SYS_exit = 60;
 export const SYS_wait4 = 61;
 export const SYS_kill = 62;
 export const SYS_fcntl = 72;
+export const SYS_flock = 73;
+/** flock(2) operations */
+export const LOCK_SH = 1;
+export const LOCK_EX = 2;
+export const LOCK_NB = 4;
+export const LOCK_UN = 8;
 export const SYS_fsync = 74;
 export const SYS_ftruncate = 77;
 export const SYS_getcwd = 79;
