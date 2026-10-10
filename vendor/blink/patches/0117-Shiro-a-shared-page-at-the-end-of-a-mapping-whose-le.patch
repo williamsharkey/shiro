@@ -1,0 +1,44 @@
+From 65f4cc32397746b11130ea430de00f1bd09c4630 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 11:37:53 +0000
+Subject: [PATCH] Shiro: a shared page at the end of a mapping whose length
+ ends mid-page is mapped and unmapped whole
+
+A MAP_SHARED anonymous mapping (and since 0112 a memfd or /dev/shm one, whose
+shadow pages are anonymous) maps each page by itself (a mug). The last page
+of a length that ends mid-page was mapped with only the part the length
+covered (Firefox's 242,716-byte memfd:mozilla-ipc region: 2,252 bytes), but
+freed as a whole page, and emscripten's munmap refuses any length but the one
+mapped: memorymalloc.c:834 asserted, at munmap or at exit. Both are a whole
+page now.
+---
+ blink/memorymalloc.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/blink/memorymalloc.c b/blink/memorymalloc.c
+index a1c38b0..cadf56e 100644
+--- a/blink/memorymalloc.c
++++ b/blink/memorymalloc.c
+@@ -831,7 +831,9 @@ static bool FreePage(struct System *s, i64 virt, u64 entry, u64 size,
+ #endif
+     {
+       while ((uintptr_t)mug & (pagesize - 1)) mug -= 4096;
+-      unassert(!Munmap(mug, real - mug + size));
++      // a whole page, however much of it the guest's length covered: what
++      // ReserveVirtual mapped (emscripten's munmap wants the exact length)
++      unassert(!Munmap(mug, real - mug + 4096));
+     }
+     if (entry & PAGE_RSRV) {
+       s->memstat.reserved -= 1;
+@@ -1173,7 +1175,7 @@ i64 ReserveVirtual(struct System *s, i64 virt, i64 size, u64 flags, int fd,
+             int mugflags;
+             long mugsize;
+             long mugskew;
+-            mugsize = MIN(4096, end - virt);
++            mugsize = 4096;  // whole, even for a length ending mid-page (FreePage)
+             if (fd != -1) {
+               mugskew = offset - ROUNDDOWN(offset, pagesize);
+               mugoff = ROUNDDOWN(offset, pagesize);
+-- 
+2.43.0
+

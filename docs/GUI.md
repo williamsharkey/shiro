@@ -226,8 +226,10 @@ Where the time went, and what changed:
 - GL (docs/research/GL.md, fast GL through WebGL2): `glx.ts` is the GLX
   extension libglvnd needs when every GL call goes to glshiro: present,
   QueryVersion 1.4, QueryServerString naming the vendor (`tabcomputer`,
-  also for GLX_VENDOR_NAMES_EXT), ClientInfo accepted, rendering requests
-  BadRequest. It's off until glshiro calls `enableGLX()` on a page with
+  also for GLX_VENDOR_NAMES_EXT) and the extension `GLX_EXT_libglvnd` (else
+  glvnd never asks for vendor names and loads libGLX_indirect),
+  GetDrawableAttributes (screen, width, height: glvnd routes drawable calls
+  by screen), ClientInfo accepted, rendering requests BadRequest. It's off until glshiro calls `enableGLX()` on a page with
   WebGL2: with GLX advertised and no usable vendor, glvnd would fall back to
   Mesa, whose first GLX request would be an X error that Xlib exits on.
   While it's on, apps whose package set has libglvnd (`libglx0`) get

@@ -1,0 +1,30 @@
+From 39c501c5179c49ca991b5be143f2e03a4d06c115 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 11:48:44 +0000
+Subject: [PATCH] Shiro: F_ADD_SEALS and F_GET_SEALS go to the kernel
+
+memfd seals are the kernel's (its MemFile enforces them on write and
+truncate); Blink answered EINVAL itself, so Firefox, Mesa and systemd-style
+callers that seal a memfd failed.
+---
+ blink/shiro.inc | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 197d211..9fffe44 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -912,9 +912,8 @@ static i64 ShiroFcntl(struct Machine *m, int fd, int cmd, i64 arg) {
+     case 8: case 9: case 10: case 11: case 15: case 16:  // owner/sig
+       return 0;
+     case 1031: case 1032:  // F_SETPIPE_SZ / F_GETPIPE_SZ: the kernel's pipes
++    case 1033: case 1034:  // F_ADD_SEALS / F_GET_SEALS: the kernel's memfds
+       return KS(m, 72, A12(fd, cmd, (int)arg));
+-    case 1033: case 1034:  // F_ADD_SEALS / F_GET_SEALS
+-      return -EINVAL_LINUX;
+     default:
+       return -EINVAL_LINUX;
+   }
+-- 
+2.43.0
+
