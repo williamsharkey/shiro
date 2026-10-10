@@ -690,14 +690,14 @@ async function npmRun(ctx: CommandContext): Promise<number> {
     return 1;
   }
 
-  ctx.stdout += `> ${pkg.name}@${pkg.version} ${scriptName}\n`;
-  ctx.stdout += `> ${script}\n\n`;
+  scriptHeader(ctx, `> ${pkg.name}@${pkg.version} ${scriptName}\n> ${script}\n\n`);
 
-  // Execute the script via the shell
+  // Execute the script via the shell; on npm's terminal when that is where npm's output
+  // goes, as npx does (a dev server's output comes as it runs, not when it ends)
   const exitCode = await ctx.shell.execute(script,
     (s) => ctx.stdout += s,
     (s) => ctx.stderr += s,
-    false, undefined, true
+    false, scriptTerminal(ctx), true
   );
 
   return exitCode;
@@ -738,14 +738,25 @@ async function npmRunScript(ctx: CommandContext, scriptName: string, defaultScri
     return 1;
   }
 
-  ctx.stdout += `> ${pkg.name || ''}@${pkg.version || ''} ${scriptName}\n`;
-  ctx.stdout += `> ${script}\n\n`;
+  scriptHeader(ctx, `> ${pkg.name || ''}@${pkg.version || ''} ${scriptName}\n> ${script}\n\n`);
 
   return await ctx.shell.execute(script,
     (s) => ctx.stdout += s,
     (s) => ctx.stderr += s,
-    false, undefined, true
+    false, scriptTerminal(ctx), true
   );
+}
+
+/** npm's "> name@version script" lines: before the script's output, which may go to the terminal as it runs */
+function scriptHeader(ctx: CommandContext, text: string): void {
+  const term = scriptTerminal(ctx) as { writeOutput?: (s: string) => void } | undefined;
+  if (term?.writeOutput) term.writeOutput(text.replace(/\n/g, '\r\n'));
+  else ctx.stdout += text;
+}
+
+/** A script's terminal: npm's own, when npm's stdout is it (not redirected or piped); else collected */
+function scriptTerminal(ctx: CommandContext): unknown {
+  return ctx.terminal && ctx.stdoutIsTTY !== false ? ctx.terminal : undefined;
 }
 
 async function npmUninstall(ctx: CommandContext): Promise<number> {
