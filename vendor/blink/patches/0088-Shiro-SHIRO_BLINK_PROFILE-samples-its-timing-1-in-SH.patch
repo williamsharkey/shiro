@@ -1,7 +1,7 @@
-From 651a249d9fcc7fc6775eb2dd2efa1651e1d05220 Mon Sep 17 00:00:00 2001
+From 3b0f5b11e2caec520d7d6ebc50f46fbc966f049a Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 02:58:17 +0000
-Subject: [PATCH 87/87] Shiro: SHIRO_BLINK_PROFILE samples its timing (1 in
+Subject: [PATCH 88/88] Shiro: SHIRO_BLINK_PROFILE samples its timing (1 in
  SHIRO_BLINK_PROFILE_EVERY, default 64)
 
 ---
@@ -9,7 +9,7 @@ Subject: [PATCH 87/87] Shiro: SHIRO_BLINK_PROFILE samples its timing (1 in
  1 file changed, 24 insertions(+), 14 deletions(-)
 
 diff --git a/blink/shiro.inc b/blink/shiro.inc
-index 8e84718..1099c65 100644
+index 606e36d..31ebee4 100644
 --- a/blink/shiro.inc
 +++ b/blink/shiro.inc
 @@ -1038,8 +1038,12 @@ static bool g_shiro_prof_stdin, g_shiro_prof_tty, g_shiro_prof_epoll;
