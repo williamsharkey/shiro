@@ -69,6 +69,8 @@ const psemBin = join(out, 'psem');
 const havePsem = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', psemBin, 'psem.c']);
 const shmobjBin = join(out, 'shmobj');
 const haveShmobj = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', shmobjBin, 'shmobj.c']);
+const shmoddBin = join(out, 'shmodd');
+const haveShmodd = tryBuild('gcc', ['-static', '-O1', '-o', shmoddBin, 'shmodd.c']);
 const fsidentBin = join(out, 'fsident');
 const haveFsident = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', fsidentBin, 'fsident.c']);
 // musl's libc (native Claude Code's) resolves paths and stats files its own way
@@ -1341,6 +1343,17 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const { shell } = await setup(readFileSync(shmobjBin));
     const r = await run(shell, './prog 2>/dev/null; BLINK_WJIT=0 ./prog 2>/dev/null');
     const ok = 'child sees "written by the parent"\npongs 50 atomic 4000 locked 4000 text "written by the child" exit 0\n';
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(ok + ok);
+  }, 120_000);
+
+  // Firefox's 242,716-byte memfd:mozilla-ipc region: the last page is partial;
+  // unmapped whole, rounded, in parts and at exit (0117); a /dev/shm object
+  // keeps what was written through its mapping (Open POSIX shm_open_28-1)
+  it.skipIf(!haveShmodd)('shared mappings of a length that isn\'t whole pages unmap and exit; /dev/shm keeps the bytes', async () => {
+    const { shell } = await setup(readFileSync(shmoddBin));
+    const r = await run(shell, './prog; echo rc $?; BLINK_WJIT=0 ./prog; echo rc $?');
+    const ok = "memfd munmap 0\nmemfd sees 'y' munmap rounded 0\nmemfd munmap tail 0 head 0\nanon munmap 0\n" +
+      "anon after fork 'c' munmap rounded 0\nshm after close 'qwerty' mapped 'qwerty'\ndone\nrc 0\n";
     expect(r.output.replace(/\r\n/g, '\n')).toBe(ok + ok);
   }, 120_000);
 
