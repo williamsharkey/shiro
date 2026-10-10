@@ -85,6 +85,7 @@ import { tee } from './tee';
 import { test } from './posix-test';
 import { time } from './time';
 import { timeout } from './timeout';
+import { ttyCmd, setsidCmd, scriptCmd } from './session';
 import { touch } from './touch';
 import { mkfifo } from './mkfifo';
 import { tr } from './tr';
@@ -142,6 +143,7 @@ export const unixCommands: Command[] = [
   revCmd, tacCmd, shufCmd, cmpCmd, ddCmd, xxdCmd, dcCmd, splitCmd,
   factorCmd, cksumCmd, sumCmd, base32Cmd, numfmtCmd, csplitCmd,
   niceCmd, wCmd, whoCmd, usersCmd, lsofCmd, dos2unixCmd, unix2dosCmd,
+  ttyCmd, setsidCmd, scriptCmd,
 ];
 
 /** Arithmetic expansion helper for $(( )) syntax */
