@@ -102,14 +102,14 @@ it.skipIf(!ROOT || !existsSync(LIB) || !existsSync(join(ROOT ?? '', 'usr/bin/glb
  * Stage 3 (docs/research/GL.md): OpenSCAD, a GL 2.1 app (Qt 5, GLEW, OpenCSG).
  * SCAD_ROOT is a rootfs with openscad and its libraries but not Mesa's vendor
  * library. Its PNG export renders offscreen through GLX and FBOs and reads back.
- * Fails today before any GL: CGAL checks at startup that SSE arithmetic follows
- * MXCSR's rounding mode (fesetround), and Blink rounds to nearest always.
+ * Needs Blink 0119 (SSE follows MXCSR's rounding mode): CGAL checks it at
+ * startup. SCAD_ARGS adds options, e.g. --render=true for a full CGAL render.
  */
 const SCAD_ROOT = process.env.SCAD_ROOT;
 it.skipIf(!SCAD_ROOT || !existsSync(LIB))('OpenSCAD exports a preview through glshiro', async () => {
   const { run, mock, logs, fs } = await setup(SCAD_ROOT);
   await fs.writeFile('/tmp/t.scad', 'difference() { cube(10, center = true); sphere(6.5); }\ntranslate([12, 0, 0]) cylinder(h = 8, r = 3);\n');
-  const r = await run(['/usr/bin/openscad', '-o', '/tmp/t.png', '--imgsize=256,256', '/tmp/t.scad'], 600_000, { HOME: '/tmp', QT_QPA_PLATFORM: 'offscreen' });
+  const r = await run(['/usr/bin/openscad', '-o', '/tmp/t.png', '--imgsize=256,256', ...(process.env.SCAD_ARGS ?? '').split(' ').filter(Boolean), '/tmp/t.scad'], 600_000, { HOME: '/tmp', QT_QPA_PLATFORM: 'offscreen' });
   console.log(`openscad: status ${r.status} in ${r.ms} ms\n${r.out}`);
   console.log(`GL calls: ${mock.calls.length}, draws ${mock.count('drawArrays') + mock.count('drawElements')}, readPixels ${mock.count('readPixels')}; warnings:\n${[...new Set(logs)].join('\n')}`);
   expect(r.status).toBe(0);
