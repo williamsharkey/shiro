@@ -1,7 +1,7 @@
-From b45501948bced382ed1c41edab61f8f5aa573649 Mon Sep 17 00:00:00 2001
+From 410528b250a059afdeb66a3bc97d8816fce55534 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 06:15:31 +0000
-Subject: [PATCH 108/109] Shiro: comisd/ucomisd (and ss) clear AF too, as x86
+Subject: [PATCH 108/111] Shiro: comisd/ucomisd (and ss) clear AF too, as x86
  does
 
 ---

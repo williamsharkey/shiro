@@ -1,7 +1,7 @@
-From 546c927332748f3b25b2486911d0d2b8b9a5d8a1 Mon Sep 17 00:00:00 2001
+From ad859a93b219eb544e4bfa780b8369747449db8c Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 04:56:38 +0000
-Subject: [PATCH 100/109] Shiro wjit: compile instructions that straddle into
+Subject: [PATCH 100/111] Shiro wjit: compile instructions that straddle into
  the next code page by default
 
 ---

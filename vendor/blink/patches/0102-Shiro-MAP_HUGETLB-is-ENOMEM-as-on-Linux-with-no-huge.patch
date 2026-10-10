@@ -1,7 +1,7 @@
-From 29131fa643f9d0f72711828fba0e631a774b65b4 Mon Sep 17 00:00:00 2001
+From 5573dbd8f169101d8898ddd74055b4fb2efa7171 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 05:26:07 +0000
-Subject: [PATCH 102/109] Shiro: MAP_HUGETLB is ENOMEM, as on Linux with no
+Subject: [PATCH 102/111] Shiro: MAP_HUGETLB is ENOMEM, as on Linux with no
  huge pages reserved
 
 ---
@@ -9,7 +9,7 @@ Subject: [PATCH 102/109] Shiro: MAP_HUGETLB is ENOMEM, as on Linux with no
  1 file changed, 3 insertions(+)
 
 diff --git a/blink/syscall.c b/blink/syscall.c
-index a5031d2..cdb5585 100644
+index c873c7d..622e00f 100644
 --- a/blink/syscall.c
 +++ b/blink/syscall.c
 @@ -1577,6 +1577,9 @@ static i64 SysMmapImpl(struct Machine *m, i64 virt, i64 size, int prot,

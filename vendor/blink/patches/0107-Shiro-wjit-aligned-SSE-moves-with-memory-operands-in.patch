@@ -1,7 +1,7 @@
-From 91896d1b331d2d13c544e13436d82e303b48c93e Mon Sep 17 00:00:00 2001
+From 64fc9a0b7d18023cf08b47d149687b135dd92b85 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 06:03:07 +0000
-Subject: [PATCH 107/109] Shiro wjit: aligned SSE moves with memory operands
+Subject: [PATCH 107/111] Shiro wjit: aligned SSE moves with memory operands
  inline (an alignment check exits to the interpreter's #GP)
 
 ---
