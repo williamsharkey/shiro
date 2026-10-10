@@ -52,7 +52,7 @@ import { titleCmd } from './commands/title';
 
 import { mkTempCmd } from './commands/mktemp';
 import { tputCmd } from './commands/tput';
-import { sttyCmd } from './commands/stty';
+import { sttyCmd, resetCmd } from './commands/stty';
 import { gzipCmd, gunzipCmd, zcatCmd } from './commands/gzip';
 import { wgetCmd } from './commands/wget';
 import { pgrepCmd, pkillCmd } from './commands/pgrep';
@@ -361,6 +361,7 @@ async function main() {
     () => import('./commands/jq').then(m => m.jqCmd)), 'src/commands/jq.ts');
   registerCommand(commands, tputCmd, 'src/commands/tput.ts');
   registerCommand(commands, sttyCmd, 'src/commands/stty.ts');
+  registerCommand(commands, resetCmd, 'src/commands/stty.ts');
   registerCommand(commands, gzipCmd, 'src/commands/gzip.ts');
   registerCommand(commands, gunzipCmd, 'src/commands/gzip.ts');
   registerCommand(commands, zcatCmd, 'src/commands/gzip.ts');

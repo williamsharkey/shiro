@@ -1391,7 +1391,7 @@ export class Shell {
     }
     const abort = new AbortController();
     const outer = this.abortController ?? this.inheritedAbort;
-    outer?.signal.addEventListener('abort', () => abort.abort(), { once: true });
+    outer?.signal.addEventListener('abort', () => abort.abort(outer.signal.reason), { once: true });
     child.inheritedAbort = abort;
     const job: BackgroundJob = {
       id: jobId,

@@ -397,6 +397,58 @@ describe('kernel pty: job control', () => {
     await f2;
   });
 
+  it('a job killed in raw mode inside the alternate screen: the shell gets its modes and the main screen back', async () => {
+    const out = capture(tty.pty);
+    const p = tty.createJobProcess();
+    const slave = tty.openSlave();
+    const f = tty.foreground({ pgid: p.pgid });
+    tty.pty.setTermios(makeRaw(tty.pty.termios)); // a TUI goes raw…
+    // …enters the alternate screen, hides the cursor, turns on mouse reporting (split across writes)
+    await slave.write(enc.encode('\x1b[?1049h\x1b[?25l\x1b[?10'), p);
+    await slave.write(enc.encode('00;1006h drawing'), p);
+    jc.kill(-p.pgid, SIGTERM);
+    const r = await f;
+    expect(WTERMSIG((r as any).status)).toBe(SIGTERM);
+    expect(tty.pty.termios.lflag & (ICANON | ECHO)).toBe(ICANON | ECHO);
+    expect(out.text().endsWith('\x1b[?1049l\x1b[?1000;1006l\x1b[?25h')).toBe(true);
+  });
+
+  it('a job that exits leaving the tty raw gets it restored; one that exits after stty -echo keeps it', async () => {
+    const out = capture(tty.pty);
+    const p = tty.createJobProcess();
+    const slave = tty.openSlave();
+    const f = tty.foreground({ pgid: p.pgid });
+    tty.pty.setTermios(makeRaw(tty.pty.termios));
+    await slave.write(enc.encode('\x1b[?1049h'), p);
+    p.finish(0);
+    expect(await f).toEqual({ type: 'exited', status: 0 });
+    expect(tty.pty.termios.lflag & ICANON).toBeTruthy();
+    expect(out.text().endsWith('\x1b[?1049l')).toBe(true);
+
+    // canonical, no echo (a password prompt's stty -echo): the job's modes stick, as in bash
+    const q = tty.createJobProcess();
+    const f2 = tty.foreground({ pgid: q.pgid });
+    const t = cloneTermios(tty.pty.termios);
+    t.lflag &= ~ECHO;
+    tty.pty.setTermios(t);
+    await slave.write(enc.encode('\x1b[?25l'), q);
+    q.finish(0);
+    await f2;
+    expect(tty.pty.termios.lflag & ECHO).toBe(0);
+    expect(out.text().endsWith('\x1b[?25l')).toBe(true);
+  });
+
+  it('a TUI that cleans up after itself gets nothing extra', async () => {
+    const out = capture(tty.pty);
+    const p = tty.createJobProcess();
+    const slave = tty.openSlave();
+    const f = tty.foreground({ pgid: p.pgid });
+    await slave.write(enc.encode('\x1b[?1049h\x1b[?25l…\x1b[?25h\x1b[?1049l'), p);
+    jc.kill(-p.pgid, SIGTERM);
+    await f;
+    expect(out.text().endsWith('\x1b[?25h\x1b[?1049l')).toBe(true);
+  });
+
   it('resizing sends SIGWINCH to the foreground job', async () => {
     const p = tty.createJobProcess();
     const got: number[] = [];
@@ -598,6 +650,61 @@ describe('shell job control for kernel jobs', () => {
     expect((await sh('tput cols')).output).toBe('99\n');
     expect((await sh('COLUMNS=50 tput cols')).output).toBe('50\n');
     p.finish(0);
+  });
+
+  it('reset and stty sane put the tty back to sane modes; reset also resets the screen', async () => {
+    await sh('stty raw -echo');
+    expect(tty.pty.termios.lflag & (ICANON | ECHO)).toBe(0);
+    await sh('stty sane');
+    expect(tty.pty.termios.lflag & (ICANON | ECHO)).toBe(ICANON | ECHO);
+    await sh('stty raw -echo');
+    const r = await sh('reset');
+    expect(r.exitCode).toBe(0);
+    expect(r.output).toBe('\x1bc');
+    expect(tty.pty.termios.lflag & (ICANON | ECHO)).toBe(ICANON | ECHO);
+  });
+
+  /** A TUI as a kernel job: raw mode, the alternate screen, a hidden cursor; ignores `ignore`, then runs until a signal ends it */
+  const tui = (ignore: number[]) => async (p: any) => {
+    for (const sig of ignore) p.dispositions.set(sig, 'ignore');
+    tty.pty.setTermios(makeRaw(tty.pty.termios));
+    await tty.openSlave().write(enc.encode('\x1b[?1049h\x1b[?25l'), p);
+    return new Promise<number>(() => {}); // until a signal ends it
+  };
+  const runTui = async (ignore: number[], reason: object) => {
+    const { runKernelPipeline } = await import('@shiro/shell-kernel');
+    const abort = new AbortController();
+    shell.abortController = abort;
+    const run = runKernelPipeline(shell, [{ argv: ['tui'], run: tui(ignore) }], {
+      captureStdout: false, captureStderr: false, writeStdout: () => {}, writeStderr: () => {},
+      terminal: term as any, command: 'tui', cwd: '/', env: {},
+    });
+    await tick(50);
+    expect(tty.jobInForeground).toBe(true);
+    abort.abort(Object.assign(new DOMException('aborted', 'AbortError'), reason));
+    return (await run).exitCode;
+  };
+
+  it("timeout's signal reaches a raw-mode TUI that ignores SIGINT; the terminal is the shell's again", async () => {
+    const screen = capture(tty.pty);
+    expect(await runTui([SIGINT], { signal: SIGTERM, killAfter: 5000 })).toBe(128 + SIGTERM);
+    expect(tty.jobInForeground).toBe(false);
+    expect(tty.pty.termios.lflag & (ICANON | ECHO)).toBe(ICANON | ECHO);
+    expect(screen.text().endsWith('\x1b[?1049l\x1b[?25h')).toBe(true);
+  });
+
+  it('timeout -k: SIGKILL when the TUI ignores the signal too', async () => {
+    expect(await runTui([SIGINT, SIGTERM], { signal: SIGTERM, killAfter: 100 })).toBe(128 + 9);
+    expect(tty.jobInForeground).toBe(false);
+    expect(tty.pty.termios.lflag & ICANON).toBeTruthy();
+  });
+
+  it('timeout still ends in-page commands and returns 124; bad -s / -k are errors', async () => {
+    const t0 = Date.now();
+    expect((await sh('timeout 0.2 sleep 5; echo "rc=$?"')).output).toBe('rc=124\n');
+    expect(Date.now() - t0).toBeLessThan(3000);
+    expect((await sh('timeout -s BOGUS 1 true; echo "rc=$?"')).output).toContain('rc=125');
+    expect((await sh('timeout -k x 1 true; echo "rc=$?"')).output).toContain('rc=125');
   });
 
   it('a real kernel job: Ctrl-Z, jobs, fg', async () => {

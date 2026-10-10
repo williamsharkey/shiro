@@ -288,3 +288,19 @@ export const sttyCmd: Command = {
     return 0;
   },
 };
+
+/**
+ * reset (ncurses tset/reset): sane tty modes, then the terminal's own reset
+ * (RIS: the main screen, a visible cursor, no mouse reporting, cleared).
+ */
+export const resetCmd: Command = {
+  name: 'reset',
+  description: 'Restore the terminal to a sane state',
+  async exec(ctx) {
+    const pty = ttyFor(ctx);
+    pty.setTermios(defaultTermios(), true);
+    pty.restoreScreen();
+    ctx.stdout = '\x1bc';
+    return 0;
+  },
+};
