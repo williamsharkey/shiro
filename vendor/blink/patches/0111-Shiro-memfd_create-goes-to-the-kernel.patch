@@ -1,4 +1,4 @@
-From baeb3bf4d809090b7f0f29dc2a985c826a9f9edf Mon Sep 17 00:00:00 2001
+From 034eb4659d7651a3878eab4b5d4452ec43b0e13c Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 07:33:28 +0000
 Subject: [PATCH 111/111] Shiro: memfd_create goes to the kernel
@@ -8,10 +8,10 @@ Subject: [PATCH 111/111] Shiro: memfd_create goes to the kernel
  1 file changed, 10 insertions(+), 1 deletion(-)
 
 diff --git a/blink/shiro.inc b/blink/shiro.inc
-index 60384b8..697533c 100644
+index c26a87c..17ae48c 100644
 --- a/blink/shiro.inc
 +++ b/blink/shiro.inc
-@@ -3680,7 +3680,16 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+@@ -3672,7 +3672,16 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
        break;
      }
      case 0x146: r = -ENOSYS_LINUX; break;                             // copy_file_range

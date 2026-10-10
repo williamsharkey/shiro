@@ -1,4 +1,4 @@
-From 070d9132cd5d63f7afdea8f264b912ad2eb02acf Mon Sep 17 00:00:00 2001
+From 1c6592ac9eb206c636f4ed58d0fed2bf4a7a89c7 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 07:06:28 +0000
 Subject: [PATCH 109/111] Shiro: same-instance fork shares private pages
@@ -205,7 +205,7 @@ index 8da4e5a..a1c38b0 100644
              pt = LoadPte(mi);
              if (!(pt & PAGE_V)) {
 diff --git a/blink/shiro.inc b/blink/shiro.inc
-index 2ac7b24..1e428f9 100644
+index ae75a0c..f72d481 100644
 --- a/blink/shiro.inc
 +++ b/blink/shiro.inc
 @@ -25,6 +25,7 @@
@@ -303,7 +303,7 @@ index 2ac7b24..1e428f9 100644
      KS(m, 62, A12(pid, 9));
      return rc;
    }
-@@ -2551,11 +2573,15 @@ static i64 ShiroForkSame(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
+@@ -2549,11 +2571,15 @@ static i64 ShiroForkSame(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
    InvalidateSystem(s, true, false);
    ResetTlb(m);
    WjResetTlb(m);
@@ -321,7 +321,7 @@ index 2ac7b24..1e428f9 100644
    c->exec = s->exec;
    ++g_shiro_kids_starting;
 diff --git a/blink/syscall.c b/blink/syscall.c
-index 622e00f..6387b5f 100644
+index cdb5585..1aa3543 100644
 --- a/blink/syscall.c
 +++ b/blink/syscall.c
 @@ -430,7 +430,7 @@ static void ClearChildTid(struct Machine *m) {

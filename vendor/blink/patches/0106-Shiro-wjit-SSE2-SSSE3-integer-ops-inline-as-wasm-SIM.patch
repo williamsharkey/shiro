@@ -1,4 +1,4 @@
-From a2e837c063072ede6ff9e9140eee5f0d9975e669 Mon Sep 17 00:00:00 2001
+From ad4798cffd9b75f7f7ffb68b3c2e767eb50c4031 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 05:59:51 +0000
 Subject: [PATCH 106/111] Shiro wjit: SSE2/SSSE3 integer ops inline as wasm

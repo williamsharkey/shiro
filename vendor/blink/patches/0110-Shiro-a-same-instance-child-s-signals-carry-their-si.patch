@@ -1,4 +1,4 @@
-From 0e3e96e99d7de6a7e262b0704764e7e7cb921397 Mon Sep 17 00:00:00 2001
+From 4dd75ef9319cec4a6c7144c6c5dfbe03232dcd45 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 07:21:58 +0000
 Subject: [PATCH 110/111] Shiro: a same-instance child's signals carry their
@@ -9,12 +9,12 @@ Subject: [PATCH 110/111] Shiro: a same-instance child's signals carry their
  1 file changed, 17 insertions(+)
 
 diff --git a/blink/shiro.inc b/blink/shiro.inc
-index 1e428f9..60384b8 100644
+index f72d481..c26a87c 100644
 --- a/blink/shiro.inc
 +++ b/blink/shiro.inc
-@@ -2400,6 +2400,23 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_sharedmaps(void) { return 1; }
- // 0099: mlock/munlock/mlockall and mmap answer bad arguments as Linux
- EMSCRIPTEN_KEEPALIVE int blink_shiro_memerrs(void) { return 1; }
+@@ -2398,6 +2398,23 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_sigmodes(void) { return 1; }
+ // 0097/0098: write-only pages readable; shared kernel-file maps written back before a new map and at exit
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_sharedmaps(void) { return 1; }
  
 +// the same with the signal's siginfo (the kernel's call 1030, made as `pid`)
 +EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid_info(int pid, int sig, int w0, int w1, int w2,
