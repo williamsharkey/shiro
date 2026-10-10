@@ -18,6 +18,7 @@ import { klog, KmsgFile, LOG_ERR, LOG_INFO, SYSLOG_ACTION_READ_ALL, SYSLOG_ACTIO
 import { processTable, type ShiroProcess } from '../process-table';
 import { packageShadows, pkgOwnShadows, packageArgsForPath, PKG_BIN_DIR } from '../pkg-manager';
 import * as A from './abi';
+import { elfInterpreter } from '../elf-interp';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
   RegularFile, DirFile, abortableWait, openInode, openInodeSync, isInodeOpen, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
@@ -1677,7 +1678,14 @@ export class Kernel {
     proc.syscalls++;
     // While in a syscall the process counts as sleeping (S in /proc/PID/stat)
     if (proc.inSyscall++ === 0) proc.syscallSince = t0;
-    const done = () => { proc.inSyscall--; proc.kernelMs += Date.now() - t0; };
+    const call = { nr, args };
+    proc.calls.push(call);
+    const done = () => {
+      proc.inSyscall--;
+      proc.kernelMs += Date.now() - t0;
+      const i = proc.calls.indexOf(call);
+      if (i >= 0) proc.calls.splice(i, 1);
+    };
     // The caller awaits the call itself: the bookkeeping adds no await hop to it
     const p = this.syscallImpl(proc, nr, args, data);
     p.then(done, done);
@@ -1956,10 +1964,22 @@ export class Kernel {
           if (!instance) return -A.ENOSYS;
           const len = (args[2] >>> 0) + (args[3] >>> 0) * 0x100000000;
           let key: string, size = len;
-          let initial: (() => Promise<Uint8Array>) | undefined;
-          let writeBack: ((b: Uint8Array) => Promise<void>) | undefined;
-          if (args[1] === 0) {
-            const f = proc.fds.get(args[0]);
+          let initial: (() => Uint8Array | Promise<Uint8Array>) | undefined;
+          let writeBack: ((b: Uint8Array) => void | Promise<void>) | undefined;
+          let onRemote: ((sab: SharedArrayBuffer) => void) | undefined;
+          const kind = args[1] & ~A.SHMOBJ_EAGER;
+          if (kind & ~0xff) return -A.EINVAL;
+          const f = kind === 0 ? proc.fds.get(args[0]) : undefined;
+          if (kind === 0 && f instanceof MemFile) {
+            // A memfd (Firefox's font list, passed over SCM_RIGHTS): keyed by
+            // the description; read/write go through the buffer while remote
+            const mf = f;
+            key = mf.shareKey;
+            size = Math.max(len, mf.statSync().size);
+            initial = () => mf.bytes();
+            onRemote = (sab) => mf.attachShared(sab);
+            writeBack = (b) => mf.detachShared(b);
+          } else if (kind === 0) {
             if (!f) return -A.EBADF;
             const path = f.path;
             if (f.kind !== 'file' || !path || !isShareablePath(path) || !this.fs) return -A.EINVAL;
@@ -1967,13 +1987,13 @@ export class Kernel {
             key = `file:${inodeNumber(fs, path)}`;
             initial = async () => { const b = await fs.readFile(path); return typeof b === 'string' ? new TextEncoder().encode(b) : b; };
             writeBack = async (b) => { if (await fs.exists(path)) await fs.writeFile(path, b); };
-          } else if (args[1] === 1) {
+          } else if (kind === 1) {
             const seg = this.shm.list().find((x) => x.id === args[0]);
             if (!seg) return -A.EINVAL;
             key = `shm:${seg.id}`;
             size = seg.size;
           } else return -A.EINVAL;
-          const r = await this.shmobj.map(instance, key, size, initial, writeBack);
+          const r = await this.shmobj.map(instance, key, size, initial, writeBack, { eager: !!(args[1] & A.SHMOBJ_EAGER), onRemote });
           if (typeof r === 'number') return r;
           if (data.length >= 4) new DataView(data.buffer, data.byteOffset, 4).setInt32(0, r.remote ? 1 : 0, true);
           return r.id;
@@ -2928,11 +2948,16 @@ export class Kernel {
       if (i > 0) env[String(kv).slice(0, i)] = String(kv).slice(i + 1);
     }
     let head: Uint8Array = new Uint8Array(0);
+    let interp: string | null = null;
     if (!builtin) try {
       const raw = await this.fs!.readFile(path);
       head = typeof raw === 'string' ? enc.encode(raw.slice(0, 4)) : raw.subarray(0, 4);
+      if (typeof raw !== 'string') interp = elfInterpreter(raw);
     } catch { /* unreadable: let the loaders decide */ }
     const isElf = head.length === 4 && head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46;
+    // A dynamic executable whose loader isn't there is ENOENT, as on Linux
+    // (bash: "cannot execute: required file not found")
+    if (interp && typeof (await this.statPath(proc, interp)) === 'number') return -A.ENOENT;
     const probe = new Process({ pid: -1, ppid: proc.pid, path, argv, env, cwd: proc.cwd });
     const embryo = !!proc.data.embryo;
     // A package command with its own arguments (zcat = gzip -dc) can't be

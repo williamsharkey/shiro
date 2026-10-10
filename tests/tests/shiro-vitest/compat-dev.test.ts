@@ -5,7 +5,7 @@
  * WASM guests run in Node worker_threads as kernel processes (sab mode), as
  * in kernel-shell.test.ts. Packages built here are read from public/pkg.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { Worker } from 'node:worker_threads';
 import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
@@ -1954,5 +1954,52 @@ describe('npm install: install scripts and platform packages', () => {
     r = await sh(shell, 'mkdir -p /home/user/scr2 && cd /home/user/scr2 && npm i --ignore-scripts zzfake-dep > /dev/null; ls node_modules/zzfake-dep; echo ignore-scripts=true > ~/.npmrc; cd /home/user/scr && rm -rf node_modules && npm i > /dev/null 2>&1; ls node_modules/zzfake-bad; rm ~/.npmrc');
     expect(r.out).toBe('package.json\nindex.js\npackage.json\n');
     expect(r.err).toBe('');
+  }, 60_000);
+});
+
+describe("the page's esbuild is let go when idle", () => {
+  it('stops after the idle time and starts again for the next build', async () => {
+    // The page's esbuild is esbuild-wasm's browser build (here in this thread, from esbuild.wasm)
+    vi.resetModules();
+    vi.doMock('esbuild-wasm', () => import(`${REPO}/node_modules/esbuild-wasm/esm/browser.js`));
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async (input: any, init?: any) => String(input).endsWith('/esbuild.wasm')
+      ? new Response(readFileSync(`${REPO}/node_modules/esbuild-wasm/esbuild.wasm`)) : saved(input, init)) as typeof fetch;
+    const { buildCmd, esbuildRunning, setEsbuildIdleMs } = await import('@shiro/commands/build');
+    const { fs, shell } = await createTestShell();
+    shell.commands.register(buildCmd);
+    await fs.mkdir('/home/user/eb', { recursive: true });
+    await fs.writeFile('/home/user/eb/a.ts', 'const n: number = 41;\nexport const v = n + 1;\n');
+    setEsbuildIdleMs(200);
+    try {
+      let r = await sh(shell, 'cd /home/user/eb && build a.ts --outfile=out1.js');
+      expect(r.exitCode).toBe(0);
+      expect(esbuildRunning()).toBe(true);
+      await new Promise((res) => setTimeout(res, 600));
+      expect(esbuildRunning()).toBe(false);
+      r = await sh(shell, 'cd /home/user/eb && build a.ts --outfile=out2.js && cat out2.js');
+      expect(r.exitCode).toBe(0);
+      expect(r.out).toContain('n + 1');
+      expect(esbuildRunning()).toBe(true);
+    } finally {
+      setEsbuildIdleMs(60_000);
+      globalThis.fetch = saved;
+      vi.doUnmock('esbuild-wasm');
+    }
+  }, 120_000);
+});
+
+describe('node: a process that exits closes its servers', () => {
+  it('process.exit() frees the port; a script that goes idle while serving leaves it up', async () => {
+    const { iframeServer } = await import('@shiro/iframe-server');
+    const { shell } = await createTestShell();
+    let r = await sh(shell, `node -e "require('http').createServer((q, s) => s.end('up')).listen(4811, () => setTimeout(() => process.exit(0), 50))"; echo "e=$?"`);
+    expect(r.out).toBe('e=0\n');
+    expect(iframeServer.isPortInUse(4811)).toBe(false);
+    r = await sh(shell, `node -e "require('http').createServer((q, s) => s.end('up')).listen(4812)"; echo "e=$?"`);
+    expect(r.out).toBe('e=0\n');
+    expect(iframeServer.isPortInUse(4812)).toBe(true);
+    expect((await iframeServer.fetch(4812, '/')).body).toBe('up');
+    iframeServer.close(4812);
   }, 60_000);
 });

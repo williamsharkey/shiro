@@ -857,6 +857,11 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    makes call 1030 as the child, and blink_shiro_signal_pid_info queues it
    on the child's System. Open POSIX sigqueue_1-1 (the child's handler
    checks si_value) passes. Test: fixtures/x86/siginfochild.c.
+111. memfd_create goes to the kernel's (Blink answered ENOSYS): Firefox's
+   shared memory, Mesa, Wayland and PulseAudio make their buffers with
+   it. Test: fixtures/x86/memfd.c. (Another process mapping the same
+   memfd afresh doesn't see its writes yet; that needs the cross-instance
+   shared objects of docs/research/SHARED_MAPPINGS.md.)
 
    fork+exit+wait with 16 MiB of dirty heap went from 30 to 7.5 ms, and
    with 64 MiB from 104 to 12 ms (native: 3.1 ms). Test:
@@ -930,6 +935,16 @@ Honest estimate for a ~200 MB static Go CLI that talks TLS to Google APIs:
    estimate from gh, not measured), and hot CPU-bound code at 2–5x native
    instead of ~120x (Go loop 50M: 253 ms vs 107 ms native; mul/div loop
    4–5x).
+   Since then (Blink patches 0085–0111): compiled blocks chain without
+   leaving the JIT, SSE2/SSSE3 integer code, rotates and hint nops are
+   compiled (SHA-1 5 → 25 MB/s), and fork is copy-on-write (64 MiB parent:
+   104 → 12 ms). From before the JIT to now, the x86 suite reads go_cpuloop
+   2282 → 246 ms and Go/glibc peak RSS −50–94% (BENCHMARKS.md, perf-blink
+   13). A larger data point: Claude's native ~200 MB single-file binary
+   (a JavaScript runtime plus its bundle) starts in ~48 s, 87% of it in
+   compiled code. That is far more init code than a Go CLI, so it bounds
+   agy from above rather than replacing the estimate: still 10–15 s first
+   run, 5–8 s later, unmeasured.
    Next levers: the interpreter for cold code (≈1.1 s of `gh`'s 3.3 s in
    Node: Blink's per-instruction dispatch and memory helpers), keeping
    compiled regions across page loads (V8 already reuses them within one

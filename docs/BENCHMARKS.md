@@ -786,6 +786,47 @@ medians 1240 and 1215 proc/s, base 1200. One of those passes stalled at
 ≈10 proc/s for its last 11 samples and did not recur in two more; worth
 watching if it shows up on other branches.
 
+### unix/perf-blink 13 — the branch end to end
+
+`node bench/ab.mjs cc8539ed --suites x86 --only 'x86\.blink\.' --rounds 2`,
+from before the wasm JIT (cc8539ed) to Blink patch 0111 (b2834b1c):
+
+| metric (isolated) | before | after | shift | verdict |
+|---|---:|---:|---:|---|
+| x86.blink.go_cpuloop_5m | 2282 ms | 246 ms | -88.9% | improved |
+| x86.blink.go_hello | 267 ms | 248 ms | -9.4% | same |
+| x86.blink.hello_musl | 146 ms | 122 ms | -15.1% | same |
+| x86.blink.hello_glibc | 160 ms | 151 ms | -3.9% | same |
+| x86.blink.go_nethttp | 540 ms | 721 ms | +30.3% | regressed (see below) |
+| x86.blink.peak_rss.go_hello | 14.1 MiB | 6.0 MiB | -59.5% | improved |
+| x86.blink.peak_rss.go_nethttp | 36.3 MiB | 16.7 MiB | -51.9% | improved |
+| x86.blink.peak_rss.hello_glibc | 18.3 MiB | 1.0 MiB | -94.3% | improved |
+| x86.blink.peak_rss.hello_musl | 15.0 MiB | 10.2 MiB | -54.2% | improved |
+| x86.blink.vim_defaults | — | 1803 ms | | new |
+| x86.blink.vim_startup | — | 4079 ms | | new |
+
+go_nethttp's regression is not in Blink. ab.mjs builds each side's whole tree,
+kernel included. On today's tree, with only `public/engines/blink` swapped
+(`TABCOMPUTER_BLINK_ASSETS`, 6–8 runs each):
+
+| go_nethttp, today's kernel and page | median |
+|---|---:|
+| cc8539ed's blink.wasm + host.mjs | 662 ms |
+| cc8539ed's blink.wasm + today's host.mjs | 788 ms |
+| today's blink.wasm, shared Module (default), 4 alternated rounds | 645–668 ms |
+| today's blink.wasm, per-worker compile, same rounds | 647–738 ms |
+
+- Single runs of the same assets spread 620–880 ms. A bisect of host.mjs
+  with the old wasm pointed at aa07d367 (shared Module, entry 8), but
+  alternated rounds with today's wasm show no cost from it.
+- Bisect builds of the patch series at four points from 0051 onwards all
+  measure 750–800 ms, the same as the head.
+- So most of the ~180 ms comes from changes elsewhere in the tree between
+  cc8539ed and b2834b1c (kernel, merged branches). In the head's profile
+  the main thread waits ~120 ms in futexes and ~95 ms in other syscalls,
+  against ~210 ms running guest code.
+- gh_version: the fixture wasn't available in this container.
+
 ### unix/perf-blink 12 — fork is copy-on-write
 
 Blink patch 0109. A same-instance fork used to copy every private page of
@@ -1678,8 +1719,23 @@ The coordinator's `ab.mjs a5e66fb 7382bdc` showed `kernel.epoll_wakeup`
   are in the write-behind cache:
   - creating an empty file, truncating an existing one, and EEXIST/ELOOP;
   - unlinking a file that no fd has open and that isn't a socket or fifo.
-  Anything else still takes the async path. Not yet measured end to end;
-  compat-tools' harness is the one that shows it.
+  Anything else still takes the async path. compat-tools measured it in
+  Chromium (node.worker fs_200, per-call time inside the guest around
+  ch.call, three runs on a warm pooled worker), on unix/compat-tools merged
+  with integration. That build also has perf-fs-shell's sync close, rename,
+  mkdir and rmdir and its longer channel spin, so the rows are the combined
+  effect:
+
+  | syscall | before | run 1 | run 2 | run 3 |
+  |---|---|---|---|---|
+  | openat O_WRONLY\|O_CREAT\|O_TRUNC ×202 | ~75 µs | 47 | 20 | 25 µs |
+  | unlinkat ×200 | ~25 µs | 23 | 9 | 19 µs |
+  | close ×202 | ~20 µs | 23 | 13 | 17 µs |
+  | newfstatat ×602 | 15–30 µs | 24 | 19 | 10 µs |
+
+  Create is about 3× faster and unlink 1.5–2×. Whole script:
+  200 → 110 → 110 → 83 ms. A warm sync call is now 10–25 µs round trip,
+  mostly the channel itself.
 
 ### unix/perf-fs-shell 7 — 1d9582a → bb39a38 regressions: shell-stdio's per-command pass; ab.mjs decides on rounds
 

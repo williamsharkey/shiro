@@ -1,4 +1,4 @@
-From 7fb0ed8a64803360d0ab3998e8ba38b16f7aba64 Mon Sep 17 00:00:00 2001
+From 8c21bc3295de07d00e5ff7d07383f9739ff17394 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 07:15:24 +0000
 Subject: [PATCH] Shiro: mlock/munlock of unmapped memory is ENOMEM; mlockall
@@ -18,19 +18,19 @@ Exports blink_shiro_memerrs.
  2 files changed, 27 insertions(+), 3 deletions(-)
 
 diff --git a/blink/shiro.inc b/blink/shiro.inc
-index e999d72..8e947d0 100644
+index c26a87c..60384b8 100644
 --- a/blink/shiro.inc
 +++ b/blink/shiro.inc
-@@ -2353,6 +2353,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_siginfo(void) { return 1; }
+@@ -2397,6 +2397,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_siginfo(void) { return 1; }
  EMSCRIPTEN_KEEPALIVE int blink_shiro_sigmodes(void) { return 1; }
  // 0097/0098: write-only pages readable; shared kernel-file maps written back before a new map and at exit
  EMSCRIPTEN_KEEPALIVE int blink_shiro_sharedmaps(void) { return 1; }
 +// 0099: mlock/munlock/mlockall and mmap answer bad arguments as Linux
 +EMSCRIPTEN_KEEPALIVE int blink_shiro_memerrs(void) { return 1; }
  
- // the kernel signalled hosted child `pid` (host.mjs routes by pid)
- EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid(int pid, int sig) {
-@@ -2649,6 +2651,10 @@ static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
+ // the same with the signal's siginfo (the kernel's call 1030, made as `pid`)
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid_info(int pid, int sig, int w0, int w1, int w2,
+@@ -2714,6 +2716,10 @@ static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
    u8 st[144], *buf;
    i64 addr, fsize, o, r;
    bool shared = (flags & 3) == 1 || (flags & 3) == 3;
@@ -41,7 +41,7 @@ index e999d72..8e947d0 100644
    if (off < 0 || (off & 4095)) return -EINVAL_LINUX;
    // as Linux: an O_PATH fd is EBADF; a mapping needs the fd readable, and a
    // writable shared one needs it open for writing too (EACCES)
-@@ -2659,7 +2665,9 @@ static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
+@@ -2724,7 +2730,9 @@ static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
    // first, so a new mapping of one sees it (as one page cache would)
    if (g_shiro_maps) ShiroSyncMaps(m, 0, (i64)1 << 47, false);
    if ((r = ShiroStatAt(m, fd, 0, 0, 0x1000, st)) < 0) return r;
@@ -52,7 +52,7 @@ index e999d72..8e947d0 100644
    fsize = Read64(st + 48);
    addr = SysMmap(m, virt, size, prot | 3 /* RW while we fill it */,
                   (flags & ~3 & ~0x08000000) | 2 | 0x20 /* PRIVATE|ANONYMOUS */, -1, 0);
-@@ -3768,6 +3776,12 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+@@ -3833,6 +3841,12 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
        r = -EBADF_LINUX;
        break;
      case 0x009:                                                       // mmap
@@ -66,10 +66,10 @@ index e999d72..8e947d0 100644
        r = ShiroMmapFile(m, a, b, c, d, e, f);  // SysMmap/SysMprotect take mmap_lock
        break;
 diff --git a/blink/syscall.c b/blink/syscall.c
-index a5031d2..c873c7d 100644
+index 1aa3543..6387b5f 100644
 --- a/blink/syscall.c
 +++ b/blink/syscall.c
-@@ -5991,11 +5991,21 @@ static int SysSchedGetPriorityMin(struct Machine *m, int policy) {
+@@ -5996,11 +5996,21 @@ static int SysSchedGetPriorityMin(struct Machine *m, int policy) {
  #ifdef __EMSCRIPTEN__
  // WebAssembly memory is never paged out: locking it always succeeds (GnuPG
  // and ssh-agent lock their secret memory, and warn when they can't)

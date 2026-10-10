@@ -7,10 +7,10 @@
  *
  *   Shiro's:  dpkg-divert --local --rename --divert PATH.debian --add PATH
  *             Debian's file moves to PATH.debian (later upgrades land there
- *             too); PATH itself is absent, which the kernel and the shell
- *             resolve to the Shiro command of that name (or, for programs
- *             that must exist as files, like apt's methods, a `#!` stub
- *             naming a Shiro kernel program).
+ *             too); PATH holds a builtin shim the kernel and the shell run
+ *             as the Shiro command of that name (or, for programs whose
+ *             Shiro side is a kernel program, like apt's methods, a `#!`
+ *             stub naming it), so PATH searches with stat() find it.
  *   Debian's: no diversion; PATH is the package's own file.
  *
  * `dpkg-divert --list`, `dpkg -S PATH` and `dpkg --verify` show exactly what
@@ -25,6 +25,7 @@ import type { FileSystem } from '../filesystem';
 import { extraShadows } from '../pkg-manager';
 import policyJson from './overlay-policy.json';
 import { activeProfile } from '../profile';
+import { BUILTIN_SHIM_INTERP, SHIM_COMMANDS } from '../path-shims';
 
 export type Side = 'shiro' | 'debian';
 
@@ -136,7 +137,9 @@ export async function setSide(fs: FileSystem, path: string, side: Side, opts: { 
     await writeDiversions(fs, divs);
     if (await exists(fs, path)) await fs.rename(path, path + SUFFIX);
     const command = opts.command ?? policy?.command ?? path.slice(path.lastIndexOf('/') + 1);
-    if (policy?.stub) await fs.writeFile(path, `#!/usr/bin/${command}\n`, { mode: 0o755 });
+    // A stub naming a kernel program, or a builtin shim so programs that search
+    // PATH themselves (Debian's bash) find the name; neither shadows the builtin
+    await fs.writeFile(path, policy?.stub ? `#!/usr/bin/${command}\n` : builtinShim(command), { mode: 0o755 });
     msg = `${path}: now tabcomputer's (${command}); Debian's file is ${path + SUFFIX}`;
   } else {
     const d = state.diversion!;
@@ -144,7 +147,7 @@ export async function setSide(fs: FileSystem, path: string, side: Side, opts: { 
     // Our stub (if any) goes; Debian's file comes back
     if (await exists(fs, path)) {
       const head = await fs.readFile(path, 'utf8').catch(() => '') as string;
-      if (head.startsWith('#!/usr/bin/') && head.length < 128) await fs.unlink(path);
+      if ((head.startsWith('#!/usr/bin/') && head.length < 128) || isBuiltinShimText(head)) await fs.unlink(path);
       else throw new Error(`${path} exists and isn't tabcomputer's stub; refusing to replace it`);
     }
     if (await exists(fs, d.to)) await fs.rename(d.to, path);
@@ -182,6 +185,54 @@ export async function applyDefaults(fs: FileSystem, only?: string[]): Promise<st
   return changed;
 }
 
+// ── Builtin shims: files on PATH that run the builtin ────────────────────
+
+/**
+ * A builtin's file on PATH (`#!/usr/libexec/tabcomputer/builtin`): the kernel
+ * and the shell run the builtin it is named after. Real bash, make and
+ * execvp() search PATH with stat(), so an overlaid program (Debian's grep
+ * diverted to grep.debian) or a builtin Debian doesn't ship (curl, git, rg)
+ * needs a file there to be found at all.
+ */
+export const builtinShim = (cmd: string) => `#!${BUILTIN_SHIM_INTERP}\n# The kernel runs tabcomputer's builtin ${cmd} for this path; the file lets PATH searches find it.\n`;
+
+const isBuiltinShimText = (text: string) => text.startsWith(`#!${BUILTIN_SHIM_INTERP}\n`);
+
+/** Small files only: a Debian program streamed lazily isn't fetched to look at its first line. */
+async function isBuiltinShim(fs: FileSystem, path: string, size: number): Promise<boolean> {
+  if (size > 512) return false;
+  const text = await fs.readFile(path, 'utf8').catch(() => '');
+  return typeof text === 'string' && isBuiltinShimText(text);
+}
+
+/**
+ * Shims for what Debian's programs should find on PATH: every overlaid
+ * program (PATH diverted to PATH.debian, nothing at PATH), and the builtins
+ * of path-shims.ts that no file provides in any bin directory. They go in
+ * /usr/bin, where a package that installs the real program replaces the
+ * shim (dpkg overwrites files no package owns). Returns the paths written.
+ */
+export async function ensureBuiltinShims(fs: FileSystem, isCommand: (name: string) => boolean): Promise<string[]> {
+  const written: string[] = [];
+  const put = async (path: string, cmd: string) => {
+    await fs.writeFile(path, builtinShim(cmd), { mode: 0o755 });
+    written.push(path);
+  };
+  const present = async (p: string) => !!(await fs.lstat(p).catch(() => null));
+  for (const d of await readDiversions(fs)) {
+    const policy = POLICY[d.from];
+    if (d.by !== LOCAL || d.to !== d.from + SUFFIX || !policy || policy.stub) continue;
+    if (!(await present(d.from)) && isCommand(policy.command)) await put(d.from, policy.command);
+  }
+  for (const cmd of SHIM_COMMANDS) {
+    if (!isCommand(cmd)) continue;
+    let found = false;
+    for (const dir of BIN_DIRS) if (await present(`${dir}/${cmd}`)) { found = true; break; }
+    if (!found) await put(`/usr/bin/${cmd}`, cmd);
+  }
+  return written;
+}
+
 // ── Builtins vs. files on PATH ───────────────────────────────────────────
 
 const BIN_DIRS = ['/usr/local/sbin', '/usr/local/bin', '/usr/sbin', '/usr/bin', '/sbin', '/bin'];
@@ -201,7 +252,7 @@ async function hasProgramFile(fs: FileSystem, name: string): Promise<boolean> {
       const l = await fs.lstat(`${dir}/${name}`);
       if (l.type === 'symlink') return true;
       const st = await fs.stat(`${dir}/${name}`);
-      if (st.type === 'file') return true;
+      if (st.type === 'file' && !(await isBuiltinShim(fs, `${dir}/${name}`, st.size))) return true;
     } catch { /* not here */ }
   }
   return false;
@@ -228,6 +279,8 @@ export async function refreshShadows(fs: FileSystem, name?: string): Promise<voi
  * `isCommand` says which names are Shiro commands.
  */
 export async function enableDebianShadows(fs: FileSystem, isCommand: (name: string) => boolean): Promise<void> {
+  // Programs that search PATH themselves find the builtins (installs made before shims existed get them now)
+  await ensureBuiltinShims(fs, isCommand).catch(() => {});
   if (shadowSets.has(fs)) return refreshShadows(fs);
   const set = new Set<string>();
   shadowSets.set(fs, { names: isCommand, set });

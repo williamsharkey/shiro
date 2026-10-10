@@ -228,6 +228,10 @@ export class ProcFs {
       case 'stat': return { type: 'file', text: () => this.pidStat(p) };
       case 'statm': return { type: 'file', text: () => '0 0 0 0 0 0 0\n' };
       case 'status': return { type: 'file', text: () => this.pidStatus(p) };
+      // What a hung process is blocked in: the oldest syscall in progress
+      // (nr and six args in hex; sp and pc aren't known: 0), or "running"
+      case 'syscall': return { type: 'file', text: () => syscallText(p) };
+      case 'wchan': return { type: 'file', text: () => (p.calls.length || p.engineSleeps ? 'do_syscall_64' : '0') };
       case 'io': return { type: 'file', text: () => 'rchar: 0\nwchar: 0\nsyscr: 0\nsyscw: 0\nread_bytes: 0\nwrite_bytes: 0\ncancelled_write_bytes: 0\n' };
       case 'mounts': return { type: 'file', text: () => 'rootfs / rootfs rw 0 0\nproc /proc proc rw 0 0\n' };
     }
@@ -399,7 +403,16 @@ const VMSTAT_KEYS = [
   'pgscan_kswapd', 'pgscan_direct', 'pgalloc_normal', 'pgactivate', 'pgdeactivate',
 ];
 
-const PID_ENTRIES = ['cmdline', 'comm', 'cwd', 'environ', 'exe', 'fd', 'io', 'mounts', 'root', 'stat', 'statm', 'status', 'task'];
+const PID_ENTRIES = ['cmdline', 'comm', 'cwd', 'environ', 'exe', 'fd', 'io', 'mounts', 'root', 'stat', 'statm', 'status', 'syscall', 'task', 'wchan'];
+
+function syscallText(p: Process): string {
+  if (p.state === 'zombie') return 'running\n';
+  const c = p.calls[0];
+  // A wait Blink does itself (futex, nanosleep) has no kernel call: say futex
+  if (!c) return p.engineSleeps ? '202 0x0 0x0 0x0 0x0 0x0 0x0 0x0 0x0\n' : 'running\n';
+  const a = Array.from({ length: 6 }, (_, i) => '0x' + ((c.args[i] ?? 0) >>> 0).toString(16));
+  return `${c.nr} ${a.join(' ')} 0x0 0x0\n`;
+}
 
 /** What /proc/PID/fd/N points at. */
 export function fdTarget(f: OpenFile): string {

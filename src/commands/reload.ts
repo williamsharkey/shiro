@@ -1,6 +1,6 @@
 import { Command, CommandContext } from './index';
 import { registry } from '../registry';
-import * as esbuild from 'esbuild-wasm';
+import { withEsbuild } from './build';
 
 /**
  * reload: Hot-reload modules from the virtual filesystem
@@ -17,96 +17,6 @@ import * as esbuild from 'esbuild-wasm';
  * The reloaded module can implement migrateFrom(old) to preserve state.
  */
 
-// Track esbuild initialization state (shared with build.ts)
-let esbuildInitialized = false;
-let initPromise: Promise<void> | null = null;
-
-const ESBUILD_WASM_URL = 'https://unpkg.com/esbuild-wasm@0.27.2/esbuild.wasm';
-const WASM_CACHE_DB = 'tabcomputer-wasm-cache';
-const WASM_CACHE_STORE = 'wasm-binaries';
-const WASM_CACHE_KEY = 'esbuild-0.27.2';
-
-async function openWasmCacheDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(WASM_CACHE_DB, 1);
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => resolve(request.result);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(WASM_CACHE_STORE)) {
-        db.createObjectStore(WASM_CACHE_STORE);
-      }
-    };
-  });
-}
-
-async function getCachedWasm(): Promise<ArrayBuffer | null> {
-  try {
-    const db = await openWasmCacheDB();
-    return new Promise((resolve) => {
-      const tx = db.transaction(WASM_CACHE_STORE, 'readonly');
-      const store = tx.objectStore(WASM_CACHE_STORE);
-      const request = store.get(WASM_CACHE_KEY);
-      request.onsuccess = () => resolve(request.result || null);
-      request.onerror = () => resolve(null);
-      tx.oncomplete = () => db.close();
-    });
-  } catch {
-    return null;
-  }
-}
-
-async function cacheWasm(wasmBinary: ArrayBuffer): Promise<void> {
-  try {
-    const db = await openWasmCacheDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(WASM_CACHE_STORE, 'readwrite');
-      const store = tx.objectStore(WASM_CACHE_STORE);
-      const request = store.put(wasmBinary, WASM_CACHE_KEY);
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-      tx.oncomplete = () => db.close();
-    });
-  } catch {
-    // Caching failure is non-fatal
-  }
-}
-
-async function ensureEsbuildInitialized(): Promise<void> {
-  if (esbuildInitialized) return;
-
-  if (initPromise) {
-    await initPromise;
-    return;
-  }
-
-  initPromise = (async () => {
-    try {
-      let wasmBinary = await getCachedWasm();
-
-      if (wasmBinary) {
-        await esbuild.initialize({
-          wasmModule: await WebAssembly.compile(wasmBinary),
-          worker: false,
-        });
-      } else {
-        const response = await fetch(ESBUILD_WASM_URL);
-        wasmBinary = await response.arrayBuffer();
-        await esbuild.initialize({
-          wasmModule: await WebAssembly.compile(wasmBinary),
-          worker: false,
-        });
-        cacheWasm(wasmBinary);
-      }
-      esbuildInitialized = true;
-    } catch (e: any) {
-      initPromise = null;
-      throw new Error(`Failed to initialize esbuild: ${e.message}`);
-    }
-  })();
-
-  await initPromise;
-}
 
 /**
  * Compile a TypeScript/JavaScript file from VFS to executable code
@@ -115,7 +25,6 @@ async function compileFromVFS(
   ctx: CommandContext,
   sourcePath: string
 ): Promise<string> {
-  await ensureEsbuildInitialized();
 
   // Read source from VFS
   const source = await ctx.fs.readFile(sourcePath, 'utf8') as string;
@@ -127,11 +36,11 @@ async function compileFromVFS(
   else if (sourcePath.endsWith('.jsx')) loader = 'jsx';
 
   // Transform to executable JavaScript
-  const result = await esbuild.transform(source, {
+  const result = await withEsbuild((esbuild) => esbuild.transform(source, {
     loader,
     format: 'esm',
     target: 'es2020',
-  });
+  }));
 
   if (result.warnings.length > 0) {
     for (const warning of result.warnings) {
