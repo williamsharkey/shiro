@@ -86,7 +86,7 @@ export function createFakeProcess(
       _st.exitCalled = true;
       // Fire 'exit' event handlers (CLI registers cleanup here)
       try { (processEvents['exit'] || []).forEach(fn => fn(_st.exitCode)); } catch (_) {}
-      if (!_st.isInteractiveMode) _st.outputClosed = true;
+      if (!_st.isInteractiveMode || _st.exitEnds) _st.outputClosed = true;
       _st.deferredExitResolve?.(_st.exitCode);
       throw new ProcessExitError(_st.exitCode);
     },

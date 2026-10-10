@@ -329,6 +329,30 @@ w.terminate();
     expect(tty.pty.termios.lflag & 0o12).toBe(0o12);
   }, 60_000);
 
+  for (const mode of ['1', '0']) {
+    it(`spawn() with stdio 'inherit' gives the child the terminal itself (codex's launcher), ${mode === '1' ? 'as a guest' : 'in the page'}`, async () => {
+      const { shell, fs } = await createTestShell();
+      await fs.mkdir('/tmp/inh', { recursive: true });
+      await fs.writeFile('/tmp/inh/child.js', 'console.log("tty", !!process.stdin.isTTY, !!process.stdout.isTTY, "ready"); process.stdin.once("data", (d) => { console.log("got-" + String(d).trim()); process.exit(0); });');
+      await fs.writeFile('/tmp/inh/parent.js', 'const c = require("child_process").spawn("node", ["/tmp/inh/child.js"], { stdio: "inherit" }); c.on("exit", (code) => console.log("child exit", code));');
+      const tty = new TtySession();
+      let screen = '';
+      // (colours off: a terminal's console.log colours its values)
+      const plain = (t: string) => t.replace(/\x1b\[[\d;]*m/g, '');
+      tty.pty.onOutput((b) => { screen += plain(new TextDecoder().decode(b)); });
+      shell.setTerminal({ tty, writeOutput: (s: string) => { screen += plain(s); }, write: (s: string) => { screen += plain(s); }, getSize: () => ({ cols: 80, rows: 24 }), onResize: () => () => {},
+        enterStdinPassthrough() {}, exitStdinPassthrough() {}, enterRawMode() {}, exitRawMode() {}, isRawMode: () => false, term: { buffer: { active: { type: 'normal' } } } } as any);
+      const until = async (cond: () => boolean) => { const t0 = Date.now(); while (!cond()) { if (Date.now() - t0 > 15_000) throw new Error(`timed out: ${JSON.stringify(screen)}`); await new Promise((r) => setTimeout(r, 10)); } };
+      const r = shell.execute(`export TABCOMPUTER_NODE_WORKER=${mode}; node /tmp/inh/parent.js`, () => {}, () => {});
+      await until(() => screen.includes('ready'));
+      expect(screen).toContain('tty true true ready');
+      tty.pty.input('hello\r');
+      await until(() => screen.includes('child exit'));
+      expect(await r).toBe(0);
+      expect(screen.replace(/\r\n/g, '\n')).toMatch(/got-hello\n[\s\S]*child exit 0/);
+    }, 60_000);
+  }
+
   it("spawn(): a fast child's output reaches listeners added after spawn() returns", async () => {
     const r = await sh(`node -e '
       const { spawn } = require("child_process");

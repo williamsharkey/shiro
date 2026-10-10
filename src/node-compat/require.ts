@@ -4,6 +4,7 @@
  * Extracted from node-cmd.ts requireModule()/_requireModule().
  */
 
+import { SCRIPT_TIMER_NAMES } from './page-globals';
 import type { CommandContext } from '../commands/index';
 import { patchPackageSource } from './source-patches';
 import { transformESModules, transformTS, transformJSX } from '../commands/jseval/module-transform';
@@ -11,6 +12,8 @@ import { ProcessExitError } from '../commands/jseval/utils';
 
 export interface RequireDeps {
   ctx: CommandContext;
+  /** The script's own timers (execution.ts), bound by name in every module it loads */
+  scriptTimers?: Record<string, Function>;
   fileCache: Map<string, string>;
   fileMtimes: Map<string, number>;
   moduleCache: Map<string, { exports: any }>;
@@ -463,6 +466,7 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
         'module', 'exports', 'require', '__filename', '__dirname',
         'console', 'process', 'global', 'Buffer', '__import_meta',
         '__shiro_module', '__shiro_require', '__dynamic_import', '__shiro_require_ready', 'globalThis', 'Function',
+        ...(deps.scriptTimers ? SCRIPT_TIMER_NAMES : []),
       ];
       const dynamicImport = async (specifier: unknown) => {
         let spec = String(specifier);
@@ -472,7 +476,8 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
       };
       const fnArgs = [mod, mod.exports, nestedRequire, resolved, modDir,
         fakeConsole, fakeProcess, deps.processGlobal ?? globalThis, FakeBuffer, modImportMeta,
-        mod, nestedRequire, dynamicImport, (p: string) => requireReady(p, modDir, resolved), deps.processGlobal ?? globalThis, deps.processFunction ?? Function];
+        mod, nestedRequire, dynamicImport, (p: string) => requireReady(p, modDir, resolved), deps.processGlobal ?? globalThis, deps.processFunction ?? Function,
+        ...(deps.scriptTimers ? SCRIPT_TIMER_NAMES.map((k) => deps.scriptTimers![k]) : [])];
 
       // Try synchronous execution first — most npm packages don't use top-level await.
       // This ensures module.exports is populated before require() returns,
