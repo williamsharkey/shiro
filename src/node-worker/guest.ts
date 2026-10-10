@@ -9,10 +9,11 @@ import * as A from '../kernel/abi';
 import { connectGuest, isStartMessage, ChannelClosed, type GuestStartMessage, type GuestSys } from '../kernel/channel';
 import { decodeTermios, encodeTermios, decodeWinsize, makeRaw, TCSETS, TERMIOS_SIZE, WINSIZE_SIZE } from '../kernel/pty';
 import { SyscallFs } from './sys-fs';
+import { setShiroOrigin } from '../utils/shiro-origin';
 import { runChild, runChildSync } from './child';
 import { GuestNetStack, installGuestPorts } from './net';
 import { GuestTtyStdin } from './tty';
-import type { NodeGuestHooks, ThreadEvents } from './hooks';
+import type { GuestIpc, NodeGuestHooks, ThreadEvents } from './hooks';
 
 const dec = new TextDecoder();
 
@@ -72,12 +73,14 @@ function terminalFacade(sys: GuestSys, stdinTTY: boolean) {
 /** Run node for one start message; exits the process (does not return normally). */
 export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) => void): Promise<void> {
   const sys = connectGuest(start, post);
+  const prof = start.env.TABCOMPUTER_NODE_SYSPROF ? sysProfile(sys) : null;
   // (a pooled worker runs one guest after another: nothing of the last one's carries over)
   exitRequested = false;
   fsEvents = null;
   parentMessages = null;
   earlyMessages.length = 0;
   threadEvents.clear();
+  setShiroOrigin((start as any).pageOrigin ?? null); // (ANTHROPIC_BASE_URL and the like: the page's origin, not the Worker's)
   try {
     const fs = new SyscallFs(sys);
     // fs.watch: the page sends its filesystem's changes once asked (host.ts)
@@ -105,6 +108,9 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
       writeOut: (fd, s) => { sys.write(fd, s); },
       netStack: net,
       busy: () => net.busy,
+      ids: { pid: sys.getpid(), ppid: sys.getppid() },
+      kill: (pid, sig) => sys.kill(pid, sig),
+      ...(ipcFd(sys, start.env) >= 0 ? { ipc: guestIpc(sys, ipcFd(sys, start.env)) } : {}),
       onUnhandledRejection: (fn) => { rejection = fn; },
       page: {
         clipboard: (text) => post({ type: 'node-guest-clipboard', text }),
@@ -134,6 +140,8 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
       } : {}),
     };
     const env = { ...start.env };
+    // (node takes its channel's variables out of process.env: its own children aren't forked)
+    if (hooks.ipc) { delete env.NODE_CHANNEL_FD; delete env.NODE_CHANNEL_SERIALIZATION_MODE; }
     const shell: any = { cwd: start.cwd, env, abortController: null, fork() { throw new Error('no shell in a node guest'); } };
     const ctx: any = {
       args: nodeThread ? (nodeThread.eval ? ['-e', nodeThread.file] : [nodeThread.file, ...(nodeThread.argv ?? [])]) : start.argv.slice(1),
@@ -147,6 +155,8 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
       stdoutIsTTY: stdoutTTY,
       stdinIsTTY: stdinTTY,
       terminal: stdoutTTY ? terminalFacade(sys, stdinTTY) : undefined,
+      // Not a terminal: fds 1 and 2 take what's written as written (bytes stay bytes: esbuild's protocol)
+      ...(stdoutTTY ? {} : { stdoutBytes: (b: Uint8Array) => { sys.write(1, b); }, stderrBytes: (b: Uint8Array) => { sys.write(2, b); } }),
       nodeGuest: hooks,
     };
     // stdin: read when the program asks for it (a pipe until its end); a thread's is the main thread's
@@ -158,6 +168,8 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
       // `node < script.js` / `cat x.js | node`: the program comes from stdin
       const code = start.argv.slice(1).some((a) => !a.startsWith('-') || a === '-e' || a === '--eval' || a === '-p' || a === '--print');
       if (!code) ctx.stdin = await ctx.readStdin();
+      // else bytes as they arrive (a parent that talks to this node while it runs: esbuild's service)
+      else ctx.stdinStream = pipeStdin(sys);
     }
     const { runNode } = await import('../commands/jseval/node-run');
     let status: number;
@@ -177,6 +189,7 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
       sys.exitThread(status);
     }
     if (ctx.stderr) sys.write(2, ctx.stderr);
+    if (prof) sys.write(2, prof());
     exitRequested = true; // a clean end: the worker can run another guest (host.ts's pool)
     // Said in the channel's memory, which the page reads when the process ends (a message would come too late)
     if (!nodeThread) { const w = new Int32Array(sys.ch.sab); Atomics.store(w, w.length - 1, EXITING_MARK); }
@@ -185,6 +198,103 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
     if (e instanceof ChannelClosed) return; // killed: the kernel is done with us
     try { sys.write(2, `node: ${(e as any)?.stack ?? e}\n`); sys.exit(1); } catch { /* channel gone */ }
   }
+}
+
+const workerTimeout = globalThis.setTimeout.bind(globalThis);
+
+/** NODE_CHANNEL_FD, when it names an open fd (a forked node's channel) */
+function ipcFd(sys: GuestSys, env: Record<string, string>): number {
+  const fd = /^\d+$/.test(env.NODE_CHANNEL_FD ?? '') ? Number(env.NODE_CHANNEL_FD) : -1;
+  return fd >= 0 && sys.fcntl(fd, A.F_GETFD, 0) >= 0 ? fd : -1;
+}
+
+/** A forked node's channel to its parent (hooks.ts GuestIpc), read from the Worker's timers */
+function guestIpc(sys: GuestSys, fd: number): GuestIpc {
+  const enc = new TextEncoder();
+  let open = true;
+  sys.fcntl(fd, A.F_SETFD, A.FD_CLOEXEC); // (not its children's)
+  const close = () => { if (open) { open = false; sys.close(fd); } };
+  return {
+    send(text) {
+      if (!open) return false;
+      let b = enc.encode(text);
+      while (b.length) {
+        const n = sys.write(fd, b);
+        if (n === -A.EINTR || n === -A.EAGAIN) continue;
+        if (n <= 0) { close(); return false; }
+        b = b.subarray(n);
+      }
+      return true;
+    },
+    onData(fn) {
+      const buf = new Uint8Array(65536);
+      let idle = 0;
+      const tick = () => {
+        if (!open) return;
+        const { ready } = sys.poll([{ fd, events: A.POLLIN }], 0);
+        if (ready > 0) {
+          const n = sys.read(fd, buf);
+          if (n > 0) { idle = 0; fn(buf.slice(0, n)); }
+          else if (n !== -A.EAGAIN && n !== -A.EINTR) { close(); fn(null); return; }
+        } else idle = Math.min(20, idle + 1);
+        workerTimeout(tick, idle);
+      };
+      tick();
+    },
+    close,
+  };
+}
+
+/** fd 0 (a pipe or a file) as node-compat's live stdin: read when poll says so, from timers */
+function pipeStdin(sys: GuestSys): { read(): Promise<Uint8Array | null> } {
+  const buf = new Uint8Array(65536);
+  return {
+    read: () => new Promise((resolve) => {
+      let idle = 0;
+      const tick = () => {
+        const { ready } = sys.poll([{ fd: 0, events: A.POLLIN }], 0);
+        if (ready > 0) {
+          const n = sys.read(0, buf);
+          if (n !== -A.EAGAIN && n !== -A.EINTR) { resolve(n > 0 ? buf.slice(0, n) : null); return; }
+        }
+        // nothing yet: back off (0, 1, 2 ... 20 ms; the Worker's timer, not the program's)
+        idle = Math.min(20, idle + 1);
+        workerTimeout(tick, idle);
+      };
+      tick();
+    }),
+  };
+}
+
+/**
+ * TABCOMPUTER_NODE_SYSPROF=1: time every syscall; the returned function is the
+ * table node prints to stderr at its end (where a guest's time went: blocked in
+ * the kernel, by syscall, against the rest: its own JS and its event loop's waits).
+ */
+function sysProfile(sys: GuestSys): () => string {
+  const names = new Map<number, string>();
+  for (const [k, v] of Object.entries(A)) if (k.startsWith('SYS_') && typeof v === 'number' && !names.has(v)) names.set(v, k.slice(4));
+  const by = new Map<number, { n: number; ms: number }>();
+  const call = sys.ch.call.bind(sys.ch);
+  const t0 = performance.now();
+  sys.ch.call = (nr: number, ...args: number[]) => {
+    const t = performance.now();
+    try { return call(nr, ...args); } finally {
+      const e = by.get(nr) ?? { n: 0, ms: 0 };
+      e.n++; e.ms += performance.now() - t;
+      by.set(nr, e);
+    }
+  };
+  return () => {
+    const wall = performance.now() - t0;
+    const rows = [...by].sort((a, b) => b[1].ms - a[1].ms);
+    const inSys = rows.reduce((s, [, e]) => s + e.ms, 0);
+    const n = rows.reduce((s, [, e]) => s + e.n, 0);
+    const f = (ms: number) => ms.toFixed(1).padStart(9);
+    let out = `\n[sysprof] ${wall.toFixed(0)} ms: ${inSys.toFixed(0)} ms in ${n} syscalls, ${(wall - inSys).toFixed(0)} ms elsewhere\n`;
+    for (const [nr, e] of rows.slice(0, 20)) out += `[sysprof] ${(names.get(nr) ?? String(nr)).padEnd(16)}${String(e.n).padStart(7)}${f(e.ms)} ms${f((e.ms * 1000) / e.n)} us/call\n`;
+    return out;
+  };
 }
 
 /** In the last word of the channel's buffer before exit_group: this guest ends itself (host.ts) */

@@ -506,6 +506,34 @@ describe('kernel syscalls found by LTP', () => {
     await fs.unlink(name);
   });
 
+  it('timer_delete discards the timer\'s still-pending signal, not another sender\'s', async () => {
+    const t = kernel.vfork(proc);
+    const RT = A.SIGRTMIN + 4;
+    kernel.setSigmask(t, new Set([A.SIGUSR1, RT]));
+    const z = new Uint8Array(8);
+    const make = async (signo: number) => {
+      const sev = new Uint8Array(24); new DataView(sev.buffer).setInt32(8, signo, true);
+      const id = await kernel.syscall(t, A.SYS_timer_create, [1, 1], sev);
+      const its = new Uint8Array(32); new DataView(its.buffer).setBigInt64(24, 2_000_000n, true);
+      expect(await kernel.syscall(t, A.SYS_timer_settime, [id, 0], its)).toBe(0);
+      return id;
+    };
+    const a = await make(A.SIGUSR1);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(t.deferredSignals.has(A.SIGUSR1)).toBe(true);
+    expect(await kernel.syscall(t, A.SYS_timer_delete, [a], z)).toBe(0);
+    expect(t.deferredSignals.has(A.SIGUSR1)).toBe(false);
+    // a real-time signal also queued by kill stays, with its own siginfo
+    const b = await make(RT);
+    await new Promise((r) => setTimeout(r, 20));
+    kernel.kill(t.pid, RT, proc);
+    expect(await kernel.syscall(t, A.SYS_timer_delete, [b], z)).toBe(0);
+    expect(t.deferredSignals.has(RT)).toBe(true);
+    expect(t.siginfo.get(RT)?.map((i) => i.code)).toEqual([A.SI_USER]);
+    kernel.kill(t.pid, A.SIGKILL);
+    await kernel.syscall(proc, A.SYS_wait4, [t.pid, 0], z);
+  });
+
   it('Open POSIX sigqueue_3-1/12-1, LTP kill05: signalling another user\'s process (or init) is EPERM', async () => {
     const t = kernel.vfork(proc), other = kernel.vfork(proc);
     other.uid = 0; other.ruid = 0; other.suid = 0;

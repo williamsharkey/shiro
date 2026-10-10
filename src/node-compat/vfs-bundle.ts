@@ -37,6 +37,8 @@ export interface BundleOptions {
   builtins?: (name: string) => any;
   /** Extra export conditions, ahead of browser/import/module/default */
   conditions?: string[];
+  /** Each blob: URL made for an asset (to revoke when the bundle is let go) */
+  onAssetUrl?: (url: string) => void;
   /** Edits to a file's source as it is bundled (path → [from, to] pairs) */
   patch?: Record<string, [string, string][]>;
 }
@@ -116,6 +118,7 @@ export async function bundleFromVfs(fs: BundleFs, entry: string, opts: BundleOpt
     else blob = new Blob([await fs.readFile(path)], { type: MIME[ext] ?? 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
     assetUrls.set(path, url);
+    opts.onAssetUrl?.(url);
     return url;
   };
 

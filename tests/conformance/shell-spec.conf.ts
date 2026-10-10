@@ -15,6 +15,8 @@ import { parseSpecFile, judge, argvPy } from './lib/oils-spec.mjs';
 
 const OILS = resolve(__dirname, 'oils');
 const RESULTS = resolve(__dirname, 'results');
+/** Shown above the area table in docs/CONFORMANCE.md */
+const OILS_NOTE = 'The file set grew from 62 to 117 oils spec files (1567 to 2417 cases) with the bash-feature files (oils/FILES); on the original 62 files (now 1587 cases with their bash-only cases scored) it went from 1413/1567 to 1449/1587. Areas without a "Before" are the new files.';
 const files = readFileSync(join(OILS, 'FILES'), 'utf8').split('\n').filter(Boolean);
 const baseline: Record<string, number[]> = JSON.parse(readFileSync(join(OILS, 'bash-baseline.json'), 'utf8'));
 const only = process.env.SPEC_FILES ? process.env.SPEC_FILES.split(',') : null;
@@ -110,6 +112,6 @@ describe('oils spec tests (shell)', () => {
         all[file] = { pass: r.pass, total: r.total, failures: r.failures.map((f: CaseResult) => ({ i: f.i, name: f.name, ...(f.timeout ? { timeout: true } : {}) })) };
       } catch { /* not run */ }
     }
-    writeFileSync(join(RESULTS, 'shell-oils.json'), JSON.stringify({ suite: 'oils spec', title: 'Shell: oils spec tests', files: all }, null, 1) + '\n');
+    writeFileSync(join(RESULTS, 'shell-oils.json'), JSON.stringify({ suite: 'oils spec', title: 'Shell: oils spec tests', note: OILS_NOTE, files: all }, null, 1) + '\n');
   });
 });

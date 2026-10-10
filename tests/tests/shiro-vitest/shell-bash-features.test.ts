@@ -117,7 +117,7 @@ declare -l lo=ABC; echo $lo
 readonly ro=1; export ex=2; declare x
 declare -p n up ro ex x
 declare -ar arr=(a b); arr+=(c); echo "\${arr[@]} $?"
-declare -pr | grep -E 'ro|arr'
+declare -pr | grep -E ' (ro|arr)='
 `);
     expect(r.out).toBe([
       '9', 'ABCDEF', 'abc',
@@ -198,6 +198,14 @@ echo logged; echo oops >&2
     expect(await fs.readFile('/tmp/log.txt', 'utf8')).toBe('logged\noops\n');
   });
 
+  it('SHELLOPTS and BASHOPTS follow set -o and shopt; they are readonly', async () => {
+    const r = await bash(`echo "$SHELLOPTS"; set -o pipefail; echo "$SHELLOPTS"; shopt -s extglob
+case :$BASHOPTS: in *:extglob:*) echo extglob;; esac
+SHELLOPTS=x; echo "rc=$?"
+`);
+    expect(r.out).toBe('braceexpand:hashall:interactive-comments\nbraceexpand:hashall:interactive-comments:pipefail\nextglob\nrc=1\n');
+  });
+
   it('umask: octal and symbolic modes, -S and -p, and new files get 0666 less it', async () => {
     const r = await bash(`umask; umask -S; umask 027; umask -p
 umask g+w,o=r; umask; umask 089; echo "rc=$?"; umask u+r+w; echo "rc=$?"
@@ -215,5 +223,67 @@ popd >/dev/null; dirs
 popd zz; echo "rc=$?"; dirs -c; dirs
 `);
     expect(r.out).toBe('~/a /\n 0  ~/b\n 1  ~/a\n 2  /\n/tmp/h/b\n/tmp/h/a\n/\n/\n~/b ~/a\nrc=2\n~/b\n');
+  });
+});
+
+/** What GNU hello's autoconf ./configure (and its config.status) needed */
+describe('autoconf configure idioms', () => {
+  it('word splitting, case in if bodies, multi-line backticks and quotes, case in subshells and pipelines', async () => {
+    const r = await bash(`IFS=' 	
+'
+x=' a  b '; set -- $x; echo "$#:$1:$2"
+nl='
+'
+y="\${nl}p\${nl}"; set -- x$y; echo "$#"
+if true; then
+  case a in
+  a) echo A ;;
+  *) echo other ;;
+  esac
+fi
+v=\`echo one
+echo two\`
+echo "$v"
+c=": 'a
+b'"; if eval "$c"; then echo evalok; fi
+( case x in *y*) echo nl ;; *) echo other ;; esac; )
+( echo q | case x in *) cat ;; esac | sort )
+`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('2:a:b\n2\nA\none\ntwo\nevalok\nother\nq\n');
+  });
+
+  it('an EXIT trap with #( comments; { } >&N, >&2, > /dev/stdout; exec 7<&0', async () => {
+    const r = await bash(`trap 'st=$?
+  # a comment
+  for v in a; do
+    case $v in #(
+    *z*) echo z ;; #(
+    *) echo "trap v=$v st=$st" ;;
+    esac
+  done
+' 0
+exec 5>&1
+{ echo to5; } >&5
+{ echo to2; } >&2
+if true; then echo fi-out; fi > /dev/stdout
+exec 7<&0 </dev/null
+exit 4
+`);
+    expect(r.out).toBe('to5\nfi-out\ntrap v=a st=4\n');
+    expect(r.err).toBe('to2\n');
+    expect(r.status).toBe(4);
+  });
+
+  it('sh SCRIPT keeps option-like arguments; source does not run the EXIT trap; xtrace ignores 2>&1', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.writeFile('/tmp/s.sh', 'echo "args: $*"\n');
+    await fs.writeFile('/tmp/lib.sh', 'trap "echo exit-trap" EXIT\necho in-lib\n');
+    await fs.writeFile('/tmp/t.sh', 'sh /tmp/s.sh -x -- a\n. /tmp/lib.sh\necho after-source\nset -x\nv=$(echo hi 2>&1)\nset +x\necho "v=$v"\n');
+    let out = '';
+    let err = '';
+    await shell.execute('bash /tmp/t.sh', (s) => { out += s; }, (s) => { err += s; });
+    expect(out.replace(/\r\n/g, '\n')).toBe('args: -x -- a\nin-lib\nafter-source\nv=hi\nexit-trap\n');
+    expect(err.replace(/\r\n/g, '\n')).toContain('+ v=hi\n');
   });
 });

@@ -208,6 +208,10 @@ const haveSigmodes = blinkHasSigmodes && tryBuild('gcc', ['-static', '-O1', '-w'
 const sharedmapsBin = join(out, 'sharedmaps');
 const blinkHasSharedmaps = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_sharedmaps');
 const haveSharedmaps = blinkHasSharedmaps && tryBuild('gcc', ['-static', '-O1', '-w', '-o', sharedmapsBin, 'sharedmaps.c']);
+// Blink 0099: mlock/munlock/mlockall and mmap errors as Linux's
+const memerrsBin = join(out, 'memerrs');
+const blinkHasMemerrs = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_memerrs');
+const haveMemerrs = blinkHasMemerrs && tryBuild('gcc', ['-static', '-O1', '-w', '-o', memerrsBin, 'memerrs.c']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -730,6 +734,12 @@ it.skipIf(!haveSharedmaps)('MAP_SHARED /dev/shm mappings: write-only pages, a se
   const { shell } = await setup(readFileSync(sharedmapsBin));
   const r = await run(shell, './prog');
   expect(r.output.replace(/\r\n/g, '\n')).toBe('second qwerty\nchild from child\n');
+}, 60_000);
+
+it.skipIf(!haveMemerrs)('mlock, munlock, mlockall and mmap refuse bad arguments with Linux\'s errors (Open POSIX)', async () => {
+  const { shell } = await setup(readFileSync(memerrsBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('mlock far ENOMEM mine ok\nmunlock far ENOMEM mine ok\nmlockall 0 EINVAL onfault EINVAL current ok\nmmap flags ~0 EINVAL pipe ENODEV huge ENOMEM\n');
 }, 60_000);
 
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink

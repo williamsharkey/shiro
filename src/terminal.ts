@@ -10,6 +10,7 @@ import { createHudPanel, HudPanel } from './hud-panel';
 import { spawnInWindow } from './commands/spawn';
 import { TtySession } from './kernel/pty';
 import { activeProfile } from './profile';
+import { pinTerminalTimers } from './node-compat/page-globals';
 
 /**
  * HUD (Heads-Up Display) state for dynamic banner updates.
@@ -189,6 +190,7 @@ export class ShiroTerminal {
       },
       ...ShiroTerminal.optionOverrides,
     });
+    pinTerminalTimers(this.term);
 
     this.fitAddon = new FitAddon();
     this.term.loadAddon(this.fitAddon);

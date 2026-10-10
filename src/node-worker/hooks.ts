@@ -30,6 +30,16 @@ export interface NodeGuestHooks {
   page?: { clipboard(text: string): void; preview(port: number): void };
   /** Whether open handles (sockets, servers) keep the program running */
   busy?(): boolean;
+  /**
+   * NODE_CHANNEL_FD: this node was forked (fork(), stdio 'ipc') and this is its
+   * channel to the parent: newline-delimited JSON both ways, as node's 'json'
+   * serialization. Bytes as they arrive, null when the parent closes it.
+   */
+  ipc?: GuestIpc;
+  /** The kernel's process ids for this node (process.pid, process.ppid) */
+  ids?: { pid: number; ppid: number };
+  /** kill(2) another process: 0 or -errno */
+  kill?(pid: number, sig: number): number;
 }
 
 /** A worker_threads Worker's thread, as its parent sees it */
@@ -55,4 +65,12 @@ export interface ThreadSide {
 
 export function nodeGuestOf(ctx: unknown): NodeGuestHooks | undefined {
   return (ctx as { nodeGuest?: NodeGuestHooks } | null)?.nodeGuest;
+}
+
+export interface GuestIpc {
+  /** Write a whole message (blocks until the kernel takes it); false once closed */
+  send(text: string): boolean;
+  /** Start reading: chunks to `fn`, then null at the channel's end */
+  onData(fn: (b: Uint8Array | null) => void): void;
+  close(): void;
 }

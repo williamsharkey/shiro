@@ -85,8 +85,9 @@ export async function startTcpTestServer(host = '0.0.0.0') {
 }
 
 /** server.mjs serving `staticDir`, with the relay on and allowed to reach `allowCidrs` on `tcpPorts`. */
-export async function startShiroServer({ staticDir, isolated = true, tcpPorts = [], allowCidrs = [], log }) {
-  const port = await freePort();
+export async function startShiroServer({ staticDir, isolated = true, tcpPorts = [], allowCidrs = [], log, port }) {
+  // a fixed port keeps the origin, and so a persistent profile's storage, across runs
+  port ??= await freePort();
   const origin = `http://localhost:${port}`;
   const env = {
     ...process.env,
