@@ -216,11 +216,19 @@ async function smoke(m, pkg) {
     const r = await m.run(`python3 -c 'import ${py}' 2>&1`, 300);
     return r.code === 0 ? { ok: true, how: `python3 -c 'import ${py}'`, ms: r.ms } : { ok: false, how: `import ${py}`, category: 'smoke-failed', error: firstError(r.out) };
   }
-  const pm = list.map((f) => /^\/usr\/share\/perl5\/(.+)\.pm$/.exec(f)?.[1]).find(Boolean);
+  // The package's top-level module (XML::Twig, not XML::Twig::XPath, which needs an optional one)
+  const pm = list.map((f) => /^\/usr\/share\/perl5\/(.+)\.pm$/.exec(f)?.[1]).filter(Boolean)
+    .sort((a, b) => a.split('/').length - b.split('/').length || a.length - b.length)[0];
   if (pm) {
     const mod = pm.replace(/\//g, '::');
     const r = await m.run(`perl -e 'use ${mod}' 2>&1`, 300);
-    return r.code === 0 ? { ok: true, how: `perl -e 'use ${mod}'`, ms: r.ms } : { ok: false, how: `use ${mod}`, category: 'smoke-failed', error: firstError(r.out) };
+    if (r.code === 0) return { ok: true, how: `perl -e 'use ${mod}'`, ms: r.ms };
+    // a module only a Recommends/Suggests provides, as on Debian
+    const need = /Can't locate (\S+\.pm) in @INC/.exec(r.out)?.[1];
+    if (need && !(await m.run(`dpkg -S '*/${need}' 2>/dev/null`)).out.trim()) {
+      return { ok: true, how: `installed; use ${mod} needs ${need}, which no dependency provides (as on Debian)`, ms: r.ms };
+    }
+    return { ok: false, how: `use ${mod}`, category: 'smoke-failed', error: firstError(r.out) };
   }
   return { ok: true, how: 'installed (data/config only)', ms: 0 };
 }
