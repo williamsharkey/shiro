@@ -792,7 +792,8 @@ export class Shell {
       PWD: '/home/user',
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',
-      FORCE_COLOR: '3',
+      // (no FORCE_COLOR: programs get FORCE_COLOR=3 only when their stdout is
+      // the terminal, so `npm test | cat` and `cmd > log` stay free of escapes)
     };
     // Load history async (don't block construction)
     this.loadHistory();
