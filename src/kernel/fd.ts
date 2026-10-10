@@ -10,7 +10,7 @@
 import type { FileSystem } from '../filesystem';
 import {
   type KStat, EBADF, EMFILE, EINVAL, EISDIR, ESPIPE, ENOTTY, EAGAIN, EINTR,
-  O_ACCMODE, O_RDONLY, O_WRONLY, O_RDWR, O_APPEND, O_NONBLOCK, O_DSYNC, OPEN_MAX, NR_OPEN,
+  O_ACCMODE, O_RDONLY, O_WRONLY, O_RDWR, O_APPEND, O_NONBLOCK, O_DSYNC, O_PATH, OPEN_MAX, NR_OPEN,
   POLLIN, POLLOUT, SEEK_SET, SEEK_CUR, SEEK_END,
   S_IFCHR, S_IFREG, S_IFDIR, S_IFIFO, FIONREAD, errnoFromError,
   EPERM, F_SEAL_SEAL, F_SEAL_SHRINK, F_SEAL_GROW, F_SEAL_WRITE, F_SEAL_FUTURE_WRITE,
@@ -495,6 +495,8 @@ class Inode {
   key = '';
   /** Blocks of an unlinked big file this inode still reads (FileSystem.holdBlob), released at the last close. */
   heldBlob: string | null = null;
+  /** An O_TMPFILE file without O_EXCL: linkat may give it a name (linkAnonymousInode). */
+  tmpfile = false;
   /** Nanoseconds past mtimeMs; atime when set apart from mtime (null: follows it). See FSNode. */
   mtimeNs = 0;
   atimeMs: number | null = null;
@@ -656,7 +658,7 @@ class Inode {
   }
 
   /** To be written back, with the times it has (no new mtime). */
-  private markDirty(): void {
+  markDirty(): void {
     if (!this.dirty) this.dirtySince = Date.now();
     this.dirty = true;
     if (!this.flushTimer) this.armFlush(FLUSH_DELAY_MS);
@@ -897,6 +899,45 @@ function findInode(fs: FileSystem, path: string): Inode | undefined {
   return table.get(inodeKey(fs, path)) ?? [...table.values()].find((i) => i.path === path && !i.unlinked);
 }
 
+let anonymousSeq = 0;
+
+/**
+ * open(dir, O_TMPFILE): a file with no name in `dir`, kept for its fds only
+ * (never written back) until linkAnonymousInode names it. `linkable`: opened
+ * without O_EXCL.
+ */
+export function anonymousInode(fs: FileSystem, dir: string, mode: number, linkable: boolean): Inode {
+  const now = Date.now();
+  const ino = new Inode(fs, `${dir === '/' ? '' : dir}/#tmpfile-${++anonymousSeq}`, new Uint8Array(0), mode & 0o7777, now, now);
+  ino.unlinked = true;
+  ino.tmpfile = linkable;
+  ino.opens = 1;
+  return ino;
+}
+
+/**
+ * linkat(fd, "", AT_EMPTY_PATH) (or "/proc/self/fd/N" with AT_SYMLINK_FOLLOW)
+ * of an O_TMPFILE fd: the file gets the name `to` (canonical, free) and is
+ * that file from now on (its bytes written there, its fds writing back there).
+ */
+export async function linkAnonymousInode(fs: FileSystem, ino: Inode, to: string): Promise<void> {
+  if (!ino.tmpfile || !ino.unlinked) throw Object.assign(new Error('ENOENT: not a linkable O_TMPFILE file'), { code: 'ENOENT' });
+  ino.tmpfile = false;
+  ino.unlinked = false;
+  ino.path = to;
+  ino.markDirty();
+  try {
+    await ino.flush();
+    await fs.chmod(to, ino.mode & 0o7777);
+  } catch (e) {
+    ino.unlinked = true;
+    ino.tmpfile = true;
+    throw e;
+  }
+  ino.key = inodeKey(fs, to);
+  tableOf(fs).set(ino.key, ino);
+}
+
 /** Recompute the keys of open inodes (their files gained or lost names). */
 export function rekeyInodes(fs: FileSystem): void {
   const table = inodeTables.get(fs);
@@ -1068,6 +1109,23 @@ export async function renameInodes(fs: FileSystem, from: string, to: string): Pr
       else if (old.path === to) old.path = others[0];
     }
     for (const ino of moved) ino.path = to + ino.path.slice(from.length);
+    rekeyInodes(fs);
+  };
+}
+
+/**
+ * Call before FileSystem.exchange(a, b): writes back what open files under
+ * either hold, and afterwards (the returned function) swaps their paths.
+ */
+export async function exchangeInodes(fs: FileSystem, a: string, b: string): Promise<() => void> {
+  const table = inodeTables.get(fs);
+  if (!table) return () => {};
+  const under = (p: string) => [...table.values()].filter((ino) => !ino.unlinked && (ino.path === p || ino.path.startsWith(p + '/')));
+  const ia = under(a), ib = under(b);
+  for (const ino of [...ia, ...ib]) await ino.flush();
+  return () => {
+    for (const ino of ia) ino.path = b + ino.path.slice(a.length);
+    for (const ino of ib) ino.path = a + ino.path.slice(b.length);
     rekeyInodes(fs);
   };
 }
@@ -1315,6 +1373,28 @@ export class RegularFile implements OpenFile {
     this.closed = true;
     return true;
   }
+}
+
+/**
+ * open(symlink, O_PATH|O_NOFOLLOW): a descriptor naming the symlink itself.
+ * fstat (and fstatat AT_EMPTY_PATH) is the link's lstat, readlinkat(fd, "")
+ * its target, linkat(fd, "", AT_EMPTY_PATH) gives it another name; no I/O.
+ */
+export class SymlinkPathFile implements OpenFile {
+  kind: OpenFileKind = 'file';
+  flags = O_PATH;
+  constructor(public path: string, private lstat: () => Promise<KStat | number>) {}
+  async read(): Promise<number> { return -EBADF; }
+  async write(): Promise<number> { return -EBADF; }
+  poll(): number { return 0; }
+  onReady(): () => void { return () => {}; }
+  async stat(): Promise<KStat> {
+    const st = await this.lstat();
+    if (typeof st === 'number') throw Object.assign(new Error('stat'), { errno: -st });
+    return st;
+  }
+  async close(): Promise<void> {}
+  closeSync(): boolean { return true; }
 }
 
 /** A directory stream (open(dir, O_RDONLY|O_DIRECTORY)); getdents reads it. */

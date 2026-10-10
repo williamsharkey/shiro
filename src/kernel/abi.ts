@@ -326,6 +326,9 @@ export const O_DSYNC = 0o10000;
 /** O_SYNC is __O_SYNC | O_DSYNC on Linux. */
 export const O_SYNC = 0o4010000;
 export const O_DIRECTORY = 0o200000;
+/** O_TMPFILE's own bit (O_TMPFILE = it | O_DIRECTORY): an unnamed file in the directory. */
+export const __O_TMPFILE = 0o20000000;
+export const O_TMPFILE = 0o20200000;
 export const O_NOFOLLOW = 0o400000;
 export const O_PATH = 0o10000000;
 export const O_CLOEXEC = 0o2000000;
@@ -336,6 +339,8 @@ export const AT_REMOVEDIR = 0x200;
 export const AT_SYMLINK_FOLLOW = 0x400;
 export const AT_EMPTY_PATH = 0x1000;
 export const RENAME_NOREPLACE = 1;
+export const RENAME_EXCHANGE = 2;
+export const RENAME_WHITEOUT = 4;
 
 /** access(2) modes */
 export const F_OK = 0;
