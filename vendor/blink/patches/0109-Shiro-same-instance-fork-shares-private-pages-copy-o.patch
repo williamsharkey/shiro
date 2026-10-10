@@ -1,7 +1,8 @@
-From d005055db630e9ebd89d6545a055d9f4934e17b1 Mon Sep 17 00:00:00 2001
+From 1c6592ac9eb206c636f4ed58d0fed2bf4a7a89c7 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 07:06:28 +0000
-Subject: [PATCH] Shiro: same-instance fork shares private pages copy-on-write
+Subject: [PATCH 109/109] Shiro: same-instance fork shares private pages
+ copy-on-write
 
 ---
  blink/machine.h      |  8 +++++
@@ -168,7 +169,7 @@ index 26b42eb..a3c0ada 100644
        memcpy(r, p, k);
      } else if (!IsRomAddress(m, p)) {
 diff --git a/blink/memorymalloc.c b/blink/memorymalloc.c
-index 98ac836..0aab96a 100644
+index 8da4e5a..a1c38b0 100644
 --- a/blink/memorymalloc.c
 +++ b/blink/memorymalloc.c
 @@ -162,6 +162,20 @@ void ShareHostPage(u8 *page) {
@@ -192,7 +193,7 @@ index 98ac836..0aab96a 100644
  // drops a reference; returns how many remain
  long UnshareHostPage(u8 *page) {
    uintptr_t k = (uintptr_t)page;
-@@ -1428,6 +1442,10 @@ int ProtectVirtual(struct System *s, i64 virt, i64 size, int prot,
+@@ -1429,6 +1443,10 @@ int ProtectVirtual(struct System *s, i64 virt, i64 size, int prot,
          if (!hostonly) {
            for (;;) {
              pt2 = (pt & ~(PAGE_U | PAGE_RW | PAGE_XD)) | key;
@@ -204,7 +205,7 @@ index 98ac836..0aab96a 100644
              pt = LoadPte(mi);
              if (!(pt & PAGE_V)) {
 diff --git a/blink/shiro.inc b/blink/shiro.inc
-index 1f4c83d..42ed64a 100644
+index ae75a0c..f72d481 100644
 --- a/blink/shiro.inc
 +++ b/blink/shiro.inc
 @@ -25,6 +25,7 @@
@@ -241,7 +242,7 @@ index 1f4c83d..42ed64a 100644
    int i;
    if (u->on && (flags != u->flags || addr >= u->limit)) ShiroMapsEnd(u, addr);
    if (!u->on) {
-@@ -1998,6 +2000,7 @@ struct ShiroWalk {
+@@ -2001,6 +2003,7 @@ struct ShiroWalk {
    struct ShiroForkRun cur;
    u64 nruns;
    bool ok;
@@ -249,7 +250,7 @@ index 1f4c83d..42ed64a 100644
  };
  
  static void ShiroCloseRun(struct ShiroWalk *w) {
-@@ -2051,6 +2054,25 @@ static void ShiroWalkTable(struct ShiroWalk *w, u64 entry, int level, i64 base)
+@@ -2054,6 +2057,25 @@ static void ShiroWalkTable(struct ShiroWalk *w, u64 entry, int level, i64 base)
        continue;
      }
      u64 key = e & (PAGE_U | PAGE_RW | PAGE_XD);
@@ -275,7 +276,7 @@ index 1f4c83d..42ed64a 100644
      if (e & PAGE_GROW) {
        // shared with a same-instance child: it maps this very host page
        ShareHostPage(FindHostPage(e));
-@@ -2099,7 +2121,7 @@ static bool ShiroHasSharedMemory(struct System *s) {
+@@ -2102,7 +2124,7 @@ static bool ShiroHasSharedMemory(struct System *s) {
  
  // A snapshot of this process for its fork() child (in *out).
  static int ShiroSnapshot(struct Machine *m, u64 flags, i64 stack, i64 ctid,
@@ -284,7 +285,7 @@ index 1f4c83d..42ed64a 100644
    struct ShiroBuf b = {0};
    struct ShiroForkHeader h;
    struct ShiroWalk w;
-@@ -2146,7 +2168,7 @@ static int ShiroSnapshot(struct Machine *m, u64 flags, i64 stack, i64 ctid,
+@@ -2149,7 +2171,7 @@ static int ShiroSnapshot(struct Machine *m, u64 flags, i64 stack, i64 ctid,
      return -ENOMEM_LINUX;
    }
    memset(&w, 0, sizeof(w));
@@ -293,7 +294,7 @@ index 1f4c83d..42ed64a 100644
    // Other guest threads are held off by the GIL (we hold it), so the
    // snapshot is consistent; this thread becomes the child's only thread.
    LOCK(&s->mmap_lock);
-@@ -2168,7 +2190,7 @@ static i64 ShiroForkReal(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
+@@ -2171,7 +2193,7 @@ static i64 ShiroForkReal(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
    i64 pid;
    int rc;
    if ((pid = KS(m, K_SYS_vfork, A12((int)(flags & 0x8000)))) < 0) return pid;
@@ -302,7 +303,7 @@ index 1f4c83d..42ed64a 100644
      KS(m, 62, A12(pid, 9));
      return rc;
    }
-@@ -2540,11 +2562,15 @@ static i64 ShiroForkSame(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
+@@ -2549,11 +2571,15 @@ static i64 ShiroForkSame(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
    InvalidateSystem(s, true, false);
    ResetTlb(m);
    WjResetTlb(m);
@@ -320,7 +321,7 @@ index 1f4c83d..42ed64a 100644
    c->exec = s->exec;
    ++g_shiro_kids_starting;
 diff --git a/blink/syscall.c b/blink/syscall.c
-index 26aed18..322d8c4 100644
+index cdb5585..1aa3543 100644
 --- a/blink/syscall.c
 +++ b/blink/syscall.c
 @@ -430,7 +430,7 @@ static void ClearChildTid(struct Machine *m) {
@@ -332,7 +333,7 @@ index 26aed18..322d8c4 100644
        atomic_store_explicit(ctid, 0, memory_order_seq_cst);
      } else {
        THR_LOGF("invalid clear child tid address %#" PRIx64, m->ctid);
-@@ -572,7 +572,7 @@ static int Fork(struct Machine *m, u64 flags, u64 stack, u64 ctid) {
+@@ -574,7 +574,7 @@ static int Fork(struct Machine *m, u64 flags, u64 stack, u64 ctid) {
  #endif
      if ((flags & (CLONE_CHILD_SETTID_LINUX | CLONE_CHILD_CLEARTID_LINUX)) &&
          !(ctid & (sizeof(i32) - 1)) &&
@@ -341,7 +342,7 @@ index 26aed18..322d8c4 100644
        if (flags & CLONE_CHILD_SETTID_LINUX) {
          atomic_store_explicit(ctid_ptr, Little32(newpid), memory_order_release);
        }
-@@ -648,11 +648,11 @@ static int SysSpawn(struct Machine *m, u64 flags, u64 stack, u64 ptid, u64 ctid,
+@@ -650,11 +650,11 @@ static int SysSpawn(struct Machine *m, u64 flags, u64 stack, u64 ptid, u64 ctid,
    if (((flags & CLONE_PARENT_SETTID_LINUX) &&
         ((ptid & (sizeof(int) - 1)) ||
          !IsValidMemory(m, ptid, 4, PROT_READ | PROT_WRITE) ||
@@ -355,7 +356,7 @@ index 26aed18..322d8c4 100644
      LOGF("bad clone() ptid / ctid pointers: %#" PRIx64, flags);
      return efault();
    }
-@@ -965,7 +965,7 @@ static int SysFutexWakeOp(struct Machine *m, i64 uaddr, u32 nwake, u32 nwake2,
+@@ -967,7 +967,7 @@ static int SysFutexWakeOp(struct Machine *m, i64 uaddr, u32 nwake, u32 nwake2,
      oparg = 1 << oparg;
    }
    if (op > 4 || cmp > 5) return enosys();
@@ -364,7 +365,7 @@ index 26aed18..322d8c4 100644
    old = atomic_load_explicit(word, memory_order_relaxed);
    do {
      switch (op) {
-@@ -1002,7 +1002,7 @@ static int SysFutexLockPi(struct Machine *m, i64 uaddr, int op, i64 timeout_addr
+@@ -1004,7 +1004,7 @@ static int SysFutexLockPi(struct Machine *m, i64 uaddr, int op, i64 timeout_addr
    bool waited = false;
    _Atomic(u32) *word;
    for (;;) {
@@ -373,7 +374,7 @@ index 26aed18..322d8c4 100644
      v = atomic_load_explicit(word, memory_order_acquire);
      if (!(v & FUTEX_TID_MASK_LINUX)) {
        if (atomic_compare_exchange_strong_explicit(
-@@ -1036,7 +1036,7 @@ static int SysFutexLockPi(struct Machine *m, i64 uaddr, int op, i64 timeout_addr
+@@ -1038,7 +1038,7 @@ static int SysFutexLockPi(struct Machine *m, i64 uaddr, int op, i64 timeout_addr
  static int SysFutexUnlockPi(struct Machine *m, i64 uaddr) {
    u32 v;
    _Atomic(u32) *word;
@@ -382,7 +383,7 @@ index 26aed18..322d8c4 100644
    v = atomic_load_explicit(word, memory_order_acquire);
    do {
      if ((int)(v & FUTEX_TID_MASK_LINUX) != m->tid) return eperm();
-@@ -1098,7 +1098,8 @@ static void UnlockRobustFutex(struct Machine *m, u64 futex_addr,
+@@ -1100,7 +1100,8 @@ static void UnlockRobustFutex(struct Machine *m, u64 futex_addr,
      LOGF("robust futex isn't aligned");
      return;
    }
@@ -392,7 +393,7 @@ index 26aed18..322d8c4 100644
      LOGF("encountered efault in robust futex list");
      return;
    }
-@@ -1481,6 +1482,7 @@ static int SysMadvise(struct Machine *m, i64 addr, u64 len, int advice) {
+@@ -1483,6 +1484,7 @@ static int SysMadvise(struct Machine *m, i64 addr, u64 len, int advice) {
      LOCK(&m->system->mmap_lock);
      for (p = addr; p < end; p += 4096) {
        e = FindPageTableEntry(m, p);
@@ -400,7 +401,7 @@ index 26aed18..322d8c4 100644
        if ((e & (PAGE_V | PAGE_U | PAGE_RW)) != (PAGE_V | PAGE_U | PAGE_RW)) continue;
        if (e & (PAGE_RSRV | PAGE_FILE | PAGE_MAP)) continue;  // untouched, or file
        if ((h = GetPageAddress(m->system, e, false))) memset(h, 0, 4096);
-@@ -1759,7 +1761,7 @@ static i64 SysMremap(struct Machine *m, i64 old_address, u64 old_size,
+@@ -1761,7 +1763,7 @@ static i64 SysMremap(struct Machine *m, i64 old_address, u64 old_size,
    if (!IsFullyMapped(m->system, old_address, old_size)) return efault();
    entry = PeekPte(m->system, old_address);
    prot = (entry & PAGE_U ? PROT_READ_LINUX : 0) |

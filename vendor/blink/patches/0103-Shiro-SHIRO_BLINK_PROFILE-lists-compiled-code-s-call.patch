@@ -1,7 +1,7 @@
-From 76872cc5df67ff599468a02a133fac1cfd640113 Mon Sep 17 00:00:00 2001
+From 1f55bace8eebf4edff64d5a6c6bc55621cf09090 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 05:50:49 +0000
-Subject: [PATCH 103/107] Shiro: SHIRO_BLINK_PROFILE lists compiled code's
+Subject: [PATCH 103/109] Shiro: SHIRO_BLINK_PROFILE lists compiled code's
  calls to Blink's handlers
 
 ---
@@ -10,7 +10,7 @@ Subject: [PATCH 103/107] Shiro: SHIRO_BLINK_PROFILE lists compiled code's
  2 files changed, 24 insertions(+), 1 deletion(-)
 
 diff --git a/blink/shiro.inc b/blink/shiro.inc
-index a2625d7..1f4c83d 100644
+index 52ba163..ae75a0c 100644
 --- a/blink/shiro.inc
 +++ b/blink/shiro.inc
 @@ -1235,6 +1235,10 @@ static int ShiroProfDumpMore(char *b, int n, int cap, double now) {

@@ -1,7 +1,7 @@
-From f64ee12042902e8070452bb469ba4451602ba263 Mon Sep 17 00:00:00 2001
+From ad4798cffd9b75f7f7ffb68b3c2e767eb50c4031 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 05:59:51 +0000
-Subject: [PATCH 106/107] Shiro wjit: SSE2/SSSE3 integer ops inline as wasm
+Subject: [PATCH 106/109] Shiro wjit: SSE2/SSSE3 integer ops inline as wasm
  SIMD (padd/psub, logic, compares, unpacks, pshufd, pshufb, palignr, shifts by
  immediates, pmovmskb, aligned memory forms)
 
