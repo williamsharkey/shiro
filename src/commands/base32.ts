@@ -63,7 +63,7 @@ export const base32Cmd: Command = {
     const ignoreGarbage = flags.i || flags['ignore-garbage'];
 
     try {
-      const { content } = await readInput(positional, ctx.stdin, ctx.fs, ctx.cwd, ctx.fs.resolvePath);
+      const { content } = await readInput(positional, () => ctx.stdin, ctx.fs, ctx.cwd, ctx.fs.resolvePath);
 
       let result: string;
 

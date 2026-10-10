@@ -125,7 +125,18 @@ const EAGER_STDIN = new Set(['node', 'nodejs']);
  */
 export async function execLazyStdin(cmd: Command, ctx: CommandContext, readAll: () => Promise<string>): Promise<number> {
   if (EAGER_STDIN.has(cmd.name)) {
-    ctx.stdin = await readAll();
+    // node runs its program once (no rerun), so it can't use the NeedStdin
+    // trick. With a script or -e/-p, process.stdin reads the stream when the
+    // program asks (ctx.readStdin): one that never reads exits at once even if
+    // the pipe stays open (an agent's shell). With neither, the program is stdin.
+    const programFromStdin = !ctx.args.some((a) => !a.startsWith('-') || /^(-e|--eval|-p|--print)$/.test(a));
+    if (programFromStdin) {
+      ctx.stdin = await readAll();
+      return cmd.exec(ctx);
+    }
+    let once: Promise<string> | null = null;
+    ctx.stdin = '';
+    ctx.readStdin = () => (once ??= readAll());
     return cmd.exec(ctx);
   }
   const args = [...ctx.args];
