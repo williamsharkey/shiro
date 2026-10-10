@@ -5,6 +5,7 @@
  */
 
 import type { CommandContext } from '../commands/index';
+import { patchPackageSource } from './source-patches';
 import { transformESModules, transformTS, transformJSX } from '../commands/jseval/module-transform';
 import { ProcessExitError } from '../commands/jseval/utils';
 
@@ -418,7 +419,7 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
 
     try {
       // Transform TypeScript/JSX/ESM syntax to CommonJS
-      let transformedContent = content;
+      let transformedContent = patchPackageSource(resolved, content);
       if (resolved.endsWith('.ts') || resolved.endsWith('.tsx')) {
         transformedContent = transformTS(transformedContent);
       }
