@@ -2090,3 +2090,102 @@ console.log(new vm.Script('k * 2').runInNewContext({ k: 4 }), vm.isContext(c2));
     expect(r.out).toBe('{"/page":{"a":1}} 2\n4 3 42\nfunction [1,"q"]\n8 true\n');
   }, 60_000);
 });
+
+describe('AsyncLocalStorage carries its store across await, timers, then, nextTick', () => {
+  it('concurrent runs stay apart; snapshot, exit, AsyncResource, enterWith (Next\'s work and request stores)', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/als', { recursive: true });
+    await fs.writeFile('/home/user/als/als.js', `const { AsyncLocalStorage, AsyncResource } = require('async_hooks');
+const als = new AsyncLocalStorage();
+const other = new AsyncLocalStorage();
+const log = [];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function inner(tag) {
+  await sleep(5);
+  log.push(\`\${tag}:inner=\${als.getStore()?.id}\`);
+  return als.getStore()?.id;
+}
+async function job(id, ms) {
+  return als.run({ id }, async () => {
+    await sleep(ms);
+    log.push(\`\${id}:after-sleep=\${als.getStore()?.id}\`);
+    const v = await inner(id);
+    await Promise.resolve().then(() => log.push(\`\${id}:then=\${als.getStore()?.id}\`));
+    await new Promise((r) => setTimeout(() => { log.push(\`\${id}:timer=\${als.getStore()?.id}\`); r(); }, 1));
+    await new Promise((r) => process.nextTick(() => { log.push(\`\${id}:tick=\${als.getStore()?.id}\`); r(); }));
+    other.run('o' + id, () => log.push(\`\${id}:other=\${other.getStore()}\`));
+    log.push(\`\${id}:other-after=\${other.getStore()}\`);
+    return v;
+  });
+}
+(async () => {
+  const r = await Promise.all([job('A', 20), job('B', 5), job('C', 10)]);
+  log.push(\`results=\${r.join(',')} outside=\${als.getStore()}\`);
+  const snap = als.run({ id: 'S' }, () => AsyncLocalStorage.snapshot());
+  log.push(\`snapshot=\${snap(() => als.getStore().id)} exit=\${als.run({ id: 'E' }, () => als.exit(() => als.getStore()))}\`);
+  const res = als.run({ id: 'R' }, () => new AsyncResource('x'));
+  log.push(\`resource=\${res.runInAsyncScope(() => als.getStore().id)}\`);
+  als.enterWith({ id: 'W' });
+  await sleep(1);
+  log.push(\`enterWith=\${als.getStore().id}\`);
+  console.log(log.join('\\n'));
+})();
+`);
+    const r = await sh(shell, 'node /home/user/als/als.js');
+    // (node 22's lines for the same script; their order follows the timers)
+    expect(r.out.trim().split('\n').sort()).toEqual(["A:after-sleep=A", "A:inner=A", "A:other-after=undefined", "A:other=oA", "A:then=A", "A:tick=A", "A:timer=A", "B:after-sleep=B", "B:inner=B", "B:other-after=undefined", "B:other=oB", "B:then=B", "B:tick=B", "B:timer=B", "C:after-sleep=C", "C:inner=C", "C:other-after=undefined", "C:other=oC", "C:then=C", "C:tick=C", "C:timer=C", "enterWith=W", "resource=R", "results=A,B,C outside=undefined", "snapshot=S exit=undefined"]);
+  }, 60_000);
+});
+
+describe('stream: web streams to node streams and back', () => {
+  it('Readable.fromWeb/toWeb, Writable.fromWeb/toWeb, Duplex (Next\'s prerender)', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/ws', { recursive: true });
+    await fs.writeFile('/home/user/ws/web.js', `const { Readable, Writable, Duplex } = require('stream');
+(async () => {
+  const rs = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('ab')); c.enqueue(new TextEncoder().encode('cd')); c.close(); } });
+  const r = Readable.fromWeb(rs);
+  let s = ''; for await (const c of r) s += Buffer.from(c).toString();
+  const back = Readable.toWeb(Readable.from(['x', 'y', 'z']));
+  const parts = []; for await (const c of back) parts.push(typeof c === 'string' ? c : Buffer.from(c).toString());
+  const got = [];
+  const ws = new WritableStream({ write(c) { got.push(Buffer.from(c).toString()); } });
+  const w = Writable.fromWeb(ws);
+  await new Promise((res) => { w.write('1'); w.end('2', res); });
+  const sink = []; const nw = new Writable({ write(c, e, cb) { sink.push(c.toString()); cb(); } });
+  const writer = Writable.toWeb(nw).getWriter(); await writer.write(new TextEncoder().encode('q')); await writer.close();
+  console.log(s, parts.join(''), got.join(''), sink.join(''), typeof Duplex.fromWeb, typeof Duplex.toWeb);
+})();
+`);
+    const r = await sh(shell, 'node /home/user/ws/web.js');
+    // (node 22's output for the same script)
+    expect(r.out).toBe('abcd xyz 12 q function function\n');
+  }, 60_000);
+});
+
+describe('http: ServerResponse internals middleware uses', () => {
+  it('_implicitHeader(), _header and a gzip body piped into the response (compression, Next\'s server)', async () => {
+    const { iframeServer } = await import('@shiro/iframe-server');
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/gz', { recursive: true });
+    await fs.writeFile('/home/user/gz/s.js', `
+      const zlib = require('zlib');
+      require('http').createServer((req, res) => {
+        const before = res._header;
+        res.setHeader('content-type', 'text/plain');
+        res.setHeader('content-encoding', 'gzip');
+        res._implicitHeader();
+        res.setHeader('x-before', String(before));
+        const gz = zlib.createGzip();
+        gz.pipe(res);
+        gz.end('compressed hello');
+      }).listen(4813);
+    `);
+    await sh(shell, 'cd /home/user/gz && node s.js');
+    const r = await iframeServer.fetch(4813, '/');
+    const body = typeof r.body === 'string' ? new TextEncoder().encode(r.body) : new Uint8Array(r.body as Uint8Array);
+    const text = await new Response(new Blob([body]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+    expect([r.status, r.headers?.['x-before'], r.headers?.['content-encoding'], text]).toEqual([200, 'null', 'gzip', 'compressed hello']);
+    iframeServer.close(4813);
+  }, 60_000);
+});

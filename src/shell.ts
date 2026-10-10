@@ -8610,6 +8610,10 @@ export class Shell {
     // The command's own context, as `node FILE` gets it: its redirects and pipes (stdoutIsTTY,
     // streamStdout…) with it; `./x.js > out` wrote to the terminal while the shell had one
     ctx.args = [filePath, ...args];
+    // and its output as it comes, to the writers this command has (a server never ends:
+    // vite's dev server under `npm run dev` printed nothing)
+    ctx.streamStdout ??= (t) => writeStdout(t.replace(/\r?\n/g, '\r\n'));
+    ctx.streamStderr ??= (t) => writeStderr(t.replace(/\r?\n/g, '\r\n'));
     return this.runCommand(nodeCmd, ctx);
   }
 

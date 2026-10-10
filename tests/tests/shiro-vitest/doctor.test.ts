@@ -50,6 +50,8 @@ describe('doctor', () => {
     expect(label('claude')).toMatch(/not signed in/);
     expect(label('debian')).toMatch(/^OK\s+debian\s+Debian 13\.1 \(trixie/);
     expect(label('kernel')).toMatch(/\d+ process(es)?\b/);
+    // Installed prebuilt packages against the local index (pkg-outdated.test.ts covers the WARN case)
+    expect(label('packages')).toMatch(/^(OK|INFO|WARN)\s+packages\s+(no prebuilt packages installed|\d+ installed, all at the index versions|\d+ upgradable)/);
     expect(out).not.toContain(SECRET);
     expect(out).not.toContain('ghp_');
   });

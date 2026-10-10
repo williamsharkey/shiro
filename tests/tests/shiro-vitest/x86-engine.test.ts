@@ -244,6 +244,10 @@ const haveSchedperm = blinkHasSchedperm && tryBuild('gcc', ['-static', '-O1', '-
 const itimersBin = join(out, 'itimers');
 const blinkHasItimers = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_itimers');
 const haveItimers = blinkHasItimers && tryBuild('gcc', ['-static', '-O1', '-w', '-o', itimersBin, 'itimers.c']);
+// Blink 0506: another existing process's CPU clock reads
+const othercpuclockBin = join(out, 'othercpuclock');
+const blinkHasOthercpuclock = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_othercpuclock');
+const haveOthercpuclock = blinkHasOthercpuclock && tryBuild('gcc', ['-static', '-O1', '-w', '-o', othercpuclockBin, 'othercpuclock.c']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -877,6 +881,12 @@ it.skipIf(!haveItimers)('ITIMER_VIRTUAL and ITIMER_PROF are per process: a fork 
   const { shell } = await setup(readFileSync(itimersBin));
   const r = await run(shell, './prog');
   expect(r.output.replace(/\r\n/g, '\n')).toBe('set 0 0 parent armed 1\nchild virtual 0 prof 0\n');
+}, 60_000);
+
+it.skipIf(!haveOthercpuclock)('clock_getcpuclockid of another existing process (init) reads; of no process is ESRCH (Open POSIX clock_getcpuclockid_1-2)', async () => {
+  const { shell } = await setup(readFileSync(othercpuclockBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('init 0 read 0 none No such process\n');
 }, 60_000);
 
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
