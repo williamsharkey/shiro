@@ -994,6 +994,7 @@ export class Shell {
    * isn't one); a target like a[2] gives the subscript too. Null for a circular chain.
    */
   derefName(name: string): { name: string; sub?: string } | null {
+    if (!this.namerefs.has(name)) return { name };
     const seen = new Set<string>();
     let n = name;
     for (;;) {
@@ -1010,7 +1011,7 @@ export class Shell {
 
   /** The variable NAME names, namerefs followed (NAME on a circular chain) */
   refTarget(name: string): string {
-    return this.derefName(name)?.name ?? name;
+    return this.namerefs.has(name) ? this.derefName(name)?.name ?? name : name;
   }
 
   /** NAME+=VALUE: appended, or added for an integer (declare -i) */
@@ -1222,6 +1223,8 @@ export class Shell {
     child.parentTraps = this.trapsModified || !this.parentTraps ? new Map(this.traps) : this.parentTraps;
     child.aliases = new Map(this.aliases);
     child.namerefs = new Map(this.namerefs);
+    if (this.varAttrs.size) child.varAttrs = new Map([...this.varAttrs].map(([k, v]) => [k, new Set(v)]));
+    if (this.declaredNames.size) child.declaredNames = new Set(this.declaredNames);
     child.ownUmask = this.umask;
     // (a new process sets it back to 0: startProcess)
     child.env['BASH_SUBSHELL'] = String((parseInt(this.env['BASH_SUBSHELL'] ?? '0', 10) || 0) + 1);
@@ -6484,10 +6487,12 @@ export class Shell {
 
   /** Value of NAME (element 0 of an array) or NAME[SUB]; undefined if unset */
   getVar(name: string, sub?: string): string | undefined {
-    const ref = this.derefName(name);
-    if (!ref) return undefined;
-    name = ref.name;
-    if (ref.sub !== undefined && sub === undefined) sub = ref.sub;
+    if (this.namerefs.has(name)) {
+      const ref = this.derefName(name);
+      if (!ref) return undefined;
+      name = ref.name;
+      if (ref.sub !== undefined && sub === undefined) sub = ref.sub;
+    }
     const assoc = this.assocArrays.get(name);
     if (sub === undefined || sub === '@' || sub === '*') {
       if (sub !== undefined) {
@@ -6508,14 +6513,16 @@ export class Shell {
   /** Assign NAME (element 0 of an array) or NAME[SUB]; returns an error message or null */
   setVar(name: string, value: string, sub?: string): string | null {
     // (a nameref with no target yet takes VALUE as its target, as in bash)
-    if (this.namerefs.get(name) === '' && sub === undefined) { this.namerefs.set(name, value); return null; }
-    const ref = this.derefName(name);
-    if (!ref) return `${name}: circular name reference`;
-    if (ref.sub !== undefined) {
-      if (sub !== undefined) return `\`${this.namerefs.get(name)}': not a valid identifier`;
-      sub = ref.sub;
+    if (this.namerefs.has(name)) {
+      if (this.namerefs.get(name) === '' && sub === undefined) { this.namerefs.set(name, value); return null; }
+      const ref = this.derefName(name);
+      if (!ref) return `${name}: circular name reference`;
+      if (ref.sub !== undefined) {
+        if (sub !== undefined) return `\`${this.namerefs.get(name)}': not a valid identifier`;
+        sub = ref.sub;
+      }
+      name = ref.name;
     }
-    name = ref.name;
     if (this.readonlyVars.has(name)) return `${name}: readonly variable`;
     const attrs = this.varAttrs.get(name);
     if (attrs) {
