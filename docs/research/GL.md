@@ -152,7 +152,7 @@ back five pixels and compares them with the same shader evaluated on the CPU.
 ## Addendum: option B design (unix/gl, 2026-10-10)
 
 Status: approved; stage 2 (glxinfo, glxgears in the page) built and tested. Owner: unix/gl.
-Xshiro's GLX (`src/gl/glx-ext.ts`) is unix/gl's too; the GL window surface and app scoring: unix/gui.
+Xshiro's GLX, the GL window surface and app scoring: unix/gui.
 
 ```
  guest (Blink worker)                         page
@@ -324,24 +324,25 @@ it covers it), a core context `3.3`, GLSL `1.20`/`3.30`; renderer
 
 ### What gui provides (Xshiro)
 
-1. Done in `src/gl/glx-ext.ts`, installed by `src/gl/setup.ts` when the page
+1. Done in `src/x11/glx.ts`, enabled by `src/gl/setup.ts` when the page
    has WebGL2: `GLX` in QueryExtension, QueryVersion (1.4), and what libglvnd
    asks the server: QueryServerString with `GLX_EXT_libglvnd` among the
    extensions and `tabcomputer` as GLX_VENDOR_NAMES_EXT (without the former
    glvnd falls back to `libGLX_indirect`), and GetDrawableAttributes for a
    drawable's screen. Other GLX requests answer `BadRequest`; our vendor
    sends none.
-2. An in-page API for a GL window, roughly
-   `server.glSurface(xid) → { canvas, width, height, onChange(cb), onDestroy(cb), release() }`:
+2. Done in `src/x11/gl-surface.ts`; present.ts doesn't use it yet. An in-page API for a GL window,
+   `server.glSurface(xid) → { canvas, width, height, x, y, visible, clip, onChange(cb), onDestroy(cb), release() }`:
    a `bitmaprenderer` canvas at the window's position in its toplevel,
    clipped and stacked like the window (child windows included: KiCad's 3D
    canvas, wxGLCanvas), kept in place across moves, resizes, map and unmap.
-   Until it lands, `src/gl/present.ts` uses the readback fallback.
+   Until present.ts uses it, frames take the readback fallback (asynchronous since 010193a1).
 3. The vendor library: `src/gl/setup.ts` writes
    `public/gui/lib/libGLX_tabcomputer.so.0` (built by `scripts/gl/build.sh`)
-   to `/usr/lib/x86_64-linux-gnu/` before Xshiro serves its first client,
-   like the text hooks `src/gui/apps.ts` ships. No environment variable is
-   needed: glvnd takes the vendor from the server.
+   to `/usr/lib/x86_64-linux-gnu/` before Xshiro serves its first client
+   (apps.ts' glEnv does the same for launched apps and sets
+   `__GLX_VENDOR_LIBRARY_NAME`). Without the variable glvnd takes the vendor
+   from the server.
 
 ### Tests and measurement
 
@@ -357,7 +358,7 @@ it covers it), a core context `3.3`, GLSL `1.20`/`3.30`; renderer
     mode, display lists, textures, lighting, a legacy GLSL program).
   - `gl-server.test.ts`: the socket server (batches split anywhere, one
     backend per connection, broken streams) and `setup.ts`.
-  - `x11.test.ts`: the GLX requests glvnd sends.
+  - `x11.test.ts` (gui's): the GLX requests glvnd sends.
   - `gl-guest.test.ts`: glxinfo, glxgears and glbench in Blink against a
     recording glshiro, with no vendor forced (`GL_PROBE_ROOT`); Neverball
     (`NB_ROOT`) and OpenSCAD (`SCAD_ROOT`) the same way.
