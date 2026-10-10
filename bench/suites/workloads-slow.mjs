@@ -1,6 +1,7 @@
 // Real workloads, the slow ones (minutes; opt-in with --suites workloads-slow):
 // `debian install` to the first Debian prompt, apt-get update and installs of
-// cowsay and python3, python3 cold and warm, `git clone` of a small repo over
+// cowsay and python3, python3 cold and warm, `npm i` of a vite+react+eslint
+// tree and `rm -rf node_modules`, `git clone` of a small repo over
 // the TCP relay from a git:// server this harness runs (lib/gitserver.mjs),
 // and the native Claude Code binary's `--version` when it is cached in
 // bench/.cache/fixtures (never downloaded here). Time and renderer RSS peak
@@ -72,6 +73,36 @@ export async function run(h) {
     S('workload.peak_rss.python3_warm', 'py_warm_peak', 'MiB', 'same, warm runs');
     S('workload.debian.storage', 'storage', 'MiB', 'navigator.storage.estimate().usage after install + update + cowsay + python3');
   }
+
+  // A real project's dependency tree: thousands of small files written, then
+  // deleted. "durable" is from the command's start until IndexedDB has
+  // committed everything it wrote (FileSystem.pendingWrites back to 0).
+  await h.try('workload.npm.install_big', 'ms', async () => {
+    const pkgs = 'vite@5 react@18 react-dom@18 @vitejs/plugin-react@4 tailwindcss@3 postcss autoprefixer eslint@8 eslint-plugin-react typescript@5';
+    const durable = () => h.eval(() => new Promise((res) => { const fs = window.__tabcomputer.fs; const tick = () => (fs.pendingWrites === 0 ? res() : setTimeout(tick, 20)); tick(); }));
+    const T = { install: [], installDurable: [], peak: [], rmDurable: [] };
+    let files = 0;
+    for (let i = 0; i < n; i++) {
+      await h.page?.context().close().catch(() => {});
+      await h.boot({ path: '/?ui=terminal' });
+      await h.sh('mkdir -p /tmp/app && cd /tmp/app && npm init -y > /dev/null');
+      const t0 = Date.now();
+      const r = await timed(h, `cd /tmp/app && npm i ${pkgs}`, 900);
+      await durable();
+      T.install.push(r.ms); T.installDurable.push(Date.now() - t0); T.peak.push(r.peak);
+      files = Number((await h.sh('find /tmp/app/node_modules -type f | wc -l')).out.trim());
+      if (files < 5000) throw new Error(`only ${files} files in node_modules`);
+      const t1 = Date.now();
+      await timed(h, 'rm -rf /tmp/app/node_modules', 120);
+      await durable();
+      T.rmDurable.push(Date.now() - t1);
+    }
+    const note = `\`npm i ${pkgs}\` (${files} files) in a fresh profile; registry from the bench cache`;
+    h.sample('workload.npm.install_big', T.install, 'ms', { notes: note });
+    h.sample('workload.npm.install_big.durable', T.installDurable, 'ms', { notes: 'the same install until IndexedDB has committed all it wrote' });
+    h.sample('workload.peak_rss.npm_install_big', T.peak, 'MiB', { notes: 'renderer RSS peak above the pre-run level' });
+    h.sample('workload.npm.rm_node_modules.durable', T.rmDurable, 'ms', { notes: '`rm -rf node_modules` after it, until committed' });
+  });
 
   await h.try('workload.git.clone_relay', 'ms', async () => {
     const g = h.gitServer;

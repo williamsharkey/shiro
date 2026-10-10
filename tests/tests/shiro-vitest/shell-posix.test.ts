@@ -156,10 +156,10 @@ describe('traps, set -u, exec and loops', () => {
     expect(r.out).toBe("trap -- 'echo bye' EXIT\ntrap -- 'echo so long' EXIT\nso long\n[body\nin-sub]\nok\nbye\n");
   });
 
-  it('set -u: an unset parameter ends the script (127) or the subshell (1); ${x-…} forms are fine', async () => {
+  it('set -u: an unset parameter ends the script or the subshell (1, as bash for a script file); ${x-…} forms are fine', async () => {
     const r = await script('set -u\necho "${nonesuch-d}${nonesuch:+x} $#"\n(echo $zz); echo "sub=$?"\necho $((zz + 1))\necho unreached\n');
     expect(r.out).toBe('d 0\nsub=1\n');
-    expect(r.status).toBe(127);
+    expect(r.status).toBe(1);
     expect(r.err).toContain('zz: unbound variable');
   });
 

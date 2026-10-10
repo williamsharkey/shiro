@@ -18,8 +18,37 @@ export interface NodeGuestHooks {
   netStack?: unknown;
   /** Who hears the worker's unhandled promise rejections (node's process 'unhandledRejection'; null: nobody) */
   onUnhandledRejection?(fn: ((reason: unknown, promise: Promise<unknown>) => void) | null): void;
+  /** worker_threads: start `file` (or code, with eval) as a thread of this process, a guest of its own */
+  startThread?(file: string, opts: { threadId: number; eval?: boolean; workerData?: unknown; argv?: string[]; env?: Record<string, string> }, events: ThreadEvents): ThreadHandle;
+  /** Set in a worker_threads thread */
+  thread?: ThreadSide;
+  /** process.stdin on the terminal: fd 0 read as the process on the pty (tty.ts); set when fd 0 is a tty */
+  ttyStdin?(on: { data(text: string): void; end(): void; signal(sig: number): void }): {
+    readonly reading: boolean; start(): void; pause(): void; setRaw(on: boolean): void; close(): void;
+  };
   /** Whether open handles (sockets, servers) keep the program running */
   busy?(): boolean;
+}
+
+/** A worker_threads Worker's thread, as its parent sees it */
+export interface ThreadHandle {
+  post(value: unknown): void;
+  terminate(): void;
+}
+
+export interface ThreadEvents {
+  online(): void;
+  message(value: unknown): void;
+  error(err: { message: string; stack?: string }): void;
+  exit(code: number): void;
+}
+
+/** In a worker_threads thread: its side of the link to the parent */
+export interface ThreadSide {
+  threadId: number;
+  workerData: unknown;
+  post(value: unknown): void;
+  onMessage(fn: (value: unknown) => void): void;
 }
 
 export function nodeGuestOf(ctx: unknown): NodeGuestHooks | undefined {

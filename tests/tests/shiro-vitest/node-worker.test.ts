@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createTestShell } from './helpers';
 import { installNodeWorker } from './node-worker-setup';
+import { TtySession } from '@shiro/kernel/pty';
 
 let cleanup: () => void;
 beforeAll(async () => { cleanup = await installNodeWorker(); }, 120_000);
@@ -112,6 +113,16 @@ console.log(a[0], a[1] === me, b[0], b[1] === me);
     expect(r.out).toBe('x true y,z true\n');
   }, 60_000);
 
+  it('in a script, node is the shell\'s child; its redirects and pipes are the shell\'s', async () => {
+    const r = await sh(`node -e '
+      const out = String(require("child_process").execSync("echo $$; node -e \\"console.log(require(\\\\\\"fs\\\\\\").readFileSync(\\\\\\"/proc/self/stat\\\\\\", \\\\\\"utf8\\\\\\").split(\\\\\\" \\\\\\")[3])\\" > /tmp/nk3; cat /tmp/nk3; node -p 6*7 | tr 4 x"));
+      const [sh, ppid, piped] = out.trim().split("\\n");
+      console.log(sh === ppid, piped);
+    ' < /dev/null`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('true x2\n');
+  }, 60_000);
+
   it('output to a pipe streams, and spawn() delivers it as it comes', async () => {
     // inner node waits for a file its parent makes on seeing inner's first line:
     // with output held until exit (either end) that never happens
@@ -188,6 +199,156 @@ srv.listen(18491, () => {
     expect(typeof res.body === 'string' ? res.body : new TextDecoder().decode(res.body as Uint8Array)).toBe('hi /preview');
     expect(await run).toBe(0);
     expect(err).toBe('');
+  }, 60_000);
+
+  it('worker_threads: each Worker is a thread of the process, running in parallel', async () => {
+    const r = await sh(`node /tmp/nt/main.js < /dev/null`, async (fs) => {
+      await fs.mkdir('/tmp/nt', { recursive: true });
+      await fs.writeFile('/tmp/nt/w.js', `const { parentPort, workerData, isMainThread, threadId } = require('worker_threads');
+const fs = require('fs');
+parentPort.on('message', (m) => {
+  if (m.cmd === 'sum') parentPort.postMessage({ sum: m.n.reduce((a, b) => a + b, 0), data: workerData.tag, isMainThread, same: threadId === workerData.id });
+  if (m.cmd === 'wake') { const a = new Int32Array(m.sab); Atomics.store(a, 0, 42); Atomics.notify(a, 0); }
+  if (m.cmd === 'file') { fs.writeFileSync('/tmp/nt/from-thread', 'hi'); parentPort.postMessage('wrote'); }
+  if (m.cmd === 'bye') process.exit(7);
+});
+`);
+      await fs.writeFile('/tmp/nt/main.js', `const { Worker, isMainThread } = require('worker_threads');
+const fs = require('fs');
+const w = new Worker('/tmp/nt/w.js', { workerData: { tag: 't1', id: 0 } });
+const replies = [];
+w.on('online', () => replies.push('online'));
+w.on('message', (m) => {
+  replies.push(m);
+  if (m.sum !== undefined) {
+    // the main thread blocks; only a worker running in parallel can wake it
+    const sab = new SharedArrayBuffer(4), a = new Int32Array(sab);
+    w.postMessage({ cmd: 'wake', sab });
+    const r = Atomics.wait(a, 0, 0, 5000);
+    replies.push(r + ' ' + Atomics.load(a, 0));
+    w.postMessage({ cmd: 'file' });
+  } else if (m === 'wrote') {
+    replies.push(fs.readFileSync('/tmp/nt/from-thread', 'utf8'));
+    w.postMessage({ cmd: 'bye' });
+  }
+});
+w.on('exit', (code) => {
+  console.log(isMainThread, JSON.stringify(replies.map((x) => typeof x === 'object' ? { ...x, same: undefined } : x)), code);
+  new Worker('throw new Error("bad thread")', { eval: true }).on('error', (e) => console.log('error:', /bad thread/.test(e.message))).on('exit', (c) => console.log('exit', c));
+});
+w.postMessage({ cmd: 'sum', n: [1, 2, 3] });
+`);
+    });
+    expect(r.err).toBe('');
+    expect(r.out).toBe('true ["online",{"sum":6,"data":"t1","isMainThread":false},"ok 42","wrote","hi"] 7\nerror: true\nexit 1\n');
+  }, 60_000);
+
+  it('worker_threads: a message posted at once waits for the listener; the main thread can block on the worker', async () => {
+    const r = await sh(`node /tmp/nt2/m.js < /dev/null`, async (fs) => {
+      await fs.mkdir('/tmp/nt2', { recursive: true });
+      // the listener comes after a slow require: the message waits for it
+      await fs.writeFile('/tmp/nt2/w.js', `const { parentPort } = require('worker_threads');
+const t0 = Date.now(); while (Date.now() - t0 < 100) {}
+parentPort.on('message', (m) => { const a = new Int32Array(m.sab); Atomics.store(a, 0, 42); Atomics.notify(a, 0); });
+`);
+      await fs.writeFile('/tmp/nt2/m.js', `const { Worker } = require('worker_threads');
+const w = new Worker('/tmp/nt2/w.js');
+const sab = new SharedArrayBuffer(4), a = new Int32Array(sab);
+w.postMessage({ sab });
+console.log(Atomics.wait(a, 0, 0, 10000), Atomics.load(a, 0));
+w.terminate();
+`);
+    });
+    expect(r.err).toBe('');
+    expect(r.out).toBe('ok 42\n');
+  }, 60_000);
+
+  it("a guest's server-sent events stream to the page as they are written", async () => {
+    const { iframeServer } = await import('@shiro/iframe-server');
+    const { shell, fs } = await createTestShell();
+    await fs.writeFile('/tmp/nh-sse.js', `require('http').createServer((req, res) => {
+  res.writeHead(200, { 'content-type': 'text/event-stream' });
+  let n = 0;
+  const t = setInterval(() => { res.write('data: ' + (++n) + '\\n\\n'); if (n === 3) { clearInterval(t); res.end(); setTimeout(() => process.exit(0), 50); } }, 150);
+}).listen(18494);`);
+    const run = shell.execute('export TABCOMPUTER_NODE_WORKER=1; node /tmp/nh-sse.js < /dev/null', () => {}, () => {});
+    const t0 = Date.now();
+    while (!iframeServer.isPortInUse(18494) && Date.now() - t0 < 20_000) await new Promise((r) => setTimeout(r, 20));
+    const start = Date.now();
+    const res = await iframeServer.fetch(18494, '/events');
+    expect(res.headers?.['content-type']).toBe('text/event-stream');
+    expect(res.body).toBeInstanceOf(ReadableStream);
+    const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+    const first = await reader.read();
+    const firstAt = Date.now() - start;
+    let all = new TextDecoder().decode(first.value);
+    for (;;) { const { value, done } = await reader.read(); if (done) break; all += new TextDecoder().decode(value); }
+    expect(firstAt).toBeLessThan(Date.now() - start - 150); // the first event came well before the end
+    expect(all).toBe('data: 1\n\ndata: 2\n\ndata: 3\n\n');
+    expect(await run).toBe(0);
+  }, 60_000);
+
+  it('on a pty: cooked lines, ^C to a listener or exit 130, setRawMode and back', async () => {
+    const { shell } = await createTestShell();
+    const tty = new TtySession();
+    let screen = '';
+    tty.pty.onOutput((b) => { screen += new TextDecoder().decode(b); });
+    shell.setTerminal({ tty, writeOutput: (s: string) => { screen += s; }, write: (s: string) => { screen += s; }, getSize: () => ({ cols: 80, rows: 24 }), onResize: () => () => {},
+      enterStdinPassthrough() {}, exitStdinPassthrough() {}, enterRawMode() {}, exitRawMode() {}, isRawMode: () => false, term: { buffer: { active: { type: 'normal' } } } } as any);
+    const until = async (cond: () => boolean) => { const t0 = Date.now(); while (!cond()) { if (Date.now() - t0 > 15_000) throw new Error(`timed out: ${JSON.stringify(screen)}`); await new Promise((r) => setTimeout(r, 10)); } };
+    const run = (js: string) => { screen = ''; return shell.execute(`export TABCOMPUTER_NODE_WORKER=1; node -e '${js}'`, () => {}, () => {}); };
+    // cooked: the pty echoes and edits; the line comes on Enter; ^D ends
+    let r = run('process.stdin.on("data", (d) => console.log("got " + JSON.stringify(String(d)))); process.stdin.on("end", () => console.log("end")); console.log("ready")');
+    await until(() => screen.includes('ready'));
+    tty.pty.input('hellp\x7fo\r');
+    await until(() => screen.includes('got "hello\\n"'));
+    expect(screen).toContain('hellp\b \bo\r\n');
+    tty.pty.input('\x04');
+    expect(await r).toBe(0);
+    expect(screen).toContain('end');
+    // ^C: SIGINT to a listener; without one, exit 130
+    r = run('process.on("SIGINT", () => { console.log("caught"); process.exit(3) }); process.stdin.resume(); console.log("ready")');
+    await until(() => screen.includes('ready'));
+    tty.pty.input('\x03');
+    expect(await r).toBe(3);
+    expect(screen).toContain('caught');
+    r = run('process.stdin.resume(); console.log("ready")');
+    await until(() => screen.includes('ready'));
+    tty.pty.input('\x03');
+    expect(await r).toBe(130);
+    // raw: keys one by one, no echo, no signals; the shell's modes again after
+    r = run('process.stdin.setRawMode(true); process.stdin.on("data", (d) => { console.log("key " + JSON.stringify(String(d))); if (String(d) === "q") process.exit(0) }); console.log("ready")');
+    await until(() => screen.includes('ready'));
+    expect(tty.pty.termios.lflag & 0o12).toBe(0); // ICANON, ECHO off
+    tty.pty.input('a');
+    await until(() => screen.includes('key "a"'));
+    tty.pty.input('\x03');
+    await until(() => screen.includes('key "\\u0003"'));
+    tty.pty.input('q');
+    expect(await r).toBe(0);
+    expect(tty.pty.termios.lflag & 0o12).toBe(0o12);
+  }, 60_000);
+
+  it("spawn(): a fast child's output reaches listeners added after spawn() returns", async () => {
+    const r = await sh(`node -e '
+      const { spawn } = require("child_process");
+      let left = 5; const got = [];
+      for (let i = 0; i < 5; i++) {
+        const c = spawn("sh", ["-c", "echo fast" + i], { env: { ...process.env, X: "1" } });
+        let out = ""; c.stdout.on("data", (d) => out += d);
+        c.on("close", () => { got[i] = out.trim(); if (!--left) console.log(got.join(",")); });
+      }
+    '`);
+    expect(r.out).toBe('fast0,fast1,fast2,fast3,fast4\n');
+  }, 60_000);
+
+  it('a worker whose guest ended cleanly runs the next node (warm); a killed one is not reused', async () => {
+    // the realm carries over, as the page's does for in-page node
+    let r = await sh(`node -e 'globalThis.__poolProbe = (globalThis.__poolProbe || 0) + 1; console.log(globalThis.__poolProbe)' < /dev/null; node -e 'console.log(globalThis.__poolProbe)' < /dev/null`);
+    expect(r.out).toBe('1\n1\n'); // the second run saw the first's global: the same worker
+    // a guest killed mid-run: its worker is gone, the next node starts fresh
+    r = await sh(`node -e 'globalThis.__poolKilled = 1; setInterval(() => {}, 1000)' < /dev/null & sleep 0.5; kill -9 %1; wait; node -e 'console.log(String(globalThis.__poolKilled))' < /dev/null`);
+    expect(r.out.trim().split('\n').pop()).toBe('undefined');
   }, 60_000);
 
   it('stdin from a pipe; async exec', async () => {

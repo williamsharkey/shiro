@@ -7,7 +7,7 @@
  */
 
 import { FdTable, type OpenFile } from './fd';
-import { W_STOPCODE } from './abi';
+import { W_STOPCODE, SI_KERNEL, SIGRTMIN, SIGQUEUE_MAX, type SigInfo } from './abi';
 
 export type ProcessState = 'running' | 'stopped' | 'zombie';
 
@@ -79,6 +79,42 @@ export class Process {
   sigactions = new Map<number, { flags: number; mask: Set<number>; restorer: number }>();
   /** Signals that arrived while blocked; delivered when unblocked (rt_sigprocmask, rt_sigreturn). */
   deferredSignals = new Set<number>();
+  /**
+   * What each pending signal (in pendingSignals or deferredSignals) carries,
+   * one entry per instance: a standard signal is pending once, a real-time
+   * one (SIGRTMIN up) as often as it was sent (up to SIGQUEUE_MAX).
+   */
+  siginfo = new Map<number, SigInfo[]>();
+  /** The siginfo of the signal of each number last taken (a handler's, sigwait's): SYS_shiro_siginfo */
+  lastSiginfo = new Map<number, SigInfo>();
+  /** Queue what `info` carries for a signal going pending; false when it coalesces with one already pending or the queue is full */
+  queueSiginfo(info: SigInfo): boolean {
+    const q = this.siginfo.get(info.signo);
+    if (q?.length && (info.signo < SIGRTMIN || q.length >= SIGQUEUE_MAX)) return false;
+    if (q) q.push(info); else this.siginfo.set(info.signo, [info]);
+    return true;
+  }
+
+  /**
+   * Take one pending instance of `sig` out of `from` (pendingSignals or
+   * deferredSignals): its siginfo, remembered as the last taken; `sig` stays
+   * in `from` while more instances are queued.
+   */
+  takeSiginfo(sig: number, from: Set<number>): SigInfo {
+    const q = this.siginfo.get(sig);
+    const info = q?.shift() ?? { signo: sig, code: SI_KERNEL };
+    if (!q?.length) { this.siginfo.delete(sig); from.delete(sig); }
+    this.lastSiginfo.set(sig, info);
+    return info;
+  }
+
+  /** Forget the pending `sig` (ignored, or discarded) */
+  dropSignal(sig: number): void {
+    this.siginfo.delete(sig);
+    this.pendingSignals.delete(sig);
+    this.deferredSignals.delete(sig);
+  }
+
   /** Masks saved when a guest handler starts; rt_sigreturn restores the top one. */
   signalFrames: Set<number>[] = [];
   /** sigaltstack(2) state, recorded but not used (guests run handlers on their own stacks). */

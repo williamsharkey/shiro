@@ -159,8 +159,8 @@ export const PKG_STATE_DIR = '/var/lib/pkg';
 export const PKG_STATUS = `${PKG_STATE_DIR}/status.json`;
 export const PKG_LISTS_DIR = `${PKG_STATE_DIR}/lists`;
 export const PKG_SOURCES = '/etc/pkg/sources.list';
-/** Serves the "/pkg/..." URLs when the page isn't on a Shiro origin */
-export const DEFAULT_MIRROR = 'https://shiro.computer';
+/** Serves the "/pkg/..." URLs when the page isn't on a tabcomputer origin (shiro.computer no longer serves /pkg) */
+export const DEFAULT_MIRROR = 'https://tabcomputer.com';
 
 const NAME_RE = /^[a-z0-9][a-z0-9.+_-]*$/;
 const SHA_RE = /^[0-9a-f]{64}$/;
