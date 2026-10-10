@@ -63,10 +63,6 @@ export const KNOWN_ISSUES: { issue: string; workaround?: string }[] = [
     workaround: 'Reload the tab (this ends running agents, including you), or do node work such as `vitest` and `esbuild` in a checkout outside the tab.',
   },
   {
-    issue: "In the page's own shell (the terminal's, and commands it runs in the page), `/proc/self/fd/N` links read `/dev/pts/0` even when the fd is redirected to a pipe or file, `stat -L` on them gives the redirect's type, and `/proc/self/cmdline` is just `bash`. Kernel processes' `/proc/PID/fd` are right.",
-    workaround: 'Ask `[ -t N ]` whether an fd is a terminal rather than reading the link.',
-  },
-  {
     issue: "Images can't be pasted into Claude Code: `xclip` and `xsel` here are text only.",
     workaround: 'Save the image to a file and give its path.',
   },
@@ -135,6 +131,11 @@ ${bootSection(ctx, name)}
   correct, but big programs take seconds to start. WASM programs run directly.
 - \`node\`, \`npm\` and \`npx\` are a Node.js-compatible runtime built into the page,
   not real Node. Most pure-JS npm packages work; native addons (\`.node\`) don't.
+  Each \`node\` is a real process in a background worker: \`*Sync\` child_process
+  calls block, \`ps\` and \`kill\` see it, and a server (\`node server.js\`, \`npm run
+  dev\`) stays in the foreground while it listens, as on Linux. Start one with
+  \`&\` (\`node server.js > server.log 2>&1 &\`) to keep using the shell, and stop it
+  with \`kill %1\`. \`TABCOMPUTER_NODE_WORKER=0\` runs node in the page instead.
 - Network: outbound HTTP(S) works. Linux programs get TCP through the site's
   relay when it is on (ports 22, 80, 443, 9418); UDP is DNS only. Nothing on the
   internet can connect in.
@@ -202,11 +203,11 @@ ${bootSection(ctx, name)}
   only say "Could not connect".
 - A command that hangs: press Ctrl-C at the terminal. Linux and WASM programs are
   kernel processes: \`ps\` lists them, \`kill PID\` (or \`kill -9 PID\`) stops
-  them. Builtins (including \`node\` and the Pyodide
-  \`python3\`) run inside the page, not as kernel processes. Started in the
-  background, one still has a PID (\`$!\`, \`jobs -l\`): \`ps\` lists it, it has a
-  \`/proc/PID\`, and \`kill PID\` stops it from any shell. A builtin in the
-  foreground has none: Ctrl-C it, or reload.
+  them; \`node\` is one too. Builtins (the Pyodide \`python3\`, and \`node\` with
+  \`TABCOMPUTER_NODE_WORKER=0\`) run inside the page, not as kernel processes.
+  Started in the background, one still has a PID (\`$!\`, \`jobs -l\`): \`ps\`
+  lists it, it has a \`/proc/PID\`, and \`kill PID\` stops it from any shell. A
+  builtin in the foreground has none: Ctrl-C it, or reload.
 - \`console -g PATTERN\` searches the page's console log (\`--prev\` includes the
   load before the last reload).
 - Report bugs at ${source}/issues (\`gh issue create\` works here): the command,

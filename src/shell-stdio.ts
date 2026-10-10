@@ -128,9 +128,10 @@ export async function execLazyStdin(cmd: Command, ctx: CommandContext, readAll: 
     // node runs its program once (no rerun), so it can't use the NeedStdin
     // trick. With a script or -e/-p, process.stdin reads the stream when the
     // program asks (ctx.readStdin): one that never reads exits at once even if
-    // the pipe stays open (an agent's shell). With neither, the program is
+    // the pipe stays open (an agent's shell). With none of those, the program is
     // stdin, or on a terminal node starts its REPL.
-    const programFromStdin = !ctx.args.some((a) => !a.startsWith('-') || /^(-e|--eval|-p|--print)$/.test(a)) &&
+    // (`node -v` and `node --help` answer without reading it)
+    const programFromStdin = !ctx.args.some((a) => !a.startsWith('-') || /^(-e|--eval|-p|--print|-v|--version|-h|--help)$/.test(a)) &&
       !(ctx.stdinIsTTY && ctx.terminal);
     if (programFromStdin) {
       ctx.stdin = await readAll();

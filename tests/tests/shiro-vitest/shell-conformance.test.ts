@@ -729,14 +729,15 @@ describe('shell conformance regressions', () => {
       'ls /proc | grep -qx "$$" && echo listed',
       'ls /proc/self | tr "\\n" " "; echo',
       'ls /proc/self/fd | tr "\\n" " "; echo',
-      '[ "$(readlink /proc/self)" = "$$" ] && echo self-is-me',
+      // (/proc/self is the command reading it, a child of the shell, as on Linux)
+      '[ "$(readlink /proc/self)" != "$$" ] && [ "$(cut -d" " -f4 /proc/self/stat)" = "$$" ] && echo self-is-my-child',
       'cd /tmp; readlink /proc/self/cwd; readlink /proc/$$/exe',
       'X_PROC_TEST=1; export X_PROC_TEST; tr "\\0" "\\n" < /proc/self/environ | grep -c "^X_PROC_TEST=1$"',
       'cut -d" " -f1,3 /proc/$$/stat | sed "s/^$$/PID/"',
       'grep -c "^Pid:" /proc/self/status',
       'ls -ld /proc/self/cwd | cut -c1',
     ].join('\n'));
-    expect(r.out).toBe('listed\ncmdline comm cwd environ exe fd io limits mounts root stat statm status syscall task wchan \n0 1 2 \nself-is-me\n/tmp\n/usr/bin/sh\n1\nPID R\n1\nl\n');
+    expect(r.out).toBe('listed\ncmdline comm cwd environ exe fd io limits mounts root stat statm status syscall task wchan \n0 1 2 \nself-is-my-child\n/tmp\n/usr/bin/sh\n1\nPID R\n1\nl\n');
   });
 
   it('tabcomputer#8: uname, free, df and ps agree with /proc and each other', async () => {

@@ -1,9 +1,10 @@
 /**
  * What the page needs of node-worker at boot, kept small: whether node runs
- * as a kernel guest for a process (TABCOMPUTER_NODE_WORKER=1, a blocking
- * channel, a way to make the Worker), and a kernel loader that only then
- * loads the rest (host.ts and the guest's Worker) — a page that never sets
- * the flag never fetches them.
+ * as a kernel guest for a process (by default, where the page can: a
+ * blocking channel, a way to make the Worker; TABCOMPUTER_NODE_WORKER=0 in
+ * the environment keeps node in the page), and a kernel loader that only
+ * then loads the rest (host.ts and the guest's Worker) — a page that never
+ * runs node never fetches them.
  */
 import type { Kernel } from '../kernel/kernel';
 import { canBlock } from '../kernel/channel';
@@ -16,19 +17,19 @@ let factory: (() => GuestWorker) | null = null;
 export function setNodeWorkerFactory(f: (() => GuestWorker) | null): void { factory = f; }
 export function nodeWorkerFactory(): (() => GuestWorker) | null { return factory; }
 
-/** Whether `node` runs as a kernel guest here */
+/** Whether `node` runs as a kernel guest here: where it can, unless TABCOMPUTER_NODE_WORKER=0 */
 export function nodeWorkerMode(env: Record<string, string | undefined>): boolean {
-  if (env.TABCOMPUTER_NODE_WORKER !== '1' || canBlock() !== 'sab') return false;
+  if (env.TABCOMPUTER_NODE_WORKER === '0' || canBlock() !== 'sab') return false;
   return !!factory || (typeof Worker !== 'undefined' && typeof window !== 'undefined');
 }
 
 const installed = new WeakSet<Kernel>();
 
 /**
- * With TABCOMPUTER_NODE_WORKER=1 in its environment, a process the kernel
+ * When node runs as a guest (nodeWorkerMode), a process the kernel
  * starts as `node` (or as a `#!...node` script) runs the guest itself
  * (host.ts nodeLoader); `sh -c 'node ...'` (execSync, npm scripts) execs it
- * in place so the loader sees it. Without the flag nothing changes.
+ * in place so the loader sees it. With TABCOMPUTER_NODE_WORKER=0 nothing changes.
  */
 export function installNodeWorkerBoot(kernel: Kernel): void {
   if (installed.has(kernel)) return;

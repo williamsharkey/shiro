@@ -465,6 +465,8 @@ const WRITE_BACKLOG_BYTES = 16 << 20;
 
 class Inode {
   data: Uint8Array;
+  /** Its own array while `data` is a shared object's buffer (attachInodeShared) */
+  privateData?: Uint8Array;
   size: number;
   opens = 0;
   dirty = false;
@@ -570,6 +572,53 @@ class Inode {
 
 const inodeTables = new WeakMap<FileSystem, Map<string, Inode>>();
 
+/**
+ * /dev/shm files mapped remote (shmobj.ts): while mapped, the object's
+ * SharedArrayBuffer holds the file's bytes, so the inode reads and writes
+ * there (pread sees the mapping, the mapping sees pwrite), as a memfd does.
+ * Kept by path so an inode opened while it is mapped (shm_open after a close)
+ * uses the buffer too.
+ */
+const sharedFiles = new WeakMap<FileSystem, Map<string, Uint8Array>>();
+
+/**
+ * The buffer holds the file's bytes (seeded from the fd when the object
+ * turned remote): the inode uses it in place of its own array, which it
+ * keeps for the detach (it may be the FileSystem node's own content).
+ */
+function useShared(ino: Inode, view: Uint8Array): void {
+  if (view.length < ino.size || ino.data.buffer === view.buffer) return; // (grown past the mapping: stays private)
+  ino.privateData = ino.data;
+  ino.data = view;
+}
+
+/** The shared object for the file at `path` turned remote: its fds use `sab`'s first `length` bytes. */
+export function attachInodeShared(fs: FileSystem, path: string, sab: SharedArrayBuffer, length: number): void {
+  let m = sharedFiles.get(fs);
+  if (!m) { m = new Map(); sharedFiles.set(fs, m); }
+  const view = new Uint8Array(sab, 0, length);
+  m.set(path, view);
+  const ino = inodeTables.get(fs)?.get(path);
+  if (ino) useShared(ino, view);
+}
+
+/** Its last mapping went: the inode keeps a private copy of the bytes it has now. */
+function detachInodeShared(fs: FileSystem, path: string): void {
+  sharedFiles.get(fs)?.delete(path);
+  const ino = inodeTables.get(fs)?.get(path);
+  if (!ino || !(ino.data.buffer instanceof SharedArrayBuffer)) return;
+  const own = ino.privateData;
+  ino.privateData = undefined;
+  if (own && own.length >= ino.size) { own.set(ino.data.subarray(0, ino.size)); ino.data = own; }
+  else ino.data = ino.data.slice(0, ino.size);
+}
+
+function newInode(fs: FileSystem, path: string, ino: Inode): Inode {
+  const shared = sharedFiles.get(fs)?.get(path);
+  if (shared) useShared(ino, shared);
+  return ino;
+}
+
 /** Open (or share) the inode for `path`; `path` must already be resolved and exist or be created by the caller. */
 export async function openInode(fs: FileSystem, path: string): Promise<Inode> {
   let table = inodeTables.get(fs);
@@ -579,11 +628,9 @@ export async function openInode(fs: FileSystem, path: string): Promise<Inode> {
     const st = await fs.stat(path);
     const raw = await fs.readFile(path);
     const bytes = typeof raw === 'string' ? new TextEncoder().encode(raw) : raw;
-    ino = table.get(path) ?? new Inode(fs, path, bytes, st.mode, st.mtime.getTime(), st.ctime.getTime(),
-      { mtimeNs: st.mtimeNs, atime: st.atimeMs === st.mtime.getTime() && st.atimeNs === st.mtimeNs ? undefined : st.atimeMs, atimeNs: st.atimeNs });
+    ino = table.get(path) ?? newInode(fs, path, new Inode(fs, path, bytes, st.mode, st.mtime.getTime(), st.ctime.getTime(),
+      { mtimeNs: st.mtimeNs, atime: st.atimeMs === st.mtime.getTime() && st.atimeNs === st.mtimeNs ? undefined : st.atimeMs, atimeNs: st.atimeNs }));
     table.set(path, ino);
-    const shared = sharedInodes.get(fs)?.get(path);
-    if (shared) adoptShared(ino, shared);
   }
   ino.opens++;
   return ino;
@@ -598,10 +645,8 @@ export function openInodeSync(fs: FileSystem, path: string, node: {
   let ino = table.get(path);
   if (!ino) {
     // Like readFile: the cached node's bytes, null meaning empty
-    ino = new Inode(fs, path, node.content ?? new Uint8Array(0), node.mode, node.mtime, node.ctime, node);
+    ino = newInode(fs, path, new Inode(fs, path, node.content ?? new Uint8Array(0), node.mode, node.mtime, node.ctime, node));
     table.set(path, ino);
-    const shared = sharedInodes.get(fs)?.get(path);
-    if (shared) adoptShared(ino, shared);
   }
   ino.opens++;
   return ino;
@@ -703,46 +748,18 @@ export async function flushInode(fs: FileSystem, path: string): Promise<void> {
 }
 
 /**
- * Files whose bytes live in a shared object's buffer (shmobj.ts: a /dev/shm
- * file mapped by Blink as remote pages): an inode open on one reads and
- * writes the buffer, so read/write and the mappings see each other, and
- * one opened later takes the buffer rather than the FileSystem's older copy.
+ * A shared object's final bytes (shmobj.ts) go to `path`: into its open
+ * inode, if any, which fds read and which writes them back (writing the
+ * FileSystem behind it would be overwritten by its next write-back); only
+ * the bytes within the file's size. False when no inode is open.
  */
-const sharedInodes = new WeakMap<FileSystem, Map<string, Uint8Array>>();
-
-function adoptShared(ino: Inode, view: Uint8Array): void {
-  if (ino.size <= view.length && ino.data.buffer !== view.buffer) ino.data = view;
-}
-
-/** `path`'s bytes are the first `length` bytes of `sab` while it's remote. */
-export function attachInodeShared(fs: FileSystem, path: string, sab: SharedArrayBuffer, length: number): void {
-  let m = sharedInodes.get(fs);
-  if (!m) { m = new Map(); sharedInodes.set(fs, m); }
-  const view = new Uint8Array(sab, 0, length);
-  m.set(path, view);
-  const ino = inodeTables.get(fs)?.get(path);
-  if (ino && !ino.unlinked) adoptShared(ino, view);
-}
-
-/**
- * The shared object's last mapping went: its final bytes go to `path`, into
- * its open inode, if any (back in private memory), which fds read and which
- * writes them back now; only the bytes within the file's size. False when
- * no inode is open.
- */
-export async function writeInodeBytes(fs: FileSystem, path: string, bytes: Uint8Array): Promise<boolean> {
-  sharedInodes.get(fs)?.delete(path);
+export function writeInodeBytes(fs: FileSystem, path: string, bytes: Uint8Array): boolean {
+  detachInodeShared(fs, path);
   const ino = inodeTables.get(fs)?.get(path);
   if (!ino || ino.unlinked) return false;
   const n = Math.min(bytes.length, ino.size);
-  if (ino.data.buffer instanceof SharedArrayBuffer) {
-    const own = new Uint8Array(Math.max(ino.size, 256));
-    own.set(ino.data.subarray(0, ino.size));
-    ino.data = own;
-  }
   ino.data.set(bytes.subarray(0, n));
   ino.touch();
-  await ino.flush();  // (the FileSystem has it when the last unmap returns)
   return true;
 }
 

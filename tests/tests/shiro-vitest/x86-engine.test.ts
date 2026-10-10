@@ -71,6 +71,8 @@ const shmobjBin = join(out, 'shmobj');
 const haveShmobj = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', shmobjBin, 'shmobj.c']);
 const shmoddBin = join(out, 'shmodd');
 const haveShmodd = tryBuild('gcc', ['-static', '-O1', '-o', shmoddBin, 'shmodd.c']);
+const shmpreadBin = join(out, 'shmpread');
+const haveShmpread = tryBuild('gcc', ['-static', '-O1', '-o', shmpreadBin, 'shmpread.c']);
 const fsidentBin = join(out, 'fsident');
 const haveFsident = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', fsidentBin, 'fsident.c']);
 // musl's libc (native Claude Code's) resolves paths and stats files its own way
@@ -1451,6 +1453,14 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const r = await run(shell, './prog; echo rc $?; BLINK_WJIT=0 ./prog; echo rc $?');
     const ok = "memfd munmap 0\nmemfd sees 'y' munmap rounded 0\nmemfd munmap tail 0 head 0\nanon munmap 0\n" +
       "anon after fork 'c' munmap rounded 0\nshm after close 'qwerty' mapped 'qwerty'\ndone\nrc 0\n";
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(ok + ok);
+  }, 120_000);
+
+  // The fd and the mapping of a /dev/shm object are one file (conformance's report, Open POSIX shm_open)
+  it.skipIf(!haveShmpread)('a /dev/shm object: pread sees the mapping, the mapping sees pwrite, an fd opened while mapped too', async () => {
+    const { shell } = await setup(readFileSync(shmpreadBin));
+    const r = await run(shell, './prog; echo rc $?; BLINK_WJIT=0 ./prog; echo rc $?');
+    const ok = 'mapped pread a\nmapping sees pwrite w\nreopened while mapped aq\nafter munmap pread a z w q\nreopened pread awq\nrc 0\n';
     expect(r.output.replace(/\r\n/g, '\n')).toBe(ok + ok);
   }, 120_000);
 

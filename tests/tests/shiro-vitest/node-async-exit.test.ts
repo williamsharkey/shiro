@@ -44,3 +44,31 @@ describe('node: async scripts exit when done', () => {
     expect(Date.now() - t).toBeLessThan(2000);
   });
 });
+
+// (both configs: the page's node here, a guest's under `npm run test:worker`)
+describe('node: children and exit', () => {
+  async function sh(cmd: string) {
+    const { shell } = await createTestShell();
+    let out = '';
+    const code = await Promise.race([
+      shell.execute(cmd, (s) => { out += s; }, (s) => { out += s; }),
+      new Promise<'hung'>((res) => setTimeout(() => res('hung'), 10_000)),
+    ]);
+    return { code, out: out.replace(/\r\n/g, '\n') };
+  }
+
+  it.each([
+    ['piped', ''],
+    ['ignored', ', { stdio: "ignore" }'],
+  ])('process.exit() with a %s child still running exits at once, as node does (tabcomputer#13)', async (_, opts) => {
+    const t0 = Date.now();
+    const r = await sh(`node -e 'require("child_process").spawn("sh", ["-c", "sleep 30"]${opts}); setTimeout(() => { console.log("t"); process.exit(3); }, 200)' < /dev/null; echo "status $?"`);
+    expect(r).toEqual({ code: 0, out: 't\nstatus 3\n' });
+    expect(Date.now() - t0).toBeLessThan(5000);
+  }, 30_000);
+
+  it('child.kill() ends the child, not the shell that ran node (tabcomputer#13)', async () => {
+    const r = await sh(`node -e 'const c = require("child_process").spawn("sh", ["-c", "sleep 30"]); c.on("exit", () => console.log("exited", c.killed)); setTimeout(() => c.kill(), 200)' < /dev/null; echo "status $?"`);
+    expect(r).toEqual({ code: 0, out: 'exited true\nstatus 0\n' });
+  }, 30_000);
+});
