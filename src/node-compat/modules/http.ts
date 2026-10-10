@@ -5,6 +5,7 @@
 
 import type { CommandContext } from '../../commands/index';
 import { createServerFactory } from './http-server';
+import { PAGE_SET_TIMEOUT } from '../page-globals';
 
 export interface HttpDeps {
   ctx: CommandContext;
@@ -40,9 +41,12 @@ function _createHttpOrHttpsModule(deps: HttpDeps, isHttps: boolean): any {
     // Nothing in the program's own output: real node prints nothing when a server listens
     log: () => {},
     // A split-view preview pane for a server that stays up (not one a script starts, uses and closes)
+    // (on the page's timer: the global one is whichever script's is installed now, and
+    // counted as its activity: of two servers started together, the later one stayed
+    // up 20 s and the earlier one ended at once)
     onListen: (port) => {
       if (typeof document === 'undefined') return;
-      setTimeout(() => {
+      PAGE_SET_TIMEOUT(() => {
         if (iframeServer.isPortInUse?.(port) === false) return;
         import('../../split-view').then(({ createSplitView }) => {
           createSplitView({ port, direction: 'right', title: `Server :${port}` });

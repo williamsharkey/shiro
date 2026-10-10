@@ -422,7 +422,7 @@ async function runInstallScripts(ctx: CommandContext, base: string, nodes: TreeN
       let out = '';
       const code = await ctx.shell.execute(
         `(cd ${q(dir)} && export ${Object.entries(env).map(([k, v]) => `${k}=${q(v)}`).join(' ')} PATH=${q(`${dir}/node_modules/.bin:${base}/${binDirOf(n)}`)}:"$PATH" && ${script})`,
-        (s) => { out += s; }, (s) => { out += s; }, false, undefined, true,
+        (s) => { out += s.replace(/\r\n/g, '\n'); }, (s) => { out += s.replace(/\r\n/g, '\n'); }, false, undefined, true,
       );
       if (code !== 0) {
         ctx.stderr += `npm warn ${n.name}@${n.version} ${event}: \`${script}\` exited with ${code}\n`;
@@ -690,17 +690,11 @@ async function npmRun(ctx: CommandContext): Promise<number> {
     return 1;
   }
 
-  scriptHeader(ctx, `> ${pkg.name}@${pkg.version} ${scriptName}\n> ${script}\n\n`);
+  scriptHeader(ctx, `> ${scriptId(pkg)}${scriptName}\n> ${script}\n\n`);
 
   // Execute the script via the shell; on npm's terminal when that is where npm's output
   // goes, as npx does (a dev server's output comes as it runs, not when it ends)
-  const exitCode = await ctx.shell.execute(script,
-    (s) => ctx.stdout += s,
-    (s) => ctx.stderr += s,
-    false, scriptTerminal(ctx), true
-  );
-
-  return exitCode;
+  return ctx.shell.execute(script, scriptOut(ctx), scriptErr(ctx), false, scriptTerminal(ctx), true);
 }
 
 /**
@@ -722,13 +716,8 @@ async function npmRunScript(ctx: CommandContext, scriptName: string, defaultScri
   const script = pkg.scripts?.[scriptName];
   if (!script) {
     if (defaultScript) {
-      ctx.stdout += `> ${pkg.name || ''}@${pkg.version || ''} ${scriptName}\n`;
-      ctx.stdout += `> ${defaultScript}\n\n`;
-      return await ctx.shell.execute(defaultScript,
-        (s) => ctx.stdout += s,
-        (s) => ctx.stderr += s,
-        false, undefined, true
-      );
+      scriptOut(ctx)(`> ${scriptId(pkg)}${scriptName}\n> ${defaultScript}\n\n`);
+      return await ctx.shell.execute(defaultScript, scriptOut(ctx), scriptErr(ctx), false, undefined, true);
     }
     ctx.stderr += `npm: missing script: ${scriptName}\n`;
     ctx.stderr += '\nAvailable scripts:\n';
@@ -738,19 +727,25 @@ async function npmRunScript(ctx: CommandContext, scriptName: string, defaultScri
     return 1;
   }
 
-  scriptHeader(ctx, `> ${pkg.name || ''}@${pkg.version || ''} ${scriptName}\n> ${script}\n\n`);
+  scriptHeader(ctx, `> ${scriptId(pkg)}${scriptName}\n> ${script}\n\n`);
 
-  return await ctx.shell.execute(script,
-    (s) => ctx.stdout += s,
-    (s) => ctx.stderr += s,
-    false, scriptTerminal(ctx), true
-  );
+  return await ctx.shell.execute(script, scriptOut(ctx), scriptErr(ctx), false, scriptTerminal(ctx), true);
 }
+
+// Output of a nested execute() is terminal-style (\r\n); npm's is a plain stream
+// again, converted once by whoever shows it (a redirect writes \n). It goes on as it
+// comes where the shell streams npm's output (`npm run dev > log`: a server never ends).
+const scriptOut = (ctx: CommandContext) => (s: string) => { s = s.replace(/\r\n/g, '\n'); if (ctx.streamStdout) ctx.streamStdout(s); else ctx.stdout += s; };
+const scriptErr = (ctx: CommandContext) => (s: string) => { s = s.replace(/\r\n/g, '\n'); if (ctx.streamStderr) ctx.streamStderr(s); else ctx.stderr += s; };
+
+/** npm's "> name@version" (just "> " without a name, as npm does) */
+const scriptId = (pkg: PackageJson) => pkg.name ? `${pkg.name}${pkg.version ? '@' + pkg.version : ''} ` : '';
 
 /** npm's "> name@version script" lines: before the script's output, which may go to the terminal as it runs */
 function scriptHeader(ctx: CommandContext, text: string): void {
   const term = scriptTerminal(ctx) as { writeOutput?: (s: string) => void } | undefined;
   if (term?.writeOutput) term.writeOutput(text.replace(/\n/g, '\r\n'));
+  else if (ctx.streamStdout) ctx.streamStdout(text);
   else ctx.stdout += text;
 }
 
