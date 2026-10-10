@@ -2280,9 +2280,12 @@ export class Kernel {
         }
         case A.SYS_fcntl:
           return this.fcntl(proc, args[0], args[1], args[2], data);
-        case A.SYS_fsync: {
+        case A.SYS_fsync: { // (and fdatasync: Blink sends both here)
           const f = file(args[0]);
           if (!f) return -A.EBADF;
+          // a pipe, FIFO or socket has nothing to sync: EINVAL (Open POSIX fsync_7-1)
+          const type = (await f.stat()).mode & A.S_IFMT;
+          if (type === A.S_IFIFO || type === A.S_IFSOCK) return -A.EINVAL;
           try { await f.sync?.(); } catch (e) { return A.errnoFromError(e); }
           return 0;
         }

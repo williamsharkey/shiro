@@ -1597,7 +1597,7 @@ export class FileSystem {
       ...(existing ? { ino: existing.ino } : {}),
       mode: options?.mode ?? existing?.mode ?? 0o644,
       mtime: options?.times?.mtime ?? now,
-      ctime: existing?.ctime ?? now,
+      ctime: now, // (a write changes the inode: st_ctime, as Linux; rename and chmod do too)
       size: content.length,
       ...(options?.times ? { mtimeNs: options.times.mtimeNs || undefined, atime: options.times.atime, atimeNs: options.times.atimeNs || undefined } : {}),
     });
@@ -1783,7 +1783,7 @@ export class FileSystem {
     const now = Date.now();
     this.cache.set(path, {
       path, type: 'file', content, ino: prev ? prev.ino : newIno(),
-      mode: prev?.mode ?? 0o644, mtime: now, ctime: prev?.ctime ?? now, size: content.length,
+      mode: prev?.mode ?? 0o644, mtime: now, ctime: now, size: content.length,
     } as FSNode);
     this._noteKey(path, true);
     return this.writeFile(path, content);
@@ -1938,7 +1938,7 @@ export class FileSystem {
     path = await this._canon(path, true);
     const node = await this._get(path);
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, chmod '${path}'`);
-    await this._put({ ...node, mode });
+    await this._put({ ...node, mode, ctime: Date.now() });
   }
 
   /**

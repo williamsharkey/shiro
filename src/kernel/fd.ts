@@ -496,6 +496,7 @@ class Inode {
     if (!this.dirty) this.dirtySince = now;
     this.dirty = true;
     this.mtimeMs = this.lastWrite = now;
+    this.ctimeMs = now; // (a write changes st_ctime too: Open POSIX mmap_14-1's msync)
     this.mtimeNs = 0;
     // Each flush writes the whole file: wait for a burst of writes to pause (a
     // program writing 64 KiB at a time used to store the file after every write)
