@@ -33,8 +33,7 @@ const APPS: [string, string, string, boolean, string?][] = [
   ['gnumeric', 'Gnumeric', 'gui/icons/gnumeric.png', true],
   ['abiword', 'AbiWord', 'gui/icons/abiword.png', true],
   ['keepassxc', 'KeePassXC', 'gui/icons/keepassxc.svg', true],
-  // stops at startup: SysV shared memory isn't there yet (docs/GUI_SCORE.md)
-  ['audacity', 'Audacity', '♫', false],
+  ['audacity', 'Audacity', '♫', true, 'first start takes a minute'],
   ['xterm', 'XTerm', 'gui/icons/xterm.svg', true],
   ['qterminal', 'QTerminal', '›_', true],
   ['xeyes', 'xeyes', '◉', true],

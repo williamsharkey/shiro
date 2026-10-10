@@ -4,7 +4,7 @@ Debian 12 GUI apps installed from the streaming manifest (`public/gui/apps.json`
 
 Columns: **installs**; **window**: a desktop window appears, with the time from launch (installed) to it; **renders**: its largest window isn't one flat colour after 8 s; **input**: focusing it and typing `abc 123` changes its pixels (or, if not, clicking into its middle and typing does, or Ctrl+O opens a window or changes them); **text**: the DOM text layer has spans for it (GTK via libshiro-text-hook.so, core X text; Qt and others draw pixels only).
 
-**29/29 install, 26/29 open a window, 24/29 render, 19/29 react to input, 19/29 have DOM text.**
+**29/29 install, 27/29 open a window, 26/29 render, 20/29 react to input, 20/29 have DOM text.**
 
 
 ### Editors & viewers
@@ -26,7 +26,7 @@ Columns: **installs**; **window**: a desktop window appears, with the time from 
 | gimp | gtk2 | 66.1 MB | 8.9 s | ✓ | 34 s | ✓ | ✓ | ✓ (2) |  |
 | inkscape | gtk3 | 83 MB | 14 s | ✓ | 54 s | ✓ | ✓ | ✓ (18) |  |
 | krita | qt5 | 118.3 MB | 8.4 s | ✓ | 14 s | ✓ | ✗ | ✓ (1) | input: its start screen has nothing to type into (passed in one run of three) |
-| blender | gl | 231.5 MB | 19 s | ✗ | – | – | – | – | exited (status 134) before a window; past OpenCV's CPU check (engine fix); now glibc aborts on PI-mutex futex ops (EINVAL in the x86 engine, reported) |
+| blender | gl | 231.5 MB | 18 s | ✗ | – | – | – | – | exited (status 134) before a window; past OpenCV's CPU check (engine fix); now glibc aborts on PI-mutex futex ops (EINVAL in the x86 engine, reported) |
 
 ### Desktop
 
@@ -49,11 +49,11 @@ Columns: **installs**; **window**: a desktop window appears, with the time from 
 
 | App | Toolkit | Download | Install | Window | First window | Renders | Input | Text | Notes |
 |---|---|---:|---:|:-:|---:|:-:|:-:|:-:|---|
-| firefox-esr | gtk3 | 125.1 MB | 22 s | ✓ | 246 s | ✗ | – | ✗ | past the getaddrinfo abort (fixed): its window opens after minutes, still blank; content processes crash (SIGSEGV) |
+| firefox-esr | gtk3 | 125.1 MB | 30 s | ✓ | 257 s | ✗ | – | ✗ | past the getaddrinfo abort (fixed): a blank window after minutes, gone seconds later; content processes crash (SIGSEGV) |
 | netsurf | gtk3 | 56.6 MB | 7.2 s | ✓ | 13 s | ✓ | ✓ | ✓ (42) |  |
 | dillo | fltk | 11.4 MB | 1.4 s | ✓ | 5.1 s | ✓ | ✓ | ✗ | FLTK draws its text as pixels |
-| vlc | qt5 | 39.4 MB | 4.7 s | ✓ | 12 s | ✗ | – | ✗ | quits at once: sigwait() is ENOSYS in the x86 engine (reported) |
-| audacity | gtk3 | 64.3 MB | 7.7 s | ✗ | – | – | – | – | error window: “Audacity Startup Failure”; SysV semaphores aren't forwarded by the x86 engine yet (shared memory is) |
+| vlc | qt5 | 39.4 MB | 5.1 s | ✓ | 13 s | ✓ | ✓ | ✓ (11) |  |
+| audacity | gtk3 | 64.3 MB | 7.9 s | ✓ | 37 s | ✓ | ✗ | ✗ | its first window is the first-run plugin scan; the main window follows (~70 s); wxWidgets text isn't reported |
 
 ### Qt
 
@@ -141,6 +141,15 @@ Second round (after the first scoreboard; the coordinator's list):
   `icon-theme.cache` for it. The installer now writes GTK's cache format
   itself (`src/gui/icon-cache.ts`) whenever a package adds icons there.
 
+- **Audacity and VLC run** on the engine fixes that followed the reports:
+  SysV shared memory and semaphores (Blink 0069/0077 and the kernel's
+  sysvsem) for Audacity's single-instance lock, `rt_sigtimedwait` (Blink
+  0087) for VLC's `sigwait()`. Audacity's first start scans its plug-ins
+  first; its main window follows (~70 s). The scoreboard's render check now
+  looks at all of an app's windows (VLC's largest surface was a blank
+  video window).
+  ![Audacity](screenshots/gui-audacity.png)
+
 Where the startup time goes (`LD_PRELOAD` timing of every file open; l3afpad,
 window at 8.2 s after the fixes, 9.9 s before): ~1.0 s of dynamic linking
 before any app code; GTK and GDK setup to ~3 s; icon themes 0.5 s (2.0 s
@@ -158,9 +167,7 @@ Known failures, not fixed here:
 |---|---|---|
 | blender | past OpenCV's CPU check now (engine fix: CPUID family 6); glibc aborts: "The futex facility returned an unexpected error code" — PI-mutex futex ops (LOCK_PI, UNLOCK_PI…) and REQUEUE/WAKE_OP return EINVAL | x86 engine (reported) |
 | libreoffice-writer | loads; an uncaught UNO `RuntimeException` at startup (release build: no SAL_LOG detail), then it hangs. LibreOffice headless (`soffice --headless --convert-to pdf`, libreoffice-writer-nogui) works (verified 2026-10-10) | not diagnosed |
-| firefox-esr | its window opens after ~4 min and stays blank; content processes die with SIGSEGV | not diagnosed |
-| audacity | "Unable to create shared memory segment": SysV shared memory is in now (engine), semaphores are in the kernel, the engine doesn't forward them yet | x86 engine (in progress) |
-| vlc | quits right after its window appears: its main thread's `sigwait()` returns ENOSYS (`rt_sigtimedwait`) | x86 engine (reported) |
+| firefox-esr | its window opens after ~4 min, blank, and goes away seconds later; its content processes die with SIGSEGV first | not diagnosed |
 
 Input ✗ is left on viewers with nothing open (eog, ristretto, gpicview,
 lximage-qt) and Krita's start screen: typing changes nothing there and none
@@ -169,7 +176,7 @@ of them answers Ctrl+O with a window in time. Text ✗ is left on FLTK
 gpicview), LXImage-Qt and the apps that don't start.
 
 Round by round (29 apps): first scoreboard 24 windows, 23 render, 18 input,
-14 DOM text; after the second round 26, 24, 19, 19.
+14 DOM text; after the second round (with the engine's fixes merged) 27, 26, 20, 20.
 
 ### Re-running
 
