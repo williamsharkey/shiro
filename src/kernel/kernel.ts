@@ -29,6 +29,7 @@ import { LockTable, F_RDLCK, F_WRLCK, F_UNLCK } from './locks';
 import { Process } from './process';
 import { SysvShm } from './sysvshm';
 import { SysvSem } from './sysvsem';
+import { SysvMsg } from './sysvmsg';
 import { EpollFile, waitReady } from './epoll';
 import { SignalFile, notifySignalPending } from './signalfd';
 import { EventFile, TimerFile } from './fd';
@@ -191,6 +192,8 @@ export class Kernel {
   readonly shm = new SysvShm();
   /** SysV semaphore sets (semget, semop, semctl) */
   readonly sem = new SysvSem();
+  /** SysV message queues (msgget, msgsnd, msgrcv, msgctl) */
+  readonly msg = new SysvMsg();
   /** fcntl record locks (F_SETLK, F_OFD_SETLK) */
   readonly locks = new LockTable();
   private detachTable?: () => void;
@@ -1642,6 +1645,10 @@ export class Kernel {
           return await this.sem.semop(proc, args[0], args[1], data, args[3] * 1000 + Math.floor(args[4] / 1e6), sig);
         }
         case A.SYS_semctl: return this.sem.semctl(proc, args[0], args[1], args[2], args[3], data);
+        case A.SYS_msgget: return this.msg.msgget(proc, args[0], args[1]);
+        case A.SYS_msgsnd: return await this.msg.msgsnd(proc, args[0], args[1], args[2], data, sig);
+        case A.SYS_msgrcv: return await this.msg.msgrcv(proc, args[0], args[1], i64(args[2], args[3]), args[4], data, sig);
+        case A.SYS_msgctl: return this.msg.msgctl(proc, args[0], args[1], data);
         case A.SYS_setuid: case A.SYS_setgid: case A.SYS_setreuid: case A.SYS_setregid:
         case A.SYS_setresuid: case A.SYS_setresgid: case A.SYS_getresuid: case A.SYS_getresgid:
         case A.SYS_getgroups: case A.SYS_setgroups: case A.SYS_setfsuid: case A.SYS_setfsgid:
