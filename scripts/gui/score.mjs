@@ -203,17 +203,16 @@ async function scoreApp(browser, base, id) {
 // ── Report ───────────────────────────────────────────────────────────────
 /** Known causes, shown with a row's own note (see "Failures and fixes" in the report) */
 const KNOWN = {
-  blender: 'OpenCV aborts: "SSE/SSE2 not available" (the x86 engine reports CPU family 0)',
-  'libreoffice-writer': 'soffice.bin is loaded as a flat binary (".bin" name; x86 engine)',
-  'firefox-esr': 'crashes itself (MOZ_CRASH) ~20 s into startup',
-  vlc: 'its window opens, then the Qt interface exits (status 0)',
-  'lximage-qt': 'single-instance check needs a D-Bus session bus',
-  eog: 'input: probably nothing open to type into (not investigated)',
-  gpicview: 'input: probably nothing open to type into (not investigated)',
-  qpdfview: 'input: probably nothing open to type into (not investigated)',
-  audacity: 'SysV shared memory (shmget) is ENOSYS in the x86 engine',
-  thunar: 'input not detected (not investigated)',
-  krita: 'input: passed in one of two runs (start screen, nothing open)',
+  blender: 'past OpenCV\'s CPU check (engine fix); now glibc aborts on PI-mutex futex ops (EINVAL in the x86 engine, reported)',
+  'libreoffice-writer': 'loads now (ELF .bin, libcups); an uncaught UNO RuntimeException at startup, then it hangs (not diagnosed)',
+  'firefox-esr': 'past the getaddrinfo abort (fixed): its window opens after minutes, still blank; content processes crash (SIGSEGV)',
+  vlc: 'quits at once: sigwait() is ENOSYS in the x86 engine (reported)',
+  audacity: 'SysV semaphores aren\'t forwarded by the x86 engine yet (shared memory is)',
+  eog: 'input: a viewer with nothing open: typing changes nothing',
+  ristretto: 'input: a viewer with nothing open: typing changes nothing',
+  gpicview: 'input: a viewer with nothing open: typing changes nothing',
+  'lximage-qt': 'input: a viewer with nothing open: typing changes nothing',
+  krita: 'input: its start screen has nothing to type into (passed in one run of three)',
   dillo: 'FLTK draws its text as pixels',
 };
 

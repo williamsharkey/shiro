@@ -4,67 +4,67 @@ Debian 12 GUI apps installed from the streaming manifest (`public/gui/apps.json`
 
 Columns: **installs**; **window**: a desktop window appears, with the time from launch (installed) to it; **renders**: its largest window isn't one flat colour after 8 s; **input**: focusing it and typing `abc 123` changes its pixels (or, if not, clicking into its middle and typing does, or Ctrl+O opens a window or changes them); **text**: the DOM text layer has spans for it (GTK via libshiro-text-hook.so, core X text; Qt and others draw pixels only).
 
-**29/29 install, 24/29 open a window, 23/29 render, 18/29 react to input, 14/29 have DOM text.**
+**29/29 install, 26/29 open a window, 24/29 render, 19/29 react to input, 19/29 have DOM text.**
 
 
 ### Editors & viewers
 
 | App | Toolkit | Download | Install | Window | First window | Renders | Input | Text | Notes |
 |---|---|---:|---:|:-:|---:|:-:|:-:|:-:|---|
-| mousepad | gtk3 | 47.3 MB | 5.2 s | ✓ | 17 s | ✓ | ✓ | ✓ (7) |  |
-| gedit | gtk3 | 52.1 MB | 5.8 s | ✓ | 14 s | ✓ | ✓ | ✓ (11) |  |
-| l3afpad | gtk3 | 45.8 MB | 4.9 s | ✓ | 7.1 s | ✓ | ✓ | ✓ (5) |  |
-| evince | gtk3 | 55.4 MB | 6.3 s | ✓ | 15 s | ✓ | ✓ | ✓ (3) |  |
-| eog | gtk3 | 53 MB | 6.5 s | ✓ | 15 s | ✓ | ✗ | ✗ | input: probably nothing open to type into (not investigated) |
-| ristretto | gtk3 | 47.8 MB | 6.2 s | ✓ | 9.3 s | ✓ | ✓ | ✓ (6) |  |
-| gpicview | gtk2 | 39.6 MB | 4.9 s | ✓ | 4.0 s | ✓ | ✗ | ✗ | input: probably nothing open to type into (not investigated) |
+| mousepad | gtk3 | 47.3 MB | 7.7 s | ✓ | 21 s | ✓ | ✓ | ✓ (7) |  |
+| gedit | gtk3 | 52.1 MB | 8.4 s | ✓ | 21 s | ✓ | ✓ | ✓ (11) |  |
+| l3afpad | gtk3 | 45.8 MB | 7.2 s | ✓ | 8.9 s | ✓ | ✓ | ✓ (6) |  |
+| evince | gtk3 | 55.4 MB | 9.3 s | ✓ | 22 s | ✓ | ✓ | ✓ (3) |  |
+| eog | gtk3 | 53 MB | 9.7 s | ✓ | 21 s | ✓ | ✗ | ✗ | input: a viewer with nothing open: typing changes nothing |
+| ristretto | gtk3 | 47.8 MB | 6.6 s | ✓ | 14 s | ✓ | ✗ | ✗ | input: a viewer with nothing open: typing changes nothing |
+| gpicview | gtk2 | 39.6 MB | 5.1 s | ✓ | 4.7 s | ✓ | ✗ | ✗ | input: a viewer with nothing open: typing changes nothing |
 
 ### Graphics
 
 | App | Toolkit | Download | Install | Window | First window | Renders | Input | Text | Notes |
 |---|---|---:|---:|:-:|---:|:-:|:-:|:-:|---|
-| gimp | gtk2 | 66.1 MB | 7.0 s | ✓ | 24 s | ✓ | ✓ | ✓ (2) |  |
-| inkscape | gtk3 | 83 MB | 9.9 s | ✓ | 38 s | ✓ | ✓ | ✓ (18) |  |
-| krita | qt5 | 118.3 MB | 8.3 s | ✓ | 13 s | ✓ | ✗ | ✗ | input: passed in one of two runs (start screen, nothing open) |
-| blender | gl | 231.5 MB | 14 s | ✗ | – | – | – | – | exited (status 134) before a window; OpenCV aborts: "SSE/SSE2 not available" (the x86 engine reports CPU family 0) |
+| gimp | gtk2 | 66.1 MB | 8.9 s | ✓ | 34 s | ✓ | ✓ | ✓ (2) |  |
+| inkscape | gtk3 | 83 MB | 14 s | ✓ | 54 s | ✓ | ✓ | ✓ (18) |  |
+| krita | qt5 | 118.3 MB | 8.4 s | ✓ | 14 s | ✓ | ✗ | ✓ (1) | input: its start screen has nothing to type into (passed in one run of three) |
+| blender | gl | 231.5 MB | 19 s | ✗ | – | – | – | – | exited (status 134) before a window; past OpenCV's CPU check (engine fix); now glibc aborts on PI-mutex futex ops (EINVAL in the x86 engine, reported) |
 
 ### Desktop
 
 | App | Toolkit | Download | Install | Window | First window | Renders | Input | Text | Notes |
 |---|---|---:|---:|:-:|---:|:-:|:-:|:-:|---|
-| pcmanfm | gtk2 | 43.6 MB | 3.7 s | ✓ | 6.6 s | ✓ | ✓ | ✓ (5) |  |
-| thunar | gtk3 | 48.6 MB | 6.3 s | ✓ | 10 s | ✓ | ✗ | ✓ (14) | input not detected (not investigated) |
-| xterm | x11 | 9.3 MB | 1.0 s | ✓ | 1.8 s | ✓ | ✓ | ✓ (1) |  |
-| galculator | gtk3 | 46 MB | 5.9 s | ✓ | 11 s | ✓ | ✓ | ✓ (59) |  |
+| pcmanfm | gtk2 | 43.6 MB | 5.8 s | ✓ | 8.9 s | ✓ | ✓ | ✓ (5) |  |
+| thunar | gtk3 | 48.6 MB | 6.6 s | ✓ | 15 s | ✓ | ✓ | ✓ (18) |  |
+| xterm | x11 | 9.3 MB | 1.4 s | ✓ | 3.0 s | ✓ | ✓ | ✓ (1) |  |
+| galculator | gtk3 | 46 MB | 6.5 s | ✓ | 13 s | ✓ | ✓ | ✓ (59) |  |
 
 ### Office
 
 | App | Toolkit | Download | Install | Window | First window | Renders | Input | Text | Notes |
 |---|---|---:|---:|:-:|---:|:-:|:-:|:-:|---|
-| gnumeric | gtk3 | 64.3 MB | 5.9 s | ✓ | 20 s | ✓ | ✓ | ✓ (16) |  |
-| abiword | gtk3 | 81.2 MB | 6.7 s | ✓ | 21 s | ✓ | ✓ | ✓ (21) |  |
-| libreoffice-writer | gtk3 | 154.8 MB | 12 s | ✗ | – | – | – | – | exited (status 139) before a window; soffice.bin is loaded as a flat binary (".bin" name; x86 engine) |
+| gnumeric | gtk3 | 64.3 MB | 7.8 s | ✓ | 27 s | ✓ | ✓ | ✓ (19) |  |
+| abiword | gtk3 | 81.2 MB | 9.0 s | ✓ | 28 s | ✓ | ✓ | ✓ (22) |  |
+| libreoffice-writer | gtk3 | 155.1 MB | 17 s | ✗ | – | – | – | – | no window in 420 s; loads now (ELF .bin, libcups); an uncaught UNO RuntimeException at startup, then it hangs (not diagnosed) |
 
 ### Internet & media
 
 | App | Toolkit | Download | Install | Window | First window | Renders | Input | Text | Notes |
 |---|---|---:|---:|:-:|---:|:-:|:-:|:-:|---|
-| firefox-esr | gtk3 | 125.1 MB | 17 s | ✗ | – | – | – | – | exited (status 2816) before a window; crashes itself (MOZ_CRASH) ~20 s into startup |
-| netsurf | gtk3 | 56.6 MB | 5.8 s | ✓ | 9.1 s | ✓ | ✓ | ✓ (41) |  |
-| dillo | fltk | 11.4 MB | 1.2 s | ✓ | 3.3 s | ✓ | ✓ | ✗ | FLTK draws its text as pixels |
-| vlc | qt5 | 36.1 MB | 3.5 s | ✓ | 5.0 s | ✗ | – | ✗ | its window opens, then the Qt interface exits (status 0) |
-| audacity | gtk3 | 64.3 MB | 7.1 s | ✗ | – | – | – | – | error window: “Audacity Startup Failure”; SysV shared memory (shmget) is ENOSYS in the x86 engine |
+| firefox-esr | gtk3 | 125.1 MB | 22 s | ✓ | 246 s | ✗ | – | ✗ | past the getaddrinfo abort (fixed): its window opens after minutes, still blank; content processes crash (SIGSEGV) |
+| netsurf | gtk3 | 56.6 MB | 7.2 s | ✓ | 13 s | ✓ | ✓ | ✓ (42) |  |
+| dillo | fltk | 11.4 MB | 1.4 s | ✓ | 5.1 s | ✓ | ✓ | ✗ | FLTK draws its text as pixels |
+| vlc | qt5 | 39.4 MB | 4.7 s | ✓ | 12 s | ✗ | – | ✗ | quits at once: sigwait() is ENOSYS in the x86 engine (reported) |
+| audacity | gtk3 | 64.3 MB | 7.7 s | ✗ | – | – | – | – | error window: “Audacity Startup Failure”; SysV semaphores aren't forwarded by the x86 engine yet (shared memory is) |
 
 ### Qt
 
 | App | Toolkit | Download | Install | Window | First window | Renders | Input | Text | Notes |
 |---|---|---:|---:|:-:|---:|:-:|:-:|:-:|---|
-| featherpad | qt5 | 34.9 MB | 3.3 s | ✓ | 5.6 s | ✓ | ✓ | ✗ |  |
-| qterminal | qt5 | 34.2 MB | 3.1 s | ✓ | 5.8 s | ✓ | ✓ | ✗ |  |
-| qpdfview | qt5 | 39.2 MB | 3.3 s | ✓ | 24 s | ✓ | ✗ | ✗ | input: probably nothing open to type into (not investigated) |
-| keepassxc | qt5 | 48 MB | 3.8 s | ✓ | 15 s | ✓ | ✓ | ✗ |  |
-| kcalc | qt5 | 44.4 MB | 3.7 s | ✓ | 7.8 s | ✓ | ✓ | ✗ |  |
-| lximage-qt | qt5 | 36.8 MB | 3.3 s | ✗ | – | – | – | – | exited (status 0) before a window; single-instance check needs a D-Bus session bus |
+| featherpad | qt5 | 34.9 MB | 4.9 s | ✓ | 8.8 s | ✓ | ✓ | ✓ (6) |  |
+| qterminal | qt5 | 34.2 MB | 4.3 s | ✓ | 9.1 s | ✓ | ✓ | ✓ (7) |  |
+| qpdfview | qt5 | 39.2 MB | 4.5 s | ✓ | 13 s | ✓ | ✓ | ✓ (6) |  |
+| keepassxc | qt5 | 48 MB | 5.3 s | ✓ | 21 s | ✓ | ✓ | ✓ (21) |  |
+| kcalc | qt5 | 44.4 MB | 5.2 s | ✓ | 13 s | ✓ | ✓ | ✓ (8) |  |
+| lximage-qt | qt5 | 36.8 MB | 4.5 s | ✓ | 8.5 s | ✓ | ✗ | ✗ | input: a viewer with nothing open: typing changes nothing |
 
 2026-10-10; per-app details (output tails, window titles) in .gui-score/results.json.
 
@@ -105,21 +105,71 @@ Fixed while building the scoreboard (scores above are after these):
   died), windows titled like errors ("Fatal error", "Startup Failure") count as
   no window.
 
+Second round (after the first scoreboard; the coordinator's list):
+
+- **Typing into a just-opened app went nowhere** until it was clicked, and so
+  did shortcuts (Ctrl+O): the desktop focuses a new window while creating
+  it, before the X side listens, so the client never got FocusIn
+  (`desktop-host.ts`). The common cause of most "input ✗" rows on apps
+  with a text field.
+- **No D-Bus session bus**: the launcher now starts Debian's `dbus-daemon`
+  (manifest entry `dbus-session`, 0.4 MB) with the first app.
+  LXImage-Qt's single-instance check needed it (it exited at once); GTK and
+  Qt apps stop failing their settings and portal lookups.
+- **Firefox ESR aborted ~20 s in** on a glibc assertion in `getaddrinfo`
+  (`IN6_IS_ADDR_V4MAPPED`), not a MOZ_CRASH: glibc sorts DNS answers by
+  connecting one IPv6 UDP socket to each, and the kernel kept the first
+  source address (`fd00::15`) for a later v4-mapped connect, or computed a
+  non-mapped one for an `AF_INET` sockaddr on an IPv6 socket
+  (`src/kernel/net.ts`). It now gets to its window (after minutes).
+- **VLC ran with only its Qt interface**: gen-apps.py kept an optional
+  plugin only when its package was needed anyway, and nothing needs
+  `vlc-plugin-base`, so all of its 288 plugins (logger, demuxers, file
+  access, video outputs) were left out. A plugin may now bring its own
+  package (376 plugins left out before, 88 now; +3.3 MB). With logging back,
+  VLC shows why it quits: `sigwait()` returns ENOSYS.
+- **LibreOffice** loads now (engine fix for `.bin` executables) and found
+  `libcups.so.2` missing: `libreoffice-core-nogui`'s `libmergedlo.so` (no
+  libcups) shadowed `libreoffice-core`'s in the closure; it is skipped.
+- **Qt apps had no DOM text**: `libshiro-qt-text-hook.so` interposes the
+  exported `QPainter::drawText` overloads (which QStyle calls from QtWidgets:
+  menus, buttons, labels, tabs, items) and reports the runs like the GTK
+  hook. Qt keeps a backing store and re-puts unchanged pixels, so each window
+  keeps the runs it shows and they follow every put of their area.
+  ![KeePassXC's text as DOM spans (outlined)](screenshots/gui-qt-text.png)
+- **Every GTK start stat'ed all of hicolor** (~1.6 s): there was no
+  `icon-theme.cache` for it. The installer now writes GTK's cache format
+  itself (`src/gui/icon-cache.ts`) whenever a package adds icons there.
+
+Where the startup time goes (`LD_PRELOAD` timing of every file open; l3afpad,
+window at 8.2 s after the fixes, 9.9 s before): ~1.0 s of dynamic linking
+before any app code; GTK and GDK setup to ~3 s; icon themes 0.5 s (2.0 s
+before the hicolor cache); fontconfig rescans the fonts and writes its caches
+(~1.9 s, first launch in a profile only: the caches persist); then the first
+window. In Inkscape most of its time is its own code: ~9 s right after
+ImageMagick's init, ~13 s before reading its recent files, ~8 s rendering
+icons. That's guest computation, so the x86 engine's speed, not files.
+Shipping fontconfig's caches would need the font directories' mtimes pinned
+(fontconfig checks them) and is left for later.
+
 Known failures, not fixed here:
 
 | App | What happens | Where it has to be fixed |
 |---|---|---|
-| blender | aborts (status 134): OpenCV reports "SSE/SSE2 not available" because CPUID leaf 1 reports family 0, and `/proc/cpuinfo` has no `flags` line | x86 engine (reported) |
-| libreoffice-writer | `soffice.bin` is run as a flat binary (by its `.bin` name) and crashes at once (status 139) | x86 engine (reported) |
-| firefox-esr | MOZ_CRASH via `tgkill` about 20 s into startup, before a window; e10s and sandbox settings don't change it | not diagnosed |
-| audacity | "Audacity Startup Failure: Unable to create shared memory segment" — SysV IPC (`shmget`, `semget`) returns ENOSYS | x86 engine syscalls (reported) |
-| vlc | the Qt interface's window appears for a moment, then VLC exits with status 0 and logs nothing (even with `-vv`); most of its 350 plugins are left out (their libraries aren't in the set) | not diagnosed |
-| lximage-qt | exits at once: its single-instance check needs a D-Bus session bus | needs a session bus |
+| blender | past OpenCV's CPU check now (engine fix: CPUID family 6); glibc aborts: "The futex facility returned an unexpected error code" — PI-mutex futex ops (LOCK_PI, UNLOCK_PI…) and REQUEUE/WAKE_OP return EINVAL | x86 engine (reported) |
+| libreoffice-writer | loads; an uncaught UNO `RuntimeException` at startup (release build: no SAL_LOG detail), then it hangs | not diagnosed |
+| firefox-esr | its window opens after ~4 min and stays blank; content processes die with SIGSEGV | not diagnosed |
+| audacity | "Unable to create shared memory segment": SysV shared memory is in now (engine), semaphores are in the kernel, the engine doesn't forward them yet | x86 engine (in progress) |
+| vlc | quits right after its window appears: its main thread's `sigwait()` returns ENOSYS (`rt_sigtimedwait`) | x86 engine (reported) |
 
-Input ✗ on viewers (eog, gpicview, qpdfview) most likely means nothing was open
-to type into and Ctrl+O's file dialog didn't open a new window in time; the text
-column is ✗ for Qt, FLTK and wxWidgets apps by design: only GTK (through
-`libshiro-text-hook.so`) and core X text report their text.
+Input ✗ is left on viewers with nothing open (eog, ristretto, gpicview,
+lximage-qt) and Krita's start screen: typing changes nothing there and none
+of them answers Ctrl+O with a window in time. Text ✗ is left on FLTK
+(dillo), GNOME/Xfce image viewers with no text in view (eog, ristretto,
+gpicview), LXImage-Qt and the apps that don't start.
+
+Round by round (29 apps): first scoreboard 24 windows, 23 render, 18 input,
+14 DOM text; after the second round 26, 24, 19, 19.
 
 ### Re-running
 

@@ -41,8 +41,7 @@ const APPS: [string, string, string, boolean, string?][] = [
   ['xclock', 'xclock', '◷', true],
   ['xcalc', 'xcalc', '±', true],
   ['xedit', 'xedit', '✎', true],
-  // exits at once without a D-Bus session bus (docs/GUI.md)
-  ['lximage-qt', 'LXImage-Qt', 'gui/icons/lximage-qt.png', false],
+  ['lximage-qt', 'LXImage-Qt', 'gui/icons/lximage-qt.png', true],
 ];
 
 function glyphIcon(glyph: string, hue: number): string {
