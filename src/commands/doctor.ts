@@ -1,7 +1,8 @@
 /**
  * doctor (alias tabinfo) — one report to paste into a bug report: the
  * deploy, the browser, the x86 engine, the internet relay, sign-ins,
- * Debian, storage and the kernel, each line OK, WARN or FAIL. Never prints
+ * Debian, storage, upgradable packages and the kernel, each line OK, WARN
+ * or FAIL. Never prints
  * a token or other secret.
  */
 
@@ -187,6 +188,26 @@ async function storageCheck(): Promise<Check> {
   };
 }
 
+/** Installed packages with a newer version (`pkg outdated`) */
+async function packagesCheck(ctx: CommandContext): Promise<Check> {
+  const { runIn } = await import('./doctor-agents');
+  const r = await runIn(ctx, 'pkg outdated', 20_000);
+  const out = r.out.replace(/\r/g, '').replace(/\x1b\[[0-9;]*m/g, '').trim();
+  if (r.code !== 0 && /unknown|usage|not a command|invalid/i.test(out)) {
+    return { label: 'packages', status: 'INFO', detail: '`pkg outdated` is not in this build' };
+  }
+  if (r.code !== 0) return { label: 'packages', status: 'WARN', detail: `pkg outdated exited ${r.code}${out ? `: ${out.split('\n').pop()!.slice(0, 160)}` : ''}` };
+  // One package per line; headers and "up to date" notes are not packages
+  const rows = out.split('\n').map((l) => l.trim()).filter((l) => l && !/^(listing|package|name)\b|up[ -]to[ -]date|^[-=\s]+$/i.test(l));
+  if (!rows.length) return { label: 'packages', status: 'OK', detail: 'every installed package is up to date' };
+  const names = rows.map((l) => l.split(/\s+/)[0]);
+  return {
+    label: 'packages',
+    status: 'INFO',
+    detail: `${rows.length} can be upgraded: ${names.slice(0, 8).join(', ')}${names.length > 8 ? ', …' : ''} (pkg outdated; pkg upgrade)`,
+  };
+}
+
 async function kernelCheck(ctx: CommandContext): Promise<Check> {
   const { kernelForContext } = await import('../wasi/run-command');
   const k = kernelForContext(ctx);
@@ -207,6 +228,7 @@ export async function runDoctorChecks(ctx: CommandContext): Promise<Check[]> {
     guard('sign-in', () => signInChecks(ctx)),
     guard('debian', () => debianCheck(ctx)),
     guard('storage', storageCheck),
+    guard('packages', () => packagesCheck(ctx), 25_000),
     guard('kernel', () => kernelCheck(ctx)),
     guard('agents', async () => {
       const { agentChecks, agentSummary } = await import('./doctor-agents');
@@ -226,7 +248,7 @@ export const doctorCmd: Command = {
   description: 'Check this tab (deploy, browser, engine, network, sign-ins, storage) for a bug report',
   async exec(ctx) {
     if (ctx.args[0] === '--help' || ctx.args[0] === '-h') {
-      ctx.stdout = 'Usage: doctor [--agents]\n\nPrints the deploy, browser, x86 engine, internet relay, sign-ins, Debian,\nstorage, kernel and agent-readiness state, one OK/WARN/FAIL line each, to\npaste into a bug report. No tokens or secrets are printed. Also: tabinfo\n\n--agents: what agent CLIs (Claude Code, Codex) need, step by step, through\nboth runtimes: a native x86-64 probe under Blink and the Node runtime\n(mkdir -p 0700, O_EXCL + rename, stat/lstat/fstat, realpath, a child\nsh -c with output to a file), and the native claude binary\'s --version.\n';
+      ctx.stdout = 'Usage: doctor [--agents]\n\nPrints the deploy, browser, x86 engine, internet relay, sign-ins, Debian,\nstorage, upgradable packages, kernel and agent-readiness state, one OK/WARN/FAIL line each, to\npaste into a bug report. No tokens or secrets are printed. Also: tabinfo\n\n--agents: what agent CLIs (Claude Code, Codex) need, step by step, through\nboth runtimes: a native x86-64 probe under Blink and the Node runtime\n(mkdir -p 0700, O_EXCL + rename, stat/lstat/fstat, realpath, a child\nsh -c with output to a file), `node -v` and `node -e` on their own, and the\nnative claude binary\'s --version. A failing node probe runs again with\nstdin on /dev/null, which tells a terminal (stdin) problem from the rest.\n';
       return 0;
     }
     if (ctx.args.includes('--agents')) {
