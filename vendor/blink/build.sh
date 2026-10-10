@@ -8,7 +8,7 @@
 # Needs emsdk EMSCRIPTEN_VERSION (the version the committed blink.wasm was
 # built with): set EMSDK=/path/to/emsdk (sourced for emcc), or have emcc on PATH.
 #   git clone https://github.com/emscripten-core/emsdk /opt/emsdk
-#   /opt/emsdk/emsdk install 6.0.12 && /opt/emsdk/emsdk activate 6.0.12
+#   /opt/emsdk/emsdk install 6.0.11 && /opt/emsdk/emsdk activate 6.0.11
 #   EMSDK=/opt/emsdk vendor/blink/build.sh
 # Blink is built in BLINK_WORK (default ../blink-build next to the repo). It
 # must be outside this repository: configure runs its probe programs with
@@ -17,7 +17,7 @@
 set -euo pipefail
 
 BLINK_COMMIT=f006a4fc6f9b8de9272504fdff0dbbe5ce5dc580
-EMSCRIPTEN_VERSION=6.0.12
+EMSCRIPTEN_VERSION=6.0.11
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 OUT="$ROOT/public/engines/blink"
