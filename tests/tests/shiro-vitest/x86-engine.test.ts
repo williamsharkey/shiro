@@ -138,6 +138,8 @@ const cowforkBin = join(out, 'cowfork');
 const haveCowfork = tryBuild('gcc', ['-static', '-O1', '-o', cowforkBin, 'cowfork.c']);
 const siginfochildBin = join(out, 'siginfochild');
 const haveSiginfochild = tryBuild('gcc', ['-static', '-O1', '-o', siginfochildBin, 'siginfochild.c']);
+const memfdBin = join(out, 'memfd');
+const haveMemfd = tryBuild('gcc', ['-static', '-O1', '-o', memfdBin, 'memfd.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -1015,6 +1017,13 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const { shell } = await setup(readFileSync(sysvmsgBin));
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe("msgget ok\nsend 0 0\nqnum 2\nrcv type 2: 6 2 world\nrcv any: 6 1 hello\nrcv empty nowait: -1 No message of desired type\nchild got 5 7 late\nrmid 0\nsend after rmid -1 Invalid argument\n");
+  }, 60_000);
+
+  // Firefox, Mesa, Wayland and PulseAudio make shared memory with memfd_create (0111)
+  it.skipIf(!haveMemfd)('memfd_create: read/write, MAP_SHARED, CLOEXEC, /proc/self/fd name', async () => {
+    const { shell } = await setup(readFileSync(memfdBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe("write 11 trunc 0 read 11 'hello memfd' map 'hello' cloexec 1 name ok\n");
   }, 60_000);
 
   // Open POSIX sigqueue_1-1: a same-instance child's handler gets the queued value (0110)

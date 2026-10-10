@@ -857,6 +857,11 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    makes call 1030 as the child, and blink_shiro_signal_pid_info queues it
    on the child's System. Open POSIX sigqueue_1-1 (the child's handler
    checks si_value) passes. Test: fixtures/x86/siginfochild.c.
+111. memfd_create goes to the kernel's (Blink answered ENOSYS): Firefox's
+   shared memory, Mesa, Wayland and PulseAudio make their buffers with
+   it. Test: fixtures/x86/memfd.c. (Another process mapping the same
+   memfd afresh doesn't see its writes yet; that needs the cross-instance
+   shared objects of docs/research/SHARED_MAPPINGS.md.)
 
    fork+exit+wait with 16 MiB of dirty heap went from 30 to 7.5 ms, and
    with 64 MiB from 104 to 12 ms (native: 3.1 ms). Test:
