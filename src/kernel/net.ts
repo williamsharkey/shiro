@@ -858,8 +858,10 @@ export class KDatagramSocket implements OpenFile {
 
   connect(addr: SockAddr): number {
     this.remote = { ...addr };
-    // A connected datagram socket has a source address (getsockname)
-    if (!this.local || this.local.address === '::' || this.local.address === '0.0.0.0') {
+    // A connected datagram socket has a source address (getsockname), chosen
+    // again on each connect unless bind() named one: glibc's getaddrinfo
+    // connects one IPv6 socket to an IPv6 answer and then to a v4-mapped one
+    if (!this.local || !this.boundAddr) {
       this.local = { family: this.domain, address: localAddressFor({ ...addr, family: this.domain }), port: this.local?.port || this.stack.ephemeral() };
     }
     return 0;
