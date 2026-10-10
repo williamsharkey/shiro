@@ -119,6 +119,47 @@ export function createFakeBuffer(): any {
   FakeBuffer.prototype.writeUInt8 = function(value: number, offset: number) { this[offset] = value & 0xff; return offset + 1; };
   FakeBuffer.prototype.writeUInt16BE = function(value: number, offset: number) { this[offset] = (value >> 8) & 0xff; this[offset+1] = value & 0xff; return offset + 2; };
   FakeBuffer.prototype.writeUInt32BE = function(value: number, offset: number) { this[offset] = (value >> 24) & 0xff; this[offset+1] = (value >> 16) & 0xff; this[offset+2] = (value >> 8) & 0xff; this[offset+3] = value & 0xff; return offset + 4; };
+  // Every fixed-width read/write node has, both byte orders, through a DataView
+  // (webpack's cache serializer writes with writeUInt32LE, writeDoubleLE and
+  // writeBigInt64LE), with node's lower-case `Uint` aliases
+  const view = (b: Uint8Array) => new DataView(b.buffer, b.byteOffset, b.byteLength);
+  const fixed: [string, number, string][] = [
+    ['UInt8', 1, 'Uint8'], ['Int8', 1, 'Int8'], ['UInt16', 2, 'Uint16'], ['Int16', 2, 'Int16'],
+    ['UInt32', 4, 'Uint32'], ['Int32', 4, 'Int32'], ['Float', 4, 'Float32'], ['Double', 8, 'Float64'],
+    ['BigUInt64', 8, 'BigUint64'], ['BigInt64', 8, 'BigInt64'],
+  ];
+  for (const [name, size, dv] of fixed) {
+    for (const suffix of size === 1 ? [''] : ['LE', 'BE']) {
+      const le = suffix === 'LE';
+      const read = function(this: Uint8Array, offset = 0) { return (view(this) as any)[`get${dv}`](offset, le); };
+      const write = function(this: Uint8Array, value: any, offset = 0) { (view(this) as any)[`set${dv}`](offset, value, le); return offset + size; };
+      for (const n of new Set([name, name.replace('UInt', 'Uint')])) {
+        FakeBuffer.prototype[`read${n}${suffix}`] = read;
+        FakeBuffer.prototype[`write${n}${suffix}`] = write;
+      }
+    }
+  }
+  // Variable width (1 to 6 bytes): readUIntLE(offset, byteLength), writeIntBE(value, offset, byteLength)...
+  const readVar = (b: Uint8Array, offset: number, n: number, le: boolean, signed: boolean) => {
+    if (offset < 0 || offset + n > b.length) throw new RangeError(`The value of "offset" is out of range. It must be >= 0 and <= ${b.length - n}. Received ${offset}`);
+    let v = 0;
+    for (let i = 0; i < n; i++) v = v * 256 + b[offset + (le ? n - 1 - i : i)];
+    return signed && v >= 2 ** (8 * n - 1) ? v - 2 ** (8 * n) : v;
+  };
+  const writeVar = (b: Uint8Array, value: number, offset: number, n: number, le: boolean) => {
+    if (offset < 0 || offset + n > b.length) throw new RangeError(`The value of "offset" is out of range. It must be >= 0 and <= ${b.length - n}. Received ${offset}`);
+    let v = value < 0 ? value + 2 ** (8 * n) : value;
+    for (let i = 0; i < n; i++) { b[offset + (le ? i : n - 1 - i)] = v % 256; v = Math.floor(v / 256); }
+    return offset + n;
+  };
+  for (const [suffix, le] of [['LE', true], ['BE', false]] as const) {
+    for (const u of ['UInt', 'Uint']) {
+      FakeBuffer.prototype[`read${u}${suffix}`] = function(this: Uint8Array, offset: number, n: number) { return readVar(this, offset, n, le, false); };
+      FakeBuffer.prototype[`write${u}${suffix}`] = function(this: Uint8Array, value: number, offset: number, n: number) { return writeVar(this, value, offset, n, le); };
+    }
+    FakeBuffer.prototype[`readInt${suffix}`] = function(this: Uint8Array, offset: number, n: number) { return readVar(this, offset, n, le, true); };
+    FakeBuffer.prototype[`writeInt${suffix}`] = function(this: Uint8Array, value: number, offset: number, n: number) { return writeVar(this, value, offset, n, le); };
+  }
   // Buffers of a buffer are Buffers (FakeBuffer has no Symbol.species, so
   // Uint8Array's subarray made plain arrays: toString() gave "48,48,...")
   const u8subarray = Uint8Array.prototype.subarray;

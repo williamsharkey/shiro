@@ -544,7 +544,8 @@ export function createStreamModule(events: any = createEventsModule()): any {
   // the legacy Stream constructor, with the rest as its properties
   const mod: any = Stream;
   Object.assign(mod, streamModule);
-  mod.default = Stream;
+  // (not enumerable: node's stream has no `default`)
+  Object.defineProperty(mod, 'default', { value: Stream, writable: true, configurable: true, enumerable: false });
   mod.isErrored = (s: any) => !!(s?._readableState?.errored ?? s?._writableState?.errored);
   mod.isDisturbed = (s: any) => !!s?._readableState && (s._readableState.flowing !== null || s._readableState.endEmitted);
   mod.isReadable = (s: any) => !!s?._readableState && !s.destroyed && !s._readableState.endEmitted;

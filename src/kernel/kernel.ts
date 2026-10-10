@@ -18,6 +18,7 @@ import { klog, KmsgFile, LOG_ERR, LOG_INFO, SYSLOG_ACTION_READ_ALL, SYSLOG_ACTIO
 import { processTable, type ShiroProcess } from '../process-table';
 import { packageShadows, pkgOwnShadows, packageArgsForPath, PKG_BIN_DIR } from '../pkg-manager';
 import * as A from './abi';
+import { elfInterpreter } from '../elf-interp';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
   RegularFile, DirFile, abortableWait, openInode, openInodeSync, isInodeOpen, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
@@ -238,6 +239,7 @@ export class Kernel {
   /** How long an unreaped child of init stays a zombie before it is reaped automatically. */
   initReapDelayMs = 30_000;
   private detachWriteBack?: () => void;
+  private detachContentPin?: () => void;
 
   constructor(opts: { fs?: FileSystem; shell?: Shell; allocPid?: () => number; registerWithProcessTable?: boolean } = {}) {
     this.fs = opts.fs ?? opts.shell?.fs;
@@ -245,6 +247,8 @@ export class Kernel {
     // Open files' buffered writes reach storage when the page goes away
     const wfs = this.fs;
     if (wfs?.addWriteBackHook) this.detachWriteBack = wfs.addWriteBackHook(() => writeBackAll(wfs));
+    // Open files' content stays in the FileSystem's cache
+    if (wfs?.addContentPin) this.detachContentPin = wfs.addContentPin((p) => isInodeOpen(wfs, p));
     const alloc = opts.allocPid ?? (() => processTable.allocatePid());
     this.allocPid = () => (this.lastPid = alloc());
     this.init = new Process({
@@ -301,6 +305,8 @@ export class Kernel {
     this.detachTable?.();
     this.detachWriteBack?.();
     this.detachWriteBack = undefined;
+    this.detachContentPin?.();
+    this.detachContentPin = undefined;
     this.detachTable = undefined;
   }
 
@@ -1677,7 +1683,14 @@ export class Kernel {
     proc.syscalls++;
     // While in a syscall the process counts as sleeping (S in /proc/PID/stat)
     if (proc.inSyscall++ === 0) proc.syscallSince = t0;
-    const done = () => { proc.inSyscall--; proc.kernelMs += Date.now() - t0; };
+    const call = { nr, args };
+    proc.calls.push(call);
+    const done = () => {
+      proc.inSyscall--;
+      proc.kernelMs += Date.now() - t0;
+      const i = proc.calls.indexOf(call);
+      if (i >= 0) proc.calls.splice(i, 1);
+    };
     // The caller awaits the call itself: the bookkeeping adds no await hop to it
     const p = this.syscallImpl(proc, nr, args, data);
     p.then(done, done);
@@ -2267,9 +2280,12 @@ export class Kernel {
         }
         case A.SYS_fcntl:
           return this.fcntl(proc, args[0], args[1], args[2], data);
-        case A.SYS_fsync: {
+        case A.SYS_fsync: { // (and fdatasync: Blink sends both here)
           const f = file(args[0]);
           if (!f) return -A.EBADF;
+          // a pipe, FIFO or socket has nothing to sync: EINVAL (Open POSIX fsync_7-1)
+          const type = (await f.stat()).mode & A.S_IFMT;
+          if (type === A.S_IFIFO || type === A.S_IFSOCK) return -A.EINVAL;
           try { await f.sync?.(); } catch (e) { return A.errnoFromError(e); }
           return 0;
         }
@@ -2948,11 +2964,16 @@ export class Kernel {
       if (i > 0) env[String(kv).slice(0, i)] = String(kv).slice(i + 1);
     }
     let head: Uint8Array = new Uint8Array(0);
+    let interp: string | null = null;
     if (!builtin) try {
       const raw = await this.fs!.readFile(path);
       head = typeof raw === 'string' ? enc.encode(raw.slice(0, 4)) : raw.subarray(0, 4);
+      if (typeof raw !== 'string') interp = elfInterpreter(raw);
     } catch { /* unreadable: let the loaders decide */ }
     const isElf = head.length === 4 && head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46;
+    // A dynamic executable whose loader isn't there is ENOENT, as on Linux
+    // (bash: "cannot execute: required file not found")
+    if (interp && typeof (await this.statPath(proc, interp)) === 'number') return -A.ENOENT;
     const probe = new Process({ pid: -1, ppid: proc.pid, path, argv, env, cwd: proc.cwd });
     const embryo = !!proc.data.embryo;
     // A package command with its own arguments (zcat = gzip -dc) can't be

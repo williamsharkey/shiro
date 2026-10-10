@@ -9,6 +9,16 @@ export const PAGE_CLEAR_TIMEOUT = globalThis.clearTimeout.bind(globalThis) as ty
 export const PAGE_SET_INTERVAL = globalThis.setInterval.bind(globalThis) as typeof setInterval;
 export const PAGE_CLEAR_INTERVAL = globalThis.clearInterval.bind(globalThis) as typeof clearInterval;
 
+/** A node script's own timer functions (execution.ts: what its code and modules see) */
+export interface ScriptTimers {
+  setTimeout: typeof setTimeout;
+  clearTimeout: typeof clearTimeout;
+  setInterval: typeof setInterval;
+  clearInterval: typeof clearInterval;
+}
+/** The names a script's and its modules' wrappers bind to the script's timers */
+export const SCRIPT_TIMER_NAMES = ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'setImmediate', 'clearImmediate'] as const;
+
 /**
  * Run page code with the page's own timers as the globals. A node script's
  * setTimeout replaces the global while it runs and cancels the timers it
