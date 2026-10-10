@@ -69,6 +69,21 @@ const BLOCK_KEY = '\u0001b/';
 const BLOB_MAP_KEY = '\u0001blobs';
 /** Blob map key of a file createWriter is writing (no node yet): dropped at the next init if never closed. */
 const WRITING_KEY = '\u0001w/';
+/** Blob map key of a deleted file's blocks that an open fd still reads (holdBlob): dropped at release or the next init. */
+const ORPHAN_KEY = '\u0001o/';
+
+/**
+ * Hard links (FileSystem.link): a file with two or more names keeps its
+ * data in one inode record at INODE_KEY + ino ({ ...node, names }), and each
+ * name's record is a stub { path, type, link: ino }. A file with one name is
+ * an ordinary record, as before links existed; it becomes an inode record at
+ * its first link() and an ordinary record again when unlinks leave one name.
+ * LINK_MAP_KEY holds name -> ino, so rm -r finds the linked names under a
+ * directory without reading every record.
+ */
+const INODE_KEY = '\u0001i/';
+const LINK_MAP_KEY = '\u0001links';
+const inodeKey = (ino: number) => INODE_KEY + ino;
 const isInternalKey = (k: string) => k.charCodeAt(0) === 1;
 const blockKey = (id: string, i: number) => BLOCK_KEY + id + '/' + i.toString(16).padStart(8, '0');
 
@@ -98,6 +113,16 @@ export interface FSNode {
    * written with writeFile, or read with readFile); in IndexedDB it is null.
    */
   blob?: string;
+  /**
+   * A name of a file with hard links: the inode number whose record (at
+   * INODE_KEY + ino) holds the data. In memory the node is a view of that
+   * record under this name, with `nlink` set.
+   */
+  link?: number;
+  /** Names of a linked file (its views; absent: 1). */
+  nlink?: number;
+  /** An inode record's names (FileSystem.link). */
+  names?: string[];
   /**
    * A special file: 'fifo' is a named pipe (mkfifo). It is stored like an
    * empty regular file; the kernel attaches opens of it to a pipe.
@@ -195,7 +220,7 @@ export function makeStat(node: FSNode): StatResult {
     // The kernel's st_dev and st_ino (src/kernel/fd.ts inodeNumber), for node programs and ls -i
     dev: 1,
     ino: node.ino ?? pathIno(node.path),
-    nlink: 1,
+    nlink: node.nlink ?? 1,
     uid: 1000,
     gid: 1000,
     rdev: 0,
@@ -730,7 +755,8 @@ export class FileSystem {
   async init(): Promise<void> {
     this.db = await this._openDb();
     this._installLifecycleFlush();
-    await this._loadBlobMap();
+    await this._loadInternal('blob map', () => this._loadBlobMap());
+    if (!(await this._loadInternal('link map', () => this._loadLinkMap()))) void this._rebuildLinkMap();
 
     // Ensure root directory exists
     const root = await this._get('/');
@@ -1092,9 +1118,21 @@ export class FileSystem {
       this._keysWanted = true;
       if (!this._keysHeld) void this._getAllKeys().catch(() => {});
     }
-    const result = await this._request('readonly', store => store.get(path) as IDBRequest<FSNode | undefined>);
+    let result = await this._request('readonly', store => store.get(path) as IDBRequest<FSNode | undefined>);
     // A write or delete made while the read was pending is newer than what it returned
     if (this.cache.has(path)) return this.cache.get(path);
+    if (result?.link !== undefined) {
+      // A name of a linked file: the inode record has the data
+      const rec = await this._loadInode(result.link);
+      if (this.cache.has(path)) return this.cache.get(path);
+      if (!rec?.names?.includes(path)) {
+        console.warn(`[fs] ${path}: hard link to a missing inode ${result.link}`);
+        result = undefined;
+      } else {
+        this._links.set(path, result.link);
+        result = this._view(rec, path);
+      }
+    }
     this.cache.set(path, result);
     if (result?.content && result.content.byteLength >= FileSystem.CONTENT_TRACK_MIN) this._touch(path);
     return result;
@@ -1228,6 +1266,12 @@ export class FileSystem {
       let pinned = false;
       for (const f of this._contentPins) if (f(p)) { pinned = true; break; }
       if (pinned) continue;
+      if (node.link !== undefined) {
+        // All its names' views share the bytes: they go with the inode record
+        if (this._dirty.has(inodeKey(node.link)) || this._inflight?.has(inodeKey(node.link))) continue;
+        for (const n of this._inodes.get(node.link)?.names ?? []) { if (n !== p) { this.cache.delete(n); this._contentUse.delete(n); } }
+        this._inodes.delete(node.link);
+      }
       this.cache.delete(p);
       this._contentUse.delete(p);
       total -= size;
@@ -1264,13 +1308,16 @@ export class FileSystem {
   private async _loadBlobMap(): Promise<void> {
     const rec = await this._request('readonly', store => store.get(BLOB_MAP_KEY) as IDBRequest<{ blobs?: [string, string][] } | undefined>);
     // Writes made before the load (none in practice: init runs first) win
-    for (const [p, id] of rec?.blobs ?? []) {
+    for (const e of Array.isArray(rec?.blobs) ? rec!.blobs! : []) {
+      if (!Array.isArray(e) || typeof e[0] !== 'string' || typeof e[1] !== 'string') continue;
+      const [p, id] = e;
       if (this._blobs.has(p) || this._blobOwner.has(id)) continue;
       this._blobs.set(p, id);
       this._blobOwner.set(id, p);
     }
     // Files a writer never closed (the page went away mid-write): their blocks go
-    for (const p of [...this._blobs.keys()]) if (p.startsWith(WRITING_KEY)) this._noteBlob(p, null);
+    // and the blocks open fds of deleted files still read when the page went away
+    for (const p of [...this._blobs.keys()]) if (p.startsWith(WRITING_KEY) || p.startsWith(ORPHAN_KEY)) this._noteBlob(p, null);
   }
 
   private _saveBlobMap(): void {
@@ -1308,6 +1355,12 @@ export class FileSystem {
   }
 
   private _dropBlob(id: string): void {
+    if (this._heldBlobs.has(id)) {
+      // An open fd still reads it: kept until releaseBlob (or the next start)
+      this._blobs.set(ORPHAN_KEY + id, id);
+      this._blobOwner.set(id, ORPHAN_KEY + id);
+      return;
+    }
     this._blobOwner.delete(id);
     const prefix = BLOCK_KEY + id + '/';
     for (const [k, b] of this._blockCache) {
@@ -1336,7 +1389,8 @@ export class FileSystem {
   async readBlock(id: string, i: number, keep = true): Promise<Uint8Array> {
     const B = FileSystem.BLOCK;
     const owner = this._blobOwner.get(id);
-    const node = owner === undefined ? undefined : this.cache.get(owner);
+    const node = owner === undefined ? undefined
+      : owner.startsWith(INODE_KEY) ? this._inodes.get(Number(owner.slice(INODE_KEY.length))) : this.cache.get(owner);
     if (node?.blob === id && node.content) return node.content.subarray(Math.min(i * B, node.content.length), Math.min((i + 1) * B, node.content.length));
     const key = blockKey(id, i);
     for (const batch of [this._dirty, this._inflight]) {
@@ -1516,6 +1570,290 @@ export class FileSystem {
     return this.cache.get(path)?.blob;
   }
 
+  // ── Hard links (see INODE_KEY) ─────────────────────────────────────────
+
+  /** name -> ino of linked files (stored as LINK_MAP_KEY), and their loaded inode records. */
+  private _links = new Map<string, number>();
+  private _inodes = new Map<number, FSNode>();
+  /** The link map couldn't be read at init: don't overwrite it with a partial one. */
+  private _linkMapBad = false;
+  /** Blobs an open fd of a deleted file still reads (holdBlob). */
+  private _heldBlobs = new Set<string>();
+
+  /**
+   * Run an init step that reads an internal record, bounded in time and
+   * failures: a corrupt or stuck record must not keep the machine from
+   * booting (it costs what the record tracks, never the files).
+   */
+  private async _loadInternal(what: string, load: () => Promise<void>, ms = 3000): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const ok = await Promise.race([load().then(() => true), new Promise<boolean>((r) => { timer = setTimeout(() => r(false), ms); })]);
+      if (!ok) console.warn(`[fs] reading the ${what} took over ${ms} ms; going on without it`);
+      return ok;
+    } catch (e) {
+      console.warn(`[fs] the ${what} couldn't be read; going on without it:`, e);
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async _loadLinkMap(): Promise<void> {
+    this._linkMapBad = true;
+    const rec = await this._request('readonly', store => store.get(LINK_MAP_KEY) as IDBRequest<{ links?: unknown } | undefined>);
+    if (rec && !Array.isArray(rec.links)) throw new Error('not a list');
+    for (const e of Array.isArray(rec?.links) ? rec!.links as unknown[] : []) {
+      if (!Array.isArray(e) || typeof e[0] !== 'string' || typeof e[1] !== 'number') continue;
+      if (!this._links.has(e[0])) this._links.set(e[0], e[1]);
+    }
+    this._linkMapBad = false;
+  }
+
+  /**
+   * The link map couldn't be read (or timed out): rebuild it from the inode
+   * records, which hold the names (there are as many as files with links),
+   * in the background, then store it again.
+   */
+  private async _rebuildLinkMap(): Promise<void> {
+    try {
+      const recs = await this._request('readonly', store => store.getAll(IDBKeyRange.bound(INODE_KEY, INODE_KEY + '\uffff')) as IDBRequest<FSNode[]>);
+      for (const r of recs) {
+        if (typeof r?.ino !== 'number' || !Array.isArray(r.names)) continue;
+        for (const n of r.names) if (typeof n === 'string' && !this._links.has(n)) this._links.set(n, r.ino);
+      }
+      this._linkMapBad = false;
+      this._saveLinkMap();
+    } catch (e) {
+      console.warn('[fs] rebuilding the link map failed:', e);
+    }
+  }
+
+  private _saveLinkMap(): void {
+    if (this._linkMapBad) return;
+    this._queue(LINK_MAP_KEY, { path: LINK_MAP_KEY, type: 'file', content: null, mode: 0, mtime: 0, ctime: 0, size: 0, links: [...this._links] } as FSNode);
+  }
+
+  /** The inode record of linked file `ino` (queued writes first), or undefined. */
+  private async _loadInode(ino: number): Promise<FSNode | undefined> {
+    const have = this._inodes.get(ino);
+    if (have) return have;
+    const key = inodeKey(ino);
+    for (const batch of [this._dirty, this._inflight]) {
+      if (batch?.has(key)) { const r = batch.get(key) ?? undefined; if (r) this._inodes.set(ino, r); return r; }
+    }
+    const rec = await this._request('readonly', store => store.get(key) as IDBRequest<FSNode | undefined>);
+    if (this._inodes.has(ino)) return this._inodes.get(ino);
+    if (rec && Array.isArray(rec.names)) this._inodes.set(ino, rec);
+    return rec && Array.isArray(rec.names) ? rec : undefined;
+  }
+
+  /** Name `name`'s view of inode record `rec`. */
+  private _view(rec: FSNode, name: string): FSNode {
+    const { names, ...data } = rec;
+    return { ...data, path: name, link: rec.ino!, nlink: names!.length };
+  }
+
+  private _stub(name: string, ino: number): FSNode {
+    return { path: name, type: 'file', content: null, mode: 0, mtime: 0, ctime: 0, size: 0, link: ino };
+  }
+
+  /** Store inode record `rec` and refresh its names' views. */
+  private _putInode(rec: FSNode): void {
+    const ino = rec.ino!;
+    this._inodes.set(ino, rec);
+    this._queue(inodeKey(ino), rec);
+    if (rec.blob || this._blobs.has(inodeKey(ino))) this._noteBlob(inodeKey(ino), rec);
+    for (const n of rec.names!) this.cache.set(n, this._view(rec, n));
+  }
+
+  /** A write through name `node.path` of linked file `ino` (data, mode, times). */
+  private _writeInode(ino: number, node: FSNode): void {
+    const rec = this._inodes.get(ino)!;
+    const bytes = (n: FSNode | undefined) => n?.blob ? n.size : n?.content?.byteLength ?? 0;
+    if (this._full && bytes(node) > bytes(rec)) throw this._enospc(node.path);
+    const { link: _l, nlink: _n, names: _ns, path, ...data } = node;
+    if (node.type === 'symlink' || rec.type === 'symlink') this._canonDirs.clear();
+    this._putInode({ ...data, path: inodeKey(ino), ino, names: rec.names });
+    if (node.content && node.content.byteLength >= FileSystem.CONTENT_TRACK_MIN) this._touch(path);
+  }
+
+  /**
+   * Drop name `path` of linked file `ino` (`stub`: queue its record's
+   * delete; a range delete covers it otherwise). One name left: it becomes
+   * an ordinary record again; none: the file goes (its blocks too, unless an
+   * open fd holds them).
+   */
+  private _unlinkName(path: string, ino: number, stub: boolean): void {
+    this._canonDirs.clear();
+    this.cache.set(path, undefined);
+    this._noteKey(path, false);
+    if (stub) this._queue(path, null);
+    this._links.delete(path);
+    const rec = this._inodes.get(ino)!;
+    const names = rec.names!.filter((n) => n !== path);
+    const key = inodeKey(ino);
+    if (names.length === 0) {
+      this._inodes.delete(ino);
+      this._queue(key, null);
+      if (this._blobs.has(key)) this._noteBlob(key, null);
+    } else if (names.length === 1) {
+      const last = names[0];
+      const { names: _n, ...data } = rec;
+      const plain: FSNode = { ...data, path: last, ino, ctime: Date.now() };
+      this._inodes.delete(ino);
+      this._links.delete(last);
+      this._queue(key, null);
+      this.cache.set(last, plain);
+      this._queue(last, plain);
+      if (plain.blob) this._noteBlob(last, plain); // the blocks are the last name's now
+      if (this._blobs.has(key)) this._noteBlob(key, null);
+    } else {
+      this._putInode({ ...rec, names, ctime: Date.now() });
+    }
+    this._saveLinkMap();
+    this._linksChanged();
+  }
+
+  /** Rename name `from` of linked file `ino` to `to` (free). */
+  private _moveLinkName(from: string, to: string, ino: number): void {
+    const rec = this._inodes.get(ino)!;
+    this._canonDirs.clear();
+    this.cache.set(from, undefined);
+    this._noteKey(from, false);
+    this._queue(from, null);
+    this._links.delete(from);
+    this._links.set(to, ino);
+    this._noteKey(to, true);
+    this._queue(to, this._stub(to, ino));
+    this._putInode({ ...rec, names: rec.names!.map((n) => (n === from ? to : n)), ctime: Date.now() });
+    this._saveLinkMap();
+    this._linksChanged();
+  }
+
+  /**
+   * rename(from, to) of a file when links are involved: true when done here.
+   * Two names of one file: nothing to do (POSIX). Onto a linked name: that
+   * name goes (as unlink). Of a linked name: the name moves.
+   */
+  private _renameLinked(from: string, to: string, node: FSNode, existing: FSNode | null | undefined): boolean {
+    if (node.link !== undefined && existing?.link === node.link) return true;
+    if (existing?.link !== undefined && this._inodes.has(existing.link)) this._unlinkName(to, existing.link, true);
+    if (node.link === undefined || !this._inodes.has(node.link)) return false;
+    this._moveLinkName(from, to, node.link);
+    return true;
+  }
+
+  /**
+   * link(2): give the file at `existing` the name `newPath` as well (one file,
+   * two names: data, mode and times shared). `follow`: through a symlink at
+   * `existing` (AT_SYMLINK_FOLLOW); otherwise the symlink itself gets the name.
+   */
+  async link(existing: string, newPath: string, options?: { follow?: boolean }): Promise<void> {
+    const src = await this._canon(existing, !!options?.follow);
+    newPath = await this._canon(newPath, false);
+    let node = await this._get(src);
+    if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, link '${existing}'`);
+    if (node.type === 'dir') throw fsError('EPERM', `EPERM: operation not permitted, link '${existing}'`);
+    if (await this._get(newPath)) throw fsError('EEXIST', `EEXIST: file already exists, link '${newPath}'`);
+    const parentPath = newPath.substring(0, newPath.lastIndexOf('/')) || '/';
+    const parent = await this._get(parentPath);
+    if (!parent) throw fsError('ENOENT', `ENOENT: no such file or directory, link '${newPath}'`);
+    if (parent.type !== 'dir') throw fsError('ENOTDIR', `ENOTDIR: not a directory, link '${newPath}'`);
+    if (this._full) throw this._enospc(newPath);
+    if (node.lazy) node = await this._materialize(node);
+    if (node.link !== undefined) await this._loadInode(node.link);
+    if (this.cache.get(newPath)) throw fsError('EEXIST', `EEXIST: file already exists, link '${newPath}'`);
+    this._linkCached(src, this.cache.get(src) ?? node, newPath);
+  }
+
+  /**
+   * link() from the cache alone, for synchronous callers (node's
+   * fs.linkSync): `existing` (not followed) and the parent of `newPath`
+   * cached, `newPath` known to be free. False when that needs link().
+   */
+  linkNow(existing: string, newPath: string): boolean {
+    if (this._full || this.virtualProviders.some((vp) => vp.handles(existing) || vp.handles(newPath))) return false;
+    const src = this.lookupCached(existing, false);
+    if (!src || src.node.type === 'dir' || src.node.lazy) return false;
+    if (src.node.link !== undefined && !this._inodes.has(src.node.link)) return false;
+    const slash = newPath.lastIndexOf('/');
+    const parent = this.lookupCached(slash <= 0 ? '/' : newPath.slice(0, slash));
+    if (!parent || parent.node.type !== 'dir') return false;
+    const to = (parent.path === '/' ? '' : parent.path) + newPath.slice(slash);
+    if (this.lookupCached(to, false) !== null) return false;
+    this._linkCached(src.path, src.node, to);
+    return true;
+  }
+
+  /** link() of cached `node` at canonical `src` to free canonical `newPath`. */
+  private _linkCached(src: string, node: FSNode, newPath: string): void {
+    const now = Date.now();
+    if (node.link !== undefined && this._inodes.has(node.link)) {
+      const rec = this._inodes.get(node.link)!;
+      this._putInode({ ...rec, names: [...rec.names!, newPath], ctime: now });
+      this._links.set(newPath, node.link);
+    } else {
+      // Its first link: the data moves to an inode record, with a fresh number
+      // if the number may be another file's (an older build's copy-links gave
+      // copies their source's number)
+      let ino = node.ino ?? pathIno(src);
+      if (this._linkMapBad || [...this._links.values()].includes(ino) || this._inodes.has(ino)) ino = newIno();
+      const { link: _l, nlink: _n, ...data } = node;
+      this._putInode({ ...data, path: inodeKey(ino), ino, names: [src, newPath], ctime: now });
+      this._queue(src, this._stub(src, ino));
+      if (this._blobs.has(src)) this._noteBlob(src, null); // the blocks are the inode record's now
+      this._links.set(src, ino);
+      this._links.set(newPath, ino);
+    }
+    this._queue(newPath, this._stub(newPath, this._links.get(newPath)!));
+    this._noteKey(newPath, true);
+    this._canonDirs.clear();
+    this._saveLinkMap();
+    this._linksChanged();
+    this._emitChange('write', newPath);
+  }
+
+  private _linkListeners = new Set<() => void>();
+
+  /** Called after a file gains or loses a name (link, unlink or rename of a linked name): the kernel re-keys its open files. */
+  onLinkChange(fn: () => void): () => void {
+    this._linkListeners.add(fn);
+    return () => { this._linkListeners.delete(fn); };
+  }
+
+  private _linksChanged(): void {
+    for (const fn of this._linkListeners) { try { fn(); } catch {} }
+  }
+
+  /** Inode number of the linked file at canonical `path` (cached), if it has links. */
+  linkOf(path: string): number | undefined {
+    return this.cache.get(path)?.link;
+  }
+
+  /** st_nlink of the cached node at canonical `path`. */
+  nlinkOf(path: string): number {
+    return this.cache.get(path)?.nlink ?? 1;
+  }
+
+  /** All names of the file at canonical `path` (just `path` without links). */
+  namesOf(path: string): string[] {
+    const ino = this.cache.get(path)?.link;
+    return ino === undefined ? [path] : [...(this._inodes.get(ino)?.names ?? [path])];
+  }
+
+  /**
+   * An open fd still reads blob `id` (the kernel's pages of a file being
+   * unlinked): deleting the file keeps its blocks until releaseBlob, or until
+   * the next start if the page goes away first.
+   */
+  holdBlob(id: string): void { this._heldBlobs.add(id); }
+
+  releaseBlob(id: string): void {
+    if (!this._heldBlobs.delete(id)) return;
+    if (this._blobOwner.get(id) === ORPHAN_KEY + id) this._noteBlob(ORPHAN_KEY + id, null);
+  }
+
   private _getCached(path: string): FSNode | null | undefined {
     const hit = this.cache.get(path); // one lookup: misses (cached as undefined) are the rare case
     if (hit) { if (hit.content && hit.content.byteLength >= FileSystem.CONTENT_TRACK_MIN) this._touch(path); return hit; }
@@ -1632,6 +1970,10 @@ export class FileSystem {
 
   /** Synchronous part of a put: cache + key index now, IndexedDB on the next flush. */
   private _putNow(node: FSNode, move = false): void {
+    // A name of a linked file: the write goes to the file (every name sees it)
+    const ino = move ? undefined : node.link ?? this._links.get(node.path);
+    if (ino !== undefined && this._inodes.has(ino)) return this._writeInode(ino, node);
+    if (node.link !== undefined || node.nlink !== undefined) { node = { ...node }; delete node.link; delete node.nlink; }
     const prev = this.cache.get(node.path);
     // A new node gets its inode number (writes and renames carry the old one)
     if (node.ino === undefined && prev === undefined) node.ino = newIno();
@@ -1653,6 +1995,8 @@ export class FileSystem {
   }
 
   private _deleteNow(path: string): void {
+    const ino = this.cache.get(path)?.link ?? this._links.get(path);
+    if (ino !== undefined && this._inodes.has(ino)) return this._unlinkName(path, ino, true);
     this._canonDirs.clear();
     // Remember the miss: IndexedDB still has the node until the flush commits
     this.cache.set(path, undefined);
@@ -1833,9 +2177,18 @@ export class FileSystem {
     // Big files with their bytes in `content`, as importAll takes them (no block records)
     const blocks = new Map<string, Uint8Array>();
     for (const n of all) if (n.path.startsWith(BLOCK_KEY)) blocks.set(n.path, n.content ?? new Uint8Array(0));
+    const inodes = new Map<string, FSNode>();
+    for (const n of all) if (n.path.startsWith(INODE_KEY)) inodes.set(n.path, n);
     const out: FSNode[] = [];
-    for (const n of all) {
+    for (let n of all) {
       if (isInternalKey(n.path)) continue;
+      if (n.link !== undefined) {
+        // Each name as a file of its own (the format has no links)
+        const rec = inodes.get(inodeKey(n.link));
+        if (!rec) continue;
+        const { names: _names, ...data } = rec;
+        n = { ...data, path: n.path };
+      }
       if (!n.blob) { out.push(n); continue; }
       const content = new Uint8Array(n.size);
       for (let i = 0, off = 0; off < n.size; i++, off += FileSystem.BLOCK) {
@@ -1857,7 +2210,9 @@ export class FileSystem {
     store.clear();
     for (const node of nodes) {
       if (isInternalKey(node.path)) continue;
-      if (node.blob) { const { blob: _blob, ...plain } = node; store.put(plain); } else store.put(node);
+      // Plain nodes: a big file's bytes are in `content`, links are separate files (exportAll)
+      const { blob: _blob, link: _link, nlink: _nlink, names: _names, ...plain } = node;
+      store.put(plain);
     }
     await new Promise<void>((resolve, reject) => {
       tx.oncomplete = () => resolve();
@@ -1866,6 +2221,8 @@ export class FileSystem {
     this.clearCache();
     this._blobs.clear();
     this._blobOwner.clear();
+    this._links.clear();
+    this._inodes.clear();
     this._blockCache.clear();
     this._blockCacheBytes = 0;
   }
@@ -2246,8 +2603,10 @@ export class FileSystem {
     const node = this.cache.get(from);
     const dst = this.cache.get(to);
     if (!node || node.type === 'dir' || dst?.type === 'dir') return false;
-    this._putNow({ ...node, path: to, ctime: Date.now(), ino: node.ino ?? pathIno(from) }, true);
-    this._deleteNow(from);
+    if (!this._renameLinked(from, to, node, dst)) {
+      this._putNow({ ...node, path: to, ctime: Date.now(), ino: node.ino ?? pathIno(from) }, true);
+      this._deleteNow(from);
+    }
     this._emitChange('rename', from, to);
     return true;
   }
@@ -2281,6 +2640,10 @@ export class FileSystem {
     if (node.type === 'dir' && options?.recursive && path !== '/') {
       const allKeys = await this._getAllKeys();
       const prefix = path + '/';
+      // Linked names under it: dropped from their files (whose records are elsewhere) first
+      const linked = [...this._links].filter(([n]) => n.startsWith(prefix));
+      for (const [, ino] of linked) await this._loadInode(ino);
+      for (const [n, ino] of linked) if (this._inodes.has(ino)) this._unlinkName(n, ino, false);
       // Gone from memory now; from IndexedDB in one range delete (_queueRange)
       for (const key of allKeys.filter(k => k.startsWith(prefix))) {
         this.cache.set(key, undefined);
@@ -2320,6 +2683,7 @@ export class FileSystem {
           const child = await this._get(key);
           if (child) {
             const newChildPath = newPath + key.slice(oldPath.length);
+            if (child.link !== undefined && this._inodes.has(child.link)) { this._moveLinkName(key, newChildPath, child.link); continue; }
             await this._put({ ...child, path: newChildPath, ino: child.ino ?? pathIno(key) }, true);
             await this._delete(key);
           }
@@ -2329,8 +2693,10 @@ export class FileSystem {
       // Prevent renaming a file over a directory
       const existing = await this._get(newPath);
       if (existing?.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, rename '${newPath}'`);
-      await this._put({ ...node, path: newPath, ctime: Date.now(), ino: node.ino ?? pathIno(oldPath) }, true); // rename keeps mtime (rsync -a, make)
-      await this._delete(oldPath);
+      if (!this._renameLinked(oldPath, newPath, node, existing)) {
+        await this._put({ ...node, path: newPath, ctime: Date.now(), ino: node.ino ?? pathIno(oldPath) }, true); // rename keeps mtime (rsync -a, make)
+        await this._delete(oldPath);
+      }
     }
     this._emitChange('rename', oldPath, newPath);
   }
