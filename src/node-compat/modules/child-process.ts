@@ -1,3 +1,4 @@
+import { stdinPipe } from '../live-stdin';
 import type { CommandContext } from '../../commands/index';
 import { parseShellArgs } from '../../shell-args';
 import { activeProfile } from '../../profile';
@@ -268,6 +269,92 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
     stderr = stderr.replace(/\r\n/g, '\n');
 
     return { stdout, stderr, exitCode };
+  };
+  /**
+   * Run `node ARGS` as the child, its stdin a pipe the parent writes into as it
+   * goes and its stdout/stderr bytes delivered as written (not at exit). The
+   * parent waits for it only while it is ref()'d (esbuild unrefs its service);
+   * when the parent ends, the child's stdin closes, so a server loop sees EOF.
+   */
+  const spawnNodeLive = (child: any, args: string[], opts: any, io: {
+    stdoutEvents: Record<string, Function[]>; stderrEvents: Record<string, Function[]>; events: Record<string, Function[]>;
+    inheritOut: boolean; inheritErr: boolean; resolve: (v: any) => void;
+  }): any => {
+    const { FakeBuffer } = deps;
+    const pipe = stdinPipe();
+    const bytesOf = (d: any, enc?: string): Uint8Array => typeof d === 'string' ? FakeBuffer.from(d, enc) : d instanceof Uint8Array ? d : FakeBuffer.from(d);
+    let outOpen = true, errOpen = true;
+    const proc = deps.getProcess?.();
+    const out = (b: Uint8Array) => {
+      if (io.inheritOut) proc?.stdout?.write(b);
+      else if (outOpen) (io.stdoutEvents['data'] || []).forEach((fn) => fn(FakeBuffer.from(b)));
+    };
+    const err = (b: Uint8Array) => {
+      if (io.inheritErr) proc?.stderr?.write(b);
+      else if (errOpen) (io.stderrEvents['data'] || []).forEach((fn) => fn(FakeBuffer.from(b)));
+    };
+    child.stdin = {
+      writable: true,
+      write: (data: any, encOrCb?: any, cb?: any) => {
+        pipe.write(bytesOf(data, typeof encOrCb === 'string' ? encOrCb : undefined));
+        const done = typeof encOrCb === 'function' ? encOrCb : cb;
+        if (done) queueMicrotask(() => done(null));
+        return true;
+      },
+      end: (data?: any, encOrCb?: any, cb?: any) => {
+        if (typeof data === 'function') { cb = data; data = undefined; }
+        if (data !== undefined && data !== null) pipe.write(bytesOf(data, typeof encOrCb === 'string' ? encOrCb : undefined));
+        pipe.end();
+        const done = typeof encOrCb === 'function' ? encOrCb : cb;
+        if (done) queueMicrotask(() => done());
+      },
+      destroy: () => { pipe.end(); },
+      on: () => child.stdin, once: () => child.stdin, off: () => child.stdin, removeListener: () => child.stdin,
+      ref: () => child.stdin, unref: () => child.stdin,
+    };
+    if (child.stdout) { child.stdout.destroy = () => { outOpen = false; return child.stdout; }; child.stdout.ref = child.stdout.unref = () => child.stdout; }
+    if (child.stderr) { child.stderr.destroy = () => { errOpen = false; return child.stderr; }; child.stderr.ref = child.stderr.unref = () => child.stderr; }
+
+    // The parent waits while the child is ref()'d
+    let release: (() => void) | null = null;
+    let exited = false;
+    const hold = () => { if (!release && !exited) deps.pendingPromises.push(new Promise<void>((r) => { release = r; })); };
+    const unhold = () => { const r = release; release = null; r?.(); };
+    child.ref = () => { hold(); return child; };
+    child.unref = () => { unhold(); return child; };
+    child.kill = () => { child.killed = true; pipe.end(); return true; };
+    // the parent's writes still in flight before it started the child (not the waits added after)
+    const before = deps.pendingPromises.slice();
+    hold();
+    proc?.once?.('exit', () => pipe.end());
+
+    const sh = ctx.shell.fork();
+    if (opts?.env) { sh.env = {}; for (const [k, v] of Object.entries(opts.env)) if (v !== undefined && v !== null) sh.env[k] = String(v); }
+    const cwd = opts?.cwd ? ctx.fs.resolvePath(String(opts.cwd), ctx.cwd) : ctx.cwd;
+    const cctx: CommandContext = {
+      args, fs: ctx.fs, cwd, env: { ...sh.env }, stdin: '', stdout: '', stderr: '', shell: sh,
+      stdinIsTTY: false, stdoutIsTTY: false,
+      stdinStream: pipe.stream, stdoutBytes: out, stderrBytes: err,
+    };
+    (sh as any).cwd = cwd;
+    const run = (async () => {
+      // what the parent wrote is on disk for the child (fs writes are queued)
+      if (before.length) await Promise.race([Promise.allSettled(before), new Promise((r) => setTimeout(r, 2000))]);
+      return ctx.shell.commands.get('node')!.exec(cctx);
+    })();
+    run.then((code) => code, (e) => { cctx.stderr += String(e?.message ?? e) + '\n'; return 1; }).then((code: number) => {
+      exited = true;
+      // anything the child left in its ctx (an error report) goes out too
+      if (cctx.stdout) out(new TextEncoder().encode(cctx.stdout));
+      if (cctx.stderr) err(new TextEncoder().encode(cctx.stderr));
+      for (const ev of ['end', 'close']) { (io.stdoutEvents[ev] || []).forEach((fn) => fn()); (io.stderrEvents[ev] || []).forEach((fn) => fn()); }
+      child.exitCode = code;
+      (io.events['exit'] || []).forEach((fn) => fn(code, null));
+      (io.events['close'] || []).forEach((fn) => fn(code, null));
+      io.resolve({ stdout: '', stderr: '', exitCode: code });
+      unhold();
+    });
+    return child;
   };
   /** The `input` option as text (a string, Buffer or typed array) */
   const inputOf = (opts: any): string | undefined => {
@@ -600,6 +687,12 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
         out: (t) => { if (inheritOut) deps.getProcess?.()?.stdout?.write(t); else (stdoutEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(t))); },
         err: (t) => { if (inheritErr) deps.getProcess?.()?.stderr?.write(t); else (stderrEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(t))); },
       } : undefined;
+      // A node child with piped stdio in the page: live pipes both ways (live-stdin.ts),
+      // for programs that talk to it while it runs (esbuild's API and its --service)
+      if (!deps.guest && !isClipboardCmd && !opts?.shell && args && /(^|\/)node$/.test(cmd) && !stdioOutPath && !stdioErrPath
+        && !inherits(opts?.stdio, 0) && ctx.shell.commands.get('node')) {
+        return spawnNodeLive(child, args, opts, { stdoutEvents, stderrEvents, events, inheritOut, inheritErr, resolve: (v) => _resolveChild?.(v) });
+      }
       const cmdPromise = isClipboardCmd
         ? new Promise<{ stdout: string; stderr: string; exitCode: number }>(resolve =>
             setTimeout(() => resolve({ stdout: '', stderr: '', exitCode: 0 }), 0))

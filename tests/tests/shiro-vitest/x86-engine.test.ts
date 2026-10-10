@@ -120,6 +120,8 @@ const sysvmsgBin = join(out, 'sysvmsg');
 const haveSysvmsg = 'SYS_msgget' in Abi && tryBuild('gcc', ['-static', '-O1', '-o', sysvmsgBin, 'sysvmsg.c']);
 const sigwaitBin = join(out, 'sigwait');
 const haveSigwait = 'SYS_rt_sigtimedwait' in Abi && tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', sigwaitBin, 'sigwait.c']);
+const futexrequeueBin = join(out, 'futexrequeue');
+const haveFutexrequeue = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', futexrequeueBin, 'futexrequeue.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -977,6 +979,14 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const { shell } = await setup(readFileSync(sysvmsgBin));
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe("msgget ok\nsend 0 0\nqnum 2\nrcv type 2: 6 2 world\nrcv any: 6 1 hello\nrcv empty nowait: -1 No message of desired type\nchild got 5 7 late\nrmid 0\nsend after rmid -1 Invalid argument\n");
+  }, 60_000);
+
+  // LTP futex_cmp_requeue01-03: requeued waiters are found at the target at once
+  it.skipIf(!haveFutexrequeue)('FUTEX_CMP_REQUEUE and FUTEX_REQUEUE wake some waiters and move the rest', async () => {
+    const { shell } = await setup(readFileSync(futexrequeueBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'cmp mismatch -1 1\ncmp_requeue 5 woken 2\nleft on f1 1 woken 3\nrequeue 3 then wake 2 woken 6\n');
   }, 60_000);
 
   // VLC's main thread sigwaits for SIGINT/HUP/QUIT/TERM and quits when it returns

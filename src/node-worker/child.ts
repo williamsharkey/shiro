@@ -142,6 +142,7 @@ export function runChild(sys: GuestSys, cmd: string, opts: ChildOptions = {}): P
       };
       reap();
     };
-    tick();
+    // Not before the caller has its listeners on (spawn() returns first, as in node)
+    setTimeout(tick, 0);
   });
 }

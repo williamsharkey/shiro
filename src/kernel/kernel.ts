@@ -1074,6 +1074,85 @@ export class Kernel {
     return 0;
   }
 
+  /**
+   * The canonical path for a new entry `p` (resolved, absent) from the
+   * cached parent: the path, -ENOENT/-ENOTDIR, or undefined when the parent
+   * isn't in memory.
+   */
+  private childPathSync(p: string): string | number | undefined {
+    const slash = p.lastIndexOf('/');
+    const parent = this.fs!.lookupCached(slash <= 0 ? '/' : p.slice(0, slash));
+    if (parent === undefined) return undefined;
+    if (parent === null) return -A.ENOENT;
+    if (parent.node.type !== 'dir') return -A.ENOTDIR;
+    return (parent.path === '/' ? '' : parent.path) + p.slice(slash);
+  }
+
+  /**
+   * rmdir, mkdir and rename from memory (node in a Worker makes these back
+   * to back): the result, or undefined for the async path (uncached, open,
+   * a symlink or directory rename would move, sockets, FIFOs).
+   */
+  private pathOpSync(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): number | undefined {
+    const fs = this.fs;
+    if (!fs) return undefined;
+    const at = (dirfd: number, off: number, len: number): string | number | undefined => {
+      if (len <= 0 || off < 0 || off + len > data.length) return undefined;
+      const s = A.decodeText(data.subarray(off, off + len));
+      if (trailingSlash(s)) return undefined;
+      const p = this.resolvePath(proc, s, dirfd);
+      if (typeof p === 'string' && (this.devices.has(p) || /^\/(?:dev|proc)(?:\/|$)/.test(p) || this.socketPaths?.has(p) || this.fifos.has(p))) return undefined;
+      return p;
+    };
+    switch (nr) {
+      case A.SYS_rmdir: case A.SYS_unlinkat: {
+        const [dirfd, len] = nr === A.SYS_rmdir ? [A.AT_FDCWD, args[0]] : [args[0], args[1]];
+        const p = at(dirfd, 0, len);
+        if (typeof p !== 'string') return p;
+        const own = fs.lookupCached(p, false);
+        if (!own) return undefined; // missing: the async path tells ENOENT from ENOTDIR
+        if (own.node.type !== 'dir') return -A.ENOTDIR;
+        const r = fs.rmdirNow(own.path);
+        return r === undefined ? undefined : r ? 0 : -A.ENOTEMPTY;
+      }
+      case A.SYS_mkdir: case A.SYS_mkdirat: {
+        const [dirfd, len, mode] = nr === A.SYS_mkdir ? [A.AT_FDCWD, args[0], args[1]] : [args[0], args[1], args[2]];
+        const p = at(dirfd, 0, len);
+        if (typeof p !== 'string') return p;
+        const own = fs.lookupCached(p, false);
+        if (own === undefined) return undefined;
+        if (own) return -A.EEXIST;
+        const real = this.childPathSync(p);
+        if (typeof real !== 'string') return real;
+        return fs.createDirNow(real, mode & ~proc.umask) ? 0 : undefined;
+      }
+      case A.SYS_rename: case A.SYS_renameat: case A.SYS_renameat2: {
+        const [od, ol, nd, nl, flags] = nr === A.SYS_rename
+          ? [A.AT_FDCWD, args[0], A.AT_FDCWD, args[1], 0]
+          : [args[0], args[1], args[2], args[3], nr === A.SYS_renameat2 ? args[4] : 0];
+        if (flags & ~A.RENAME_NOREPLACE) return undefined;
+        const from = at(od, 0, ol), to = at(nd, ol, nl);
+        if (typeof from !== 'string') return from;
+        if (typeof to !== 'string') return to;
+        const src = fs.lookupCached(from, false);
+        const dst = fs.lookupCached(to, false);
+        if (!src || dst === undefined || src.node.type === 'dir' || src.node.special) return undefined;
+        if (from === to || src.path === dst?.path) return 0;
+        if (dst) {
+          if (flags & A.RENAME_NOREPLACE) return -A.EEXIST;
+          if (dst.node.type === 'dir') return -A.EISDIR;
+        }
+        const real = dst ? dst.path : this.childPathSync(to);
+        if (typeof real !== 'string') return real;
+        if (isInodeOpen(fs, src.path) || isInodeOpen(fs, real) || !fs.renameNow(src.path, real)) return undefined;
+        forgetInodeNumber(fs, real);
+        renameLinkName(src.path, real);
+        return 0;
+      }
+    }
+    return undefined;
+  }
+
   /** statPath from memory, encoded into `data`: 0, -errno, or undefined (use statPath). */
   private statPathSyncInto(proc: Process, path: string, follow: boolean, dirfd: number, data: Uint8Array): number | undefined {
     const fs = this.fs;
@@ -1463,9 +1542,14 @@ export class Kernel {
       case A.SYS_unlink:
       case A.SYS_unlinkat: {
         const [dirfd, len, flg] = nr === A.SYS_unlink ? [A.AT_FDCWD, args[0], 0] : [args[0], args[1], args[2]];
-        if (flg !== 0 || len <= 0 || len > data.length) return undefined; // AT_REMOVEDIR, bad flags: the async path
+        if (flg === A.AT_REMOVEDIR) return this.pathOpSync(proc, nr, args, data);
+        if (flg !== 0 || len <= 0 || len > data.length) return undefined; // bad flags: the async path
         return this.unlinkSync(proc, A.decodeText(data.subarray(0, len)), dirfd);
       }
+      case A.SYS_rmdir:
+      case A.SYS_mkdir: case A.SYS_mkdirat:
+      case A.SYS_rename: case A.SYS_renameat: case A.SYS_renameat2:
+        return this.pathOpSync(proc, nr, args, data);
       case A.SYS_stat:
       case A.SYS_lstat: {
         if (args[0] < 0 || args[0] > data.length) return undefined;

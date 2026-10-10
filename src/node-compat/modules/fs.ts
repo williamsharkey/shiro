@@ -1,5 +1,6 @@
 import { nodeGuestOf } from '../../node-worker/hooks';
 import type { CommandContext } from '../../commands/index';
+import { ProcessExitError } from '../../commands/jseval/utils';
 import { decodeUtf8Strict } from '../preload';
 import { PAGE_SET_TIMEOUT } from '../page-globals';
 import { createWatchApi } from './fs-watch';
@@ -17,6 +18,8 @@ export interface FsDeps {
   trackAsync?: <T>(p: Promise<T>) => Promise<T>;
   /** Registers cleanup for when the script ends (watchers) */
   atExit?: (fn: () => void) => void;
+  /** The script's process: fds 0-2 are its stdin, stdout and stderr */
+  getProcess?: () => any;
 }
 
 /** Create a Node.js-style fs error with code, errno, syscall properties */
@@ -525,6 +528,13 @@ export function createFsModule(deps: FsDeps): any {
   const fsShim: any = {
     readFileSync: (p: string, opts?: any) => {
       tickSyncOps();
+      // stdin (fd 0, /dev/stdin): what has arrived; a script that reads it so gets it loaded first (execution.ts)
+      const fd0 = ((p as unknown) === 0 && !(globalThis as any).__shiroFds?.[0]) || p === '/dev/stdin' ? deps.getProcess?.()?.stdin?.__fd0 : null;
+      if (fd0) {
+        const bytes = deps.FakeBuffer.from(fd0.takeAll());
+        const enc = typeof opts === 'string' ? opts : opts?.encoding;
+        return enc ? bytes.toString(enc) : bytes;
+      }
       if (typeof p === 'number') {
         const fdPath = (globalThis as any).__shiroFds?.[p]?.path;
         if (!fdPath) throw fsError('EBADF', 'EBADF: bad file descriptor, read', 'read');
@@ -891,6 +901,13 @@ export function createFsModule(deps: FsDeps): any {
     },
     writeSync: (fd: number, data: string | Uint8Array) => {
       const fdInfo = (globalThis as any).__shiroFds?.[fd];
+      // fds 1 and 2: the process's stdout and stderr (Go's runtime writes them so: esbuild)
+      if (!fdInfo && (fd === 1 || fd === 2)) {
+        const proc = deps.getProcess?.();
+        const bytes = typeof data === 'string' ? data : toBytes(data) ?? new Uint8Array(0);
+        (fd === 1 ? proc?.stdout : proc?.stderr)?.write(bytes);
+        return typeof bytes === 'string' ? new TextEncoder().encode(bytes).length : bytes.length;
+      }
       if (fdInfo) {
         const bytes = toBytes(data);
         const prior = currentBytes(fdInfo.path);
@@ -909,6 +926,16 @@ export function createFsModule(deps: FsDeps): any {
     },
     readSync: (fd: number, buf: Uint8Array, offset?: number, length?: number, position?: number) => {
       const fdInfo = (globalThis as any).__shiroFds?.[fd];
+      if (!fdInfo && fd === 0) {
+        // stdin: what has arrived; a pipe with nothing yet is EAGAIN, as a nonblocking one
+        const fd0 = deps.getProcess?.()?.stdin?.__fd0;
+        if (!fd0) return 0;
+        const off = typeof offset === 'object' && offset ? (offset as any).offset ?? 0 : offset ?? 0;
+        const len = typeof offset === 'object' && offset ? (offset as any).length ?? buf.length - off : length ?? buf.length - off;
+        const n = fd0.tryRead(buf, off, len);
+        if (n === null) throw fsError('EAGAIN', 'EAGAIN: resource temporarily unavailable, read', 'read');
+        return n;
+      }
       if (!fdInfo) return 0;
       const bytes = currentBytes(fdInfo.path) ?? new Uint8Array(0);
       const pos = position ?? fdInfo.offset;
@@ -1244,6 +1271,15 @@ export function createFsModule(deps: FsDeps): any {
     },
     read: (fd: number, buf: any, off: number, len: number, pos: any, cb?: any) => {
       const fdInfo = (globalThis as any).__shiroFds?.[fd];
+      const fd0 = !fdInfo && fd === 0 ? deps.getProcess?.()?.stdin?.__fd0 : null;
+      if (fd0) {
+        // stdin as it arrives (a child's pipe: esbuild's service reads its requests so)
+        if (typeof off === 'function') { cb = off; off = 0; len = buf.length - 0; }
+        // (a callback that calls process.exit, as Go's runtime does at the end, ends the script, not the page)
+        const call = (...a: any[]) => { try { cb?.(...a); } catch (e) { if (!(e instanceof ProcessExitError)) throw e; } };
+        fd0.read(buf, off ?? 0, len ?? buf.length - (off ?? 0)).then((n: number) => call(null, n, buf), (e: any) => call(e));
+        return;
+      }
       if (!fdInfo) {
         cb?.(null, 0, buf);
         return;

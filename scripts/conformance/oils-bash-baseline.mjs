@@ -32,6 +32,9 @@ for (const [name, body] of Object.entries(helpers)) {
   chmodSync(join(bin, name), 0o755);
 }
 
+const caseDir = join(work, 'cases');
+mkdirSync(caseDir);
+
 const out = {};
 let total = 0, pass = 0;
 for (const f of files) {
@@ -39,7 +42,12 @@ for (const f of files) {
   out[f] = [];
   cases.forEach((c, i) => {
     const tmp = mkdtempSync(join(work, 'case-'));
-    const r = spawnSync('bash', ['-c', c.code], {
+    // As a script file, as the Shiro side runs it (`bash FILE`: FUNCNAME has
+    // its "main" frame, BASH_SOURCE the file; `bash -c` differs there)
+    // (outside its directory, which globs see)
+    const file = join(caseDir, `${f}-${i}.sh`);
+    writeFileSync(file, c.code);
+    const r = spawnSync('bash', [file], {
       cwd: tmp, encoding: 'utf8', timeout: 5000,
       env: { PATH: `${bin}:/usr/bin:/bin`, TMP: tmp, SH: 'bash', REPO_ROOT: OILS, HOME: tmp, LC_ALL: 'C.UTF-8' },
     });

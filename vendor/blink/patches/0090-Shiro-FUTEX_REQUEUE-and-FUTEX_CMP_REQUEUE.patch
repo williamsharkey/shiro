@@ -1,0 +1,259 @@
+From 452cb97e8bd79bd4f8037e2ab66869f8fb465d22 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 03:26:04 +0000
+Subject: [PATCH] Shiro: FUTEX_REQUEUE and FUTEX_CMP_REQUEUE
+
+---
+ blink/bus.h     |   5 ++
+ blink/linux.h   |   2 +
+ blink/syscall.c | 122 +++++++++++++++++++++++++++++++++++++++++++-----
+ 3 files changed, 118 insertions(+), 11 deletions(-)
+
+diff --git a/blink/bus.h b/blink/bus.h
+index 6667e7c..814bf9d 100644
+--- a/blink/bus.h
++++ b/blink/bus.h
+@@ -20,6 +20,11 @@ struct Futex {
+   int refs;     // threads in SysFutexWait holding it (it's freed at 0)
+   int waiters;  // of those, still waiting (a woken one leaves at once)
+   int wakeups;  // FUTEX_WAKE grants not yet taken by a waiter
++  // FUTEX_REQUEUE grants: the taker goes on waiting at requeue_to, already
++  // counted there (refs, waiters) with tickets from requeue_ticket on
++  int requeues;
++  u32 requeue_ticket;
++  i64 requeue_to;
+   // a grant goes only to a waiter that was waiting at the FUTEX_WAKE:
+   // tickets below `eligible` (`old` of them still waiting) may take one
+   u32 tickets;
+diff --git a/blink/linux.h b/blink/linux.h
+index 8357d89..79b36d0 100644
+--- a/blink/linux.h
++++ b/blink/linux.h
+@@ -231,6 +231,8 @@
+ 
+ #define FUTEX_WAIT_LINUX           0
+ #define FUTEX_WAKE_LINUX           1
++#define FUTEX_REQUEUE_LINUX        3
++#define FUTEX_CMP_REQUEUE_LINUX    4
+ #define FUTEX_WAIT_BITSET_LINUX    9
+ #define FUTEX_WAKE_BITSET_LINUX    10
+ #define FUTEX_PRIVATE_FLAG_LINUX   128
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 388b0a9..abdcdcf 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -344,9 +344,9 @@ static int SysFutexWake(struct Machine *m, i64 uaddr, u32 count) {
+     LOCK(&f->lock);
+   }
+   UNLOCK(&g_bus->futexes.lock);
+-  if (f && f->waiters > f->wakeups) {
++  if (f && f->waiters > f->wakeups + f->requeues) {
+     // wake at most `count` waiters: each takes one grant (see SysFutexWait)
+-    rc = MIN((u32)(f->waiters - f->wakeups), count);
++    rc = MIN((u32)(f->waiters - f->wakeups - f->requeues), count);
+     THR_LOGF("pid=%d tid=%d is waking %d of %d waiters at address %#" PRIx64,
+              m->system->pid, m->tid, rc, f->waiters, uaddr);
+     f->wakeups += rc;
+@@ -363,6 +363,68 @@ static int SysFutexWake(struct Machine *m, i64 uaddr, u32 count) {
+   return rc;
+ }
+ 
++static struct Futex *NewFutex(i64);
++
++// FUTEX_REQUEUE, FUTEX_CMP_REQUEUE: wakes up to `nwake` waiters at uaddr
++// and moves up to `nreq` more to uaddr2; returns how many of both. The
++// moved ones count at uaddr2 at once (a wake there finds them), and each
++// steps over when it next looks (SysFutexWait)
++static int SysFutexRequeue(struct Machine *m, i64 uaddr, u32 nwake, u32 nreq,
++                           i64 uaddr2, bool cmp, u32 val3) {
++  int avail, woke, moved;
++  struct Futex *f, *f2 = 0;
++  u8 *mem;
++  i64 key2;
++  if ((i32)nwake < 0 || (i32)nreq < 0) return einval();
++  if (!(mem = LookupAddress(m, uaddr))) return -1;
++  if (!LookupAddress(m, uaddr2)) return -1;
++  key2 = FutexKey(m, uaddr2);
++  LOCK(&g_bus->futexes.lock);
++  if (cmp && Load32(mem) != val3) {
++    UNLOCK(&g_bus->futexes.lock);
++    return eagain();
++  }
++  if (!(f = FindFutex(m, (i64)(uintptr_t)mem))) {
++    UNLOCK(&g_bus->futexes.lock);
++    return 0;
++  }
++  LOCK(&f->lock);
++  avail = MAX(0, f->waiters - f->wakeups - f->requeues);
++  woke = MIN((u32)avail, nwake);
++  moved = MIN((u32)(avail - woke), nreq);
++  f->wakeups += woke;
++  // (onto itself they stay; and one batch of moves at a time)
++  if (moved && key2 != f->addr) {
++    if (f->requeues) {
++      moved = 0;
++    } else {
++      if (!(f2 = FindFutex(m, key2)) && (f2 = NewFutex(key2))) {
++        f2->refs = f2->waiters = 0;  // no creator waiting there
++        f2->tickets = 0;
++        dll_make_first(&g_bus->futexes.active, &f2->elem);
++      }
++    }
++    if (moved && f2) {
++      LOCK(&f2->lock);
++      f->requeue_ticket = f2->tickets;
++      f2->tickets += moved;
++      f2->waiters += moved;
++      f2->refs += moved;
++      UNLOCK(&f2->lock);
++      f->requeues = moved;
++      f->requeue_to = key2;
++    } else {
++      moved = 0;
++    }
++  }
++  f->eligible = f->tickets;
++  f->old = f->waiters;
++  unassert(!pthread_cond_broadcast(&f->cond));
++  UNLOCK(&f->lock);
++  UNLOCK(&g_bus->futexes.lock);
++  return woke + moved;
++}
++
+ static void ClearChildTid(struct Machine *m) {
+ #if defined(HAVE_FORK) || defined(HAVE_THREADS)
+   _Atomic(int) *ctid;
+@@ -670,6 +732,7 @@ static struct Futex *NewFutex(i64 addr) {
+   f->refs = 1;
+   f->waiters = 1;
+   f->wakeups = 0;
++  f->requeues = 0;
+   f->tickets = 1;  // the creator's is 0
+   f->eligible = 0;
+   f->old = 0;
+@@ -733,8 +796,9 @@ static int SysFutexWait(struct Machine *m,  //
+   clockid_t clk = CLOCK_MONOTONIC;
+   struct timespec now, tick, timeout, deadline, cnow, cend;
+   int sleeping;
+-  u32 ticket;
+-  bool picked = false;
++  u32 ticket, nticket = 0;
++  i64 key, moveto = 0;
++  bool picked = false, requeued = false, leaving = false;
+   now = tick = GetTime();
+   if (timeout_addr) {
+     if (!(gtimeout = (const struct timespec_linux *)SchlepR(
+@@ -766,8 +830,12 @@ static int SysFutexWait(struct Machine *m,  //
+     UNLOCK(&g_bus->futexes.lock);
+     return eagain();
+   }
+-  ticket = 0;
+-  if ((f = FindFutex(m, (i64)(uintptr_t)mem))) {
++  key = (i64)(uintptr_t)mem;
++Join:  // (FUTEX_REQUEUE brings a waiter back here, for the target futex)
++  if (requeued) {
++    f = FindFutex(m, key);  // counted there already, so it exists
++    unassert(f);
++  } else if ((ticket = 0), (f = FindFutex(m, key))) {
+     LOCK(&f->lock);
+     ++f->refs;
+     ++f->waiters;
+@@ -775,7 +843,7 @@ static int SysFutexWait(struct Machine *m,  //
+     UNLOCK(&f->lock);
+   }
+   if (!f) {
+-    if ((f = NewFutex((i64)(uintptr_t)mem))) {
++    if ((f = NewFutex(key))) {
+       dll_make_first(&g_bus->futexes.active, &f->elem);
+     } else {
+       UNLOCK(&g_bus->futexes.lock);
+@@ -783,6 +851,7 @@ static int SysFutexWait(struct Machine *m,  //
+     }
+   }
+   UNLOCK(&g_bus->futexes.lock);
++  if (leaving) goto Leave;
+   THR_LOGF("pid=%d tid=%d is waiting at address %#" PRIx64, m->system->pid,
+            m->tid, uaddr);
+   sleeping = 0;  // told the embedder we're blocked (S in /proc) after a tick
+@@ -808,7 +877,16 @@ static int SysFutexWait(struct Machine *m,  //
+       --f->old;
+       picked = true;
+       rc = 0;
+-    } else if (Load32(mem) != expect) {
++    } else if (f->requeues > 0 && (i32)(ticket - f->eligible) < 0) {
++      // a FUTEX_REQUEUE moved us: wait on its target, timeout unchanged
++      --f->requeues;
++      --f->waiters;
++      --f->old;
++      picked = true;
++      moveto = f->requeue_to;
++      nticket = f->requeue_ticket++;
++      rc = 0;
++    } else if (!requeued && Load32(mem) != expect) {
+       rc = 0;  // changed (polling stands in for a wake we couldn't see)
+     } else {
+       tick = AddTime(tick, FromMilliseconds(kPollingMs));
+@@ -826,28 +904,45 @@ static int SysFutexWait(struct Machine *m,  //
+     }
+   } while (rc == ETIMEDOUT && CompareTime(cnow, cend) < 0);
+   if (sleeping) ShiroSleeping(m, -1);
++  sleeping = 0;
++Leave:
+   LOCK(&g_bus->futexes.lock);
+   LOCK(&f->lock);
+   if (!picked) {
+     if ((i32)(ticket - f->eligible) < 0) {
++      --f->old;
+       if (rc == ETIMEDOUT && f->wakeups > 0) {
+         --f->wakeups;  // woken just as the wait ran out: count it as a wake
+         rc = 0;
++      } else if (f->requeues > 0 && f->requeues > f->old - f->wakeups) {
++        // a move meant for a waiter that's leaving: it steps over to the
++        // target (where it is counted) only to leave from there
++        --f->requeues;
++        moveto = f->requeue_to;
++        nticket = f->requeue_ticket++;
++        leaving = true;
+       }
+-      --f->old;
+     }
+     --f->waiters;
+   }
+   if (f->wakeups > f->old) f->wakeups = f->old;  // grants for waiters gone
++  if (f->requeues > f->old - f->wakeups) f->requeues = f->old - f->wakeups;
+   if (!--f->refs) {
+     dll_remove(&g_bus->futexes.active, &f->elem);
+     UNLOCK(&f->lock);
+     FreeFutex(f);
+-    UNLOCK(&g_bus->futexes.lock);
+   } else {
+     UNLOCK(&f->lock);
+-    UNLOCK(&g_bus->futexes.lock);
+   }
++  if (moveto) {
++    key = moveto;
++    ticket = nticket;
++    moveto = 0;
++    picked = false;
++    requeued = true;
++    goto Join;  // with the bus lock held
++  }
++  UNLOCK(&g_bus->futexes.lock);
+   if (rc) {
+     errno = rc;
+     rc = -1;
+@@ -877,6 +972,11 @@ static int SysFutex(struct Machine *m,  //
+     case FUTEX_WAKE_BITSET_LINUX:
+       if (!val3) return einval();
+       return SysFutexWake(m, uaddr, val);
++    case FUTEX_REQUEUE_LINUX:
++    case FUTEX_CMP_REQUEUE_LINUX:
++      if (uaddr2 & 3) return efault();
++      return SysFutexRequeue(m, uaddr, val, (u32)timeout_addr, uaddr2,
++                             op == FUTEX_CMP_REQUEUE_LINUX, val3);
+     default:
+       LOGF("unsupported %s op %#x", "futex", op);
+       return einval();
+-- 
+2.43.0
+

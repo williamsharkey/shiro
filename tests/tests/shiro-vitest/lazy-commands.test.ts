@@ -668,8 +668,11 @@ describe('Lazy-Loaded Commands', () => {
         args: ['-e', 'print("hello")'],
         fs, cwd: '/home/user', env: {}, stdin: '', stdout: '', stderr: '', shell,
       };
-      const code = await luaCmd.exec(ctx);
-      // CDN load will fail in test env
+      // Simulate being offline: the package mirror is unreachable
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = (async () => { throw new TypeError('fetch failed (offline in this test)'); }) as typeof fetch;
+      let code: number;
+      try { code = await luaCmd.exec(ctx); } finally { globalThis.fetch = realFetch; }
       expect(code).toBe(1);
       expect(ctx.stderr).toContain('lua');
     });
@@ -806,6 +809,34 @@ describe('Lazy-Loaded Commands', () => {
       // CDN load will fail in test env
       expect(code).toBe(1);
       expect(ctx.stderr).toContain('convert');
+    });
+
+    it('reads the command line as ImageMagick does: settings before images, pseudo-images, operators after', async () => {
+      const { parseCommandLine, magickCmd } = await import('@shiro/commands/magick');
+      const p = parseCommandLine(['-size', '600x120', 'xc:white', '-fill', 'navy', '-pointsize', '32', '-gravity', 'center', '-annotate', '+0+0', 'Hello world', '+repage', 'gradient:red-blue', '-append', 't.png']);
+      expect(p).toEqual({
+        output: 't.png',
+        steps: [
+          { kind: 'setting', name: 'size', plus: false, value: '600x120' },
+          { kind: 'read', spec: 'xc:white' },
+          { kind: 'setting', name: 'fill', plus: false, value: 'navy' },
+          { kind: 'setting', name: 'pointsize', plus: false, value: '32' },
+          { kind: 'setting', name: 'gravity', plus: false, value: 'center' },
+          { kind: 'op', name: 'annotate', plus: false, args: ['+0+0', 'Hello world'] },
+          { kind: 'op', name: 'repage', plus: true, args: [] },
+          { kind: 'read', spec: 'gradient:red-blue' },
+          { kind: 'op', name: 'append', plus: false, args: [] },
+        ],
+      });
+      // IM6's bare -grayscale, and IM7's with a method
+      expect(parseCommandLine(['in.png', '-grayscale', 'out.png'])).toMatchObject({ steps: [{ kind: 'read' }, { kind: 'op', name: 'grayscale', args: [] }] });
+      expect(parseCommandLine(['in.png', '-grayscale', 'Rec709Luma', 'out.png'])).toMatchObject({ steps: [{ kind: 'read' }, { kind: 'op', name: 'grayscale', args: ['Rec709Luma'] }] });
+      expect(parseCommandLine(['-size', '10x10', 'xc:white', '-bogus', 'x.png'])).toEqual({ error: "unrecognized option `-bogus'" });
+      expect(parseCommandLine(['-size', 'x.png'])).toEqual({ error: "option requires an argument `-size'" });
+      // an option is never taken for an input file (it was: "open '/tmp/-size'")
+      const ctx = { args: ['-size', '600x120', 'xc:white', '-wobble', 't.png'], fs, cwd: '/tmp', env: {}, stdin: '', stdout: '', stderr: '', shell };
+      expect(await magickCmd.exec(ctx)).toBe(1);
+      expect(ctx.stderr).toBe("magick: unrecognized option `-wobble'.\n");
     });
 
     it('magick identify should fail gracefully (test env)', async () => {
