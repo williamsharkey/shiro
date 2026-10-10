@@ -172,6 +172,10 @@ const haveRaiseKill = blinkHasRaiseKill && tryBuild('gcc', ['-static', '-O1', '-
 const aioSigqueueBin = join(out, 'aio-sigqueue');
 const blinkHasSigqueue = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_sigqueue');
 const haveAioSigqueue = blinkHasSigqueue && tryBuild('gcc', ['-static', '-O1', '-w', '-o', aioSigqueueBin, 'aio-sigqueue.c', '-lrt', '-pthread']);
+// Blink 0086: POSIX message queues are the kernel's
+const mqueueBin = join(out, 'mqueue');
+const blinkHasMqueue = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_mqueue');
+const haveMqueue = blinkHasMqueue && tryBuild('gcc', ['-static', '-O1', '-w', '-o', mqueueBin, 'mqueue.c', '-lrt', '-pthread']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -668,6 +672,13 @@ it.skipIf(!haveAioSigqueue)('POSIX AIO completes and sigqueue delivers', async (
   const { shell } = await setup(readFileSync(aioSigqueueBin));
   const r = await run(shell, './prog');
   expect(r.output.replace(/\r\n/g, '\n')).toBe('aio 0 9 sigqueue 0 1 probe 0\n');
+}, 60_000);
+
+// Open POSIX mq_*: priority order, a full queue, a receive blocked across processes, unlink
+it.skipIf(!haveMqueue)('POSIX message queues', async () => {
+  const { shell } = await setup(readFileSync(mqueueBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('full 1 first high/7 second low/1 blocked 1 unlink 1\n');
 }, 60_000);
 
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink

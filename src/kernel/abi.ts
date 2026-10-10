@@ -605,6 +605,13 @@ export const NR_OPEN = 1048576;
 export const RLIMIT_NOFILE = 7;
 export const SYS_prlimit64 = 302;
 export const SYS_memfd_create = 319;
+/** POSIX message queues (src/kernel/mqueue.ts) */
+export const SYS_mq_open = 240;
+export const SYS_mq_unlink = 241;
+export const SYS_mq_timedsend = 242;
+export const SYS_mq_timedreceive = 243;
+export const SYS_mq_notify = 244;
+export const SYS_mq_getsetattr = 245;
 export const MFD_CLOEXEC = 1;
 export const MFD_ALLOW_SEALING = 2;
 

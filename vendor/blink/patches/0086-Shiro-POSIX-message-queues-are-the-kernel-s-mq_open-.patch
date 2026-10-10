@@ -1,0 +1,83 @@
+From 08912ea91580a5e72c8699f7723b83c8579fe31d Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 02:59:02 +0000
+Subject: [PATCH] Shiro: POSIX message queues are the kernel's (mq_open ...
+ mq_getsetattr)
+
+Conformance (Open POSIX mq_*): mq_open, mq_unlink, mq_timedsend,
+mq_timedreceive, mq_notify and mq_getsetattr were ENOSYS; they go to the
+kernel's queues (unix/conformance src/kernel/mqueue.ts), where sends and
+receives block (a signal interrupts them). mq_open copies the name and
+the struct mq_attr, mq_timedsend the message and the deadline,
+mq_timedreceive copies the message and its priority out. Exports
+blink_shiro_mqueue (x86-engine test fixtures/x86/mqueue.c).
+---
+ blink/shiro.inc | 45 +++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 45 insertions(+)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 89ea4b5..0e9ed8e 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2219,6 +2219,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_conformance(void) { return 1; }
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_raise_kill(void) { return 1; }
+ // 0084: rt_sigqueueinfo is the kernel's (sigqueue, POSIX AIO)
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_sigqueue(void) { return 1; }
++// 0086: POSIX message queues are the kernel's
++EMSCRIPTEN_KEEPALIVE int blink_shiro_mqueue(void) { return 1; }
+ 
+ // the kernel signalled hosted child `pid` (host.mjs routes by pid)
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid(int pid, int sig) {
+@@ -2874,6 +2876,49 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       if (r >= 0 && old && CopyToUserWrite(m, old, lim, 16) == -1) r = -EFAULT_LINUX;
+       break;
+     }
++    // POSIX message queues are the kernel's (mq_send/mq_receive block there;
++    // names come without glibc's leading '/')
++    case 0x0F0: {                                                     // mq_open
++      char *buf = (char *)ShiroAlloc(m, 4096 + 32);
++      int n = ShiroPath(m, a, buf, 0);
++      if (n < 0) { r = n; break; }
++      if (d && CopyFromUserRead(m, buf + n, d, 32) == -1) { r = -EFAULT_LINUX; break; }
++      r = ShiroCall(m, 240, A12(n, (int)b, (int)c, d ? 1 : 0), buf, n + (d ? 32 : 0), 0, false, false);
++      break;
++    }
++    case 0x0F1: r = ShiroPathCall(m, 241, a, 0, 0, 0); break;         // mq_unlink
++    case 0x0F2: {                                                     // mq_timedsend
++      u8 *buf;
++      if (c > (u64)g_shiro_chunk - 16) { r = -EMSGSIZE_LINUX; break; }
++      buf = (u8 *)ShiroAlloc(m, c + 16);
++      if (c && CopyFromUserRead(m, buf, b, c) == -1) { r = -EFAULT_LINUX; break; }
++      if (e && CopyFromUserRead(m, buf + c, e, 16) == -1) { r = -EFAULT_LINUX; break; }
++      r = ShiroCall(m, 242, A12((int)a, (int)c, (int)d, e ? 1 : 0), buf, c + (e ? 16 : 0), 0, true, true);
++      break;
++    }
++    case 0x0F3: {                                                     // mq_timedreceive
++      u8 *buf;
++      u64 len = MIN(c, (u64)g_shiro_chunk - 8);
++      buf = (u8 *)ShiroAlloc(m, len + 8);
++      if (e && CopyFromUserRead(m, buf, e, 16) == -1) { r = -EFAULT_LINUX; break; }
++      r = ShiroCall(m, 243, A12((int)a, (int)len, e ? 1 : 0), buf, e ? 16 : 0, len + 8, true, true);
++      if (r >= 0 && ((r && CopyToUserWrite(m, b, buf + 8, r) == -1) ||
++                     (d && CopyToUserWrite(m, d, buf, 4) == -1))) r = -EFAULT_LINUX;
++      break;
++    }
++    case 0x0F4: {                                                     // mq_notify
++      u8 sev[16];
++      if (b && CopyFromUserRead(m, sev, b, 16) == -1) { r = -EFAULT_LINUX; break; }
++      r = ShiroCall(m, 244, A12((int)a, b ? 1 : 0), sev, b ? 16 : 0, 0, false, false);
++      break;
++    }
++    case 0x0F5: {                                                     // mq_getsetattr
++      u8 at[32];
++      if (b && CopyFromUserRead(m, at, b, 32) == -1) { r = -EFAULT_LINUX; break; }
++      r = ShiroCall(m, 245, A12((int)a, b ? 1 : 0), at, b ? 32 : 0, 32, false, false);
++      if (r >= 0 && c && CopyToUserWrite(m, c, at, 32) == -1) r = -EFAULT_LINUX;
++      break;
++    }
+     case 0x081: case 0x129: {                                         // rt_sigqueueinfo, rt_tgsigqueueinfo
+       // The kernel delivers it as kill(2) does (signal 0 checks the target
+       // exists): glibc's sigqueue, and POSIX AIO's completion notice (an
+-- 
+2.43.0
+
