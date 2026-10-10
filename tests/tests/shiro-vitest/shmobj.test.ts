@@ -242,3 +242,51 @@ describe('SharedObjects: a memfd passed between instances', () => {
     expect(new TextDecoder().decode(d.subarray(0, 6))).toBe('Jello!');
   });
 });
+
+describe('SharedObjects: a /dev/shm file mapped remote', () => {
+  // conformance's report: shm_open, ftruncate, mmap MAP_SHARED, p[1] = 'a', munmap, pread
+  it('pread sees the mapping, the mapping sees pwrite, an fd opened later too; the bytes stay after the last unmap', async () => {
+    const { fs } = await createTestShell();
+    const kernel = new Kernel({ fs, registerWithProcessTable: false });
+    const inbox: Record<number, ShmObjMessage[]> = {};
+    const ia = kernel.registerEngineInstance((m) => (inbox[ia] ??= []).push(m));
+    const a = kernel.spawn({ path: 'p', cwd: '/tmp', uid: 1000, run: () => new Promise<number>(() => {}) });
+    a.data.engineInstance = ia;
+    await fs.mkdir('/dev/shm', { recursive: true }).catch(() => {});
+    await fs.writeFile('/dev/shm/coh', new Uint8Array(12288));
+    const d = new Uint8Array(256);
+    const open = async () => {
+      const e = new TextEncoder().encode('/dev/shm/coh'); d.set(e);
+      return kernel.syscall(a, A.SYS_openat, [A.AT_FDCWD, e.length, A.O_RDWR, 0], d);
+    };
+    const pread = async (fd: number, off: number) => {
+      const b = new Uint8Array(1);
+      return (await kernel.syscall(a, A.SYS_pread64, [fd, 1, off, 0], b)) === 1 ? String.fromCharCode(b[0]) : '?';
+    };
+    const fd = await open();
+    const out = new Uint8Array(8);
+    const id = await kernel.syscall(a, A.SYS_shiro_shmobj_map, [fd, A.SHMOBJ_EAGER, 12288, 0], out);
+    expect(new DataView(out.buffer).getInt32(0, true)).toBe(1);
+    const sab = (inbox[ia][0] as { sab: SharedArrayBuffer }).sab;
+    const mem = new Uint8Array(sab);
+    mem[1] = 0x61; // 'a' through the mapping
+    expect(await pread(fd, 1)).toBe('a');
+    d[0] = 0x77; // 'w' through the fd
+    expect(await kernel.syscall(a, A.SYS_pwrite64, [fd, 1, 2, 0], d)).toBe(1);
+    expect(mem[2]).toBe(0x77);
+    // shm_open, mmap, close, then shm_open again: the new inode reads the mapping too
+    expect(await kernel.syscall(a, A.SYS_close, [fd], d)).toBe(0);
+    mem[3] = 0x7a; // 'z'
+    const fd2 = await open();
+    expect(await pread(fd2, 3)).toBe('z');
+    // munmap: the fd keeps the final bytes (the pwrite included), and so does the file
+    expect(await kernel.syscall(a, A.SYS_shiro_shmobj_unmap, [id], d)).toBe(0);
+    mem.fill(0, 0, 8); // no longer the file's memory
+    expect([await pread(fd2, 1), await pread(fd2, 2), await pread(fd2, 3)].join('')).toBe('awz');
+    expect(await kernel.syscall(a, A.SYS_close, [fd2], d)).toBe(0);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(Array.from((await fs.readFile('/dev/shm/coh') as Uint8Array).subarray(1, 4))).toEqual([0x61, 0x77, 0x7a]);
+    await kernel.engineInstanceGone(ia);
+    kernel.dispose();
+  });
+});

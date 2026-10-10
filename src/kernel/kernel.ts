@@ -22,7 +22,7 @@ import { elfInterpreter } from '../elf-interp';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
   RegularFile, DirFile, abortableWait, openInode, openInodeSync, isInodeOpen, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
-  shareInodeNumber, forgetInodeNumber, renameLinkName, linkCount, writeBackAll,
+  shareInodeNumber, forgetInodeNumber, renameLinkName, linkCount, writeBackAll, attachInodeShared,
 } from './fd';
 import { createPipe, Pipe, PipeEnd, FifoRdWr } from './pipe';
 import type { PtyFile } from './pty';
@@ -2052,6 +2052,8 @@ export class Kernel {
               const b = await fs.readFile(path);
               return typeof b === 'string' ? new TextEncoder().encode(b) : b;
             };
+            // While remote, the file's fds read and write the buffer (not the control page)
+            onRemote = (sab) => attachInodeShared(fs, path, sab, sab.byteLength - CONTROL_BYTES);
             writeBack = async (b) => { if (!writeInodeBytes(fs, path, b) && await fs.exists(path)) await fs.writeFile(path, b); };
           } else if (kind === 1) {
             const seg = this.shm.list().find((x) => x.id === args[0]);
