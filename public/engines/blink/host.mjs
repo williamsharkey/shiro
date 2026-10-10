@@ -797,6 +797,11 @@ async function run(msg) {
         }
         for (const k of Object.keys(M.ENV)) delete M.ENV[k];
         Object.assign(M.ENV, msg.env || {});
+        // The guest's environment is the kernel's, nothing more: emscripten
+        // adds its defaults (PATH=/, USER=web_user, HOME, LANG, PWD, LOGNAME,
+        // _) unless ENV holds the key as undefined (LTP execve01: env -i, or
+        // execve from a fork child, got PATH=/)
+        for (const k of ['USER', 'LOGNAME', 'PATH', 'PWD', 'HOME', 'LANG', '_']) if (!(k in M.ENV)) M.ENV[k] = undefined;
         try { FS.chdir(msg.cwd || '/'); } catch { /* cwd missing: stay at / */ }
       }],
     });

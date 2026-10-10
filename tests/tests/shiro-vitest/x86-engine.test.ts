@@ -71,6 +71,8 @@ const shmobjBin = join(out, 'shmobj');
 const haveShmobj = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', shmobjBin, 'shmobj.c']);
 const shmoddBin = join(out, 'shmodd');
 const haveShmodd = tryBuild('gcc', ['-static', '-O1', '-o', shmoddBin, 'shmodd.c']);
+const execenvBin = join(out, 'execenv');
+const haveExecenv = tryBuild('gcc', ['-static', '-O1', '-o', execenvBin, 'execenv.c']);
 const shmpreadBin = join(out, 'shmpread');
 const haveShmpread = tryBuild('gcc', ['-static', '-O1', '-o', shmpreadBin, 'shmpread.c']);
 const fsidentBin = join(out, 'fsident');
@@ -1521,6 +1523,13 @@ describe('Blink engine: CPU and syscall fixes', () => {
       "anon after fork 'c' munmap rounded 0\nshm after close 'qwerty' mapped 'qwerty'\ndone\nrc 0\n";
     expect(r.output.replace(/\r\n/g, '\n')).toBe(ok + ok);
   }, 120_000);
+
+  // execve's envp is the new program's whole environment (LTP execve01)
+  it.skipIf(!haveExecenv)('execve passes exactly the envp it was given', async () => {
+    const { shell } = await setup(readFileSync(execenvBin));
+    const r = await run(shell, './prog; env -i ./prog; ./prog fork; ./prog self');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('child env 1 PATH (none) ONLY 1\n'.repeat(4));
+  }, 60_000);
 
   // The fd and the mapping of a /dev/shm object are one file (conformance's report, Open POSIX shm_open)
   it.skipIf(!haveShmpread)('a /dev/shm object: pread sees the mapping, the mapping sees pwrite, an fd opened while mapped too', async () => {

@@ -3062,8 +3062,19 @@ export class Kernel {
   /** SYS_shiro_execve (see abi.ts). */
   private async sysExecve(proc: Process, req: { path: string; argv?: string[]; env?: string[]; inproc?: boolean }, data: Uint8Array): Promise<number> {
     if (!req || typeof req.path !== 'string' || !req.path) return -A.ENOENT;
-    const path = this.resolvePath(proc, req.path);
-    if (typeof path === 'number') return path;
+    const resolved = this.resolvePath(proc, req.path);
+    if (typeof resolved === 'number') return resolved;
+    let path: string = resolved;
+    // /proc/self/exe and /proc/PID/fd/N: the file they name (the engine loads
+    // the path it gets back, and /proc isn't a directory it can read)
+    for (let hops = 0; hops < 8 && path.startsWith('/proc/'); hops++) {
+      const t = this.procfs.readlink(proc, path);
+      if (typeof t !== 'string') break;
+      // (exe as readlink gives it: absolute and resolved, however the program was started)
+      const next = /^\/proc\/[^/]+\/exe$/.test(path) ? await this.exePath(proc, path, t) : t.startsWith('/') ? t : `/proc/${t}`;
+      if (next === path) break;
+      path = next;
+    }
     const st = await this.statPath(proc, path);
     // A Shiro command under /bin, /usr/bin, ... (sh, env, ls) has no file but runs
     // A Shiro command with no file anywhere runs as /bin/NAME and /usr/bin/NAME.
