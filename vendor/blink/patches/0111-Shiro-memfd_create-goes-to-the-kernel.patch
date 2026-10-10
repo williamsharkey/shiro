@@ -1,7 +1,7 @@
 From 034eb4659d7651a3878eab4b5d4452ec43b0e13c Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 07:33:28 +0000
-Subject: [PATCH] Shiro: memfd_create goes to the kernel
+Subject: [PATCH 111/111] Shiro: memfd_create goes to the kernel
 
 ---
  blink/shiro.inc | 11 ++++++++++-
