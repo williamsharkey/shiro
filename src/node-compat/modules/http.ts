@@ -11,6 +11,7 @@ export interface HttpDeps {
   iframeServer: {
     serve: (port: number, handler: (req: any) => Promise<any>, label: string, opts?: { connect?: (c: any) => void }) => () => void;
     createIframe: (port: number, container: any, opts: { height: string }) => Promise<any>;
+    isPortInUse?: (port: number) => boolean;
   };
   fakeConsole: { log: (...args: any[]) => void; warn: (...args: any[]) => void };
   getBuiltinModule: (name: string) => any;
@@ -34,17 +35,17 @@ function _createHttpOrHttpsModule(deps: HttpDeps, isHttps: boolean): any {
     host: iframeServer,
     getBuiltinModule,
     isHttps,
-    log: (m) => fakeConsole.log(m),
-    // A split-view preview pane for each new server
+    // Nothing in the program's own output: real node prints nothing when a server listens
+    log: () => {},
+    // A split-view preview pane for a server that stays up (not one a script starts, uses and closes)
     onListen: (port) => {
-      try {
-        if (typeof document !== 'undefined') {
-          import('../../split-view').then(({ createSplitView }) => {
-            createSplitView({ port, direction: 'right', title: `Server :${port}` });
-            fakeConsole.log('Browser window opened');
-          }).catch((err: Error) => fakeConsole.warn('Could not open browser:', err.message));
-        }
-      } catch { /* no DOM */ }
+      if (typeof document === 'undefined') return;
+      setTimeout(() => {
+        if (iframeServer.isPortInUse?.(port) === false) return;
+        import('../../split-view').then(({ createSplitView }) => {
+          createSplitView({ port, direction: 'right', title: `Server :${port}` });
+        }).catch(() => { /* no desktop to show it in */ });
+      }, 1000);
     },
   });
   const createServer = serverApi.createServer;

@@ -20,6 +20,7 @@ import { isClaudeCodeScript, patchClaudeCodeSource } from '../claude-code-versio
 import { createAutoStubFactory } from './auto-stub';
 import { createRequireFunction, compileAsyncModule, esmNamespace } from './require';
 import { createExpressFactory } from './shims/express';
+import { awaitSyncCalls } from './sync-await';
 import { createSqliteShim } from './shims/sqlite';
 import { createPathModule } from './modules/path';
 import { createOsModule } from './modules/os';
@@ -256,8 +257,16 @@ export async function executeNodeScript(
      * Worker object (messages structured-cloned, delivered as tasks). Enough
      * for pools that hand a worker jobs by message (pnpm's store workers).
      */
+    let evalWorkers = 0;
     function startWorker(filename: string, options: any, worker: any): void {
-      const file = filename.startsWith('file://') ? decodeURIComponent(new URL(filename).pathname) : ctx.fs.resolvePath(filename, ctx.cwd);
+      // { eval: true }: the "filename" is the worker's code, run as a CommonJS module from here
+      let file: string;
+      if (options?.eval) {
+        file = ctx.fs.resolvePath(`[worker eval ${++evalWorkers}].js`, ctx.cwd);
+        fileCache.set(file, String(filename));
+      } else {
+        file = filename.startsWith('file://') ? decodeURIComponent(new URL(filename).pathname) : ctx.fs.resolvePath(filename, ctx.cwd);
+      }
       const mainWT = getBuiltinModule('worker_threads');
       const parentPort: any = mainWT._makeEmitter({});
       let alive = true;
@@ -303,6 +312,8 @@ export async function executeNodeScript(
       transformedCode = transformJSX(transformedCode);
     }
     transformedCode = transformESModules(transformedCode);
+    // spawnSync/execSync results are read right away: await them where the script can
+    if (!isClaudeCodeScript(scriptPath)) transformedCode = awaitSyncCalls(transformedCode);
 
     // Stash real browser console on globalThis so injected code can use it
     if (code.length > 500000) {
@@ -467,7 +478,22 @@ export async function executeNodeScript(
             return resp;
           });
         }
-        return _origFetch(input, init);
+        // A site without CORS headers fails in the page ("Failed to fetch"), not in node:
+        // the request again over the TCP relay, as curl does (commands/relay-fetch.ts)
+        return _origFetch(input, init).catch(async (e: unknown) => {
+          const target = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url;
+          const { relayAvailable, relayFetch } = await import('../commands/relay-fetch');
+          const crossOrigin = /^https?:/.test(target) && typeof location !== 'undefined' && new URL(target).origin !== location.origin;
+          if (!(e instanceof TypeError) || !crossOrigin || !relayAvailable() || init?.signal?.aborted) throw e;
+          const req = input instanceof Request ? input : null;
+          return relayFetch(target, {
+            method: init?.method ?? req?.method,
+            headers: init?.headers ?? req?.headers,
+            body: init?.body ?? (req && req.method !== 'GET' && req.method !== 'HEAD' ? new Uint8Array(await req.clone().arrayBuffer()) : undefined),
+            redirect: init?.redirect ?? req?.redirect,
+            signal: init?.signal ?? req?.signal,
+          });
+        });
       };
       // Patch XMLHttpRequest prototype
       if (_origXHR && !(XMLHttpRequest.prototype as any)._shiroProxied) {

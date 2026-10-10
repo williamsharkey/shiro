@@ -323,7 +323,7 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
         _exited = false;
         constructor(filename: string | URL, options?: any) {
           makeEmitter(this);
-          if (deps.startWorker && !options?.eval) {
+          if (deps.startWorker) {
             deps.startWorker(String(filename), options ?? {}, this);
             return;
           }
