@@ -483,7 +483,11 @@ describe('X11 protocol', () => {
     expect(glx.glxEnabled()).toBe(false);
     glx.enableGLX();
     expect(glx.glxEnabled()).toBe(true);
-    const [present, major] = await query();
+    c.send(98, 0, (w) => w.u16(3).u16(0).str('GLX'));
+    const q = await c.reply(); q.skip(8);
+    const [present, major] = [q.u8(), q.u8()];
+    q.u8();
+    const firstError = q.u8();
     expect(present).toBe(1);
     c.send(major, 7, (w) => w.u32(1).u32(4));                  // QueryVersion
     const v = await c.reply(); v.skip(8);
@@ -496,6 +500,16 @@ describe('X11 protocol', () => {
     };
     expect(await serverString(0x20f6)).toBe('tabcomputer');    // GLX_VENDOR_NAMES_EXT: glvnd loads libGLX_tabcomputer
     expect(await serverString(2)).toBe('1.4');
+    expect((await serverString(3)).split(' ')).toContain('GLX_EXT_libglvnd');   // without it glvnd loads libGLX_indirect
+    createWindow(c, c.id(1), 0, 0, 120, 90, 0);
+    c.send(major, 29, (w) => w.u32(c.id(1)));                  // GetDrawableAttributes: glvnd finds the drawable's screen
+    const a = await c.reply(); a.skip(8);
+    const n = a.u32(); a.skip(20);
+    const attrs = new Map<number, number>();
+    for (let i = 0; i < n; i++) attrs.set(a.u32(), a.u32());
+    expect([attrs.get(0x800c), attrs.get(0x801d), attrs.get(0x801e)]).toEqual([0, 120, 90]);
+    c.send(major, 29, (w) => w.u32(c.id(77)));
+    await expect(c.reply()).rejects.toThrow(`X error ${firstError + 2} `);   // GLXBadDrawable
     c.send(major, 20, (w) => w.u32(1).u32(4).u32(0));          // ClientInfo: no reply, no error
     c.send(major, 3, (w) => w.u32(c.id(9)).u32(0x21).u32(0).u32(0).u8(1).zero(3)); // CreateContext
     await expect(c.reply()).rejects.toThrow(/X error 1 /);
