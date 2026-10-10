@@ -1,0 +1,40 @@
+From 4399cc2afb7f8daf6d5444b59ebf4f012e70f272 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 02:08:39 +0000
+Subject: [PATCH 78/82] Shiro: a failed assertion's text reaches the embedder
+
+AssertFailed hands its text to the main runtime thread (Module.shiroNote)
+before aborting: a guest thread's stderr never reached host.mjs's printErr,
+so 'blink: aborted' came without the assertion (debian's dpkg aborts).
+---
+ blink/assert.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/blink/assert.c b/blink/assert.c
+index fe00047..82d7387 100644
+--- a/blink/assert.c
++++ b/blink/assert.c
+@@ -22,6 +22,9 @@
+ #include <stdio.h>
+ 
+ #include "blink/debug.h"
++#ifdef __EMSCRIPTEN__
++#include <emscripten.h>
++#endif
+ #include "blink/flag.h"
+ #include "blink/log.h"
+ #include "blink/machine.h"
+@@ -44,6 +47,10 @@ void AssertFailed(const char *file, int line, const char *msg) {
+              DescribeHostErrno(errno), GetBacktrace(g_machine),
+              GetBlinkBacktrace());
+     WriteErrorString(bp);
++#ifdef __EMSCRIPTEN__
++    // the embedder's abort report: a thread's stderr doesn't reach it
++    MAIN_THREAD_EM_ASM({ if (Module['shiroNote']) Module['shiroNote'](UTF8ToString($0)); }, bp);
++#endif
+   }
+   Abort();
+ }
+-- 
+2.43.0
+
