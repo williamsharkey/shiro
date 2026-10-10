@@ -203,9 +203,39 @@ export async function executeNodeScript(
     function getBuiltinModule(name: string): any | null {
       const cacheKey = name.startsWith('node:') ? name.slice(5) : name;
       if (_builtinCache.has(cacheKey)) return _builtinCache.get(cacheKey);
-      const mod = _getBuiltinModuleImpl(name);
+      let mod = _getBuiltinModuleImpl(name);
+      // A worker_threads thread (a guest of its own): its parentPort talks to the Worker in the parent
+      if (mod && cacheKey === 'worker_threads' && guest?.thread) mod = threadSide(mod, guest.thread);
       if (mod !== null) _builtinCache.set(cacheKey, mod);
       return mod;
+    }
+    /** What keeps this script running for worker_threads: ref'd Workers it started, or (a thread) a parentPort listened to */
+    const liveWorkers = new Set<any>();
+    let parentPortAlive = () => false;
+    const threadsAlive = () => liveWorkers.size > 0 || parentPortAlive();
+    function threadSide(mainWT: any, t: NonNullable<typeof guest>['thread'] & object): any {
+      const parentPort: any = mainWT._makeEmitter({});
+      let refd = true, closed = false;
+      parentPort.postMessage = (v: any) => { if (!closed) t.post(v); };
+      parentPort.start = () => {};
+      parentPort.close = () => { closed = true; parentPort.emit('close'); };
+      parentPort.ref = () => { refd = true; return parentPort; };
+      parentPort.unref = () => { refd = false; return parentPort; };
+      // As a MessagePort: messages wait until something listens for them, then come a tick later
+      const queued: unknown[] = [];
+      let flushing = false;
+      const flush = () => {
+        if (flushing || closed || !parentPort.listenerCount('message') || !queued.length) return;
+        flushing = true;
+        _baseST(() => { flushing = false; while (queued.length && parentPort.listenerCount('message') && !closed) parentPort.emit('message', queued.shift()); }, 0);
+      };
+      for (const k of ['on', 'addListener', 'once', 'prependListener']) {
+        const orig = parentPort[k];
+        if (typeof orig === 'function') parentPort[k] = (ev: string, fn: any) => { const r = orig(ev, fn); if (ev === 'message') flush(); return r; };
+      }
+      t.onMessage((v) => { queued.push(v); flush(); });
+      parentPortAlive = () => !closed && refd && parentPort.listenerCount('message') > 0;
+      return { ...mainWT, isMainThread: false, parentPort, workerData: t.workerData, threadId: t.threadId };
     }
     function _getBuiltinModuleImpl(name: string): any | null {
       switch (name) {
@@ -280,6 +310,31 @@ export async function executeNodeScript(
      */
     let evalWorkers = 0;
     function startWorker(filename: string, options: any, worker: any): void {
+      if (guest?.startThread) {
+        // A kernel guest: the worker is a thread of this process, running in parallel
+        const target = options?.eval ? String(filename)
+          : filename.startsWith('file://') ? decodeURIComponent(new URL(filename).pathname) : ctx.fs.resolvePath(String(filename), ctx.cwd);
+        const env = options?.env && typeof options.env === 'object' ? Object.fromEntries(Object.entries(options.env).map(([k, v]) => [k, String(v)])) : undefined;
+        const h = guest.startThread(target, { threadId: worker.threadId, eval: !!options?.eval, workerData: options?.workerData, argv: options?.argv?.map(String), env }, {
+          online: () => worker.emit('online'),
+          message: (v) => { if (!worker._exited) worker.emit('message', v); },
+          error: (e) => {
+            const err = Object.assign(new Error(e.message), { stack: e.stack ?? e.message });
+            if (worker.listenerCount('error')) worker.emit('error', err);
+            else stderrBuf.push(e.message + '\n');
+          },
+          exit: (code) => {
+            liveWorkers.delete(worker);
+            if (!worker._exited) { worker._exited = true; worker.emit('exit', code); }
+          },
+        });
+        liveWorkers.add(worker);
+        worker._toWorker = (v: any) => h.post(v);
+        worker._terminate = () => { liveWorkers.delete(worker); h.terminate(); };
+        worker.ref = () => { if (!worker._exited) liveWorkers.add(worker); return worker; };
+        worker.unref = () => { liveWorkers.delete(worker); return worker; };
+        return;
+      }
       // { eval: true }: the "filename" is the worker's code, run as a CommonJS module from here
       let file: string;
       if (options?.eval) {
@@ -613,7 +668,7 @@ export async function executeNodeScript(
     const _intervalIds = new Set<any>();
     const _refdIntervals = new Set<any>(); // a guest's ref'd intervals: activity, as in node
     // (and its open sockets and servers)
-    const intervalsAlive = () => _refdIntervals.size > 0 || !!guest?.busy?.();
+    const intervalsAlive = () => _refdIntervals.size > 0 || !!guest?.busy?.() || threadsAlive();
     if (code.length <= 500000) {
       const settle = () => { if (_activeTimers <= 0 && _timersResolve) { _timersResolve(); _timersResolve = null; _timersDone = null; } };
       globalThis.setTimeout = _st.installedSetTimeout = function(fn: any, ms?: number, ...args: any[]) {
