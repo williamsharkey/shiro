@@ -327,6 +327,7 @@ describe('SharedObjects: a /dev/shm file mapped remote', () => {
     expect(await pread(fd2, HI + 3)).toBe('z');
     expect(await kernel.syscall(a, A.SYS_shiro_shmobj_unmap, [id], d)).toBe(0);
     mem.fill(0, HI, HI + 8); // no longer the file's memory
+    expect((a.fds.get(fd2) as any).ino.blob).toBeTruthy(); // pages again, not a whole copy
     expect([await pread(fd2, HI), await pread(fd2, HI + 1), await pread(fd2, HI + 2), await pread(fd2, HI + 3)].join('')).toBe('pawz');
     expect(await pwrite(fd2, SZ - 1, 'e')).toBe(1); // still writable after the detach
     expect(await kernel.syscall(a, A.SYS_close, [fd2], d)).toBe(0);

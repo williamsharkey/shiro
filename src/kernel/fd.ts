@@ -641,10 +641,21 @@ class Inode {
     this.dirtyPages.clear();
     this.zeroFrom = Infinity;
     this.data = view;
-    if (unwritten) {
-      this.dirty = true;
-      if (!this.flushTimer) this.armFlush(FLUSH_DELAY_MS);
-    }
+    if (unwritten) this.markDirty();
+  }
+
+  /** A big file no longer shared (its last mapping went): back to pages, all to be written back. */
+  pageIfBig(): void {
+    if (this.blob || this.shared || this.size < (this.fs.blobMin ?? Infinity)) return;
+    this.toPages();
+    this.markDirty();
+  }
+
+  /** To be written back, with the times it has (no new mtime). */
+  private markDirty(): void {
+    if (!this.dirty) this.dirtySince = Date.now();
+    this.dirty = true;
+    if (!this.flushTimer) this.armFlush(FLUSH_DELAY_MS);
   }
 
   // ── Pages ──
@@ -900,6 +911,7 @@ function detachInodeShared(fs: FileSystem, path: string): void {
   ino.privateData = undefined;
   if (own && own.length >= ino.size) { own.set(ino.data.subarray(0, ino.size)); ino.data = own; }
   else ino.data = ino.data.slice(0, ino.size);
+  ino.pageIfBig();
 }
 
 function newInode(fs: FileSystem, path: string, ino: Inode): Inode {
