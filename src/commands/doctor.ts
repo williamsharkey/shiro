@@ -1,7 +1,8 @@
 /**
  * doctor (alias tabinfo) — one report to paste into a bug report: the
  * deploy, the browser, the x86 engine, the internet relay, sign-ins,
- * Debian, storage and the kernel, each line OK, WARN or FAIL. Never prints
+ * Debian, storage, upgradable packages and the kernel, each line OK, WARN
+ * or FAIL. Never prints
  * a token or other secret.
  */
 
@@ -241,7 +242,7 @@ export const doctorCmd: Command = {
   description: 'Check this tab (deploy, browser, engine, network, sign-ins, storage) for a bug report',
   async exec(ctx) {
     if (ctx.args[0] === '--help' || ctx.args[0] === '-h') {
-      ctx.stdout = 'Usage: doctor [--agents]\n\nPrints the deploy, browser, x86 engine, internet relay, sign-ins, Debian,\nprebuilt packages, storage, kernel and agent-readiness state, one OK/WARN/FAIL line each, to\npaste into a bug report. No tokens or secrets are printed. Also: tabinfo\n\n--agents: what agent CLIs (Claude Code, Codex) need, step by step, through\nboth runtimes: a native x86-64 probe under Blink and the Node runtime\n(mkdir -p 0700, O_EXCL + rename, stat/lstat/fstat, realpath, a child\nsh -c with output to a file), and the native claude binary\'s --version.\n';
+      ctx.stdout = 'Usage: doctor [--agents]\n\nPrints the deploy, browser, x86 engine, internet relay, sign-ins, Debian,\nstorage, upgradable packages, kernel and agent-readiness state, one OK/WARN/FAIL line each, to\npaste into a bug report. No tokens or secrets are printed. Also: tabinfo\n\n--agents: what agent CLIs (Claude Code, Codex) need, step by step, through\nboth runtimes: a native x86-64 probe under Blink and the Node runtime\n(mkdir -p 0700, O_EXCL + rename, stat/lstat/fstat, realpath, a child\nsh -c with output to a file), `node -v` and `node -e` on their own, and the\nnative claude binary\'s --version. A failing node probe runs again with\nstdin on /dev/null, which tells a terminal (stdin) problem from the rest.\n';
       return 0;
     }
     if (ctx.args.includes('--agents')) {
