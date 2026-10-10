@@ -59,12 +59,12 @@ export const KNOWN_ISSUES: { issue: string; workaround?: string }[] = [
     workaround: 'Wrap a command that may read stdin as `{ cmd; } </dev/null`; a group\'s redirect works.',
   },
   {
-    issue: '`node -e CODE` and `node file.js` can hang in the tab even with stdin closed (tabcomputer#13), so in-tab `vitest` and `esbuild` runs are unreliable.',
-    workaround: 'Run node under `timeout N` with stdin closed (`{ timeout 30 node file.js; } </dev/null`) so a hang ends; test changes to the source in a checkout outside the tab.',
+    issue: 'Once a `node` has been killed by `timeout`, the tab can wedge so that `node -e CODE`, `node file.js`, `esbuild` and `claude --npm` print nothing and hang, whatever their stdin (tabcomputer#13). `node -v`, `npm init` and `python3` still work.',
+    workaround: 'Reload the tab (this ends running agents, including you), or do node work such as `vitest` and `esbuild` in a checkout outside the tab.',
   },
   {
-    issue: 'Process odds and ends (tabcomputer#14): `/proc/self/fd/N` may not name the real target, `tmux new -d` (a detached session) is not supported by the built-in tmux, `$!` after backgrounding a builtin has no `/proc` entry, and an exited child of init stays a zombie in `ps` for up to 30 seconds.',
-    workaround: 'Use `[ -t N ]` to ask whether an fd is a terminal rather than reading the link; for a detached job use `nohup cmd >log 2>&1 &`; stop a background builtin with `jobs -l` and `kill PID` from the shell that started it; ignore `Z` lines in `ps`.',
+    issue: 'Process odds and ends (tabcomputer#14): `/proc/self/fd/N` links say `/dev/pts/0` even for a pipe or file, and `stat -L` on them can disagree with the link; `/proc/PID/cmdline` holds only argv[0]; the built-in tmux fails `tmux new-session -d` with "not a terminal"; in-page background jobs (`node … &`) have a `/proc/$!` but `ps` doesn\'t list them; exited children of init linger as zombies; `/proc/loadavg` reads 0; `kill PID` on a `bash -c` blocked in a command can leave it running.',
+    workaround: 'Use `[ -t N ]` to ask whether an fd is a terminal (it works); for a detached job use `nohup cmd >log 2>&1 &` or `pkg install tmux` for the real tmux; find in-page jobs with `jobs -l` or `ls /proc`; use `kill -9` when `kill` doesn\'t take; ignore `Z` lines in `ps`.',
   },
   {
     issue: '`js-eval` runs the code a second time when it throws, and it cannot run statements, only an expression (tabcomputer#17).',
@@ -207,10 +207,11 @@ ${bootSection(ctx, name)}
 - A command that hangs: press Ctrl-C at the terminal. Linux and WASM programs are
   kernel processes: \`ps\` lists them, \`kill PID\` (or \`kill -9 PID\`) stops
   them. Builtins (including \`node\` and the Pyodide
-  \`python3\`) run inside the page, not as kernel processes: their \`$!\` has no
-  \`/proc\` entry and \`ps\` doesn't list them. In the shell that started one in
-  the background, \`jobs -l\` shows its PID and \`kill PID\` stops it; from
-  anywhere else, a reload is the only way.
+  \`python3\`) run inside the page, not as kernel processes, and \`ps\` doesn't
+  list them. One started in the background has a \`/proc/$!\` while it runs;
+  \`jobs -l\` (in the shell that started it) or \`ls /proc\` shows its PID, and
+  \`kill PID\` stops it from any shell. A foreground one only Ctrl-C or a
+  reload stops.
 - \`console -g PATTERN\` searches the page's console log (\`--prev\` includes the
   load before the last reload).
 - Report bugs at ${source}/issues (\`gh issue create\` works here): the command,
