@@ -1191,4 +1191,30 @@ describe('kernel syscalls found by LTP', () => {
     kernel.deliver = deliver;
     expect(sigs).toEqual([A.SIGXCPU, A.SIGKILL]);
   });
+
+  it('a thread-directed signal left to its default action goes to the engine (the thread may block it), not the process\'s default action, job control or not (Open POSIX fork_18-1)', async () => {
+    for (const hooked of [false, true]) {
+      const p = kernel.spawn({ path: 'tdir', cwd: '/tmp/kc', fds: {}, run: () => new Promise<number>(() => {}) });
+      const got: number[] = [];
+      p.addSignalListener((sig) => got.push(sig));
+      let hookCalls = 0;
+      if (hooked) p.signalHook = () => { hookCalls++; return true; };
+      kernel.deliver(p, 32, { signo: 32, code: A.SI_TIMER, tid: p.pid + 1 });
+      await new Promise((r) => setTimeout(r, 10));
+      expect(p.exiting).toBe(false);
+      expect(got).toEqual([32]);
+      expect(p.pendingSignals.has(32)).toBe(true);
+      expect(hookCalls).toBe(0);
+      // a process-directed one still takes the default action (through job control when hooked)
+      if (!hooked) {
+        kernel.deliver(p, 32, { signo: 32, code: A.SI_USER });
+        await new Promise((r) => setTimeout(r, 10));
+        expect(p.exiting).toBe(true);
+      } else {
+        kernel.deliver(p, 32, { signo: 32, code: A.SI_USER });
+        expect(hookCalls).toBe(1);
+        kernel.kill(p.pid, A.SIGKILL);
+      }
+    }
+  });
 });
