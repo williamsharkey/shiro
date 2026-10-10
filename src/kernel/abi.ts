@@ -31,6 +31,10 @@ export const SYS_wait4 = 61;
 export const SYS_kill = 62;
 export const SYS_fcntl = 72;
 export const SYS_flock = 73;
+export const SYS_splice = 275;
+export const SYS_tee = 276;
+export const SYS_vmsplice = 278;
+export const SYS_copy_file_range = 326;
 /** flock(2) operations */
 export const LOCK_SH = 1;
 export const LOCK_EX = 2;

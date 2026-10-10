@@ -33,6 +33,7 @@ import { SysvSem } from './sysvsem';
 import { SysvMsg } from './sysvmsg';
 import { MessageQueues, MqFile } from './mqueue';
 import { PosixTimers } from './posixtimers';
+import { splice, tee, vmsplice, copyFileRange, type Moved } from './splice';
 import { CONTROL_BYTES, SharedObjects, isShareablePath, type ShmObjMessage } from './shmobj';
 import { EpollFile, waitReady } from './epoll';
 import { SignalFile, notifySignalPending, pendingSignalListeners } from './signalfd';
@@ -2369,6 +2370,33 @@ export class Kernel {
         }
         case A.SYS_fcntl:
           return this.fcntl(proc, args[0], args[1], args[2], data);
+        case A.SYS_splice:
+        case A.SYS_copy_file_range: {
+          // offsets as i64 in data (in and out), when args[1] / args[3] say there are
+          const dv = new DataView(data.buffer, data.byteOffset, 16);
+          const offIn = args[1] ? Number(dv.getBigInt64(0, true)) : null;
+          const offOut = args[3] ? Number(dv.getBigInt64(8, true)) : null;
+          const r: Moved | number = nr === A.SYS_splice
+            ? await splice(file(args[0]), offIn, file(args[2]), offOut, args[4] >>> 0, args[5], sig)
+            : await copyFileRange(file(args[0]), offIn, file(args[2]), offOut, args[4] >>> 0, args[5]);
+          if (typeof r === 'number') {
+            if (r === -A.EPIPE) this.deliver(proc, A.SIGPIPE);
+            return r;
+          }
+          if (r.offIn !== null) dv.setBigInt64(0, BigInt(r.offIn), true);
+          if (r.offOut !== null) dv.setBigInt64(8, BigInt(r.offOut), true);
+          return r.n;
+        }
+        case A.SYS_vmsplice: {
+          const r = await vmsplice(file(args[0]), data.subarray(0, Math.min(args[1] >>> 0, data.length)), args[2], sig);
+          if (r === -A.EPIPE) this.deliver(proc, A.SIGPIPE);
+          return r;
+        }
+        case A.SYS_tee: {
+          const r = await tee(file(args[0]), file(args[1]), args[2] >>> 0, args[3], sig);
+          if (r === -A.EPIPE) this.deliver(proc, A.SIGPIPE);
+          return r;
+        }
         case A.SYS_flock: {
           // whole-file locks of the open file description: shared or
           // exclusive, waiting unless LOCK_NB (EWOULDBLOCK), interrupted by a
