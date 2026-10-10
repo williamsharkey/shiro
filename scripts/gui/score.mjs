@@ -210,9 +210,8 @@ const KNOWN = {
   'lximage-qt': 'single-instance check needs a D-Bus session bus',
   eog: 'input: probably nothing open to type into (not investigated)',
   gpicview: 'input: probably nothing open to type into (not investigated)',
-  krita: 'input: probably nothing open to type into (not investigated)',
   qpdfview: 'input: probably nothing open to type into (not investigated)',
-  audacity: 'wxWidgets: input and text not detected (not investigated)',
+  audacity: 'SysV shared memory (shmget) is ENOSYS in the x86 engine',
   thunar: 'input not detected (not investigated)',
   dillo: 'FLTK draws its text as pixels',
 };
