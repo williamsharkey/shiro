@@ -1153,7 +1153,7 @@ export function inodeStat(fs: FileSystem, path: string): KStat | undefined {
 
 function inodeKStat(ino: Inode): KStat {
   return {
-    dev: 1, ino: inodeNumber(ino.fs, ino.path), mode: S_IFREG | (ino.mode & 0o7777), nlink: linkCount(ino.fs, ino.path), uid: 1000, gid: 1000, rdev: 0,
+    dev: 1, ino: inodeNumber(ino.fs, ino.path), mode: S_IFREG | (ino.mode & 0o7777), nlink: ino.unlinked ? 0 : linkCount(ino.fs, ino.path), uid: 1000, gid: 1000, rdev: 0,
     size: ino.size, blksize: 4096, blocks: Math.ceil(ino.size / 512),
     atimeMs: ino.atimeMs ?? ino.mtimeMs, mtimeMs: ino.mtimeMs, ctimeMs: ino.ctimeMs,
     atimeNs: ino.atimeMs === null ? ino.mtimeNs : ino.atimeNs, mtimeNs: ino.mtimeNs,
