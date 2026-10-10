@@ -166,6 +166,10 @@ export interface BackgroundJob {
   pids?: number[];
   /** Kernel jobs: tty modes saved when the job stopped */
   termios?: import('./kernel/pty').Termios;
+  /** In-page jobs: the child shell running it, its parent's pid and start time (its /proc/PID) */
+  shell?: Shell;
+  ppid?: number;
+  startMs?: number;
 }
 
 /** bash's shopt options, and those on by default in a non-interactive bash */
@@ -350,6 +354,17 @@ let activeShell: WeakRef<Shell> | undefined;
 /** In-page shells in /proc: their own pids, the shell running in-page commands as /proc/self */
 addProcInfoSource({
   get(pid) {
+    const job = inPageJobs.get(pid);
+    if (job?.shell) {
+      // an in-page background job ($!): its command, run by a child shell
+      const argv = job.command.trim().split(/\s+/);
+      const comm = argv[0].slice(argv[0].lastIndexOf('/') + 1);
+      return {
+        pid, ppid: job.ppid ?? 1, pgid: pid, sid: job.ppid ?? pid, comm, state: 'S', cmdline: argv,
+        cwd: job.shell.cwd, environ: job.shell.exportedEnv(), exe: argv[0].startsWith('/') ? argv[0] : `/usr/bin/${comm}`,
+        startMs: job.startMs,
+      };
+    }
     const active = activeShell?.deref();
     const sh = shellForPid(pid) ?? (active?.shellPid === pid ? active : undefined);
     if (!sh) return undefined;
@@ -362,7 +377,7 @@ addProcInfoSource({
   },
   list() {
     const active = activeShell?.deref();
-    return [...shellsByPid.keys(), ...(active ? [active.shellPid] : [])];
+    return [...shellsByPid.keys(), ...(active ? [active.shellPid] : []), ...inPageJobs.keys()];
   },
 });
 setProcSelf(() => activeShell?.deref()?.shellPid);
@@ -792,7 +807,8 @@ export class Shell {
       PWD: '/home/user',
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',
-      FORCE_COLOR: '3',
+      // (no FORCE_COLOR: programs colour when their stdout is a tty, and
+      // chalk, npm and python tracebacks put no escapes into pipes and files)
     };
     // Load history async (don't block construction)
     this.loadHistory();
@@ -1274,6 +1290,8 @@ export class Shell {
     child.shellPid = this.shellPid;
     child.parentPid = this.parentPid;
     child.localVars = new Set(this.localVars);
+    // A subshell of a function is still in it (local works there, as in bash)
+    child.localVarStack = this.localVarStack.map((f) => new Map(f));
     child.invokedAsSh = this.invokedAsSh;
     child.exportedUnset = new Set(this.exportedUnset);
     child.arrays = new Map(Array.from(this.arrays.entries()).map(([k, v]) => [k, copyArray(v)]));
@@ -1391,7 +1409,7 @@ export class Shell {
     }
     const abort = new AbortController();
     const outer = this.abortController ?? this.inheritedAbort;
-    outer?.signal.addEventListener('abort', () => abort.abort(), { once: true });
+    outer?.signal.addEventListener('abort', () => abort.abort(outer.signal.reason), { once: true });
     child.inheritedAbort = abort;
     const job: BackgroundJob = {
       id: jobId,
@@ -1399,6 +1417,9 @@ export class Shell {
       status: 'running',
       exitCode: 0,
       pid,
+      shell: child,
+      ppid: this.bashPid,
+      startMs: Date.now(),
       abortController: abort,
       ignoresIntQuit: this.scriptShell && !this.options.has('monitor'),
       // No tty for in-page background work: kernel programs inside it must not take the terminal
@@ -1949,6 +1970,14 @@ export class Shell {
       else if (inp) out.push({ fd: n, content: inp.content.slice(inp.offset) });
     }
     return out;
+  }
+
+  /** [[ -t FD ]]: is the descriptor a terminal (a kernel shell's own fds, else the page terminal) */
+  private fdIsTerminal(fd: number): boolean {
+    if (this.kernelStdio) return this.kernelStdio.file(fd)?.kind === 'pty';
+    const term = this.activeTerminal ?? this.terminal;
+    if (!term || fd > 2 || this.userFds.has(fd)) return false;
+    return fd !== 1 || !(term as { captureStdout?: boolean }).captureStdout;
   }
 
   /** Write command output to fd n's target */
@@ -4284,7 +4313,8 @@ export class Shell {
         let pkgShadowed = !_builtinDisabled && this.pkgShadowBypass !== effectiveCmdName &&
           !SHELL_BUILTIN_NAMES.has(effectiveCmdName) &&
           !!this.commands.get(effectiveCmdName) &&
-          packageShadows(this.fs).has(effectiveCmdName);
+          packageShadows(this.fs).has(effectiveCmdName) &&
+          !this.commands.get(effectiveCmdName)!.keepOverPackage?.(cmdArgs);
         // A Debian program that is gone (apt remove) no longer shadows the builtin
         if (pkgShadowed && !pkgOwnShadows(this.fs).has(effectiveCmdName) && !(await this.findExecutableInPath(effectiveCmdName))) pkgShadowed = false;
         // /bin/NAME, /usr/bin/NAME, …: Shiro's NAME when no such file exists (the kernel stats them the same way)
@@ -7587,6 +7617,7 @@ export class Shell {
         if (n.op === '-o') return this.options.has(v);
         if (n.op === '-R') return this.namerefs.has(v);
         if (n.op === '-a') return new TestEval([], this.fs, this.cwd).unary('-e', v);
+        if (n.op === '-t') return /^\d+$/.test(v) && this.fdIsTerminal(Number(v));
         return new TestEval([], this.fs, this.cwd).unary(n.op, v);
       }
       case 'binary': {
@@ -8106,10 +8137,10 @@ export class Shell {
     const { mayBeKernelProgram, resolveKernelProgram, builtinStage, runKernelPipeline } = _shellKernel ?? await loadShellKernel();
     const progress = (m: string) => writeStderr(`  ${m}\r\n`);
     const stageFor = async (n: string, a: string[]) =>
-      builtinStage(this, n, a) ?? (mayBeKernelProgram(this, n) ? await resolveKernelProgram(this, n, a, progress) : null);
+      builtinStage(this, n, a) ?? (mayBeKernelProgram(this, n, a) ? await resolveKernelProgram(this, n, a, progress) : null);
     // Cheap exit for the common case: neither a filter builtin nor something to look up on PATH
     const firstIsFilter = !!builtinStage(this, name, args);
-    if (!firstIsFilter && !mayBeKernelProgram(this, name)) return null;
+    if (!firstIsFilter && !mayBeKernelProgram(this, name, args)) return null;
     if (firstIsFilter && i === pipeline.length - 1) return null;
     const first = await stageFor(name, args);
     if (!first) return null;
@@ -8215,7 +8246,7 @@ export class Shell {
       const parsed = this.parseSegment(t);
       if (parsed.redirects.length || parsed.hereString !== undefined || parsed.args.length === 0) return false;
       const words = await this.expandGlobs(parsed.args);
-      if (!words || !mayBeKernelProgram(this, words[0])) return false;
+      if (!words || !mayBeKernelProgram(this, words[0], words.slice(1))) return false;
       const prog = await resolveKernelProgram(this, words[0], words.slice(1));
       if (!prog) return false;
       programs.push(prog);
@@ -8579,6 +8610,10 @@ export class Shell {
     // The command's own context, as `node FILE` gets it: its redirects and pipes (stdoutIsTTY,
     // streamStdout…) with it; `./x.js > out` wrote to the terminal while the shell had one
     ctx.args = [filePath, ...args];
+    // and its output as it comes, to the writers this command has (a server never ends:
+    // vite's dev server under `npm run dev` printed nothing)
+    ctx.streamStdout ??= (t) => writeStdout(t.replace(/\r?\n/g, '\r\n'));
+    ctx.streamStderr ??= (t) => writeStderr(t.replace(/\r?\n/g, '\r\n'));
     return this.runCommand(nodeCmd, ctx);
   }
 

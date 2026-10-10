@@ -1,10 +1,14 @@
 import { createReadline } from './readline';
+import { asyncContext } from '../async-context';
+import { createQuerystringModule } from './querystring';
 import { createZlibModule } from './zlib';
 import { createAssertModule } from './assert';
 import type { CommandContext } from '../../commands/index';
 
 export interface MiscDeps {
   ctx: CommandContext;
+  /** The script's own timers (execution.ts), for 'timers' and 'timers/promises' */
+  scriptTimers?: { setTimeout: Function; clearTimeout: Function; setInterval: Function; clearInterval: Function; setImmediate: Function; clearImmediate: Function };
   FakeBuffer: any;
   fakeProcess: any;
   fakeConsole: any;
@@ -35,28 +39,7 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
     };
 
     case 'querystring':
-    case 'node:querystring': return {
-      parse: (str: string) => {
-        const obj: Record<string, string> = {};
-        for (const pair of str.split('&')) {
-          const [k, v] = pair.split('=');
-          if (k) obj[decodeURIComponent(k)] = v ? decodeURIComponent(v) : '';
-        }
-        return obj;
-      },
-      stringify: (obj: Record<string, any>) => Object.entries(obj).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&'),
-      encode: (obj: Record<string, any>) => Object.entries(obj).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&'),
-      decode: (str: string) => {
-        const obj: Record<string, string> = {};
-        for (const pair of str.split('&')) {
-          const [k, v] = pair.split('=');
-          if (k) obj[decodeURIComponent(k)] = v ? decodeURIComponent(v) : '';
-        }
-        return obj;
-      },
-      escape: encodeURIComponent,
-      unescape: decodeURIComponent,
-    };
+    case 'node:querystring': return createQuerystringModule();
 
     case 'string_decoder':
     case 'node:string_decoder': {
@@ -158,18 +141,26 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
     };
 
     case 'timers':
-    case 'node:timers': return {
-      setTimeout, setInterval, setImmediate: (fn: Function, ...args: any[]) => setTimeout(fn, 0, ...args),
-      clearTimeout, clearInterval, clearImmediate: clearTimeout,
-    };
+    case 'node:timers': {
+      // (the script's own: cancelled with it, as the setTimeout it calls by name)
+      const t = deps.scriptTimers;
+      if (t) return { setTimeout: t.setTimeout, setInterval: t.setInterval, setImmediate: t.setImmediate, clearTimeout: t.clearTimeout, clearInterval: t.clearInterval, clearImmediate: t.clearImmediate };
+      return {
+        setTimeout, setInterval, setImmediate: (fn: Function, ...args: any[]) => setTimeout(fn, 0, ...args),
+        clearTimeout, clearInterval, clearImmediate: clearTimeout,
+      };
+    }
 
     case 'timers/promises':
-    case 'node:timers/promises': return {
-      setTimeout: (ms: number, value?: any) => new Promise(resolve => globalThis.setTimeout(() => resolve(value), ms)),
-      setInterval: async function*(ms: number, value?: any) { while (true) { await new Promise(r => globalThis.setTimeout(r, ms)); yield value; } },
-      setImmediate: (value?: any) => new Promise(resolve => globalThis.setTimeout(() => resolve(value), 0)),
-      scheduler: { wait: (ms: number) => new Promise(r => globalThis.setTimeout(r, ms)), yield: () => new Promise(r => globalThis.setTimeout(r, 0)) },
-    };
+    case 'node:timers/promises': {
+      const st = (deps.scriptTimers?.setTimeout ?? globalThis.setTimeout) as (fn: () => void, ms?: number) => unknown;
+      return {
+        setTimeout: (ms: number, value?: any) => new Promise(resolve => st(() => resolve(value), ms)),
+        setInterval: async function*(ms: number, value?: any) { while (true) { await new Promise<void>(r => st(r, ms)); yield value; } },
+        setImmediate: (value?: any) => new Promise(resolve => st(() => resolve(value), 0)),
+        scheduler: { wait: (ms: number) => new Promise<void>(r => st(r, ms)), yield: () => new Promise<void>(r => st(r, 0)) },
+      };
+    }
 
     case 'module':
     case 'node:module': {
@@ -241,23 +232,40 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
     case 'async_hooks':
     case 'node:async_hooks': {
       // AsyncLocalStorage: context propagation for async operations
+      // Stores live in the page's async context (async-context.ts), carried across awaits
       class AsyncLocalStorage {
-        private _store: any = undefined;
-        getStore() { return this._store; }
-        run(store: any, fn: Function, ...args: any[]) { const prev = this._store; this._store = store; try { return fn(...args); } finally { this._store = prev; } }
-        enterWith(store: any) { this._store = store; }
-        disable() { this._store = undefined; }
-        exit(fn: Function, ...args: any[]) { const prev = this._store; this._store = undefined; try { return fn(...args); } finally { this._store = prev; } }
+        private _enabled = true;
+        constructor() { asyncContext.activate(); }
+        /** A function that runs `fn` in the stores in effect now (Next's prerender) */
+        static snapshot() {
+          const frame = asyncContext.capture();
+          return (fn: Function, ...args: any[]) => asyncContext.inFrame(frame, () => fn(...args));
+        }
+        /** `fn` bound to the stores in effect now */
+        static bind(fn: Function) {
+          const frame = asyncContext.capture();
+          return function (this: unknown, ...args: any[]) { return asyncContext.inFrame(frame, () => fn.apply(this, args)); };
+        }
+        getStore() { return this._enabled ? asyncContext.get(this) : undefined; }
+        run(store: any, fn: Function, ...args: any[]) { this._enabled = true; return asyncContext.with(this, store, () => fn(...args)); }
+        enterWith(store: any) { this._enabled = true; asyncContext.enter(this, store); }
+        disable() { this._enabled = false; }
+        exit(fn: Function, ...args: any[]) { return asyncContext.with(this, undefined, () => fn(...args), true); }
       }
+      // (the stores in effect where it was made are the ones its scope runs in)
       class AsyncResource {
         type: string;
+        private _frame = asyncContext.capture();
         constructor(type: string) { this.type = type; }
-        runInAsyncScope(fn: Function, thisArg?: any, ...args: any[]) { return fn.apply(thisArg, args); }
+        runInAsyncScope(fn: Function, thisArg?: any, ...args: any[]) { return asyncContext.inFrame(this._frame, () => fn.apply(thisArg, args)); }
         emitDestroy() { return this; }
         asyncId() { return 0; }
         triggerAsyncId() { return 0; }
-        bind(fn: Function) { return fn; }
-        static bind(fn: Function) { return fn; }
+        bind(fn: Function, thisArg?: any) {
+          const self = this;
+          return function (this: unknown, ...args: any[]) { return self.runInAsyncScope(fn, thisArg ?? this, ...args); };
+        }
+        static bind(fn: Function, type?: string, thisArg?: any) { return new AsyncResource(type ?? 'bound-anonymous-fn').bind(fn, thisArg); }
       }
       return {
         AsyncLocalStorage,
@@ -566,9 +574,14 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
       function createContext(sandbox?: any): any {
         if (!sandbox) sandbox = {};
         Object.defineProperty(sandbox, VM_CONTEXT_SYMBOL, { value: true, enumerable: false, configurable: false });
+        // The context is the script's global object: `globalThis` is the context
+        // (Next's client-reference manifests assign globalThis.__RSC_MANIFEST
+        // in runInNewContext and read it back from it)
+        const selfNames = new Set(['globalThis']);
         return new Proxy(sandbox, {
           get(target, prop, receiver) {
             if (prop in target) return Reflect.get(target, prop, receiver);
+            if (typeof prop === 'string' && selfNames.has(prop)) return receiver;
             if (typeof prop === 'string' && prop in globalThis) return (globalThis as any)[prop];
             return undefined;
           },
@@ -593,24 +606,28 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
           this._options = options || {};
         }
         runInThisContext(options?: any): any {
-          return new Function(this._code)();
+          // The global scope, and the value of the last expression, as node:
+          // webpack's executeModule takes the function `(function (…) {…})` evaluates to
+          const filename = options?.filename ?? this._options.filename;
+          const code = filename ? `${this._code}\n//# sourceURL=${String(filename).replace(/\s/g, '%20')}` : this._code;
+          return (0, eval)(code);
         }
         runInNewContext(sandbox?: any, options?: any): any {
           return this.runInContext(createContext(sandbox), options);
         }
         runInContext(context?: any, options?: any): any {
           if (!context) return this.runInThisContext(options);
-          // For proxy-based contexts, enumerate own keys from underlying sandbox
-          const keys = Object.keys(context);
-          const values = keys.map(k => context[k]);
-          // Try eval-based execution first (returns last expression value, matches vm.Script behavior)
-          // Fall back to direct Function execution for code with return statements
+          if (!isContext(context)) context = createContext(context);
+          // Names resolve on the context first (reads and writes of its
+          // properties, globalThis included), then the page's globals; the
+          // value is the last expression's, as node's
+          const run = new Function('__shiro_ctx', '__shiro_code', 'with (__shiro_ctx) { return eval(__shiro_code); }');
           try {
-            const fn = new Function(...keys, 'return eval(' + JSON.stringify(this._code) + ')');
-            return fn(...values);
-          } catch {
-            const fn = new Function(...keys, this._code);
-            return fn(...values);
+            return run.call(context, context, this._code);
+          } catch (e) {
+            // (a top-level `return`, which node refuses, has run as a function body here)
+            if (!(e instanceof SyntaxError) || !/Illegal return/.test(e.message)) throw e;
+            return new Function('__shiro_ctx', `with (__shiro_ctx) { return (function () {\n${this._code}\n}).call(this); }`).call(context, context);
           }
         }
       }

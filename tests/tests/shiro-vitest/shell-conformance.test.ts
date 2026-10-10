@@ -736,7 +736,7 @@ describe('shell conformance regressions', () => {
       'grep -c "^Pid:" /proc/self/status',
       'ls -ld /proc/self/cwd | cut -c1',
     ].join('\n'));
-    expect(r.out).toBe('listed\ncmdline comm cwd environ exe fd io limits mounts root stat statm status \n0 1 2 \nself-is-me\n/tmp\n/usr/bin/sh\n1\nPID R\n1\nl\n');
+    expect(r.out).toBe('listed\ncmdline comm cwd environ exe fd io limits mounts root stat statm status syscall task wchan \n0 1 2 \nself-is-me\n/tmp\n/usr/bin/sh\n1\nPID R\n1\nl\n');
   });
 
   it('tabcomputer#8: uname, free, df and ps agree with /proc and each other', async () => {

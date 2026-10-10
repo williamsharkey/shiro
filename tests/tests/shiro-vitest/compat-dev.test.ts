@@ -5,7 +5,7 @@
  * WASM guests run in Node worker_threads as kernel processes (sab mode), as
  * in kernel-shell.test.ts. Packages built here are read from public/pkg.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { Worker } from 'node:worker_threads';
 import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
@@ -85,8 +85,7 @@ async function sh(shell: Shell, cmd: string) {
   return { out: out.replace(/\r\n/g, '\n'), err: err.replace(/\r\n/g, '\n'), exitCode };
 }
 
-/** Without colour codes: Shiro's shell exports FORCE_COLOR, so chalk and
- *  supports-color colour even into a pipe */
+/** Without colour codes (a program that colours anyway) */
 const plain = (t: string) => t.replace(/\x1b\[[0-9;]*m/g, '');
 
 /** A download pinned by sha256, cached in tests/.pkg-cache. */
@@ -1954,5 +1953,239 @@ describe('npm install: install scripts and platform packages', () => {
     r = await sh(shell, 'mkdir -p /home/user/scr2 && cd /home/user/scr2 && npm i --ignore-scripts zzfake-dep > /dev/null; ls node_modules/zzfake-dep; echo ignore-scripts=true > ~/.npmrc; cd /home/user/scr && rm -rf node_modules && npm i > /dev/null 2>&1; ls node_modules/zzfake-bad; rm ~/.npmrc');
     expect(r.out).toBe('package.json\nindex.js\npackage.json\n');
     expect(r.err).toBe('');
+  }, 60_000);
+});
+
+describe("the page's esbuild is let go when idle", () => {
+  it('stops after the idle time and starts again for the next build', async () => {
+    // The page's esbuild is esbuild-wasm's browser build (here in this thread, from esbuild.wasm)
+    vi.resetModules();
+    vi.doMock('esbuild-wasm', () => import(`${REPO}/node_modules/esbuild-wasm/esm/browser.js`));
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async (input: any, init?: any) => String(input).endsWith('/esbuild.wasm')
+      ? new Response(readFileSync(`${REPO}/node_modules/esbuild-wasm/esbuild.wasm`)) : saved(input, init)) as typeof fetch;
+    const { buildCmd, esbuildRunning, setEsbuildIdleMs } = await import('@shiro/commands/build');
+    const { fs, shell } = await createTestShell();
+    shell.commands.register(buildCmd);
+    await fs.mkdir('/home/user/eb', { recursive: true });
+    await fs.writeFile('/home/user/eb/a.ts', 'const n: number = 41;\nexport const v = n + 1;\n');
+    setEsbuildIdleMs(200);
+    try {
+      let r = await sh(shell, 'cd /home/user/eb && build a.ts --outfile=out1.js');
+      expect(r.exitCode).toBe(0);
+      expect(esbuildRunning()).toBe(true);
+      await new Promise((res) => setTimeout(res, 600));
+      expect(esbuildRunning()).toBe(false);
+      r = await sh(shell, 'cd /home/user/eb && build a.ts --outfile=out2.js && cat out2.js');
+      expect(r.exitCode).toBe(0);
+      expect(r.out).toContain('n + 1');
+      expect(esbuildRunning()).toBe(true);
+    } finally {
+      setEsbuildIdleMs(60_000);
+      globalThis.fetch = saved;
+      vi.doUnmock('esbuild-wasm');
+    }
+  }, 120_000);
+});
+
+describe('node: a process that exits closes its servers', () => {
+  it('process.exit() frees the port; a script that goes idle while serving leaves it up', async () => {
+    const { iframeServer } = await import('@shiro/iframe-server');
+    const { shell } = await createTestShell();
+    let r = await sh(shell, `node -e "require('http').createServer((q, s) => s.end('up')).listen(4811, () => setTimeout(() => process.exit(0), 50))"; echo "e=$?"`);
+    expect(r.out).toBe('e=0\n');
+    expect(iframeServer.isPortInUse(4811)).toBe(false);
+    r = await sh(shell, `node -e "require('http').createServer((q, s) => s.end('up')).listen(4812)"; echo "e=$?"`);
+    expect(r.out).toBe('e=0\n');
+    expect(iframeServer.isPortInUse(4812)).toBe(true);
+    expect((await iframeServer.fetch(4812, '/')).body).toBe('up');
+    iframeServer.close(4812);
+  }, 60_000);
+});
+
+describe('node builtins have no enumerable `default` (as in node)', () => {
+  it("a copy of path's keys into a mock leaves path.resolve alone (@vercel/nft, Next's build)", async () => {
+    const { shell } = await createTestShell();
+    const r = await sh(shell, `node -e "
+      const o = { default: require('path') };
+      const Y = { default: {} };
+      Object.keys(o.default).forEach((e) => { const t = o.default[e]; Y[e] = Y.default[e] = t; });
+      Y.resolve = Y.default.resolve = function (...e) { return o.default.resolve.apply(this, ['/x', ...e]); };
+      console.log(Y.resolve('a'), require('path').resolve('/b', 'c'));
+      console.log(['path', 'assert', 'events', 'stream'].map((m) => Object.keys(require(m)).includes('default')).join(' '));
+      import('path').then((p) => console.log(typeof p.default.join));
+    "`);
+    expect(r.out).toBe('/x/a /b/c\nfalse false false false\nfunction\n');
+  }, 60_000);
+});
+
+describe('Buffer: every fixed- and variable-width read/write node has', () => {
+  it('LE/BE ints, floats, doubles, BigInt64, readUIntLE/writeIntBE (webpack\'s cache serializer)', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/bo', { recursive: true });
+    await fs.writeFile('/home/user/bo/ops.js', `const b = Buffer.alloc(16);
+const out = [];
+out.push(b.writeUInt32LE(0xdeadbeef, 0), b.writeInt16LE(-2, 4), b.writeInt32BE(-5, 6), b.writeUInt16LE(513, 10), b.writeInt8(-1, 12), b.writeFloatLE(1.5, 12));
+out.push(b.toString('hex'));
+out.push(b.readUInt32LE(0), b.readInt16LE(4), b.readInt32BE(6), b.readUint16LE(10), b.readFloatLE(12), b.readInt32LE(0));
+const d = Buffer.alloc(8); d.writeDoubleBE(Math.PI); out.push(d.toString('hex'), d.readDoubleBE(0));
+const g = Buffer.alloc(8); g.writeBigInt64LE(-3n); out.push(g.toString('hex'), String(g.readBigInt64LE()), String(g.readBigUInt64LE()));
+const v = Buffer.alloc(6); out.push(v.writeUIntBE(0x123456789a, 0, 5), v.toString('hex'), v.readUIntLE(0, 5), v.readIntBE(0, 3), v.writeIntLE(-300, 0, 3), v.readIntLE(0, 3), v.toString('hex'));
+console.log(out.join(' '));
+`);
+    const r = await sh(shell, 'node /home/user/bo/ops.js');
+    // (node 22's output for the same script)
+    expect(r.out).toBe('4 6 10 12 13 16 efbeaddefefffffffffb01020000c03f 3735928559 -2 -5 513 1.5 -559038737 400921fb54442d18 3.141592653589793 fdffffffffffffff -3 18446744073709551613 5 123456789a00 663443878930 1193046 3 -300 d4feff789a00\n');
+  }, 60_000);
+});
+
+describe('require.resolve finds any existing file', () => {
+  it('a binary file by its path (Next resolves app/favicon.ico)', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/rr/app', { recursive: true });
+    await fs.writeFile('/home/user/rr/app/favicon.ico', new Uint8Array([0, 0, 1, 0, 0xff, 0xfe]));
+    const r = await sh(shell, `cd /home/user/rr && node -e "console.log(require.resolve('/home/user/rr/app/favicon.ico'), require.resolve('./app/favicon.ico')); try { require.resolve('./app/nope.ico') } catch (e) { console.log(e.code) }"`);
+    expect(r.out).toBe('/home/user/rr/app/favicon.ico /home/user/rr/app/favicon.ico\nMODULE_NOT_FOUND\n');
+  }, 60_000);
+});
+
+describe('node:querystring as node has it', () => {
+  it('repeated keys are arrays both ways, + is a space, separators, bad escapes (Next\'s loader options)', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/qs', { recursive: true });
+    await fs.writeFile('/home/user/qs/qs.js', `const qs = require('querystring');
+console.log(JSON.stringify(qs.parse('a=1&a=2&b=x&c=&d')), qs.stringify({ a: ['1', '2'], b: 'x y', c: '' }));
+console.log(JSON.stringify(qs.parse('a=1;a=2', ';')), qs.escape('ä &'), qs.unescape('%C3%A4+%20'), JSON.stringify(qs.decode('x=%E4')));
+const u = new URLSearchParams('a=1&a=2'); console.log(u.getAll('a').join());
+`);
+    const r = await sh(shell, 'node /home/user/qs/qs.js');
+    // (node 22's output for the same script)
+    expect(r.out).toBe('{"a":["1","2"],"b":"x","c":"","d":""} a=1&a=2&b=x%20y&c=\n{"a":["1","2"]} %C3%A4%20%26 \u00e4+  {"x":"\ufffd"}\n1,2\n');
+  }, 60_000);
+});
+
+describe('vm.runInThisContext', () => {
+  it("gives the value of the script's last expression (webpack's executeModule)", async () => {
+    const { shell } = await createTestShell();
+    const r = await sh(shell, `node -e "const vm=require('vm'); console.log(typeof vm.runInThisContext('(function(a){return a+1})'), vm.runInThisContext('1+2'), new vm.Script('var zzvm = 5; zzvm*2').runInThisContext(), typeof zzvm, vm.runInThisContext('(function(a){return a+1})', { filename: '/x/y.js' })(1))"`);
+    expect(r.out).toBe('function 3 10 number 2\n');
+  }, 60_000);
+});
+
+describe('vm contexts are their own global object', () => {
+  it('globalThis in runInNewContext is the context (Next\'s client-reference manifests); names read and write it', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/vmc', { recursive: true });
+    await fs.writeFile('/home/user/vmc/vm.js', `const vm = require('vm');
+const ctx = {};
+vm.runInNewContext('globalThis.__RSC_MANIFEST = (globalThis.__RSC_MANIFEST || {}); globalThis.__RSC_MANIFEST["/page"] = { a: 1 }; globalThis.x = 2', ctx);
+console.log(JSON.stringify(ctx.__RSC_MANIFEST), ctx.x);
+const c2 = vm.createContext({ n: 2, out: [] });
+console.log(vm.runInContext('out.push(n * 21); n = n + 1; out.length + n', c2), c2.n, c2.out.join());
+console.log(vm.runInNewContext('typeof Math.max + " " + JSON.stringify([a, b])', { a: 1, b: 'q' }));
+console.log(new vm.Script('k * 2').runInNewContext({ k: 4 }), vm.isContext(c2));
+`);
+    const r = await sh(shell, 'node /home/user/vmc/vm.js');
+    // (node 22's output for the same script)
+    expect(r.out).toBe('{"/page":{"a":1}} 2\n4 3 42\nfunction [1,"q"]\n8 true\n');
+  }, 60_000);
+});
+
+describe('AsyncLocalStorage carries its store across await, timers, then, nextTick', () => {
+  it('concurrent runs stay apart; snapshot, exit, AsyncResource, enterWith (Next\'s work and request stores)', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/als', { recursive: true });
+    await fs.writeFile('/home/user/als/als.js', `const { AsyncLocalStorage, AsyncResource } = require('async_hooks');
+const als = new AsyncLocalStorage();
+const other = new AsyncLocalStorage();
+const log = [];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function inner(tag) {
+  await sleep(5);
+  log.push(\`\${tag}:inner=\${als.getStore()?.id}\`);
+  return als.getStore()?.id;
+}
+async function job(id, ms) {
+  return als.run({ id }, async () => {
+    await sleep(ms);
+    log.push(\`\${id}:after-sleep=\${als.getStore()?.id}\`);
+    const v = await inner(id);
+    await Promise.resolve().then(() => log.push(\`\${id}:then=\${als.getStore()?.id}\`));
+    await new Promise((r) => setTimeout(() => { log.push(\`\${id}:timer=\${als.getStore()?.id}\`); r(); }, 1));
+    await new Promise((r) => process.nextTick(() => { log.push(\`\${id}:tick=\${als.getStore()?.id}\`); r(); }));
+    other.run('o' + id, () => log.push(\`\${id}:other=\${other.getStore()}\`));
+    log.push(\`\${id}:other-after=\${other.getStore()}\`);
+    return v;
+  });
+}
+(async () => {
+  const r = await Promise.all([job('A', 20), job('B', 5), job('C', 10)]);
+  log.push(\`results=\${r.join(',')} outside=\${als.getStore()}\`);
+  const snap = als.run({ id: 'S' }, () => AsyncLocalStorage.snapshot());
+  log.push(\`snapshot=\${snap(() => als.getStore().id)} exit=\${als.run({ id: 'E' }, () => als.exit(() => als.getStore()))}\`);
+  const res = als.run({ id: 'R' }, () => new AsyncResource('x'));
+  log.push(\`resource=\${res.runInAsyncScope(() => als.getStore().id)}\`);
+  als.enterWith({ id: 'W' });
+  await sleep(1);
+  log.push(\`enterWith=\${als.getStore().id}\`);
+  console.log(log.join('\\n'));
+})();
+`);
+    const r = await sh(shell, 'node /home/user/als/als.js');
+    // (node 22's lines for the same script; their order follows the timers)
+    expect(r.out.trim().split('\n').sort()).toEqual(["A:after-sleep=A", "A:inner=A", "A:other-after=undefined", "A:other=oA", "A:then=A", "A:tick=A", "A:timer=A", "B:after-sleep=B", "B:inner=B", "B:other-after=undefined", "B:other=oB", "B:then=B", "B:tick=B", "B:timer=B", "C:after-sleep=C", "C:inner=C", "C:other-after=undefined", "C:other=oC", "C:then=C", "C:tick=C", "C:timer=C", "enterWith=W", "resource=R", "results=A,B,C outside=undefined", "snapshot=S exit=undefined"]);
+  }, 60_000);
+});
+
+describe('stream: web streams to node streams and back', () => {
+  it('Readable.fromWeb/toWeb, Writable.fromWeb/toWeb, Duplex (Next\'s prerender)', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/ws', { recursive: true });
+    await fs.writeFile('/home/user/ws/web.js', `const { Readable, Writable, Duplex } = require('stream');
+(async () => {
+  const rs = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('ab')); c.enqueue(new TextEncoder().encode('cd')); c.close(); } });
+  const r = Readable.fromWeb(rs);
+  let s = ''; for await (const c of r) s += Buffer.from(c).toString();
+  const back = Readable.toWeb(Readable.from(['x', 'y', 'z']));
+  const parts = []; for await (const c of back) parts.push(typeof c === 'string' ? c : Buffer.from(c).toString());
+  const got = [];
+  const ws = new WritableStream({ write(c) { got.push(Buffer.from(c).toString()); } });
+  const w = Writable.fromWeb(ws);
+  await new Promise((res) => { w.write('1'); w.end('2', res); });
+  const sink = []; const nw = new Writable({ write(c, e, cb) { sink.push(c.toString()); cb(); } });
+  const writer = Writable.toWeb(nw).getWriter(); await writer.write(new TextEncoder().encode('q')); await writer.close();
+  console.log(s, parts.join(''), got.join(''), sink.join(''), typeof Duplex.fromWeb, typeof Duplex.toWeb);
+})();
+`);
+    const r = await sh(shell, 'node /home/user/ws/web.js');
+    // (node 22's output for the same script)
+    expect(r.out).toBe('abcd xyz 12 q function function\n');
+  }, 60_000);
+});
+
+describe('http: ServerResponse internals middleware uses', () => {
+  it('_implicitHeader(), _header and a gzip body piped into the response (compression, Next\'s server)', async () => {
+    const { iframeServer } = await import('@shiro/iframe-server');
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/gz', { recursive: true });
+    await fs.writeFile('/home/user/gz/s.js', `
+      const zlib = require('zlib');
+      require('http').createServer((req, res) => {
+        const before = res._header;
+        res.setHeader('content-type', 'text/plain');
+        res.setHeader('content-encoding', 'gzip');
+        res._implicitHeader();
+        res.setHeader('x-before', String(before));
+        const gz = zlib.createGzip();
+        gz.pipe(res);
+        gz.end('compressed hello');
+      }).listen(4813);
+    `);
+    await sh(shell, 'cd /home/user/gz && node s.js');
+    const r = await iframeServer.fetch(4813, '/');
+    const body = typeof r.body === 'string' ? new TextEncoder().encode(r.body) : new Uint8Array(r.body as Uint8Array);
+    const text = await new Response(new Blob([body]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+    expect([r.status, r.headers?.['x-before'], r.headers?.['content-encoding'], text]).toEqual([200, 'null', 'gzip', 'compressed hello']);
+    iframeServer.close(4813);
   }, 60_000);
 });

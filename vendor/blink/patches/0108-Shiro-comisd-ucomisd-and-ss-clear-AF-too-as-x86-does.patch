@@ -1,7 +1,8 @@
-From 3ba2e7a28bb0538c61c5f24bcceaa59b0d8c6f07 Mon Sep 17 00:00:00 2001
+From b45501948bced382ed1c41edab61f8f5aa573649 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 06:15:31 +0000
-Subject: [PATCH] Shiro: comisd/ucomisd (and ss) clear AF too, as x86 does
+Subject: [PATCH 108/111] Shiro: comisd/ucomisd (and ss) clear AF too, as x86
+ does
 
 ---
  blink/ssefloat.c | 3 +++

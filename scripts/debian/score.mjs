@@ -4,6 +4,7 @@
 // mode) and smoke-test each one.
 //
 //   npm run build && npm run debian-score -- --top 100 [--workers 3] [--only a,b] [--rescore] [--report-only]
+//   (a fresh clone: add --seed-from-report once, to start from the committed report)
 //
 // Results are cached per package and version in .debian-build/score/results.json,
 // so a rerun only does what is new or asked for; .debs and indexes are cached
@@ -14,6 +15,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { parseReport } from './score-report.mjs';
 
 const require = createRequire(import.meta.url);
 const ROOT = resolve(new URL('../..', import.meta.url).pathname);
@@ -37,6 +39,14 @@ mkdirSync(OUT_DIR, { recursive: true });
 
 const results = existsSync(RESULTS) ? JSON.parse(readFileSync(RESULTS, 'utf8')) : {};
 const save = () => writeFileSync(RESULTS, JSON.stringify(results, null, 1));
+
+if (flag('--seed-from-report') && existsSync(REPORT)) {
+  const seeded = parseReport(readFileSync(REPORT, 'utf8'));
+  let n = 0;
+  for (const [name, r] of Object.entries(seeded)) if (!results[name]) { results[name] = r; n++; }
+  save();
+  console.log(`seeded ${n} results from ${REPORT}`);
+}
 
 // ── The popcon snapshot ──────────────────────────────────────────────────
 const popcon = readFileSync(join(ROOT, 'scripts/debian/popcon-top2000.txt'), 'utf8').split('\n')

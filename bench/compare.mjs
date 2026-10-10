@@ -145,11 +145,20 @@ function runAb(cands) {
   const suites = [...new Set(cands.map((c) => suiteOf(c.r)))];
   const modes = [...new Set(cands.map((c) => c.r.mode))];
   // Suites gate whole groups with h.try(group) / h.wants(group) (kernel.spawn_throughput
-  // records .builtin and .wasm), so match the metric and each dotted parent of it
+  // records .builtin and .wasm), so match the metric and each dotted parent of it, the
+  // block it was recorded in (`gate`, kernel.file_write for kernel.file_read), and for
+  // results from before `gate` the name minus one inner part (x86.blink.go_hello
+  // records x86.blink.peak_rss.go_hello)
   const names = new Set();
-  for (const c of cands) {
-    const parts = c.r.name.split('.');
+  const addWithParents = (name) => {
+    const parts = name.split('.');
     for (let i = 2; i <= parts.length; i++) names.add(parts.slice(0, i).join('.'));
+  };
+  for (const c of cands) {
+    addWithParents(c.r.name);
+    for (const g of new Set([c.r.gate, c.b?.gate].filter(Boolean))) addWithParents(g);
+    const parts = c.r.name.split('.');
+    for (let i = 1; i < parts.length - 1; i++) names.add([...parts.slice(0, i), ...parts.slice(i + 1)].join('.'));
   }
   const only = [...names].map((n) => `^${esc(n)}$`).join('|');
   const dir = join(BENCH, '.cache', 'ab', 'compare');
