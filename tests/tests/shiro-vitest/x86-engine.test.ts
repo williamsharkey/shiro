@@ -57,6 +57,8 @@ const forkBin = join(out, 'forkcopy');
 const haveFork = tryBuild('gcc', ['-static', '-O1', '-o', forkBin, 'forkcopy.c']);
 const mtchildBin = join(out, 'mtchild');
 const haveMtchild = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', mtchildBin, 'mtchild.c']);
+const psemBin = join(out, 'psem');
+const havePsem = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', psemBin, 'psem.c']);
 const fsidentBin = join(out, 'fsident');
 const haveFsident = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', fsidentBin, 'fsident.c']);
 // musl's libc (native Claude Code's) resolves paths and stats files its own way
@@ -985,6 +987,18 @@ describe('Blink engine: CPU and syscall fixes', () => {
       expect(typeof st).not.toBe('number');
       expect(a[i]).toBe(`${(st as any).dev}:${(st as any).ino}`);
     }
+  }, 60_000);
+
+  // The acceptance test of docs/research/SHARED_MAPPINGS.md: within a process
+  // and across fork today; an exec'd process's sem_post needs the Blink half
+  // (remote pages). it.fails until then: flip it to `it` when it lands.
+  it.skipIf(!havePsem).fails('POSIX named semaphores across exec (sem_open, /dev/shm)', async () => {
+    const { shell } = await setup(readFileSync(psemBin));
+    const r = await run(shell, './prog');
+    const out = r.output.replace(/\r\n/g, '\n');
+    expect(out).toContain('initial 1\nafter wait 0\n');
+    expect(out).toContain('after fork child post 1\n');
+    expect(out).toContain("exec'd process post seen: yes\n");
   }, 60_000);
 
   it.skipIf(!haveStatnull)('the stat family with a NULL buffer is EFAULT once the file is found', async () => {
