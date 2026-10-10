@@ -939,3 +939,27 @@ describe('emacs', () => {
     expect(await done).toBe(0);
   }, 180_000);
 });
+
+describe('a #!/usr/bin/env node script run by path', () => {
+  it('honours redirects and pipes while the shell has a terminal (vite build under npm run printed to the screen)', async () => {
+    const { shell, fs } = await createTestShell();
+    let screen = '';
+    shell.setTerminal({
+      writeOutput: (s: string) => { screen += s; }, write: (s: string) => { screen += s; },
+      getSize: () => ({ cols: 80, rows: 24 }), onResize: () => () => {},
+      enterStdinPassthrough() {}, exitStdinPassthrough() {}, enterRawMode() {}, exitRawMode() {}, isRawMode: () => false,
+      term: { buffer: { active: { type: 'normal' } } },
+    } as any);
+    await fs.mkdir('/home/user/nb/lib', { recursive: true });
+    await fs.writeFile('/home/user/nb/lib/a.js', '#!/usr/bin/env node\nconsole.log("hi", require("path").basename(process.argv[1]))\n');
+    await fs.chmod('/home/user/nb/lib/a.js', 0o755);
+    await fs.symlink('lib/a.js', '/home/user/nb/a');
+    let out = '';
+    const run = (cmd: string) => { out = ''; return shell.execute(cmd, (s) => { out += s; }, (s) => { out += s; }); };
+    expect(await run('cd /home/user/nb && ./a > /tmp/nb.out; cat /tmp/nb.out')).toBe(0);
+    expect(out.replace(/\r\n/g, '\n')).toBe('hi a.js\n');
+    expect(await run('cd /home/user/nb && ./lib/a.js | tr a-z A-Z')).toBe(0);
+    expect(out.replace(/\r\n/g, '\n')).toBe('HI A.JS\n');
+    expect(screen).not.toContain('hi a.js');
+  }, 60_000);
+});
