@@ -134,6 +134,12 @@ export interface PkgEntry {
   /** Kernel features some modes need (e.g. an interactive REPL); batch use works */
   wants?: KernelFeature[];
   notes?: string;
+  /**
+   * Installed versions of this package known to be broken. Boot upgrades a
+   * package installed at one of them to this entry's version
+   * (`upgradeBrokenPackages`); `pkg outdated` and `doctor` say so.
+   */
+  broken?: string[];
 }
 
 export interface PkgIndex {
@@ -225,6 +231,8 @@ export function parseIndex(doc: unknown): PkgIndex {
       }
     }
     if (p.deps !== undefined && (!Array.isArray(p.deps) || p.deps.some((x: unknown) => typeof x !== 'string'))) fail(`${where}: bad deps`);
+    if (p.broken !== undefined && (!Array.isArray(p.broken) || p.broken.some((x: unknown) => typeof x !== 'string' || !x))) fail(`${where}: bad broken`);
+    if (p.broken?.includes(p.version)) fail(`${where}: its own version ${p.version} is listed as broken`);
   }
   for (const p of d.packages) for (const dep of p.deps || []) {
     if (!seen.has(dep)) fail(`package ${JSON.stringify(p.name)}: unknown dependency ${dep}`);
@@ -389,6 +397,46 @@ async function writeStatus(fs: FileSystem, status: Record<string, InstalledPkg>)
   await fs.mkdir(PKG_STATE_DIR, { recursive: true });
   await fs.writeFile(PKG_STATUS, JSON.stringify(status, null, 1) + '\n');
   shadowSets.set(fs, shadowsOf(status));
+}
+
+export interface OutdatedPkg {
+  name: string;
+  /** Version installed */
+  installed: string;
+  /** Version the index has */
+  available: string;
+  /** The installed version is listed in the entry's `broken` */
+  broken: boolean;
+}
+
+/**
+ * Installed packages whose index version differs from the installed one
+ * (`pkg outdated`, `pkg upgrade`, doctor). A package the index no longer has
+ * isn't listed.
+ */
+export async function outdatedPackages(fs: FileSystem, index?: PkgIndex): Promise<OutdatedPkg[]> {
+  index ??= await loadIndex(fs);
+  const byName = new Map(index.packages.map(p => [p.name, p]));
+  const out: OutdatedPkg[] = [];
+  for (const p of Object.values(await readStatus(fs))) {
+    const e = byName.get(p.name);
+    if (!e || e.version === p.version) continue;
+    out.push({ name: p.name, installed: p.version, available: e.version, broken: !!e.broken?.includes(p.version) });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Upgrade installed packages whose version the index marks broken (run in
+ * the background at boot). Returns the names upgraded; a failed download
+ * leaves the package as it was and tries again next boot.
+ */
+export async function upgradeBrokenPackages(fs: FileSystem, opts: PkgOptions = {}): Promise<string[]> {
+  const index = await loadIndex(fs);
+  const broken = (await outdatedPackages(fs, index)).filter(o => o.broken).map(o => o.name);
+  if (!broken.length) return [];
+  opts.log?.(`upgrading known-broken packages: ${broken.join(', ')}`);
+  return installPackages(fs, index, broken, opts);
 }
 
 /** Install order for `names` and their dependencies (dependencies first). */

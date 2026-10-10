@@ -20,6 +20,7 @@ Blink engine.
 | node, npm, npx | builtin | works (commander, mocha, tsc 5, prettier); runs as a kernel process in a Worker where the page is cross-origin isolated (real pid, blocking `*Sync` child_process, fork() IPC, a server stays in the foreground: background it with `&`; `TABCOMPUTER_NODE_WORKER=0` runs it in the page); `node` alone is the REPL on a terminal (`let`/`const` persist, `...` continuation lines, `await`, .help/.exit, ^C/^D as node) and reads its program from a pipe; on a terminal process.stdin reads the pty as the foreground job (cooked lines with echo and ^D, `setRawMode` sets its termios, ^C is SIGINT) |
 | pnpm 9 | `npm install pnpm` | works (add, store, symlinks, run, exec, bins) |
 | yarn 1 | `npm install yarn` | works (add, lockfile, run, bins, offline) |
+| Next.js 16 (App Router, webpack) | `npx create-next-app`, then `next build` / `next start` (node in a Worker, the default) | builds (static pages prerendered) and serves; see "Next.js 16" below |
 | ruby, gem, rake | `pkg install ruby` (ruby.wasm 3.4.1) | works (no sockets) |
 | perl | `pkg install perl` (x86-64 in Blink) | works |
 | lua | `pkg install lua` | works |
@@ -327,19 +328,39 @@ Shell and platform fixes these needed (all with tests in the same file):
   Not yet: node output into a pipe or file comes when the process exits
   (only the terminal streams), so `npm run dev > log &` shows nothing while
   it runs.
-- Next.js 16 (in progress): `npx create-next-app` works in the page. `next
-  build` in the page stops where it compiles SWC's wasm (Chromium refuses a
-  synchronous `WebAssembly.Module` over 8 MB on the main thread), so Next
-  goes through worker mode (the default now), where the module
-  compiles; `NEXT_TEST_WASM_DIR` pointing at an installed
-  `@next/swc-wasm-nodejs` avoids Next's own download (the test container's
-  relay can't fetch it). With `experimental: { webpackBuildWorker: false,
-  workerThreads: true, cpus: 1 }` (jest-worker's child processes need fork
-  IPC, `child.send`, in a guest), `next build --webpack` compiles ("Compiled
-  successfully", Google fonts fetched) and collects page data in a worker
-  thread; prerendering stops at "Expected workStore to be initialized":
-  AsyncLocalStorage doesn't carry its store across `await` yet. What it took,
-  all general:
+- Next.js 16 (`create-next-app`, App Router, webpack): `next build` and
+  `next start` work in worker mode (the default on a cross-origin isolated page).
+  - The build takes 54 s: compile 14 s, then page data and the static pages
+    in a worker thread. It writes `/` and `/_not-found` as static HTML and
+    RSC.
+  - `next start` serves the page, its CSS and JS chunks, the favicon, and
+    a 404 for an unknown path; the page renders in 75 ms.
+  - In the page, `next build` stops where it compiles SWC's wasm (Chromium
+    refuses a synchronous `WebAssembly.Module` over 8 MB on the main thread).
+  - Set `NEXT_TEST_WASM_DIR` to an installed `@next/swc-wasm-nodejs`: the
+    test container's relay can't fetch Next's own download.
+  - next.config needs `experimental: { webpackBuildWorker: false,
+    workerThreads: true, cpus: 1 }`: jest-worker's child processes would
+    need fork IPC (`child.send`) in a guest.
+  - Node output into a file comes when the process exits, so `next start >
+    log &` shows its log only then.
+
+  What it took, all general:
+  - AsyncLocalStorage carries its store across `await`, timers, `then`,
+    `nextTick` and `queueMicrotask` (src/node-compat/async-context.ts). The
+    page has no async hooks, so once a process makes an AsyncLocalStorage:
+    - each `await X` in the code it loads becomes
+      `__shiroAls.r(__shiroAls.c(), await X)`, so the frame before the await
+      is the frame after it;
+    - queued callbacks run in the frame they were queued from.
+    Next's work and request stores, and React's, live there. Concurrent
+    runs stay apart; an await on a string, template or regex literal, a
+    function or a class is left as it is.
+  - `stream`: `Readable.fromWeb`/`toWeb`, `Writable.fromWeb`/`toWeb` and
+    `Duplex.fromWeb`/`toWeb`. Uint8Array chunks become Buffers, with the
+    process's own Buffer: the page has none.
+  - `http.ServerResponse` has `_implicitHeader()`, `_header` and
+    `_headerSent` (the `compression` middleware in Next's server).
   - builtins: `require.extensions` / `Module._extensions`, a directory
     `require` using its package.json `main`, `stream/web`,
     `process.prependOnceListener`, `fs.opendir` / `opendirSync` /
@@ -920,7 +941,7 @@ real account takes over (the sign-in page opens and the CLI waits for the code).
 
 | Tool | Version | Install | `--version` | First screen | API with a dummy key | Sign-in | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Claude Code, native (default) | 2.1.296 | `claude install` 140 s | 3 s | 52 s | `-p`: "Invalid API key", ~100 s | `claude login` → `claude auth login`: the sign-in page opens in a tab (or an Open card), then "Paste code here" | Startup is ~48–52 s offline, mostly compiled guest code (perf-blink's profiles). With `TABCOMPUTER_NODE_WORKER=1`: same. |
+| Claude Code, native (default) | 2.1.296 | `claude install` 140 s | 3 s | 52 s | `-p`: "Invalid API key", ~100 s | `claude login` → `claude auth login`: the sign-in page opens in a tab (or an Open card), then "Paste code here" | Startup is ~48–52 s offline, mostly compiled guest code (perf-blink's profiles). In worker mode: same. |
 | Claude Code, `--npm` | 2.1.112 (reports 2.1.280) | installed at boot | 5–7 s | 14 s | `-p`: "Invalid API key", 4 s | `claude --npm login` → the in-session `/login` (URL, paste prompt) | 2.1.112's `auth login` has no paste prompt and could never finish here; fixed (ad91c0e). In worker mode (the default) it starts onboarded too (8e78beb8). |
 | OpenAI Codex | 0.162.1 | GitHub release tarball with the real curl (`pkg install curl`): 65 s; `npm i -g @openai/codex` 8–11 s (the `linux-x64` package installs since f86aded) | 4.7 s (tarball), 12 s (npm launcher) | — | `exec`: 401 on `wss://` then `https://api.openai.com`, ~40–50 s (tarball and, on ed8a01c, the npm launcher) | not tried (ChatGPT sign-in) | After the 401s, `exec` can hang in the HTTPS fallback until Ctrl-C (the npm launcher on ed8a01c; one of three tarball runs). Through npm, the terminal used to freeze after `codex --version` (fixed in 102fc13), and `exec` used to wait on stdin (compat-tools' stdio-inherit fix). |
 | Grok Build (xAI) | 1.0.50 | `x.ai/cli/install.sh` after `pkg install curl`: 118 s | 2.4 s | — | `-p`: 400 "Incorrect API key", 25 s (148 s on 2026-10-09) | not tried | The builtin `curl` can't fetch the binary (browser fetch); the real curl goes through the relay. |

@@ -5,7 +5,9 @@
  *
  *   native  scripts/agent-probe/agentprobe.c, a static x86-64 binary under
  *           Blink: the syscalls the native Claude binary makes
- *   node    the same steps through the Node runtime (what the npm build uses)
+ *   node    the same steps through the Node runtime (what the npm build uses),
+ *           after `node -v` and `node -e` on their own; a failing node probe
+ *           runs again with stdin on /dev/null, to tell a stdin problem apart
  *
  * The child step runs `sh -c -l 'echo hi'`, the form Claude Code's Bash tool uses.
  *
@@ -112,7 +114,7 @@ export function parseProbe(runtime: string, out: string, code: number): Check[] 
 
 const quote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
-async function runIn(ctx: CommandContext, line: string, timeoutMs: number): Promise<{ out: string; code: number }> {
+export async function runIn(ctx: CommandContext, line: string, timeoutMs: number): Promise<{ out: string; code: number }> {
   let out = '';
   const sink = (s: string) => { out += s; };
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -152,19 +154,57 @@ export async function agentChecks(ctx: CommandContext, opts: { claudeVersion?: b
     checks.push({ label: 'native probe', status: 'FAIL', detail: String(e?.message ?? e) });
   }
 
+  // node: the runtime starts (-v answers without running a script; -e runs one)
+  checks.push(await nodeLine(ctx, 'node -v', 'node -v', (out) => /^v\d+\.\d+\.\d+$/.test(out)));
+  checks.push(await nodeLine(ctx, 'node -e', `node -e ${quote('console.log(6 * 7)')}`, (out) => out === '42'));
+
   // node: the same steps through the Node runtime
+  const js = `${dir}/agentprobe.js`;
+  const runNodeProbe = async (sub: string, redirect: string): Promise<Check[]> => {
+    try {
+      const r = await runIn(ctx, `node ${quote(js)} ${quote(`${dir}/${sub}`)}${redirect}`, 20_000);
+      return parseProbe('node', r.out, r.code);
+    } catch (e: any) {
+      return [{ label: 'node probe', status: 'FAIL', detail: String(e?.message ?? e) }];
+    }
+  };
+  let nodeChecks: Check[];
   try {
-    const js = `${dir}/agentprobe.js`;
     await ctx.fs.writeFile(js, NODE_PROBE);
-    const r = await runIn(ctx, `node ${quote(js)} ${quote(`${dir}/node`)}`, 20_000);
-    checks.push(...parseProbe('node', r.out, r.code));
+    nodeChecks = await runNodeProbe('node', '');
   } catch (e: any) {
-    checks.push({ label: 'node probe', status: 'FAIL', detail: String(e?.message ?? e) });
+    nodeChecks = [{ label: 'node probe', status: 'FAIL', detail: String(e?.message ?? e) }];
   }
+  checks.push(...nodeChecks);
+  // A failure again with stdin on /dev/null, which tells a stdin (terminal) problem from the rest
+  if (nodeChecks.some((c) => c.status === 'FAIL')) checks.push(stdinRetry(nodeChecks, await runNodeProbe('node-devnull', ' < /dev/null')));
 
   // the native Claude binary, if installed
   checks.push(await claudeBinaryCheck(ctx, opts.claudeVersion ?? false));
   return checks;
+}
+
+/** One node command: OK when its last line passes `good` */
+async function nodeLine(ctx: CommandContext, label: string, line: string, good: (out: string) => boolean): Promise<Check> {
+  try {
+    const r = await runIn(ctx, line, 15_000);
+    const out = r.out.replace(/\r/g, '').trim().split('\n').pop() ?? '';
+    return r.code === 0 && good(out)
+      ? { label, status: 'OK', detail: out }
+      : { label, status: 'FAIL', detail: `exited ${r.code}${out ? `: ${out.slice(0, 160)}` : ', no output'}` };
+  } catch (e: any) {
+    return { label, status: 'FAIL', detail: String(e?.message ?? e) };
+  }
+}
+
+/** The node probe's second run, stdin on /dev/null: which run failed, and which steps */
+export function stdinRetry(first: Check[], second: Check[]): Check {
+  const failed = (cs: Check[]) => cs.filter((c) => c.status === 'FAIL').map((c) => c.label.replace(/^node /, ''));
+  const a = failed(first);
+  const b = failed(second);
+  if (!b.length) return { label: 'node < /dev/null', status: 'WARN', detail: `passes with stdin on /dev/null, fails on this terminal (${a.join(', ')}): a stdin problem` };
+  const same = a.length === b.length && a.every((x) => b.includes(x));
+  return { label: 'node < /dev/null', status: 'FAIL', detail: `fails with stdin on /dev/null too (${b.join(', ')})${same ? ': not a stdin problem' : ''}` };
 }
 
 async function claudeBinaryCheck(ctx: CommandContext, version: boolean): Promise<Check> {
@@ -193,7 +233,7 @@ async function claudeBinaryCheck(ctx: CommandContext, version: boolean): Promise
 /** One line for plain `doctor` */
 export function agentSummary(checks: Check[]): Check {
   const by = (rt: string) => {
-    const mine = checks.filter((c) => c.label.startsWith(`${rt} `) && c.label !== `${rt} probe`);
+    const mine = checks.filter((c) => (AGENT_STEPS as readonly string[]).includes(c.label.slice(rt.length + 1)) && c.label.startsWith(`${rt} `));
     const probe = checks.find((c) => c.label === `${rt} probe`);
     if (probe) return { text: `${rt} probe failed`, ok: false };
     const good = mine.filter((c) => c.status === 'OK').length;
@@ -202,9 +242,12 @@ export function agentSummary(checks: Check[]): Check {
   };
   const n = by('native');
   const j = by('node');
+  // node -v, node -e and the /dev/null rerun: named only when they fail
+  const extra = checks.filter((c) => /^node (-v|-e|< \/dev\/null)$/.test(c.label) && c.status !== 'OK');
+  const ok = n.ok && j.ok && !extra.length;
   return {
     label: 'agents',
-    status: n.ok && j.ok ? 'OK' : 'FAIL',
-    detail: `${n.text} · ${j.text}${n.ok && j.ok ? '' : ' (doctor --agents for details)'}`,
+    status: ok ? 'OK' : 'FAIL',
+    detail: `${n.text} · ${j.text}${extra.map((c) => ` · ${c.label}: ${c.detail}`).join('')}${ok ? '' : ' (doctor --agents for details)'}`,
   };
 }

@@ -231,7 +231,7 @@ export class ProcFs {
       // What a hung process is blocked in: the oldest syscall in progress
       // (nr and six args in hex; sp and pc aren't known: 0), or "running"
       case 'syscall': return { type: 'file', text: () => syscallText(p) };
-      case 'wchan': return { type: 'file', text: () => (p.calls.length || p.engineSleeps ? 'do_syscall_64' : '0') };
+      case 'wchan': return { type: 'file', text: () => wchanText(p) };
       case 'io': return { type: 'file', text: () => 'rchar: 0\nwchar: 0\nsyscr: 0\nsyscw: 0\nread_bytes: 0\nwrite_bytes: 0\ncancelled_write_bytes: 0\n' };
       case 'mounts': return { type: 'file', text: () => 'rootfs / rootfs rw 0 0\nproc /proc proc rw 0 0\n' };
     }
@@ -342,6 +342,21 @@ export class ProcFs {
     return `${l} ${l} ${l} ${Math.max(1, running)}/${procs.length} ${this.kernel.lastPid}\n`;
   }
 
+  /**
+   * The FileSystem's view of a /proc path this generates (ProcInfoSource.node):
+   * in-page commands (the shell's cat, ls, grep) read the same /proc/PID as
+   * programs. undefined when it isn't ours.
+   */
+  fsNode(path: string): { dir: string[] } | { text: string } | { link: string } | undefined {
+    if (path === '/proc') return undefined; // (the FileSystem lists /proc itself)
+    const head = path.slice(6).split('/')[0];
+    const p = /^\d+$/.test(head) ? this.kernel.procs.get(Number(head)) : this.kernel.init;
+    if (!p || head === 'self' || head === 'thread-self') return undefined;
+    const n = this.node(p, path);
+    if (!n) return undefined;
+    return n.type === 'dir' ? { dir: n.list() } : n.type === 'file' ? { text: n.text() } : { link: n.target() };
+  }
+
   // ── what the kernel calls ──
 
   /** readlink(2) of a /proc path: the target, -errno, or undefined when it isn't ours. */
@@ -405,7 +420,11 @@ const VMSTAT_KEYS = [
 
 const PID_ENTRIES = ['cmdline', 'comm', 'cwd', 'environ', 'exe', 'fd', 'io', 'mounts', 'root', 'stat', 'statm', 'status', 'syscall', 'task', 'wchan'];
 
-function syscallText(p: Process): string {
+export function wchanText(p: Process): string {
+  return p.calls.length || p.engineSleeps ? 'do_syscall_64' : '0';
+}
+
+export function syscallText(p: Process): string {
   if (p.state === 'zombie') return 'running\n';
   const c = p.calls[0];
   // A wait Blink does itself (futex, nanosleep) has no kernel call: say futex
