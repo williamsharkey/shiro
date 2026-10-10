@@ -399,6 +399,52 @@ const TEXT_HOOK = '/usr/lib/shiro/libshiro-text-hook.so';
  * DOM-text mode (docs/DOM-RENDERING.md): GTK apps load libshiro-text-hook.so,
  * which tells Xshiro the text they draw (scripts/gui/text-hook/).
  */
+const SESSION_BUS = 'unix:path=/tmp/runtime-user/bus';
+const buses = new WeakMap<Kernel, Promise<string | null>>();
+
+/**
+ * The session bus apps share (Debian's dbus-daemon, the manifest's
+ * `dbus-session`), started with the first app: single-instance checks
+ * (LXImage-Qt), settings and portals look for one. Its address, or null when
+ * it can't run (then apps get the unreachable default and fail fast).
+ */
+function sessionBus(kernel: Kernel, m: AppsManifest): Promise<string | null> {
+  if (!m.apps['dbus-session'] || !kernel.fs) return Promise.resolve(null);
+  let p = buses.get(kernel);
+  if (!p) {
+    p = startSessionBus(kernel, m.apps['dbus-session'].bin).catch(() => null);
+    buses.set(kernel, p);
+    // gone (or never came up): the next launch tries again
+    void p.then((a) => { if (!a) buses.delete(kernel); });
+  }
+  return p;
+}
+
+async function startSessionBus(kernel: Kernel, bin: string): Promise<string | null> {
+  const fs = kernel.fs as FileSystem;
+  if (!(await isAppInstalled(fs, 'dbus-session'))) await installApp(fs, kernel, 'dbus-session');
+  // libdbus needs a machine id
+  if (!(await fs.exists('/etc/machine-id').catch(() => false))) {
+    const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('') + '\n';
+    await fs.writeFile('/etc/machine-id', id).catch(() => {});
+  }
+  await fs.mkdir('/tmp/runtime-user', { recursive: true }).catch(() => {});
+  const sock = SESSION_BUS.slice('unix:path='.length);
+  if (await fs.exists(sock).catch(() => false)) await fs.unlink(sock).catch(() => {});
+  const { BufferFile } = await import('../kernel/fd');
+  const p = kernel.spawn({
+    path: bin, argv: ['dbus-daemon', '--session', '--nofork', '--nopidfile', `--address=${SESSION_BUS}`], cwd: '/',
+    env: appEnv(), fds: { 0: new BufferFile(''), 1: new BufferFile(null), 2: new BufferFile(null) },
+  });
+  let exited = false;
+  void p.wait().then(() => { exited = true; buses.delete(kernel); });
+  for (let t = 0; t < 15000 && !exited; t += 100) {
+    if (await fs.exists(sock).catch(() => false)) return SESSION_BUS;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return null;
+}
+
 async function writeHomeDefaults(kernel: Kernel, files: Record<string, string>): Promise<void> {
   const fs = kernel.fs as FileSystem | undefined;
   if (!fs) return;
@@ -441,6 +487,8 @@ export async function launchApp(kernel: Kernel, name: string, args: string[] = [
   const ids = await import('../x11/app-ids');
   if (instance !== name) ids.appIdAliases.set(instance, name);
   if (app.home) await writeHomeDefaults(kernel, app.home);
+  const bus = await sessionBus(kernel, m);
+  if (bus) env = { DBUS_SESSION_BUS_ADDRESS: bus, ...env };
   const out = new BufferFile(null);
   const p = kernel.spawn({
     path: app.bin, argv: [app.bin.split('/').pop()!, ...args], cwd: '/home/user',

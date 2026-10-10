@@ -33,6 +33,8 @@ dconf-service xdg-user-dirs ncurses-base mount util-linux procps libpam-modules 
 APPS = {
     # name: (packages, binaries, plugin globs, extra packages, description, category)
     'xterm': (['xterm'], ['/usr/bin/xterm'], [], [], 'Terminal emulator for X', 'x11'),
+    # not an app: the session bus the launcher starts for apps that want one (single-instance checks, settings)
+    'dbus-session': (['dbus-daemon', 'dbus-session-bus-common'], ['/usr/bin/dbus-daemon'], [], [], 'D-Bus session bus', 'service'),
     'xeyes': (['x11-apps'], ['/usr/bin/xeyes'], [], [], 'Eyes that follow the pointer', 'x11'),
     'xclock': (['x11-apps'], ['/usr/bin/xclock'], [], [], 'Analog/digital clock', 'x11'),
     'xcalc': (['x11-apps'], ['/usr/bin/xcalc'], [], [], 'Scientific calculator', 'x11'),
@@ -126,7 +128,8 @@ def closure(db, prov, roots):
     while todo:
         n = todo.pop()
         n = n if n in db else prov.get(n, n)
-        if n in seen or n in SKIP or n not in db: continue
+        # (an entry's own roots come even when skipped for everyone else: dbus-session)
+        if n in seen or (n in SKIP and n not in roots) or n not in db: continue
         seen.append(n)
         for f in ('Pre-Depends', 'Depends'):
             for alt in db[n].get(f, '').split(','):
@@ -280,6 +283,10 @@ def main():
             for path in sorted(glob.glob(os.path.join(root, g))):
                 rel = os.path.relpath(path, root)
                 if not os.path.isfile(path) or os.path.islink(path): continue
+                # the plugin's own package may come with it (vlc-plugin-base: nothing else needs
+                # it), as long as everything it links is already in the set
+                own = owner.get(rel)
+                allowed = set(keep) | ({own} if own in names else set())
                 ok, seen2, todo2 = True, set(), [rel]
                 while todo2 and ok:
                     f = todo2.pop()
@@ -287,12 +294,13 @@ def main():
                     seen2.add(f)
                     real = os.path.realpath(os.path.join(root, f))
                     o = owner.get(os.path.relpath(real, root)) or owner.get(f)
-                    if o and o not in keep: ok = False; break
+                    if o and o not in allowed: ok = False; break
                     for lib in needed(real):
                         hit = resolve(root, os.path.relpath(real, root), lib, links)
                         if hit is None: ok = False; break
                         todo2.append(hit)
                 if not ok: remove.append('/' + os.path.dirname(rel) if g.endswith('/*/*') else '/' + rel)
+                elif own and own not in keep: keep.append(own)
         dropped = [n for n in names if n not in keep]
         apps[app] = {
             'description': desc, 'toolkit': kind, 'bin': bins[0], 'pkg': roots[0], 'packages': keep,
