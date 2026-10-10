@@ -1,0 +1,124 @@
+From 023aa6f9f7954a00eced4b4c345cc52b4b055fde Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 15:03:10 +0000
+Subject: [PATCH] Shiro: a SIGEV_THREAD_ID timer's signal goes to its thread
+
+glibc makes a SIGEV_THREAD timer a SIGEV_THREAD_ID one whose signal goes
+to a helper thread waiting in sigwaitinfo with every signal blocked. The
+kernel didn't know Blink's thread ids (timer_create was EINVAL), and its
+signals went to whichever thread doesn't block them (Open POSIX
+fork_18-1). timer_create now vouches for one of our threads (third
+argument 1), and the kernel names the thread in the signal's siginfo
+(its last word): blink_shiro_signal_tid_info, and the direct channels'
+ShiroKernelSignal, queue it on that thread.
+
+Exports blink_shiro_timerthread.
+---
+ blink/blink.c   | 30 ++++++++++++++++++++++++++++++
+ blink/shiro.inc | 21 +++++++++++++++++++--
+ 2 files changed, 49 insertions(+), 2 deletions(-)
+
+diff --git a/blink/blink.c b/blink/blink.c
+index b8f9a68..0bb3349 100644
+--- a/blink/blink.c
++++ b/blink/blink.c
+@@ -269,6 +269,25 @@ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal(int sig) {
+   ShiroSignalSystem(g_shiro_system, sig);
+ }
+ 
++// A SIGEV_THREAD_ID timer's signal is for one thread (glibc's SIGEV_THREAD
++// helper waits for it in sigwaitinfo, with every signal blocked): false if
++// it isn't one of ours
++static bool ShiroSignalThread(struct System *s, int tid, int sig) {
++  struct Dll *e;
++  struct Machine *m = 0;
++  LOCK(&s->machines_lock);
++  for (e = dll_first(s->machines); e; e = dll_next(s->machines, e)) {
++    if (MACHINE_CONTAINER(e)->tid == tid) {
++      m = MACHINE_CONTAINER(e);
++      EnqueueSignal(m, sig);
++      break;
++    }
++  }
++  UNLOCK(&s->machines_lock);
++  if (m) ShiroDirectWake();
++  return !!m;
++}
++
+ // the same with the signal's siginfo (the kernel's call 1030): its first 32
+ // bytes as words (si_signo, si_errno, si_code, pad, pid/tid, uid/overrun,
+ // value lo, value hi)
+@@ -282,6 +301,17 @@ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_info(int sig, int w0, int w1, int w
+   ShiroSignalSystem(s, sig);
+ }
+ 
++// the same for thread `tid` (the siginfo's last word: Blink 0510)
++EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_tid_info(int tid, int sig, int w0, int w1,
++                                                      int w2, int w3, int w4, int w5,
++                                                      int w6, int w7) {
++  const int w[8] = {w0, w1, w2, w3, w4, w5, w6, w7};
++  struct System *s = g_shiro_system;
++  if (!s || sig < 1 || sig > 64) return;
++  ShiroQueueSiginfo(s, sig, w);
++  if (!ShiroSignalThread(s, tid, sig)) ShiroSignalSystem(s, sig);
++}
++
+ // the parent's System is going away while same-instance children run on
+ void ShiroDropSystem(void) {
+   g_shiro_system = 0;
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index fd76877..aee478a 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -221,6 +221,7 @@ static bool ShiroDirectCall(int nr, int args[12], void *data, int inlen,
+ }
+ 
+ void blink_shiro_signal_info(int, int, int, int, int, int, int, int, int);
++void blink_shiro_signal_tid_info(int, int, int, int, int, int, int, int, int, int);
+ static bool g_shiro_siginfo = true;  // the kernel has call 1030
+ static void ShiroDrainSignals(int);
+ 
+@@ -230,7 +231,9 @@ static void ShiroKernelSignal(int sig) {
+   i32 w[32];
+   if (g_shiro_siginfo && ShiroDirectCall(1030, a2, w, 0, 128, &r, &sig2)) {
+     if (r == -ENOSYS_LINUX) g_shiro_siginfo = false;
+-    if (!r && w[0] == sig) {
++    if (!r && w[0] == sig && w[31]) {  // (a SIGEV_THREAD_ID timer's: for that thread)
++      blink_shiro_signal_tid_info(w[31], sig, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
++    } else if (!r && w[0] == sig) {
+       blink_shiro_signal_info(sig, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
+     } else {
+       blink_shiro_signal(sig);
+@@ -2487,6 +2490,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_threadintr(void) { return 1; }
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_sigbus(void) { return 1; }
+ // 0509: CPU-time clocks and times() start at a fork child's (and a thread's) start
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_forkcpu(void) { return 1; }
++// 0510: a SIGEV_THREAD_ID timer's signal goes to its thread (SIGEV_THREAD timers)
++EMSCRIPTEN_KEEPALIVE int blink_shiro_timerthread(void) { return 1; }
+ 
+ // the same with the signal's siginfo (the kernel's call 1030, made as `pid`)
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid_info(int pid, int sig, int w0, int w1, int w2,
+@@ -4021,7 +4026,19 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       u8 sev[24], id[4];
+       if (b && CopyFromUserRead(m, sev, b, 24) == -1) { r = -EFAULT_LINUX; break; }
+       if (b && Read32(sev + 12) == 2) { r = -EINVAL_LINUX; break; }  // (glibc turns SIGEV_THREAD into SIGEV_THREAD_ID)
+-      r = ShiroCall(m, 222, A12((int)a, b ? 1 : 0), sev, b ? 24 : 0, 0, false, false);
++      // SIGEV_THREAD_ID to one of our threads, which the kernel doesn't know:
++      // we vouch for it, and route its signal (blink_shiro_signal_tid_info)
++      bool ours = false;
++      if (b && Read32(sev + 12) == 4) {
++        struct Dll *e;
++        int tid = Read32(sev + 16);
++        LOCK(&m->system->machines_lock);
++        for (e = dll_first(m->system->machines); e; e = dll_next(m->system->machines, e)) {
++          if (MACHINE_CONTAINER(e)->tid == tid) ours = true;
++        }
++        UNLOCK(&m->system->machines_lock);
++      }
++      r = ShiroCall(m, 222, A12((int)a, b ? 1 : 0, ours), sev, b ? 24 : 0, 0, false, false);
+       if (r >= 0) {
+         Write32(id, (u32)r);
+         if (CopyToUserWrite(m, c, id, 4) == -1) { KS(m, 226, A12((int)r)); r = -EFAULT_LINUX; break; }
+-- 
+2.43.0
+

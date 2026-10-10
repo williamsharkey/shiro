@@ -64,10 +64,12 @@ export const asyncContext = {
   },
 };
 
-// What rewritten code calls: c() before an await, r(frame, value) after it
+// What rewritten code calls: c() before an await, r(frame, value) after it, and e(code)
+// on what it evals (webpack's dev builds wrap every module in eval("…"))
 (globalThis as any).__shiroAls = {
   c: (): Frame => current,
   r: <T>(frame: Frame, value: T): T => { current = frame; return value; },
+  e: (code: unknown): unknown => typeof code === 'string' ? carryAsyncContext(code) : code,
 };
 
 let thenPatched = false;
@@ -89,10 +91,11 @@ const ID = /[A-Za-z0-9_$\u0080-￿]/;
  * `await X` → `__shiroAls.r(__shiroAls.c(), await X)`, in code only. An await
  * whose operand isn't a plain unary/member/call expression (one starting
  * with a string, template or regex literal, a function or class) is left
- * as it is.
+ * as it is. A direct `eval(X)` becomes `eval(__shiroAls.e(X))` (still direct:
+ * the code it runs is rewritten the same way when it runs).
  */
 export function carryAsyncContext(src: string): string {
-  if (!src.includes('await')) return src;
+  if (!src.includes('await') && !src.includes('eval')) return src;
   const mask = codeMask(src);
   const n = src.length;
   const isCode = (i: number) => mask[i] === 1;
@@ -154,6 +157,22 @@ export function carryAsyncContext(src: string): string {
     }
   };
 
+  /** The word before position p (across whitespace) */
+  const wordBefore = (p: number) => {
+    let b = p - 1;
+    while (b >= 0 && /\s/.test(src[b])) b--;
+    let a = b;
+    while (a >= 0 && ID.test(src[a])) a--;
+    return src.slice(a + 1, b + 1);
+  };
+  /** `NAME(…) {` or `get NAME()`: a method, accessor or function named NAME, not a call (rollup's `get await()`) */
+  const definesName = (p: number, open: number) => {
+    if (/^(get|set|static|async|function)$/.test(wordBefore(p))) return true;
+    if (src[open] !== '(') return false;
+    const end = matchBracket(open);
+    return end > 0 && src[skipWs(end)] === '{';
+  };
+
   const inserts: [number, string][] = [];
   const re = /\bawait\b/g;
   for (let m = re.exec(src); m; m = re.exec(src)) {
@@ -165,9 +184,19 @@ export function carryAsyncContext(src: string): string {
     if (src.slice(Math.max(0, b - 2), b + 1) === 'for' && !ID.test(src[b - 3] ?? '')) continue;
     const a = skipWs(p + 5);
     if (a >= n || /[=,;)\]}:?]/.test(src[a]) && !(src[a] === '?' && src[a + 1] === '.')) continue;
+    if (definesName(p, a)) continue;
     const e = unary(p + 5);
     if (e < 0) continue;
     inserts.push([p, '__shiroAls.r(__shiroAls.c(), '], [e, ')']);
+  }
+  const ev = /\beval\s*\(/g;
+  for (let m = ev.exec(src); m; m = ev.exec(src)) {
+    const p = m.index;
+    if (!isCode(p) || src[p - 1] === '.' || ID.test(src[p - 1] ?? '')) continue;
+    const open = p + m[0].length - 1;
+    const end = matchBracket(open);
+    if (end < 0 || skipWs(open + 1) === end - 1 || definesName(p, open)) continue;
+    inserts.push([open + 1, '__shiroAls.e('], [end - 1, ')']);
   }
   if (!inserts.length) return src;
   // Ends before starts at one position: `await await x` closes the inner one first

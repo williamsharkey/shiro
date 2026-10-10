@@ -20,7 +20,7 @@ Blink engine.
 | node, npm, npx | builtin | works (commander, mocha, tsc 5, prettier); runs as a kernel process in a Worker where the page is cross-origin isolated (real pid, blocking `*Sync` child_process, fork() IPC, a server stays in the foreground: background it with `&`; `TABCOMPUTER_NODE_WORKER=0` runs it in the page); `node` alone is the REPL on a terminal (`let`/`const` persist, `...` continuation lines, `await`, .help/.exit, ^C/^D as node) and reads its program from a pipe; on a terminal process.stdin reads the pty as the foreground job (cooked lines with echo and ^D, `setRawMode` sets its termios, ^C is SIGINT) |
 | pnpm 9 | `npm install pnpm` | works (add, store, symlinks, run, exec, bins) |
 | yarn 1 | `npm install yarn` | works (add, lockfile, run, bins, offline) |
-| Next.js 16 (App Router, webpack) | `npx create-next-app`, then `next build` / `next start` (node in a Worker, the default) | builds (static pages prerendered) and serves; see "Next.js 16" below |
+| Next.js 16 (App Router, webpack) | `npx create-next-app`, then `next dev --webpack` / `next build` / `next start` (node in a Worker, the default) | dev server with HMR, builds (static pages prerendered) and serves; see "Next.js 16" below |
 | ruby, gem, rake | `pkg install ruby` (ruby.wasm 3.4.1) | works (no sockets) |
 | perl | `pkg install perl` (x86-64 in Blink) | works |
 | lua | `pkg install lua` | works |
@@ -334,9 +334,15 @@ Shell and platform fixes these needed (all with tests in the same file):
     lost.
   Not yet, in the page: node output into a pipe, with a terminal attached,
   comes when the process exits (a guest's streams).
-- Next.js 16 (`create-next-app`, App Router, webpack): `next build` and
-  `next start` work in worker mode (the default on a cross-origin isolated page).
-  - The build takes 54 s: compile 14 s, then page data and the static pages
+- Next.js 16 (`create-next-app`, App Router, webpack): `next dev --webpack`,
+  `next build` and `next start` work in worker mode (the default on a
+  cross-origin isolated page). `APP=next node tests/browser/vite-react.mjs`
+  checks all three on a minimal site.
+  - `next dev`: ready in 1.6 s, the first page in 14 s (compiling it), then
+    about 0.1 s a request; an edit reaches the preview by HMR in 2 to 6 s,
+    without a reload. A restart with webpack's persistent cache isn't faster
+    yet.
+  - The build takes 30 to 54 s: compile, then page data and the static pages
     in a worker thread. It writes `/` and `/_not-found` as static HTML and
     RSC.
   - `next start` serves the page, its CSS and JS chunks, the favicon, and
@@ -344,12 +350,31 @@ Shell and platform fixes these needed (all with tests in the same file):
   - In the page, `next build` stops where it compiles SWC's wasm (Chromium
     refuses a synchronous `WebAssembly.Module` over 8 MB on the main thread).
   - Set `NEXT_TEST_WASM_DIR` to an installed `@next/swc-wasm-nodejs`: the
-    test container's relay can't fetch Next's own download.
+    test container's relay can't fetch Next's own download. Its native SWC
+    isn't installed (a .node addon can't load), so Next downloads that first;
+    where the download fails, Next's loader never settles and the first
+    page never compiles. The browser check gives it an empty
+    `node_modules/next/next-swc-fallback/@next/swc-linux-x64-gnu` there.
   - next.config needs `experimental: { webpackBuildWorker: false,
     workerThreads: true, cpus: 1 }`: jest-worker's child processes would
     need fork IPC (`child.send`) in a guest.
 
   What it took, all general:
+  - `next dev`: the module transform's patterns that start with an
+    identifier start only at one; webpack's dev chunks carry inline source
+    maps (runs of 100 000+ identifier characters), and the 8 MB vendor chunk
+    took 171 s to load (now 0.3 s). A direct `eval(X)` in code that carries
+    async context becomes `eval(__shiroAls.e(X))`, so the code it runs
+    carries it too (webpack's dev builds wrap every module in `eval`);
+    methods, accessors and functions named `await` or `eval` stay as they
+    are (rollup 4's `get await()` became a syntax error, and `astro build`
+    failed once an AsyncLocalStorage existed).
+    `require.cache` entries are modules with `children`, JSON ones too, and
+    `Module._cache` is the same object (Next's dev server clears its
+    manifests from it). `fs.ReadStream`/`fs.WriteStream` are constructors a
+    subclass can run on itself (graceful-fs), and an open write stream
+    follows a rename of its file (webpack's cache renames `X_` to `X` before
+    the stream behind its gzip has written).
   - AsyncLocalStorage carries its store across `await`, timers, `then`,
     `nextTick` and `queueMicrotask` (src/node-compat/async-context.ts). The
     page has no async hooks, so once a process makes an AsyncLocalStorage:
