@@ -67,6 +67,23 @@
         "latexmk"
       ],
       "check": "kpsewhich article.cls"
+    },
+    "go": {
+      "title": "Go",
+      "description": "Debian's golang-go, with the standard library already compiled",
+      "packages": [
+        "golang-go"
+      ],
+      "prepare": [
+        "# std compiled into the default build cache of the tab's user (HOME=/home/user), so",
+        "# go build in the tab only compiles the user's packages",
+        "mkdir -p /home/user/.cache",
+        "env HOME=/home/user CGO_ENABLED=0 go build std",
+        "# go trims cache entries unused for 5 days, by mtime; the layer's times are the",
+        "# snapshot's, so a far-future last-trim time keeps the shipped entries",
+        "echo 4102444800 > /home/user/.cache/go-build/trim.txt"
+      ],
+      "check": "printf 'package main\\nimport \"fmt\"\\nfunc main(){fmt.Println(\"hello\")}\\n' > /tmp/tc-hello.go && cd /tmp && go run tc-hello.go"
     }
   }
 }
