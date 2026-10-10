@@ -1,0 +1,97 @@
+From e58a07742889b423fef62c7b7180802f819cb827 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 18:43:33 +0000
+Subject: [PATCH] Shiro: leases and RLIMIT_CPU go to the kernel; a CLONE_VM
+ process runs as a vfork child; CLONE_THREAD needs only CLONE_SIGHAND and
+ CLONE_VM
+
+---
+ blink/shiro.inc | 29 ++++++++++++++++++++++++-----
+ blink/syscall.c |  5 +++--
+ 2 files changed, 27 insertions(+), 7 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index cd0741d..818ca68 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -971,6 +971,7 @@ static i64 ShiroFcntl(struct Machine *m, int fd, int cmd, i64 arg) {
+       return 0;
+     case 1031: case 1032:  // F_SETPIPE_SZ / F_GETPIPE_SZ: the kernel's pipes
+     case 1033: case 1034:  // F_ADD_SEALS / F_GET_SEALS: the kernel's memfds
++    case 1024: case 1025:  // F_SETLEASE / F_GETLEASE: the kernel's leases (LTP fcntl27)
+       return KS(m, 72, A12(fd, cmd, (int)arg));
+     default:
+       return -EINVAL_LINUX;
+@@ -2561,6 +2562,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_flock(void) { return 1; }
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_splice(void) { return 1; }
+ // 0514: argument checks (LTP), mincore, mlock commits its pages
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_argchecks(void) { return 1; }
++// 0515: leases, a CLONE_VM process, RLIMIT_CPU go to the kernel
++EMSCRIPTEN_KEEPALIVE int blink_shiro_cpulimit(void) { return 1; }
+ 
+ // the same with the signal's siginfo (the kernel's call 1030, made as `pid`)
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid_info(int pid, int sig, int w0, int w1, int w2,
+@@ -3963,16 +3966,18 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       }
+       break;
+     case 0x061: case 0x0A0: case 0x12E: {                             // getrlimit, setrlimit, prlimit64
+-      // RLIMIT_NOFILE is the kernel's (its fd table enforces it); a kernel
+-      // without prlimit64 leaves it, and the other limits, to Blink
++      // RLIMIT_NOFILE is the kernel's (its fd table enforces it), and so is
++      // RLIMIT_CPU (it sends SIGXCPU and SIGKILL by the process's CPU time:
++      // LTP setrlimit06); a kernel without them leaves them, and the other
++      // limits, to Blink
+       int pid = nr == 0x12E ? (int)a : 0, res = nr == 0x12E ? (int)b : (int)a;
+       i64 nw = nr == 0x12E ? (i64)c : nr == 0x0A0 ? (i64)b : 0;
+       i64 old = nr == 0x12E ? (i64)d : nr == 0x061 ? (i64)b : 0;
+       u8 lim[16];
+-      if (res != 7) return false;
++      if (res != 7 && res != 0) return false;
+       if (nw && CopyFromUserRead(m, lim, nw, 16) == -1) { r = -EFAULT_LINUX; break; }
+-      r = ShiroCall(m, 302, A12(pid, 7, nw ? 1 : 0), lim, nw ? 16 : 0, 16, false, false);
+-      if (r == -ENOSYS_LINUX || r == -EINVAL_LINUX && !nw) return false;
++      r = ShiroCall(m, 302, A12(pid, res, nw ? 1 : 0), lim, nw ? 16 : 0, 16, false, false);
++      if (r == -ENOSYS_LINUX || r == -EINVAL_LINUX && (!nw || res == 0)) return false;
+       if (r >= 0 && old && CopyToUserWrite(m, old, lim, 16) == -1) r = -EFAULT_LINUX;
+       break;
+     }
+@@ -4745,6 +4750,20 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       break;
+     case 0x03A: r = ShiroVfork(m, 0, false); break;                   // vfork
+     case 0x038:                                                       // clone
++      // A process sharing our memory (CLONE_VM without CLONE_THREAD, on its
++      // own stack: LTP clone08): it runs as a vfork child, the parent
++      // waiting until it exits or execs; its pid is in ptid/ctid first
++      if ((a & CLONE_VM_LINUX) && b &&
++          !(a & ~(u64)(CLONE_VM_LINUX | CLONE_PARENT_SETTID_LINUX |
++                       CLONE_CHILD_SETTID_LINUX | 0x8000 | 0xff))) {
++        u8 w[4];
++        if ((r = ShiroVfork(m, b, false)) == 0) {
++          Write32(w, t_vfork->pid);
++          if ((a & CLONE_PARENT_SETTID_LINUX) && c) CopyToUserWrite(m, c, w, 4);
++          if ((a & CLONE_CHILD_SETTID_LINUX) && d) CopyToUserWrite(m, d, w, 4);
++        }
++        break;
++      }
+       if (!IsForkOrVfork(a)) return false;                           // threads stay Blink's
+       if (a & CLONE_VFORK_LINUX) {
+         r = ShiroVfork(m, b, false);
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 7bd3cfd..e178876 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -634,8 +634,9 @@ static int SysSpawn(struct Machine *m, u64 flags, u64 stack, u64 ptid, u64 ctid,
+               CLONE_FILES_LINUX | CLONE_SIGHAND_LINUX | CLONE_SETTLS_LINUX |
+               CLONE_PARENT_SETTID_LINUX | CLONE_CHILD_CLEARTID_LINUX |
+               CLONE_CHILD_SETTID_LINUX | CLONE_SYSVSEM_LINUX;
+-  mandatory = CLONE_THREAD_LINUX | CLONE_VM_LINUX | CLONE_FS_LINUX |
+-              CLONE_FILES_LINUX | CLONE_SIGHAND_LINUX;
++  // (as Linux: CLONE_THREAD needs CLONE_SIGHAND, which needs CLONE_VM; a
++  // thread without CLONE_FS or CLONE_FILES still shares them here: LTP clone08)
++  mandatory = CLONE_THREAD_LINUX | CLONE_VM_LINUX | CLONE_SIGHAND_LINUX;
+   ignored = CLONE_DETACHED_LINUX | CLONE_IO_LINUX;
+   flags &= ~ignored;
+   if (flags & ~supported) {
+-- 
+2.43.0
+

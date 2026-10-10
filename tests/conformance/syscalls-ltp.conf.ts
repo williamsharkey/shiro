@@ -17,6 +17,7 @@ import { getKernel } from '@shiro/kernel/kernel';
 import { createTestShell } from '../tests/shiro-vitest/helpers';
 // @ts-ignore plain JS module shared with the native baseline script
 import { judgeLtp } from './lib/ltp.mjs';
+import { startWatchdog } from './lib/watchdog.mjs';
 
 const CONF = resolve(__dirname, 'ltp');
 const BIN = resolve(__dirname, '.cache/ltp-bin');
@@ -63,11 +64,14 @@ async function runAll(): Promise<{ files: Record<string, AreaResult>; detail: Re
     if (ok) res.pass++; else res.failures.push({ name, ...f });
     if (!done.has(name)) appendFileSync(journal, JSON.stringify({ name, ok, ...f }) + '\n');
   };
+  const watchdog = startWatchdog({ journal, detailDir: join(RESULTS, 'detail', 'ltp') });
+  mkdirSync(join(RESULTS, 'detail', 'ltp'), { recursive: true });
   for (const name of names) {
     const prev = done.get(name);
     if (prev) { record(name, prev.ok, { ...(prev.reason ? { reason: prev.reason } : {}), ...(prev.timeout ? { timeout: true } : {}) }); continue; }
     if (hangs.includes(name)) { record(name, false, { reason: 'skipped: hangs tabcomputer', timeout: true }); continue; }
     progress(name);
+    watchdog.arm(name, TEST_TIMEOUT);
     const dir = `/tmp/ltp/${name}`;
     await fs.mkdir(dir, { recursive: true });
     const shell = new Shell(fs, base.commands);
@@ -101,7 +105,9 @@ async function runAll(): Promise<{ files: Record<string, AreaResult>; detail: Re
     mkdirSync(join(RESULTS, 'detail', 'ltp'), { recursive: true });
     writeFileSync(join(RESULTS, 'detail', 'ltp', `${name}.txt`), text);
     record(name, j.ok, j.ok ? {} : { reason: j.reason || 'no summary', ...(!finished && !j.summary ? { timeout: true } : {}) });
+    watchdog.disarm();
   }
+  watchdog.stop();
   return { files, detail };
 }
 
@@ -115,7 +121,7 @@ describe.skipIf(!existsSync(BIN))('LTP syscall tests under Blink', () => {
     writeFileSync(join(RESULTS, name), JSON.stringify({
       suite: 'LTP syscalls',
       title: 'Syscalls: LTP under Blink (x86-64)',
-      note: 'Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel processes in the Blink engine; only tests that pass natively on the build host as an unprivileged user (uid 1000, like tabcomputer) are scored. Blink forks within one instance by default (patch 0048), so the child shares MAP_SHARED pages, where LTP keeps its result counts and checkpoints; with BLINK_SAME_INSTANCE_FORK=0 (snapshot fork) they are not shared, so when the Summary reads all zeros the TPASS/TFAIL/TBROK lines are counted instead (tests/conformance/lib/ltp.mjs). Trend: 146 (first run) → 172 → 148 (TBROK/TFAIL lines counted, snapshot fork) → 197 (same-instance fork opt-in, A/B against 155 without it) → 222 (same-instance fork the default, Blink 0034–0048, kernel O_PATH/locks/pipe sizes/epoll/errno fixes) → 229 (AF_UNIX DGRAM/SEQPACKET sockets, timeouts that never end early, unlinkat/wait4 errnos; bind04 now reaches its abstract-name cases, which Blink truncates) → 237 (Blink 0050–0054: same-instance children no longer stall each other, sleeps show S and end on signals, abstract AF_UNIX names keep their length) → 240/322 (Blink 0058–0070 and signalfd01/02 added to the scored set: nanosleep04 and signalfd pass; UDP over loopback, AF_UNIX datagram backpressure and socket errnos fix bind05, sendfile07, connect03, accept03 and epoll_wait05; ppoll01 and waitpid08/10 newly fail, both Blink regressions reported to perf-blink) → 272/322 (Blink 0080/0081, built locally until perf-blink folds them into its build: record locks, pipe sizes and RLIMIT_NOFILE are the kernel\'s, read-only output buffers are EFAULT, LTP errnos for clocks, rlimits, iovs, waitid, sendfile, O_PATH fds, personality; waitpid13 fails like waitpid08/10) → 280/322 (measured on integration a8bf453, perf-blink\'s build with 0080–0082 and its 0075–0077: ppoll takes its sigmask, a futex wake is no longer counted twice (waitpid08/10/13), /proc/self/maps is a memfd, pipes are writable by the page, nanosleep writes rem before the signal frame; futex_cmp_requeue01 now crashes the test worker). → 282/322 measured on integration bab5481 (perf-blink\'s engine through 0110: futex requeue, copy-on-write fork): futex_cmp_requeue02/03 and waitpid01 pass; clock_gettime04 failed once on CLOCK_BOOTTIME jitter under load (8 ms > 6 ms). → 283/322 on integration dff2c0d (perf-blink\'s engine through 0114 with this branch\'s 0500–0504): execve06 passes. → 283/322 again on unix/conformance 55e936d (perf-blink\'s engine through 0119 with this branch\'s 0505–0509, as for Open POSIX): no change; clock_gettime04 (CLOCK_BOOTTIME jitter) and futex_wake02 still fail.',
+      note: 'Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel processes in the Blink engine; only tests that pass natively on the build host as an unprivileged user (uid 1000, like tabcomputer) are scored. Blink forks within one instance by default (patch 0048), so the child shares MAP_SHARED pages, where LTP keeps its result counts and checkpoints; with BLINK_SAME_INSTANCE_FORK=0 (snapshot fork) they are not shared, so when the Summary reads all zeros the TPASS/TFAIL/TBROK lines are counted instead (tests/conformance/lib/ltp.mjs). Trend: 146 (first run) → 172 → 148 (TBROK/TFAIL lines counted, snapshot fork) → 197 (same-instance fork opt-in, A/B against 155 without it) → 222 (same-instance fork the default, Blink 0034–0048, kernel O_PATH/locks/pipe sizes/epoll/errno fixes) → 229 (AF_UNIX DGRAM/SEQPACKET sockets, timeouts that never end early, unlinkat/wait4 errnos; bind04 now reaches its abstract-name cases, which Blink truncates) → 237 (Blink 0050–0054: same-instance children no longer stall each other, sleeps show S and end on signals, abstract AF_UNIX names keep their length) → 240/322 (Blink 0058–0070 and signalfd01/02 added to the scored set: nanosleep04 and signalfd pass; UDP over loopback, AF_UNIX datagram backpressure and socket errnos fix bind05, sendfile07, connect03, accept03 and epoll_wait05; ppoll01 and waitpid08/10 newly fail, both Blink regressions reported to perf-blink) → 272/322 (Blink 0080/0081, built locally until perf-blink folds them into its build: record locks, pipe sizes and RLIMIT_NOFILE are the kernel\'s, read-only output buffers are EFAULT, LTP errnos for clocks, rlimits, iovs, waitid, sendfile, O_PATH fds, personality; waitpid13 fails like waitpid08/10) → 280/322 (measured on integration a8bf453, perf-blink\'s build with 0080–0082 and its 0075–0077: ppoll takes its sigmask, a futex wake is no longer counted twice (waitpid08/10/13), /proc/self/maps is a memfd, pipes are writable by the page, nanosleep writes rem before the signal frame; futex_cmp_requeue01 now crashes the test worker). → 282/322 measured on integration bab5481 (perf-blink\'s engine through 0110: futex requeue, copy-on-write fork): futex_cmp_requeue02/03 and waitpid01 pass; clock_gettime04 failed once on CLOCK_BOOTTIME jitter under load (8 ms > 6 ms). → 283/322 on integration dff2c0d (perf-blink\'s engine through 0114 with this branch\'s 0500–0504): execve06 passes. → 283/322 again on unix/conformance 55e936d (perf-blink\'s engine through 0119 with this branch\'s 0505–0509, as for Open POSIX): no change; clock_gettime04 (CLOCK_BOOTTIME jitter) and futex_wake02 still fail. → 431/534 on unix/conformance d3049611 with the scored set widened to the calls real tools use (212 more: memory maps and locks, file metadata and sync, splice/tee/copy_file_range, eventfd/timerfd/inotify, socket messages and options, queued and per-thread signals, POSIX timers and itimers, prctl, ids, rusage, affinity; perf-blink\'s engine through 0121 with this branch\'s 0514 built locally: Linux\'s argument checks before the call, mincore, mlock; and host.mjs\'s chunk fix, without which writes over 1 MiB came back short): the first 322 at 285 (clock_gettime04 and futex_wake02 pass this time), the new 212 at 146. Left among the new: inotify (not implemented), ioctl_pidfd/ioctl_ns, mmap/mremap edge cases, prctl options, fallocate modes, multicast/packet socket options, readlinkat of an O_PATH symlink, splice07 (/proc/self/fd reopen), splice08/09 (Linux 6.7).',
       files: sorted,
     }, null, 1) + '\n');
   }, 7_200_000);

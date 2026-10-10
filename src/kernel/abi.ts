@@ -456,6 +456,7 @@ export const SIGPIPE = 13;
 export const SIGALRM = 14;
 export const SIGVTALRM = 26;
 export const SIGPROF = 27;
+export const SIGXCPU = 24;
 export const SIGTERM = 15;
 export const SIGCHLD = 17;
 export const SIGCONT = 18;
@@ -694,6 +695,7 @@ export const OPEN_MAX = 1024;
 /** fs.nr_open: the most fds RLIMIT_NOFILE can allow (Linux's default) */
 export const NR_OPEN = 1048576;
 export const RLIMIT_NOFILE = 7;
+export const RLIMIT_CPU = 0;
 export const SYS_prlimit64 = 302;
 export const SYS_memfd_create = 319;
 /** POSIX message queues (src/kernel/mqueue.ts) */
