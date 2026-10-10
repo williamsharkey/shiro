@@ -574,8 +574,11 @@ export class KSocket implements OpenFile {
       if (this.state !== 'connected' || !this.peer) return this.everConnected ? -EPIPE : -ENOTCONN;
       if (buf.length === 0) return 0;
       if (this.messages && buf.length > this.stack.config.sndbuf) return -EMSGSIZE;
+      // (a datagram waits only while the buffer is full, then may overshoot
+      // it, as Linux checks before allocating: two messages of half
+      // SO_SNDBUF fit, Open POSIX aio_cancel_5-1)
       const room = this.stack.config.sndbuf - this.peer.buffered();
-      if (room <= 0 || (this.messages && room < buf.length + MSG_OVERHEAD)) {
+      if (room <= 0) {
         if (dontwait) return -EAGAIN;
         if (signal?.aborted) return -EINTR;
         await this.q.wait(50, signal);
@@ -602,7 +605,7 @@ export class KSocket implements OpenFile {
       case 'connected':
         if (this.rxLen > 0 || this.rxEof || this.rdShut) r |= POLLIN;
         if (this.rxEof || this.rdShut) r |= POLLRDHUP; // the peer's FIN, or our own shutdown(SHUT_RD)
-        if (!this.wrShut && this.peer && this.peer.buffered() + (this.messages ? MSG_OVERHEAD : 0) < this.stack.config.sndbuf) r |= POLLOUT;
+        if (!this.wrShut && this.peer && this.peer.buffered() < this.stack.config.sndbuf) r |= POLLOUT;
         if (this.rxEof && this.wrShut) r |= POLLHUP;
         break;
       case 'closed':
