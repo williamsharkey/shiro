@@ -18,7 +18,8 @@
   },
   "banner": "desktop",
   "preinstall": [
-    "claude-code"
+    "claude-code",
+    "ca-certificates"
   ],
   "shims": {
     "claude": "native",

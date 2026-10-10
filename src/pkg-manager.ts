@@ -697,6 +697,27 @@ async function removeFiles(fs: FileSystem, pkg: InstalledPkg): Promise<void> {
   moduleCache.forEach((_, k) => { if (k.startsWith(`${PKG_ROOT}/${pkg.name}/`)) moduleCache.delete(k); });
 }
 
+/**
+ * The profile's preinstalled packages (`preinstall` names that are pkg
+ * packages). Installs those that are neither installed nor already provided:
+ * every path in a package's `links` existing (Debian's ca-certificates has
+ * written /etc/ssl/certs/ca-certificates.crt) counts as provided. Returns the
+ * names installed.
+ */
+export async function preinstallPackages(fs: FileSystem, names: string[], opts: PkgOptions = {}): Promise<string[]> {
+  const index = await loadIndex(fs);
+  const status = await readStatus(fs);
+  const want: string[] = [];
+  for (const name of names) {
+    const entry = index.packages.find(p => p.name === name);
+    if (!entry || status[entry.name]) continue;
+    const links = Object.keys(entry.links || {});
+    if (links.length && (await Promise.all(links.map(l => lstatSafe(fs, l)))).every(Boolean)) continue;
+    want.push(entry.name);
+  }
+  return want.length ? installPackages(fs, index, want, opts) : [];
+}
+
 /** Remove an installed package. Returns false when it wasn't installed. */
 export async function removePackage(fs: FileSystem, name: string): Promise<boolean> {
   const status = await readStatus(fs);
