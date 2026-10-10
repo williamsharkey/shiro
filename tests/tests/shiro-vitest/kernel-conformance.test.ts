@@ -1110,4 +1110,45 @@ describe('kernel syscalls found by LTP', () => {
     expect(await sys(A.SYS_signalfd4, [ep, 8, 0], set(SIGUSR1))).toBe(-A.EINVAL); // not a signalfd
     kernel.kill(p.pid, A.SIGKILL);
   });
+
+  it('eventfd overflow waits, close_range flags, fstat of a removed directory, /proc/config.gz (LTP eventfd02/04, close_range02, readahead01, needs_kconfigs)', async () => {
+    const u64 = (v: bigint) => { const d = new Uint8Array(8); new DataView(d.buffer).setBigUint64(0, v, true); return d; };
+    const max = 0xfffffffffffffffen;
+    // a write that would pass the maximum is EAGAIN nonblocking, and waits for a read otherwise
+    const nb = await kernel.syscall(proc, A.SYS_eventfd2, [0, A.O_NONBLOCK], new Uint8Array(8));
+    expect(await kernel.syscall(proc, A.SYS_write, [nb, 8], u64(max))).toBe(8);
+    expect(await kernel.syscall(proc, A.SYS_write, [nb, 8], u64(1n))).toBe(-A.EAGAIN);
+    const ev = await kernel.syscall(proc, A.SYS_eventfd2, [0, 0], new Uint8Array(8));
+    expect(await kernel.syscall(proc, A.SYS_write, [ev, 8], u64(max))).toBe(8);
+    let done = false;
+    const w = kernel.syscall(proc, A.SYS_write, [ev, 8], u64(5n)).then((n) => { done = true; return n; });
+    await new Promise((res) => setTimeout(res, 10));
+    expect(done).toBe(false);
+    const got = new Uint8Array(8);
+    expect(await kernel.syscall(proc, A.SYS_read, [ev, 8], got)).toBe(8);
+    expect(new DataView(got.buffer).getBigUint64(0, true)).toBe(max);
+    expect(await w).toBe(8);
+    expect(await kernel.syscall(proc, A.SYS_read, [ev, 8], got)).toBe(8);
+    expect(new DataView(got.buffer).getBigUint64(0, true)).toBe(5n);
+    for (const fd of [nb, ev]) await call(A.SYS_close, [fd]);
+    // close_range: unknown flags
+    expect(await call(A.SYS_close_range, [100, 200, 1])).toBe(-A.EINVAL);
+    expect(await call(A.SYS_close_range, [100, 200, 4])).toBe(0);
+    // a removed directory's fd still fstats, with nlink 0
+    await fs.mkdir('/tmp/kc/gone');
+    const d = await open('/tmp/kc/gone', A.O_RDONLY | A.O_DIRECTORY);
+    await fs.rmdir('/tmp/kc/gone');
+    const st = new Uint8Array(256);
+    expect(await kernel.syscall(proc, A.SYS_fstat, [d], st)).toBe(0);
+    expect(new DataView(st.buffer).getBigUint64(16, true)).toBe(0n);
+    await call(A.SYS_close, [d]);
+    // /proc/config.gz is gzip of the options
+    const cfg = await open('/proc/config.gz', A.O_RDONLY);
+    const gz = new Uint8Array(65536);
+    const n = await kernel.syscall(proc, A.SYS_read, [cfg, gz.length], gz);
+    expect(n).toBeGreaterThan(20);
+    const text = await new Response(new Blob([gz.subarray(0, n)]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+    expect(text).toContain('CONFIG_EVENTFD=y');
+    await call(A.SYS_close, [cfg]);
+  });
 });

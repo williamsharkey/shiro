@@ -377,9 +377,9 @@ export function setProcSelf(fn: () => number | undefined): void {
 }
 const PROC_PID_RE = /^\/proc\/(\d+|self|thread-self)(?:\/(.*))?$/;
 const PROC_PID_FILES = ['cmdline', 'comm', 'cwd', 'environ', 'exe', 'fd', 'io', 'limits', 'mounts', 'root', 'stat', 'statm', 'status', 'syscall', 'task', 'wchan'];
-type ProcPidNode = { dir: string[] } | { text: string } | { link: string };
+type ProcPidNode = { dir: string[] } | { text: string } | { bytes: Uint8Array } | { link: string };
 /** Top-level /proc files the kernel generates from its process table (ProcInfoSource.node) */
-const SYSTEM_NAMES = ['stat', 'loadavg', 'uptime', 'vmstat', 'sysvipc'];
+const SYSTEM_NAMES = ['stat', 'loadavg', 'uptime', 'vmstat', 'sysvipc', 'config.gz'];
 
 /** /proc virtual provider — dynamic system info from Shiro */
 class ProcProvider implements VirtualFSProvider {
@@ -515,6 +515,7 @@ class ProcProvider implements VirtualFSProvider {
     if (node && 'dir' in node) return null;
     const gen = this.entries[path];
     if (!gen && !node) return null;
+    if (node && 'bytes' in node) return encoding === 'utf8' ? new TextDecoder().decode(node.bytes) : node.bytes;
     const content = node && 'text' in node ? node.text : gen!();
     return encoding === 'utf8' ? content : new TextEncoder().encode(content);
   }
@@ -532,7 +533,8 @@ class ProcProvider implements VirtualFSProvider {
       return null; // the FileSystem follows it to a real path
     }
     if ('dir' in node) return makeStat({ path, type: 'dir', content: null, mode: 0o555, mtime: Date.now(), ctime: this.startTime, size: 0 });
-    return makeStat({ path, type: 'file', content: new TextEncoder().encode(node.text), mode: 0o444, mtime: Date.now(), ctime: this.startTime, size: node.text.length });
+    const content = 'bytes' in node ? node.bytes : new TextEncoder().encode(node.text);
+    return makeStat({ path, type: 'file', content, mode: 0o444, mtime: Date.now(), ctime: this.startTime, size: content.length });
   }
 
   stat(path: string, follow = true): StatResult | null {
