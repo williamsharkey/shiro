@@ -857,6 +857,7 @@ export async function executeNodeScript(
 
     // Clean up
     uncountScript?.();
+    _st.ttyStdin?.close();
     if (ctx.terminal && _st.ownsStdinPassthrough) ctx.terminal.exitStdinPassthrough();
     if (typeof window !== 'undefined') {
       setTimeout(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000);
@@ -868,6 +869,7 @@ export async function executeNodeScript(
   } catch (e: any) {
     // Clean up on error
     uncountScript?.();
+    _st.ttyStdin?.close();
     if (ctx.terminal && _st.ownsStdinPassthrough) ctx.terminal.exitStdinPassthrough();
     if (typeof window !== 'undefined') {
       setTimeout(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000);

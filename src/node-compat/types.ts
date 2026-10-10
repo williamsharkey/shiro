@@ -66,6 +66,8 @@ export interface SharedState {
   isInteractiveMode: boolean;
   scriptTimeoutId: any;
   ownsStdinPassthrough: boolean;
+  /** process.stdin reading the terminal's pty (tty-stdin.ts): closed when the script ends */
+  ttyStdin?: { close(): void };
   deferredExitResolve: ((code: number) => void) | null;
   fakeProcess: any;  // set after createFakeProcess() returns
   portDetected?: boolean;
