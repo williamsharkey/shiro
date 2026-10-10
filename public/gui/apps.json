@@ -3870,6 +3870,36 @@
    "size": 56629128,
    "toolkit": "gtk3"
   },
+  "osmesa-probe": {
+   "bin": "/usr/lib/x86_64-linux-gnu/libOSMesa.so.8",
+   "closureSize": 47974740,
+   "description": "Mesa off-screen rendering (llvmpipe)",
+   "dropped": [
+    "gcc-12-base"
+   ],
+   "packages": [
+    "libosmesa6",
+    "zlib1g",
+    "libc6",
+    "libgcc-s1",
+    "libzstd1",
+    "libstdc++6",
+    "libllvm15",
+    "libz3-4",
+    "libxml2",
+    "liblzma5",
+    "libicu72",
+    "libtinfo6",
+    "libffi8",
+    "libedit2",
+    "libbsd0",
+    "libmd0",
+    "libglapi-mesa"
+   ],
+   "pkg": "libosmesa6",
+   "size": 47937144,
+   "toolkit": "service"
+  },
   "pcmanfm": {
    "bin": "/usr/bin/pcmanfm",
    "closureSize": 50962188,
@@ -6296,6 +6326,12 @@
    "size": 266012,
    "version": "3.46.4-2"
   },
+  "libedit2": {
+   "filename": "pool/main/libe/libedit/libedit2_3.1-20221030-2_amd64.deb",
+   "sha256": "1cf14abf2716d3279db12d0657a5737cf70074a1e71d3bdf73206625e3c89ce6",
+   "size": 92992,
+   "version": "3.1-20221030-2"
+  },
   "libelf1": {
    "filename": "pool/main/e/elfutils/libelf1_0.188-2.1_amd64.deb",
    "sha256": "619add379c606b3ac6c1a175853b918e6939598a83d8ebadf3bdfd50d10b3c8c",
@@ -6613,6 +6649,12 @@
    "sha256": "6f89b1702c48e9a2437bb3c1ffac8e1ab2d828fc28b3d14b2eecd4cc19b2c790",
    "size": 88448,
    "version": "1.6.0-1"
+  },
+  "libglapi-mesa": {
+   "filename": "pool/main/m/mesa/libglapi-mesa_22.3.6-1+deb12u2_amd64.deb",
+   "sha256": "2db5b13a6b7f4042f9a417ad7fa4338b6c47528dc64d7f89cfd5e53d07d76bc4",
+   "size": 35900,
+   "version": "22.3.6-1+deb12u2"
   },
   "libglib2.0-0": {
    "filename": "pool/main/g/glib2.0/libglib2.0-0_2.74.6-2+deb12u9_amd64.deb",
@@ -7286,6 +7328,12 @@
    "size": 49424,
    "version": "0.24.14-1"
   },
+  "libllvm15": {
+   "filename": "pool/main/l/llvm-toolchain-15/libllvm15_15.0.6-4+b1_amd64.deb",
+   "sha256": "9f0751109ba89e65b1313a4f3e34a29977a0db6fa30ed475e2c6bd555fa9e866",
+   "size": 23115156,
+   "version": "1:15.0.6-4+b1"
+  },
   "liblog4cplus-2.0.5": {
    "filename": "pool/main/l/log4cplus/liblog4cplus-2.0.5_2.0.8-1_amd64.deb",
    "sha256": "f33a6fa06ceac7bbc159820b565687a7cf1c56c9861ed66e63b9d7ef10b527d9",
@@ -7657,6 +7705,12 @@
    "sha256": "18bedc2e89f15f7428442402201776ab4f432a9abffe00e77a2b68f62431f3b3",
    "size": 134992,
    "version": "3.5.0-2"
+  },
+  "libosmesa6": {
+   "filename": "pool/main/m/mesa/libosmesa6_22.3.6-1+deb12u2_amd64.deb",
+   "sha256": "3d1f76857a314f2d30e91628fccb4bbac3623ddde6b66d7d785a13199b8b0b65",
+   "size": 2906728,
+   "version": "22.3.6-1+deb12u2"
   },
   "libp11-kit0": {
    "filename": "pool/main/p/p11-kit/libp11-kit0_0.24.1-2_amd64.deb",
@@ -9073,6 +9127,12 @@
    "sha256": "d80c71f81907e51cb004b8f1bd3855f18d5e0c50a2724e2cef0d4142e3c3f663",
    "size": 110080,
    "version": "0.7.0+dfsg-8+b1"
+  },
+  "libz3-4": {
+   "filename": "pool/main/z/z3/libz3-4_4.8.12-3.1_amd64.deb",
+   "sha256": "6221ca25ad5abcfbe1965801029d85a88b4775320384b4b716de8fab7a4d2f7a",
+   "size": 7216172,
+   "version": "4.8.12-3.1"
   },
   "libzimg2": {
    "filename": "pool/main/z/zimg/libzimg2_3.0.4+ds1-1_amd64.deb",

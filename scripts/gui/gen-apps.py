@@ -34,6 +34,8 @@ libreoffice-core-nogui'''.split())  # (the GUI-less build of libreoffice-core: i
 APPS = {
     # name: (packages, binaries, plugin globs, extra packages, description, category)
     'xterm': (['xterm'], ['/usr/bin/xterm'], [], [], 'Terminal emulator for X', 'x11'),
+    # (probe: Mesa's off-screen llvmpipe, docs/research/GL.md)
+    'osmesa-probe': (['libosmesa6'], ['/usr/lib/x86_64-linux-gnu/libOSMesa.so.8'], [], [], 'Mesa off-screen rendering (llvmpipe)', 'service'),
     # not an app: the session bus the launcher starts for apps that want one (single-instance checks, settings)
     'dbus-session': (['dbus-daemon', 'dbus-session-bus-common'], ['/usr/bin/dbus-daemon'], [], [], 'D-Bus session bus', 'service'),
     'xeyes': (['x11-apps'], ['/usr/bin/xeyes'], [], [], 'Eyes that follow the pointer', 'x11'),

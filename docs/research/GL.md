@@ -87,6 +87,35 @@ and the result is the GL window's canvas, so displaying it is free.
 | Qt Quick (QML) apps, e.g. many KDE apps | ES 2 / GL 2 (or `QT_QUICK_BACKEND=software`) | yes | yes |
 | Inkscape 1.2, GIMP 2.10, Krita | Cairo / QPainter (Krita's GL canvas is optional) | no change | no change |
 
+## Probe results (2026-10-10)
+
+`scripts/gui/probes/osmesa-probe.c`, run in Blink against Debian's libOSMesa
+(manifest entry `osmesa-probe`, 47.9 MB with LLVM 15). It times context
+creation, a GLSL 1.20 compile and link, and frames of a full-window quad with
+a per-pixel sin/cos/smoothstep shader plus 2000 small triangles. It reads
+back five pixels and compares them with the same shader evaluated on the CPU.
+
+| | llvmpipe (LLVM JIT) | softpipe (no JIT) |
+|---|---|---|
+| dlopen / context | 1.6 s / 0.7 s | same |
+| shader compile + link | 1.3–1.4 s | 1.4 s |
+| 128×128: first frame, then | 21–25 s, then 0.86 s | 1.0 s, then 0.46 s |
+| 512×512 per frame | 2.6–2.8 s | 4.6 s |
+| 1280×720 per frame | ~9.5 s (extrapolated) | 16.8–17.5 s |
+| pixels | **3 of 5 wrong** | all 5 exact |
+| `LP_NUM_THREADS=0` | no change (no parallel gain in Blink) | – |
+
+- LLVM's JIT works under Blink: llvmpipe initialises, compiles and draws.
+  But its generated code computes some fragments wrongly (e.g. (181, 85, 0)
+  where the shader gives (224, 1, 3)). That's an x86-engine bug in the SSE
+  code LLVM emits, reported with this probe as the repro. It's possibly
+  related to librsvg's gradients, which fail in the same engine.
+- softpipe is correct, and faster than llvmpipe on small frames (no
+  per-draw JIT compiles), but slower per pixel.
+- A realistic window costs seconds to tens of seconds per full redraw with
+  either driver. Blender's UI shaders are cheaper than this probe's, so its
+  frames would land somewhat lower, but nowhere near the ~2 s bar.
+
 ## Recommendation
 
 1. **Measure before building**: Debian's `libosmesa6` renders with llvmpipe
