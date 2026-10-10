@@ -25,6 +25,7 @@ import type { TarEntry } from './utils/tar';
 // utils/tar (~65 KB with its codecs) loads with the first package that needs it
 const readTarball = (bytes: Uint8Array) => import('./utils/tar').then(m => m.readTarball(bytes));
 import builtinIndexJson from './pkg-index.json';
+import { isBuiltinShimFile } from './path-shims';
 import { untar, gunzip, type TarEntry as PkgTarEntry } from './pkg-tar';
 
 // ── Index format ─────────────────────────────────────────────────────
@@ -563,7 +564,9 @@ async function installOne(fs: FileSystem, entry: PkgEntry, opts: PkgOptions): Pr
   const bins: string[] = [];
   for (const [cmd, b] of Object.entries(entry.bin)) {
     const link = `${PKG_BIN_DIR}/${cmd}`;
-    const existing = await lstatSafe(fs, link);
+    let existing = await lstatSafe(fs, link);
+    // Debian mode's shim for the builtin (no package owns it, as dpkg would overwrite it)
+    if (existing?.type === 'file' && await isBuiltinShimFile(fs, link)) { await fs.unlink(link); existing = null; }
     if (existing && existing.type !== 'symlink') {
       log(`warning: not replacing ${link} (a regular file)`);
       continue;
