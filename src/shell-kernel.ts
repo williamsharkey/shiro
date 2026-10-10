@@ -266,7 +266,9 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
       parent: host ?? undefined,
       uid: shell.uid,
     };
-    procs.push(tty ? tty.spawnJob(kernel, spawn) : kernel.spawn(spawn));
+    const proc = tty ? tty.spawnJob(kernel, spawn) : kernel.spawn(spawn);
+    proc.umask = shell.umask; // (the shell's umask builtin, not the parent process's)
+    procs.push(proc);
     if (nextInput) input = nextInput;
   }
   // The children's fd tables hold the slave; if none took it, give it back
