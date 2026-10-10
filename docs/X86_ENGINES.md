@@ -762,6 +762,16 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    copies of the PTEs start with no locks; it inherited the parent's and
    waited on them as it exited. fork_21-1 passes 12/12 and
    pthread_attr_destroy_1-1 6/6.
+94. FUTEX_WAKE_OP and the priority-inheritance futex ops (LOCK_PI,
+   LOCK_PI2, TRYLOCK_PI, UNLOCK_PI) were EINVAL. glibc aborts on that ("The
+   futex facility returned an unexpected error code") for
+   PTHREAD_PRIO_INHERIT mutexes, which TBB, OpenEXR and Blender use. The
+   word holds the owner's tid; a contended locker sets FUTEX_WAITERS and
+   waits on the word. It takes it with FUTEX_WAITERS when it had to wait,
+   so its unlock comes back to wake the rest. EDEADLK for the owner, EPERM
+   for an unlock by a non-owner, timeouts absolute as on Linux; priority
+   inheritance itself is a no-op. Test: fixtures/x86/futexpi.c (raw ops, 4
+   threads on a PI mutex, a timed lock), identical to native output.
 
 The page compiles blink.wasm once and gives the `WebAssembly.Module` to every
 Blink worker (src/x86-engine/blink.ts `blinkWasmModule`, host.mjs

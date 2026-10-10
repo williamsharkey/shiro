@@ -1204,7 +1204,7 @@
 1203:cos
 1204:dup2
 1205:_do_futex_wait
-1206:a_cas_p_1643
+1206:a_cas_p_1644
 1207:emscripten_futex_wake
 1208:_emscripten_thread_notify
 1209:__set_thread_state
@@ -1290,7 +1290,7 @@
 1289:pthread_attr_setdetachstate
 1290:pthread_attr_setstacksize
 1291:pthread_cond_broadcast
-1292:__wake_1847
+1292:__wake_1848
 1293:pthread_cond_destroy
 1294:pthread_cond_init
 1295:pthread_cond_signal
@@ -1299,7 +1299,7 @@
 1298:__pthread_cond_timedwait
 1299:lock
 1300:unlock
-1301:a_fetch_add_1862
+1301:a_fetch_add_1863
 1302:a_store
 1303:__private_cond_signal
 1304:pthread_cond_wait
@@ -1325,7 +1325,7 @@
 1324:undo
 1325:__pthread_once
 1326:__pthread_rwlock_timedrdlock
-1327:a_cas_1930
+1327:a_cas_1931
 1328:__pthread_rwlock_tryrdlock
 1329:__pthread_rwlock_unlock
 1330:__pthread_rwlock_trywrlock

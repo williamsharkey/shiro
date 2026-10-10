@@ -1,0 +1,154 @@
+From 86d969448de8da9e8d51d10b20959d23c0d7be80 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 04:12:28 +0000
+Subject: [PATCH] Shiro: FUTEX_WAKE_OP and the PI futex ops (LOCK_PI, LOCK_PI2,
+ TRYLOCK_PI, UNLOCK_PI)
+
+---
+ blink/linux.h   |   5 +++
+ blink/syscall.c | 106 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 111 insertions(+)
+
+diff --git a/blink/linux.h b/blink/linux.h
+index 79b36d0..8fa5b02 100644
+--- a/blink/linux.h
++++ b/blink/linux.h
+@@ -233,6 +233,11 @@
+ #define FUTEX_WAKE_LINUX           1
+ #define FUTEX_REQUEUE_LINUX        3
+ #define FUTEX_CMP_REQUEUE_LINUX    4
++#define FUTEX_WAKE_OP_LINUX        5
++#define FUTEX_LOCK_PI_LINUX        6
++#define FUTEX_UNLOCK_PI_LINUX      7
++#define FUTEX_TRYLOCK_PI_LINUX     8
++#define FUTEX_LOCK_PI2_LINUX       13
+ #define FUTEX_WAIT_BITSET_LINUX    9
+ #define FUTEX_WAKE_BITSET_LINUX    10
+ #define FUTEX_PRIVATE_FLAG_LINUX   128
+diff --git a/blink/syscall.c b/blink/syscall.c
+index abdcdcf..b477722 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -950,6 +950,102 @@ Leave:
+   return rc;
+ }
+ 
++// FUTEX_WAKE_OP: *uaddr2 = op(old = *uaddr2, oparg); wakes `nwake` at
++// uaddr, and `nwake2` at uaddr2 too when cmp(old, cmparg) holds
++static int SysFutexWakeOp(struct Machine *m, i64 uaddr, u32 nwake, u32 nwake2,
++                          i64 uaddr2, u32 val3) {
++  int op = (val3 >> 28) & 7, cmp = (val3 >> 24) & 15, n, n2;
++  i32 oparg = (i32)(val3 << 8) >> 20, cmparg = (i32)(val3 << 20) >> 20;
++  u32 old, neu;
++  _Atomic(u32) *word;
++  bool hit;
++  if (uaddr2 & 3) return efault();
++  if ((val3 >> 28) & 8) {  // FUTEX_OP_OPARG_SHIFT
++    if ((u32)oparg > 31) return einval();
++    oparg = 1 << oparg;
++  }
++  if (op > 4 || cmp > 5) return enosys();
++  if (!(word = (_Atomic(u32) *)LookupAddress(m, uaddr2))) return -1;
++  old = atomic_load_explicit(word, memory_order_relaxed);
++  do {
++    switch (op) {
++      case 0: neu = oparg; break;
++      case 1: neu = old + oparg; break;
++      case 2: neu = old | oparg; break;
++      case 3: neu = old & ~oparg; break;
++      default: neu = old ^ oparg; break;
++    }
++  } while (!atomic_compare_exchange_weak_explicit(word, &old, neu, memory_order_acq_rel,
++                                                  memory_order_relaxed));
++  switch (cmp) {
++    case 0: hit = (i32)old == cmparg; break;
++    case 1: hit = (i32)old != cmparg; break;
++    case 2: hit = (i32)old < cmparg; break;
++    case 3: hit = (i32)old <= cmparg; break;
++    case 4: hit = (i32)old > cmparg; break;
++    default: hit = (i32)old >= cmparg; break;
++  }
++  if ((n = SysFutexWake(m, uaddr, nwake)) < 0) return n;
++  if (hit && (n2 = SysFutexWake(m, uaddr2, nwake2)) > 0) n += n2;
++  return n;
++}
++
++// Priority-inheritance futexes (pthread mutexes with PTHREAD_PRIO_INHERIT:
++// TBB, OpenEXR, Blender): the word holds the owner's tid, with
++// FUTEX_WAITERS when someone may be blocked. The priority part is a no-op.
++// A locker that had to wait takes the word with FUTEX_WAITERS set, so its
++// unlock comes back here to wake whoever is left.
++static int SysFutexLockPi(struct Machine *m, i64 uaddr, int op, i64 timeout_addr,
++                          bool try) {
++  u32 v;
++  int rc;
++  bool waited = false;
++  _Atomic(u32) *word;
++  for (;;) {
++    if (!(word = (_Atomic(u32) *)LookupAddress(m, uaddr))) return -1;
++    v = atomic_load_explicit(word, memory_order_acquire);
++    if (!(v & FUTEX_TID_MASK_LINUX)) {
++      if (atomic_compare_exchange_strong_explicit(
++              word, &v, (u32)m->tid | (waited || (v & FUTEX_WAITERS_LINUX) ? FUTEX_WAITERS_LINUX : 0),
++              memory_order_acq_rel, memory_order_relaxed)) {
++        return 0;
++      }
++      continue;
++    }
++    if ((int)(v & FUTEX_TID_MASK_LINUX) == m->tid) return (errno = EDEADLK), -1;
++    if (try) return eagain();
++    if (!(v & FUTEX_WAITERS_LINUX) &&
++        !atomic_compare_exchange_strong_explicit(word, &v, v | FUTEX_WAITERS_LINUX,
++                                                 memory_order_acq_rel, memory_order_relaxed)) {
++      continue;
++    }
++    waited = true;
++    // LOCK_PI's timeout is absolute on CLOCK_REALTIME; LOCK_PI2's on
++    // CLOCK_MONOTONIC unless FUTEX_CLOCK_REALTIME
++    rc = SysFutexWait(m, uaddr,
++                      FUTEX_WAIT_BITSET_LINUX |
++                          (op == FUTEX_LOCK_PI_LINUX ? FUTEX_CLOCK_REALTIME_LINUX
++                                                     : (op & FUTEX_CLOCK_REALTIME_LINUX)),
++                      v | FUTEX_WAITERS_LINUX, timeout_addr);
++    if (rc == -1 && errno == ETIMEDOUT) return -1;
++    if (rc == -1 && errno != EAGAIN && errno != EINTR) return -1;
++    // (EINTR: the handler ran; a PI lock isn't interrupted, it goes on)
++  }
++}
++
++static int SysFutexUnlockPi(struct Machine *m, i64 uaddr) {
++  u32 v;
++  _Atomic(u32) *word;
++  if (!(word = (_Atomic(u32) *)LookupAddress(m, uaddr))) return -1;
++  v = atomic_load_explicit(word, memory_order_acquire);
++  do {
++    if ((int)(v & FUTEX_TID_MASK_LINUX) != m->tid) return eperm();
++  } while (!atomic_compare_exchange_weak_explicit(word, &v, v & FUTEX_OWNER_DIED_LINUX,
++                                                  memory_order_acq_rel, memory_order_relaxed));
++  if (v & FUTEX_WAITERS_LINUX) SysFutexWake(m, uaddr, 1);
++  return 0;
++}
++
+ static int SysFutex(struct Machine *m,  //
+                     i64 uaddr,          //
+                     i32 op,             //
+@@ -977,6 +1073,16 @@ static int SysFutex(struct Machine *m,  //
+       if (uaddr2 & 3) return efault();
+       return SysFutexRequeue(m, uaddr, val, (u32)timeout_addr, uaddr2,
+                              op == FUTEX_CMP_REQUEUE_LINUX, val3);
++    case FUTEX_WAKE_OP_LINUX:
++      return SysFutexWakeOp(m, uaddr, val, (u32)timeout_addr, uaddr2, val3);
++    case FUTEX_LOCK_PI_LINUX:
++    case FUTEX_LOCK_PI2_LINUX:
++    case FUTEX_LOCK_PI2_LINUX | FUTEX_CLOCK_REALTIME_LINUX:
++      return SysFutexLockPi(m, uaddr, op, timeout_addr, false);
++    case FUTEX_TRYLOCK_PI_LINUX:
++      return SysFutexLockPi(m, uaddr, op, 0, true);
++    case FUTEX_UNLOCK_PI_LINUX:
++      return SysFutexUnlockPi(m, uaddr);
+     default:
+       LOGF("unsupported %s op %#x", "futex", op);
+       return einval();
+-- 
+2.43.0
+
