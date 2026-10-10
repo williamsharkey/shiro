@@ -870,6 +870,22 @@ export class Kernel {
       proc.markContinued(); this.notify();
       if (!proc.signalHook) this.notifyParentOfStop(proc, 0);
     }
+    // A thread-directed one (a SIGEV_THREAD_ID timer's) left to its default
+    // action: that thread may block it, though the process mask (what all
+    // threads block) doesn't (glibc's SIGEV_THREAD helper waits for it in
+    // sigwaitinfo and the main thread doesn't block it). Only the engine knows
+    // the thread's mask: it holds the signal there, or takes the default action
+    // (Open POSIX fork_18-1 died of signal 32 when an expiry came while the
+    // helper was between waits). Before job control, which would act on it.
+    const onSignal = proc.data.onSignal as ((s: number) => void) | undefined;
+    if (info.tid && onSignal && !proc.sigmask.has(sig) && (proc.dispositions.get(sig) ?? 'default') === 'default' &&
+        A.defaultSignalAction(sig) !== 'stop') {
+      if (!proc.queueSiginfo(info) && proc.pendingSignals.has(sig)) return;
+      proc.pendingSignals.add(sig);
+      proc.interruptSyscalls();
+      onSignal(sig);
+      return;
+    }
     if (proc.signalHook) {
       // (job control routes it: signals.ts queues what it carries when it goes pending)
       proc.data.sigInFlight = info;
