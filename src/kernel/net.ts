@@ -502,7 +502,10 @@ export class KSocket implements OpenFile {
       if (this.soError) return -this.takeError();
       if (this.rxEof || this.rdShut) return 0;
       if (this.state === 'closed') return -EBADF;
-      if (this.state !== 'connected' && this.state !== 'connecting' && !(this.type === SOCK_DGRAM && this.state === 'bound')) return -ENOTCONN;
+      // (an AF_UNIX stream socket's is EINVAL on Linux: unix_stream_read_generic)
+      if (this.state !== 'connected' && this.state !== 'connecting' && !(this.type === SOCK_DGRAM && this.state === 'bound')) {
+        return this.domain === AF_UNIX && this.type !== SOCK_DGRAM ? -EINVAL : -ENOTCONN;
+      }
       if (dontwait) return got || -EAGAIN;
       if (signal?.aborted) return got || -EINTR;
       const t0 = Date.now();
@@ -574,8 +577,11 @@ export class KSocket implements OpenFile {
       if (this.state !== 'connected' || !this.peer) return this.everConnected ? -EPIPE : -ENOTCONN;
       if (buf.length === 0) return 0;
       if (this.messages && buf.length > this.stack.config.sndbuf) return -EMSGSIZE;
+      // (a datagram waits only while the buffer is full, then may overshoot
+      // it, as Linux checks before allocating: two messages of half
+      // SO_SNDBUF fit, Open POSIX aio_cancel_5-1)
       const room = this.stack.config.sndbuf - this.peer.buffered();
-      if (room <= 0 || (this.messages && room < buf.length + MSG_OVERHEAD)) {
+      if (room <= 0) {
         if (dontwait) return -EAGAIN;
         if (signal?.aborted) return -EINTR;
         await this.q.wait(50, signal);
@@ -602,7 +608,7 @@ export class KSocket implements OpenFile {
       case 'connected':
         if (this.rxLen > 0 || this.rxEof || this.rdShut) r |= POLLIN;
         if (this.rxEof || this.rdShut) r |= POLLRDHUP; // the peer's FIN, or our own shutdown(SHUT_RD)
-        if (!this.wrShut && this.peer && this.peer.buffered() + (this.messages ? MSG_OVERHEAD : 0) < this.stack.config.sndbuf) r |= POLLOUT;
+        if (!this.wrShut && this.peer && this.peer.buffered() < this.stack.config.sndbuf) r |= POLLOUT;
         if (this.rxEof && this.wrShut) r |= POLLHUP;
         break;
       case 'closed':
@@ -827,6 +833,8 @@ export class KSocket implements OpenFile {
       return -ENOPROTOOPT;
     }
     if (level === IPPROTO_IPV6 && name === IPV6_V6ONLY) return this.getOpt(level, name);
+    // a level an inet socket has no options at: EOPNOTSUPP (Linux's ip_getsockopt; LTP getsockopt01)
+    if (this.domain !== AF_UNIX && level !== IPPROTO_IP && level !== IPPROTO_IPV6) return -EOPNOTSUPP;
     return -ENOPROTOOPT;
   }
 
@@ -834,6 +842,8 @@ export class KSocket implements OpenFile {
   setsockopt(level: number, name: number, value: number): number {
     if (level === SOL_SOCKET && (name === SO_ERROR || name === SO_TYPE || name === SO_DOMAIN || name === SO_PROTOCOL || name === SO_ACCEPTCONN)) return -ENOPROTOOPT;
     if (level !== SOL_SOCKET && level !== IPPROTO_TCP && level !== IPPROTO_IPV6 && level !== IPPROTO_IP) return -ENOPROTOOPT;
+    // (option numbers that don't exist: LTP setsockopt01's -1)
+    if (name <= 0 || name > 100) return -ENOPROTOOPT;
     this.opts.set(`${level}:${name}`, value);
     return 0;
   }

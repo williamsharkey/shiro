@@ -52,12 +52,14 @@ function stoppedLine(id: number, job: BackgroundJob, sig: number): string {
 }
 
 /** Resolves with the shell status when every process of a kernel job has exited (stops don't end it). */
-function kernelJobExit(job: BackgroundJob): Promise<number> {
+function kernelJobExit(job: BackgroundJob, reap?: () => Promise<void>): Promise<number> {
   return new Promise((resolve) => {
     const loop = async () => {
       for (;;) {
         const r = await jobControl.waitJob(job.pgid!, job.pids);
         if (r.type === 'exited') {
+          // reaped at once, as bash's SIGCHLD handler does: no zombie under the shell
+          await reap?.().catch(() => {});
           job.status = WIFEXITED(r.status) && r.status === 0 ? 'done' : 'failed';
           job.exitCode = shellStatus(r.status);
           resolve(job.exitCode);
@@ -122,6 +124,8 @@ export async function runKernelJob(shell: Shell, opts: {
   background?: boolean;
   tty?: TtySession;
   write?: (s: string) => void;
+  /** Collect the job's exited processes (waitpid), so they don't stay zombies */
+  reap?: () => Promise<void>;
 }): Promise<number> {
   const write = opts.write ?? (() => {});
   const job: BackgroundJob = {
@@ -136,9 +140,10 @@ export async function runKernelJob(shell: Shell, opts: {
   if (opts.background) {
     const id = shell.allocJobId();
     job.id = id;
-    job.promise = kernelJobExit(job);
+    job.promise = kernelJobExit(job, opts.reap);
     shell.backgroundJobs.set(id, job);
-    write(`[${id}] ${opts.pgid}\n`);
+    // ($!: the last process; without job control the group is the shell's)
+    write(`[${id}] ${opts.pids?.[opts.pids.length - 1] ?? opts.pgid}\n`);
     return 0;
   }
   const tty = opts.tty;
@@ -178,14 +183,15 @@ export const jobsCmd: Command = {
       if (runningOnly && job.status !== 'running') continue;
       if (stoppedOnly && job.status !== 'stopped') continue;
       if (pOnly) {
-        ctx.stdout += `${job.pgid ?? job.pid ?? id}\n`;
+        // (the job's first process: without job control its group is the shell's)
+        ctx.stdout += `${job.pids?.[0] ?? job.pgid ?? job.pid ?? id}\n`;
         continue;
       }
       const mark = id === current ? '+' : id === previous ? '-' : ' ';
       if (job.pgid) {
         const status = statusText(job).padEnd(24);
         ctx.stdout += longFormat
-          ? `[${id}]${mark} ${job.pgid} ${status}${job.command}\n`
+          ? `[${id}]${mark} ${job.pids?.[0] ?? job.pgid} ${status}${job.command}\n`
           : `[${id}]${mark}  ${status}${job.command}\n`;
       } else {
         const status = job.status === 'running' ? 'Running'

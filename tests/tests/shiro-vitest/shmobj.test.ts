@@ -327,6 +327,7 @@ describe('SharedObjects: a /dev/shm file mapped remote', () => {
     expect(await pread(fd2, HI + 3)).toBe('z');
     expect(await kernel.syscall(a, A.SYS_shiro_shmobj_unmap, [id], d)).toBe(0);
     mem.fill(0, HI, HI + 8); // no longer the file's memory
+    expect((a.fds.get(fd2) as any).ino.blob).toBeTruthy(); // pages again, not a whole copy
     expect([await pread(fd2, HI), await pread(fd2, HI + 1), await pread(fd2, HI + 2), await pread(fd2, HI + 3)].join('')).toBe('pawz');
     expect(await pwrite(fd2, SZ - 1, 'e')).toBe(1); // still writable after the detach
     expect(await kernel.syscall(a, A.SYS_close, [fd2], d)).toBe(0);
@@ -346,6 +347,121 @@ describe('SharedObjects: a /dev/shm file mapped remote', () => {
     expect(await kernel.syscall(a, A.SYS_shiro_shmobj_unmap, [id2], d)).toBe(0);
     expect([await pread(fd3, 5), await pread(fd3, HI)].join('')).toBe('mp');
     expect(await kernel.syscall(a, A.SYS_close, [fd3], d)).toBe(0);
+    await kernel.engineInstanceGone(ia);
+    kernel.dispose();
+  });
+  it('a /dev/shm file with two names: an fd opened through the other name while mapped uses the mapping', async () => {
+    const { fs } = await createTestShell();
+    const kernel = new Kernel({ fs, registerWithProcessTable: false });
+    const inbox: Record<number, ShmObjMessage[]> = {};
+    const ia = kernel.registerEngineInstance((m) => (inbox[ia] ??= []).push(m));
+    const a = kernel.spawn({ path: 'p', cwd: '/tmp', uid: 1000, run: () => new Promise<number>(() => {}) });
+    a.data.engineInstance = ia;
+    await fs.mkdir('/dev/shm', { recursive: true }).catch(() => {});
+    await fs.writeFile('/dev/shm/two', new Uint8Array(8192));
+    await fs.link('/dev/shm/two', '/dev/shm/two.link');
+    const d = new Uint8Array(256);
+    const open = async (p: string) => { const e = new TextEncoder().encode(p); d.set(e); return kernel.syscall(a, A.SYS_openat, [A.AT_FDCWD, e.length, A.O_RDWR, 0], d); };
+    const fd = await open('/dev/shm/two');
+    const out = new Uint8Array(8);
+    const id = await kernel.syscall(a, A.SYS_shiro_shmobj_map, [fd, A.SHMOBJ_EAGER, 8192, 0], out);
+    const mem = new Uint8Array((inbox[ia][0] as { sab: SharedArrayBuffer }).sab);
+    mem[7] = 0x6c; // 'l' through the mapping
+    expect(await kernel.syscall(a, A.SYS_close, [fd], d)).toBe(0);
+    const fd2 = await open('/dev/shm/two.link'); // the other name, opened while mapped
+    const b = new Uint8Array(1);
+    expect(await kernel.syscall(a, A.SYS_pread64, [fd2, 1, 7, 0], b)).toBe(1);
+    expect(b[0]).toBe(0x6c);
+    d[0] = 0x6b; // 'k' through it
+    expect(await kernel.syscall(a, A.SYS_pwrite64, [fd2, 1, 8, 0], d)).toBe(1);
+    expect(mem[8]).toBe(0x6b);
+    expect(await kernel.syscall(a, A.SYS_shiro_shmobj_unmap, [id], d)).toBe(0);
+    expect(await kernel.syscall(a, A.SYS_close, [fd2], d)).toBe(0);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(Array.from((await fs.readFile('/dev/shm/two') as Uint8Array).subarray(7, 9))).toEqual([0x6c, 0x6b]);
+    expect(Array.from((await fs.readFile('/dev/shm/two.link') as Uint8Array).subarray(7, 9))).toEqual([0x6c, 0x6b]);
+    await kernel.engineInstanceGone(ia);
+    kernel.dispose();
+  });
+});
+
+describe('SharedObjects: an unlinked /dev/shm object is not its old name', () => {
+  const setup = async () => {
+    const { fs } = await createTestShell();
+    const kernel = new Kernel({ fs, registerWithProcessTable: false });
+    const inbox: Record<number, ShmObjMessage[]> = {};
+    const ia = kernel.registerEngineInstance((m) => (inbox[ia] ??= []).push(m));
+    const a = kernel.spawn({ path: 'p', cwd: '/tmp', uid: 1000, run: () => new Promise<number>(() => {}) });
+    a.data.engineInstance = ia;
+    await fs.mkdir('/dev/shm', { recursive: true }).catch(() => {});
+    const d = new Uint8Array(256);
+    const call = (nr: number, args: number[], data = d) => kernel.syscall(a, nr, args, data);
+    const open = async (path: string, flags = A.O_RDWR) => {
+      const e = new TextEncoder().encode(path); d.fill(0); d.set(e);
+      return call(A.SYS_openat, [A.AT_FDCWD, e.length, flags, 0o600]);
+    };
+    const unlink = async (path: string) => {
+      const e = new TextEncoder().encode(path); d.fill(0); d.set(e);
+      return call(A.SYS_unlinkat, [A.AT_FDCWD, e.length, 0]);
+    };
+    const map = async (fd: number) => {
+      const out = new Uint8Array(8);
+      const id = await call(A.SYS_shiro_shmobj_map, [fd, A.SHMOBJ_EAGER, 4096, 0], out);
+      return { id, sab: (inbox[ia].at(-1) as { sab: SharedArrayBuffer }).sab };
+    };
+    const pread = async (fd: number, off: number) => {
+      const b = new Uint8Array(1);
+      return (await call(A.SYS_pread64, [fd, 1, off, 0], b)) === 1 ? String.fromCharCode(b[0]) : '?';
+    };
+    return { fs, kernel, ia, call, open, unlink, map, pread, d };
+  };
+
+  it('unlinked before the map: a new file of that name is another object; the bytes stay with the fd', async () => {
+    const { fs, kernel, ia, call, open, unlink, map, pread } = await setup();
+    await fs.writeFile('/dev/shm/u', new Uint8Array(4096));
+    const fd = await open('/dev/shm/u');
+    expect(await unlink('/dev/shm/u')).toBe(0);
+    const m1 = await map(fd);
+    new Uint8Array(m1.sab)[0] = 0x61; // 'a'
+    expect(await pread(fd, 0)).toBe('a');
+    // the name again: a new, separate object
+    await fs.writeFile('/dev/shm/u', new Uint8Array(4096).fill(0x6e)); // 'n'
+    const fd2 = await open('/dev/shm/u');
+    expect(await pread(fd2, 0)).toBe('n');
+    const m2 = await map(fd2);
+    expect(m2.id).not.toBe(m1.id);
+    expect(m2.sab).not.toBe(m1.sab);
+    // the last unmap: the new file keeps its bytes, the unlinked fd its own (off the buffer)
+    expect(await call(A.SYS_shiro_shmobj_unmap, [m1.id])).toBe(0);
+    new Uint8Array(m1.sab)[0] = 0x7a; // no longer the file's memory
+    expect(await pread(fd, 0)).toBe('a');
+    expect(await pread(fd2, 0)).toBe('n');
+    expect(await call(A.SYS_shiro_shmobj_unmap, [m2.id])).toBe(0);
+    expect(((await fs.readFile('/dev/shm/u')) as Uint8Array)[0]).toBe(0x6e);
+    await kernel.engineInstanceGone(ia);
+    kernel.dispose();
+  });
+
+  it('unlinked while mapped: mapping its fd again is the same object; a new file of that name is untouched', async () => {
+    const { fs, kernel, ia, call, open, unlink, map, pread } = await setup();
+    await fs.writeFile('/dev/shm/w', new Uint8Array(4096));
+    const fd = await open('/dev/shm/w');
+    const m1 = await map(fd);
+    expect(await unlink('/dev/shm/w')).toBe(0);
+    const again = await map(fd);
+    expect(again.id).toBe(m1.id);
+    new Uint8Array(m1.sab)[0] = 0x61;
+    await fs.writeFile('/dev/shm/w', new Uint8Array(4096).fill(0x6e));
+    const fd2 = await open('/dev/shm/w');
+    expect(await pread(fd2, 0)).toBe('n'); // not the old object's buffer
+    expect(await call(A.SYS_shiro_shmobj_unmap, [m1.id])).toBe(0);
+    expect(await call(A.SYS_shiro_shmobj_unmap, [m1.id])).toBe(0);
+    expect(await pread(fd, 0)).toBe('a');
+    new Uint8Array(m1.sab)[0] = 0x7a;
+    expect(await pread(fd, 0)).toBe('a'); // off the buffer
+    expect(await pread(fd2, 0)).toBe('n');
+    await new Promise((r) => setTimeout(r, 50));
+    expect(((await fs.readFile('/dev/shm/w')) as Uint8Array)[0]).toBe(0x6e);
     await kernel.engineInstanceGone(ia);
     kernel.dispose();
   });

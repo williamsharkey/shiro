@@ -1,3 +1,4 @@
+import { EscapedBytes } from '../utils/printf';
 import type { Command } from './index';
 
 /**
@@ -26,32 +27,33 @@ export const echo: Command = {
       return 0;
     }
     let out = '';
+    // \0NNN and \xHH are bytes, decoded a run at a time (\xc3\xa9 is é; \xff one byte)
+    const bytes = new EscapedBytes();
     for (let k = 0; k < text.length; k++) {
       const c = text[k];
-      if (c !== '\\' || k + 1 >= text.length) { out += c; continue; }
+      if (c !== '\\' || k + 1 >= text.length) { out += bytes.flush() + c; continue; }
       const n = text[++k];
-      const simple: Record<string, string> = { a: '\x07', b: '\b', e: '\x1b', E: '\x1b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v', '\\': '\\' };
-      if (simple[n] !== undefined) { out += simple[n]; continue; }
-      if (n === 'c') { ctx.stdout += out; return 0; }
       if (n === '0') {
         const m = /^[0-7]{0,3}/.exec(text.slice(k + 1))![0];
-        out += String.fromCharCode(parseInt(m || '0', 8) & 0xff);
+        bytes.push(parseInt(m || '0', 8) & 0xff);
         k += m.length;
         continue;
       }
-      if (n === 'x' || n === 'u' || n === 'U') {
-        const max = n === 'x' ? 2 : n === 'u' ? 4 : 8;
-        const m = new RegExp(`^[0-9a-fA-F]{1,${max}}`).exec(text.slice(k + 1));
-        if (m) {
-          const v = parseInt(m[0], 16);
-          out += n === 'x' ? String.fromCharCode(v) : String.fromCodePoint(v);
-          k += m[0].length;
-          continue;
-        }
+      if (n === 'x') {
+        const m = /^[0-9a-fA-F]{1,2}/.exec(text.slice(k + 1));
+        if (m) { bytes.push(parseInt(m[0], 16)); k += m[0].length; continue; }
+      }
+      out += bytes.flush();
+      const simple: Record<string, string> = { a: '\x07', b: '\b', e: '\x1b', E: '\x1b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v', '\\': '\\' };
+      if (simple[n] !== undefined) { out += simple[n]; continue; }
+      if (n === 'c') { ctx.stdout += out; return 0; }
+      if (n === 'u' || n === 'U') {
+        const m = new RegExp(`^[0-9a-fA-F]{1,${n === 'u' ? 4 : 8}}`).exec(text.slice(k + 1));
+        if (m) { out += String.fromCodePoint(parseInt(m[0], 16)); k += m[0].length; continue; }
       }
       out += '\\' + n;
     }
-    ctx.stdout += out + (newline ? '\n' : '');
+    ctx.stdout += out + bytes.flush() + (newline ? '\n' : '');
     return 0;
   },
 };

@@ -133,7 +133,7 @@ Not here: hardware devices, kernel modules, and any access to your own machine.
 - **Prebuilt packages.** 72 programs built for the page, WebAssembly or static x86-64, that
   install in about a second ([above](#tabcomputers-prebuilt-packages), [docs/PACKAGES.md](docs/PACKAGES.md)).
 - **Conformance.** Under Blink, LTP's syscall tests pass 283/322 and the Open POSIX Test Suite
-  1375/1448 (only tests that pass natively as uid 1000 are scored); the busybox testsuite
+  1428/1448 (only tests that pass natively as uid 1000 are scored); the busybox testsuite
   625/635; the oils shell spec tests 2034/2417; smoosh's POSIX shell tests 159/162; the
   wasi-testsuite 71/72 ([docs/CONFORMANCE.md](docs/CONFORMANCE.md)).
 - **GUI apps.** `gui` lists Debian X11 apps (xterm, GTK and Qt editors and viewers, GIMP,
@@ -229,6 +229,27 @@ It runs them twice, as a static x86-64 binary under Blink
 and through the Node runtime (what the npm build uses), so you can see which layer
 breaks. It also runs the native `claude --version` if that is installed. Plain
 `doctor` shows a one-line summary.
+
+### If tabcomputer won't load
+
+If the page freezes or stays blank on every reload, open it in safe mode: add `?safe=1` to the
+address (`https://tabcomputer.com/?safe=1`; `?safe` and `#safe` work too). A tab whose last two
+loads never reached the prompt starts in safe mode by itself on the next reload (counted in this
+tab only, and reset once a load reaches the prompt).
+
+Safe mode starts a plain terminal and skips what your saved setup starts at boot: `~/.profile`
+(and anything it launches), your saved windows and panes, app mode, the background Claude Code
+install and the X11 display. Your files are all still there. In safe mode:
+
+- `safe-mode` shows why it's on, and any boot step that failed or hung.
+- `console --prev` shows the log of the session before this one.
+- `safe-mode disable-profile` renames `~/.profile` to `~/.profile.disabled` (or `.disabled.2`, …;
+  it never overwrites a file), so it no longer runs at boot. Rename it back to restore it.
+- `safe-mode reset-layout` forgets the saved windows, panes, app mode and console log. Files
+  aren't touched.
+- `safe-mode exit` reloads normally.
+
+Nothing in safe mode deletes files.
 
 ## Development
 

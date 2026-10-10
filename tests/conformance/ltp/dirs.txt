@@ -8,3 +8,13 @@ chdir fchdir getcwd access faccessat umask truncate ftruncate chmod fchmod
 socket socketpair bind listen connect accept sendfile
 clock_gettime clock_nanosleep nanosleep gettimeofday time
 futex sched_yield getpid getppid uname getrlimit setrlimit
+mmap munmap mprotect mremap msync madvise mincore memfd_create mlock munlock brk sbrk
+statx fstatat utimensat utime utimes fchownat fchmodat mknod mknodat statfs fstatfs
+fsync fdatasync sync syncfs sync_file_range fallocate readahead copy_file_range splice tee vmsplice
+renameat renameat2 linkat symlinkat readlinkat flock ioctl preadv pwritev preadv2 pwritev2 close_range
+eventfd eventfd2 timerfd inotify epoll_pwait
+sendmsg recvmsg sendto recvfrom shutdown getsockopt setsockopt getsockname getpeername
+rt_sigqueueinfo rt_sigtimedwait sigwait sigaltstack sigpending sigsuspend tgkill tkill
+timer_create timer_settime getitimer setitimer
+prctl getrandom setsid setpgid getpgid getuid geteuid getgid getgroups getrusage times sysinfo
+sched_getaffinity sched_setaffinity exit exit_group set_tid_address gettid getcpu

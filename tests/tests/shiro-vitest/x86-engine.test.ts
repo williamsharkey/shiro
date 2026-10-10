@@ -71,6 +71,10 @@ const shmobjBin = join(out, 'shmobj');
 const haveShmobj = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', shmobjBin, 'shmobj.c']);
 const shmoddBin = join(out, 'shmodd');
 const haveShmodd = tryBuild('gcc', ['-static', '-O1', '-o', shmoddBin, 'shmodd.c']);
+const statpathBin = join(out, 'statpath');
+const haveStatpath = tryBuild('gcc', ['-static', '-O1', '-o', statpathBin, 'statpath.c']);
+const execenvBin = join(out, 'execenv');
+const haveExecenv = tryBuild('gcc', ['-static', '-O1', '-o', execenvBin, 'execenv.c']);
 const shmpreadBin = join(out, 'shmpread');
 const haveShmpread = tryBuild('gcc', ['-static', '-O1', '-o', shmpreadBin, 'shmpread.c']);
 const fsidentBin = join(out, 'fsident');
@@ -292,6 +296,9 @@ const haveTimerthread = blinkHasTimerthread && tryBuild('gcc', ['-static', '-O1'
 const mmaptailBin = join(out, 'mmaptail');
 const blinkHasMmaptail = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_mmaptail');
 const haveMmaptail = blinkHasMmaptail && tryBuild('gcc', ['-static', '-O1', '-w', '-o', mmaptailBin, 'mmaptail.c']);
+// a named semaphore's count survives sem_close (the kernel writes a /dev/shm object back to its linked names)
+const semreopenBin = join(out, 'semreopen');
+const haveSemreopen = tryBuild('gcc', ['-static', '-O1', '-w', '-o', semreopenBin, 'semreopen.c', '-lpthread']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -979,6 +986,12 @@ it.skipIf(!haveMmaptail)('a file mapping whose length ends mid-page shows the fi
   expect(r.output.replace(/\r\n/g, '\n')).toBe('tail a\nreplaced 1 tail b\n');
 }, 60_000);
 
+it.skipIf(!haveSemreopen)('a named semaphore keeps its count across sem_close and sem_open: a /dev/shm object goes back to the names link() gave it (Open POSIX sem_close_3-2)', async () => {
+  const { shell } = await setup(readFileSync(semreopenBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('value 1\n');
+}, 60_000);
+
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
 // (busybox picks its applet by it; Debian's redis-server -> redis-check-rdb)
 describe('argv[0] through a symlink', () => {
@@ -1534,6 +1547,26 @@ describe('Blink engine: CPU and syscall fixes', () => {
       "anon after fork 'c' munmap rounded 0\nshm after close 'qwerty' mapped 'qwerty'\ndone\nrc 0\n";
     expect(r.output.replace(/\r\n/g, '\n')).toBe(ok + ok);
   }, 120_000);
+
+  // Path lookup errors (LTP lstat02), as uid 1000
+  it.skipIf(!haveStatpath)('stat and lstat: EACCES, ENOENT for "", ENAMETOOLONG, ENOTDIR, ELOOP past 40 links', async () => {
+    const { shell } = await setup(readFileSync(statpathBin));
+    const r = await run(shell, 'rm -rf sp; ./prog; rm -rf sp');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'eacces lstat Permission denied stat Permission denied\n' +
+      'enoent lstat No such file or directory stat No such file or directory\n' +
+      'enametoolong lstat File name too long stat File name too long\n' +
+      'enotdir lstat Not a directory stat Not a directory\n' +
+      'eloop lstat Too many levels of symbolic links stat Too many levels of symbolic links\n' +
+      'ok-30 lstat ok stat ok\n');
+  }, 60_000);
+
+  // execve's envp is the new program's whole environment (LTP execve01)
+  it.skipIf(!haveExecenv)('execve passes exactly the envp it was given', async () => {
+    const { shell } = await setup(readFileSync(execenvBin));
+    const r = await run(shell, './prog; env -i ./prog; ./prog fork; ./prog self');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('child env 1 PATH (none) ONLY 1\n'.repeat(4));
+  }, 60_000);
 
   // The fd and the mapping of a /dev/shm object are one file (conformance's report, Open POSIX shm_open)
   it.skipIf(!haveShmpread)('a /dev/shm object: pread sees the mapping, the mapping sees pwrite, an fd opened while mapped too', async () => {

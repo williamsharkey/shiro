@@ -206,6 +206,8 @@ ${bootSection(ctx, name)}
   Started in the background, one still has a PID (\`$!\`, \`jobs -l\`): \`ps\`
   lists it, it has a \`/proc/PID\`, and \`kill PID\` stops it from any shell. A
   builtin in the foreground has none: Ctrl-C it, or reload.
+- If a boot freezes, \`?safe=1\` in the address skips ~/.profile and the saved
+  layout; \`safe-mode\` lists what failed.
 - \`console -g PATTERN\` searches the page's console log (\`--prev\` includes the
   load before the last reload).
 - Report bugs at ${source}/issues (\`gh issue create\` works here): the command,

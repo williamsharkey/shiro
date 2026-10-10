@@ -7,7 +7,7 @@
  * .lzma (LZMA_Alone): 13-byte header, LZMA with known size or end marker.
  */
 
-import { crc32 } from './crc32';
+import { crc32, crc32Update } from './crc32';
 
 export type XzErrorKind = 'format' | 'corrupt' | 'eof' | 'options';
 
@@ -40,15 +40,23 @@ const CRC64_LO = new Int32Array(256), CRC64_HI = new Int32Array(256);
   }
 })();
 
-function crc64(b: Uint8Array, start: number, end: number): Uint8Array {
-  let lo = -1, hi = -1;
+/** CRC64 state over bytes so far: [lo, hi], starting at [-1, -1] */
+function crc64Update(st: Int32Array, b: Uint8Array, start: number, end: number): void {
+  let lo = st[0], hi = st[1];
   for (let i = start; i < end; i++) {
     const idx = (lo ^ b[i]) & 0xff;
     lo = ((lo >>> 8) | (hi << 24)) ^ CRC64_LO[idx];
     hi = (hi >>> 8) ^ CRC64_HI[idx];
   }
-  lo = ~lo; hi = ~hi;
-  return new Uint8Array([lo, lo >>> 8, lo >>> 16, lo >>> 24, hi, hi >>> 8, hi >>> 16, hi >>> 24]);
+  st[0] = lo; st[1] = hi;
+}
+
+const crc64Bytes = (st: Int32Array) => { const lo = ~st[0], hi = ~st[1]; return new Uint8Array([lo, lo >>> 8, lo >>> 16, lo >>> 24, hi, hi >>> 8, hi >>> 16, hi >>> 24]); };
+
+function crc64(b: Uint8Array, start: number, end: number): Uint8Array {
+  const st = new Int32Array([-1, -1]);
+  crc64Update(st, b, start, end);
+  return crc64Bytes(st);
 }
 
 const SHA256_K = new Int32Array([
@@ -99,10 +107,40 @@ function sha256(b: Uint8Array, start: number, end: number): Uint8Array {
 
 // ── Output buffer (it is also the LZ dictionary) ──────────────────────
 
+/**
+ * With a `sink` (xzDecompressTo) the output streams out: slide() hands what
+ * was decoded since to the sink and drops all but the last `keep` bytes (the
+ * dictionary), so `buf` holds only that window; `base` counts the bytes
+ * dropped before buf[0]. Without one, buf holds everything (base stays 0).
+ */
 class Out {
   buf: Uint8Array;
   pos = 0;
-  constructor(cap: number) { this.buf = new Uint8Array(Math.max(cap, 1024)); }
+  base = 0;
+  /** buf index up to which bytes went to the sink */
+  emitted = 0;
+  keep = 0;
+  /** The current block's check, updated with what is emitted */
+  check: { crc32: number } | { crc64: Int32Array } | null = null;
+  constructor(cap: number, public sink?: (bytes: Uint8Array) => void) { this.buf = new Uint8Array(Math.max(cap, 1024)); }
+  slide(): void {
+    if (!this.sink) return;
+    if (this.pos > this.emitted) {
+      const c = this.check;
+      if (c && 'crc32' in c) c.crc32 = crc32Update(c.crc32, this.buf, this.emitted, this.pos);
+      else if (c) crc64Update(c.crc64, this.buf, this.emitted, this.pos);
+      this.sink(this.buf.slice(this.emitted, this.pos));
+      this.emitted = this.pos;
+    }
+    // Shift by a multiple of 64 KiB: the decoder's position-dependent contexts (pb, lp) stay the same
+    const shift = Math.max(0, this.pos - this.keep - (4 << 20)) & ~0xffff;
+    if (shift > 0) {
+      this.buf.copyWithin(0, shift, this.pos);
+      this.pos -= shift;
+      this.emitted -= shift;
+      this.base += shift;
+    }
+  }
   ensure(extra: number): void {
     const need = this.pos + extra;
     if (need <= this.buf.length) return;
@@ -332,11 +370,14 @@ class LzmaDecoder {
 }
 
 /** Decode an LZMA2 stream starting at `pos`; returns the position after its end byte */
-function decodeLzma2(inp: Uint8Array, pos: number, out: Out): number {
+/** A generator: it yields after handing output to a streaming Out's sink (run() drives it through at once). */
+function* decodeLzma2(inp: Uint8Array, pos: number, out: Out): Generator<void, number, void> {
   const lz = new LzmaDecoder();
-  let dictStart = out.pos;
+  // Absolute (out.base + index): the window may slide between chunks
+  let dictStart = out.base + out.pos;
   let needDictReset = true, needProps = true;
   for (;;) {
+    if (out.sink) { out.slide(); yield; }
     if (pos >= inp.length) throw eof();
     const control = inp[pos++];
     if (control === 0) return pos;
@@ -344,7 +385,7 @@ function decodeLzma2(inp: Uint8Array, pos: number, out: Out): number {
       if (pos + 2 > inp.length) throw eof();
       const size = ((inp[pos] << 8) | inp[pos + 1]) + 1;
       pos += 2;
-      if (control === 1) { dictStart = out.pos; needDictReset = false; }
+      if (control === 1) { dictStart = out.base + out.pos; needDictReset = false; }
       else if (needDictReset) throw corrupt('missing dictionary reset');
       if (pos + size > inp.length) throw eof();
       out.ensure(size);
@@ -359,7 +400,7 @@ function decodeLzma2(inp: Uint8Array, pos: number, out: Out): number {
     const packed = (inp[pos + 2] << 8) + inp[pos + 3] + 1;
     pos += 4;
     const reset = (control >> 5) & 3;
-    if (reset === 3) { dictStart = out.pos; needDictReset = false; }
+    if (reset === 3) { dictStart = out.base + out.pos; needDictReset = false; }
     else if (needDictReset) throw corrupt('missing dictionary reset');
     if (reset >= 2) {
       if (pos >= inp.length) throw eof();
@@ -372,7 +413,7 @@ function decodeLzma2(inp: Uint8Array, pos: number, out: Out): number {
     if (end > inp.length) throw eof();
     out.ensure(unpacked + 274);
     lz.initRange(inp, pos, end);
-    lz.decode(out, out.pos + unpacked, dictStart, end, false);
+    lz.decode(out, out.pos + unpacked, dictStart - out.base, end, false);
     if (lz.inPos !== end || !lz.finished || lz.pending) throw corrupt('LZMA2 chunk size mismatch');
     pos = end;
   }
@@ -456,7 +497,7 @@ export interface XzDecodeResult {
   unsupportedCheck?: number;
 }
 
-function decodeXzStream(inp: Uint8Array, pos: number, out: Out, res: XzDecodeResult): number {
+function* decodeXzStream(inp: Uint8Array, pos: number, out: Out, res: XzDecodeResult): Generator<void, number, void> {
   if (inp.length - pos < 12) throw eof();
   for (let i = 0; i < 6; i++) if (inp[pos + i] !== XZ_MAGIC[i]) throw new XzError('format', 'File format not recognized');
   if (crc32(inp, pos + 6, pos + 8) !== le32(inp, pos + 8)) throw corrupt('stream header CRC');
@@ -502,12 +543,21 @@ function decodeXzStream(inp: Uint8Array, pos: number, out: Out, res: XzDecodeRes
       if (!ok) throw new XzError('options', 'Unsupported filter chain or filter options');
     }
 
+    if (out.sink) {
+      // Streaming: no filters after the fact, and checks computed as the bytes go
+      if (filters.length > 1 || checkType === 10) throw new XzError('options', XZ_NOT_STREAMABLE);
+      const p = last.props[0];
+      out.keep = Math.max(out.keep, p === 40 ? 0xffffffff : (2 | (p & 1)) * 2 ** ((p >> 1) + 11));
+      out.slide();
+      out.check = checkType === 1 ? { crc32: 0 } : checkType === 4 ? { crc64: new Int32Array([-1, -1]) } : null;
+    }
     pos = hstart + hsize;
     const dataStart = pos;
     const outStart = out.pos;
-    pos = decodeLzma2(inp, pos, out);
+    const outStartAbs = out.base + out.pos;
+    pos = yield* decodeLzma2(inp, pos, out);
     if (compSize >= 0 && pos - dataStart !== compSize) throw corrupt('block size');
-    if (uncompSize >= 0 && out.pos - outStart !== uncompSize) throw corrupt('block uncompressed size');
+    if (uncompSize >= 0 && out.base + out.pos - outStartAbs !== uncompSize) throw corrupt('block uncompressed size');
     // Non-last filters, applied in reverse order
     for (let f = filters.length - 2; f >= 0; f--) {
       if (filters[f].id === 0x03) undoDelta(out.buf, outStart, out.pos, filters[f].props[0] + 1);
@@ -521,12 +571,19 @@ function decodeXzStream(inp: Uint8Array, pos: number, out: Out, res: XzDecodeRes
     if (pos + checkSize > inp.length) throw eof();
     const stored = inp.subarray(pos, pos + checkSize);
     let actual: Uint8Array | null = null;
-    if (checkType === 1) { const c = crc32(out.buf, outStart, out.pos); actual = new Uint8Array([c, c >>> 8, c >>> 16, c >>> 24]); }
+    if (out.sink) {
+      out.slide();
+      const c = out.check;
+      out.check = null;
+      if (c && 'crc32' in c) actual = new Uint8Array([c.crc32, c.crc32 >>> 8, c.crc32 >>> 16, c.crc32 >>> 24]);
+      else if (c) actual = crc64Bytes(c.crc64);
+    }
+    else if (checkType === 1) { const c = crc32(out.buf, outStart, out.pos); actual = new Uint8Array([c, c >>> 8, c >>> 16, c >>> 24]); }
     else if (checkType === 4) actual = crc64(out.buf, outStart, out.pos);
     else if (checkType === 10) actual = sha256(out.buf, outStart, out.pos);
     if (actual) for (let i = 0; i < checkSize; i++) if (actual[i] !== stored[i]) throw new XzError('corrupt', 'Compressed data is corrupt');
     pos += checkSize;
-    records.push([unpadded + checkSize, out.pos - outStart]);
+    records.push([unpadded + checkSize, out.base + out.pos - outStartAbs]);
   }
 
   // Index
@@ -554,11 +611,16 @@ function decodeXzStream(inp: Uint8Array, pos: number, out: Out, res: XzDecodeRes
   return pos + 12;
 }
 
+/** Run a decoding generator to its end (no sink: it never yields). */
+function run<T>(g: Generator<void, T, void>): T {
+  for (;;) { const r = g.next(); if (r.done) return r.value; }
+}
+
 /** Decode a .xz file (one or more streams, with stream padding) */
 export function xzDecompressDetailed(inp: Uint8Array): XzDecodeResult {
   const res: XzDecodeResult = { data: new Uint8Array(0) };
   const out = new Out(inp.length * 4);
-  let pos = decodeXzStream(inp, 0, out, res);
+  let pos = run(decodeXzStream(inp, 0, out, res));
   for (;;) {
     // Stream padding: null bytes in multiples of four
     const padStart = pos;
@@ -568,10 +630,49 @@ export function xzDecompressDetailed(inp: Uint8Array): XzDecodeResult {
       break;
     }
     if ((pos - padStart) & 3) throw corrupt('stream padding');
-    pos = decodeXzStream(inp, pos, out, res);
+    pos = run(decodeXzStream(inp, pos, out, res));
   }
   res.data = out.buf.slice(0, out.pos);
   return res;
+}
+
+/** xzDecompressTo can't stream this file (filters, or a SHA-256 check): decode it whole instead. */
+export const XZ_NOT_STREAMABLE = 'filters or a SHA-256 check: not decoded as a stream';
+
+/**
+ * Decode a .xz file handing the output to `sink` a piece at a time (each
+ * piece its own copy; a promise it returns is awaited before decoding on),
+ * holding only the LZMA2 dictionary's window: a 39 MB Packages file decodes
+ * in ~12 MB instead of 2-4 times its size. Throws
+ * XzError('options', XZ_NOT_STREAMABLE), possibly after some output, for a
+ * file using filters or a SHA-256 check (xzDecompressDetailed decodes those).
+ */
+export async function xzDecompressTo(inp: Uint8Array, sink: (bytes: Uint8Array) => void | Promise<void>): Promise<{ size: number; unsupportedCheck?: number }> {
+  const res: XzDecodeResult = { data: new Uint8Array(0) };
+  // The sink's promise (a writer pacing itself) is awaited before decoding on
+  let wait: Promise<void> | undefined;
+  const out = new Out(Math.min(inp.length * 4, 8 << 20), (b) => { wait = sink(b) ?? undefined; });
+  const drive = async (g: Generator<void, number, void>): Promise<number> => {
+    for (;;) {
+      const r = g.next();
+      if (wait) { const w = wait; wait = undefined; await w; }
+      if (r.done) return r.value;
+    }
+  };
+  let pos = await drive(decodeXzStream(inp, 0, out, res));
+  for (;;) {
+    const padStart = pos;
+    while (pos < inp.length && inp[pos] === 0) pos++;
+    if (pos === inp.length) {
+      if ((pos - padStart) & 3) throw corrupt('stream padding');
+      break;
+    }
+    if ((pos - padStart) & 3) throw corrupt('stream padding');
+    pos = await drive(decodeXzStream(inp, pos, out, res));
+  }
+  out.slide();
+  if (wait) await wait;
+  return { size: out.base + out.pos, ...(res.unsupportedCheck !== undefined ? { unsupportedCheck: res.unsupportedCheck } : {}) };
 }
 
 // ── .lzma (LZMA_Alone) ────────────────────────────────────────────────

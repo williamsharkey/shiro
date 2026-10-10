@@ -1,3 +1,4 @@
+import { encodeText } from '../utils/byte-text';
 import { Command } from './index';
 
 /**
@@ -145,7 +146,7 @@ export const iconvCmd: Command = {
       let off = 0;
       for (const p of parts) { input.set(p, off); off += p.length; }
     } else {
-      input = new TextEncoder().encode(ctx.stdin);
+      input = encodeText(ctx.stdin);
     }
 
     const text = decode(input, fromEnc);

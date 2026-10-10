@@ -113,6 +113,7 @@ export async function loadBrowserPackages(fs: BundleFs, fromDir: string, getBuil
   trackAsync?: <T>(p: Promise<T>) => Promise<T>, atExit?: (fn: () => void) => void): Promise<Map<string, any>> {
   const processFs = getBuiltinModule('fs');
   const out = new Map<string, any>();
+  let failed: Error | undefined;
   for (const p of PACKAGES) {
     let pkgDir: string | null = null;
     let pkg: any = null;
@@ -144,10 +145,33 @@ export async function loadBrowserPackages(fs: BundleFs, fromDir: string, getBuil
     clearTimeout(entry.unloadTimer);
     { const e = entry, dir = pkgDir; atExit?.(() => release(dir, e)); }
     const ready = entry.ready;
+    let modules: Map<string, any>;
+    try {
+      modules = await ready;
+    } catch (e) {
+      // Its specifiers fail with this error, not by falling through to the package's node
+      // files (rolldown's need node:wasi: "Cannot find module 'node:wasi'" said nothing useful)
+      const failure = new BrowserBuildFailure(p.name, p.browserName, e);
+      for (const key of p.subpaths) out.set(key === '.' ? p.name : p.name + key.slice(1), failure);
+      failed ??= e instanceof Error ? e : new Error(String(e));
+      continue;
+    }
     // (its async calls count as the process's activity: the script doesn't idle out mid-build)
-    for (const [spec, ns] of await ready) out.set(spec, trackedNamespace(ns));
+    for (const [spec, ns] of modules) out.set(spec, trackedNamespace(ns));
   }
+  // (the caller reports it; `partial` has the packages that loaded and the failed ones' markers)
+  if (failed) throw Object.assign(failed, { partial: out });
   return out;
+}
+
+/** A package whose browser build didn't load: requiring it throws this, with the cause */
+export class BrowserBuildFailure {
+  constructor(readonly name: string, readonly browserName: string, readonly cause: unknown) {}
+  error(spec: string): Error {
+    const c = this.cause as any;
+    const why = c?.errors?.[0]?.text ?? c?.message ?? String(c);
+    return Object.assign(new Error(`Cannot load '${spec}': ${this.name} runs here as its browser build (${this.browserName}), which failed to load: ${why}`), { code: 'ERR_BROWSER_BUILD', cause: c });
+  }
 }
 
 async function loadPackage(fs: BundleFs, pkgDir: string, pkg: any, p: BrowserPackage, getBuiltinModule: (name: string) => any,

@@ -5,6 +5,7 @@
  * The shell evaluates the tree (operands are expanded without word splitting
  * or globbing).
  */
+import { EscapedBytes } from './utils/printf';
 
 export type DbNode =
   | { t: 'and' | 'or'; a: DbNode; b: DbNode }
@@ -207,13 +208,23 @@ export function doubleBracketEnd(s: string, i: number): number {
 /** The value of a $'…' body (ANSI-C escapes) */
 export function decodeAnsiC(body: string): string {
   const simple: Record<string, string> = { n: '\n', t: '\t', r: '\r', a: '\x07', b: '\b', e: '\x1b', E: '\x1b', f: '\f', v: '\v', '\\': '\\', "'": "'", '"': '"', '?': '?' };
-  return body.replace(/\\(x[0-9A-Fa-f]{1,2}|u[0-9A-Fa-f]{1,4}|U[0-9A-Fa-f]{1,8}|[0-7]{1,3}|c.|.)/gs, (m, e: string) => {
-    if (simple[e] !== undefined) return simple[e];
-    if (/^[xuU]/.test(e) && e.length > 1) return String.fromCodePoint(parseInt(e.slice(1), 16));
-    if (/^[0-7]/.test(e)) return String.fromCharCode(parseInt(e, 8) & 0xff);
-    if (e[0] === 'c' && e.length === 2) return String.fromCharCode(e.charCodeAt(1) & 0x1f);
-    return m;
-  });
+  // \xHH and \NNN are bytes, decoded a run at a time (\xc3\xa9 is é; \xff one byte)
+  const bytes = new EscapedBytes();
+  let out = '';
+  let last = 0;
+  for (const mm of body.matchAll(/\\(x[0-9A-Fa-f]{1,2}|u[0-9A-Fa-f]{1,4}|U[0-9A-Fa-f]{1,8}|[0-7]{1,3}|c.|.)/gs)) {
+    const [m, e] = mm;
+    if (mm.index! > last) out += bytes.flush() + body.slice(last, mm.index);
+    last = mm.index! + m.length;
+    if (e[0] === 'x' && e.length > 1) { bytes.push(parseInt(e.slice(1), 16)); continue; }
+    if (/^[0-7]/.test(e)) { bytes.push(parseInt(e, 8) & 0xff); continue; }
+    out += bytes.flush();
+    if (simple[e] !== undefined) out += simple[e];
+    else if (/^[uU]/.test(e) && e.length > 1) out += String.fromCodePoint(parseInt(e.slice(1), 16));
+    else if (e[0] === 'c' && e.length === 2) out += String.fromCharCode(e.charCodeAt(1) & 0x1f);
+    else out += m;
+  }
+  return out + bytes.flush() + body.slice(last);
 }
 
 /** Index just past the `'` closing the $' at s[i] */
