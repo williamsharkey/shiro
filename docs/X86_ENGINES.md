@@ -732,6 +732,8 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    scaled by N. Timing every entry slowed native Claude's startup by 55%
    and inflated its "in compiled code" share. After 0085, "blocks run"
    counts entries, each running up to 65 blocks.
+89. unix/conformance's: POSIX timers go to the kernel; sched_* answers as
+   Linux's (sched_getparam wrote 8 bytes into the 4-byte struct).
 90. FUTEX_REQUEUE and FUTEX_CMP_REQUEUE (they were EINVAL). Up to `val`
    waiters are woken, and up to `val2` more move to uaddr2. The moved ones
    count at uaddr2 at once, so a wake there right after finds them. Each
@@ -741,6 +743,14 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    futex_cmp_requeue01 passes its 10- and 100-waiter cases, but 1000 forked
    waiters don't fit its 30 s. Test: fixtures/x86/futexrequeue.c, identical
    to native output.
+91. A thread running a vfork child takes no signals until the child execs
+   or exits, as on Linux, where the parent sleeps in vfork. Before, Go's
+   SIGURG (sysmon preemption) for the forking thread was delivered to the
+   child with the parent's handlers. Go's runtime threw "signal received
+   during fork" and the parent wedged with unreaped children (toolchains'
+   `go run` hang). perf-kernel's gowait stress (60 rounds of 8 parallel
+   os/exec children, BLINK_FORK_STRESS=1) failed before; it passed 3 of 3
+   runs after.
 
 The page compiles blink.wasm once and gives the `WebAssembly.Module` to every
 Blink worker (src/x86-engine/blink.ts `blinkWasmModule`, host.mjs

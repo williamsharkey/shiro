@@ -1,7 +1,7 @@
-From 452cb97e8bd79bd4f8037e2ab66869f8fb465d22 Mon Sep 17 00:00:00 2001
+From 98a810740b80b999f5aabae8df454bd5bbb2317b Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 03:26:04 +0000
-Subject: [PATCH] Shiro: FUTEX_REQUEUE and FUTEX_CMP_REQUEUE
+Subject: [PATCH 90/91] Shiro: FUTEX_REQUEUE and FUTEX_CMP_REQUEUE
 
 ---
  blink/bus.h     |   5 ++
