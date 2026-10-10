@@ -2,6 +2,7 @@
  * xxd — hex dump and reverse
  */
 
+import { decodeBytes, encodeText } from '../utils/byte-text';
 import type { Command } from './index';
 import { parseArgs, readInput } from './flags';
 
@@ -44,25 +45,25 @@ export const xxdCmd: Command = {
           }
         }
 
-        let result = '';
-        for (let i = 0; i + 1 < hex.length; i += 2) {
-          result += String.fromCharCode(parseInt(hex.substring(i, i + 2), 16));
-        }
-        ctx.stdout += result;
+        const out = new Uint8Array(hex.length >> 1);
+        for (let i = 0; i + 1 < hex.length; i += 2) out[i >> 1] = parseInt(hex.substring(i, i + 2), 16);
+        // (byte-exact text: written back as these bytes)
+        ctx.stdout += decodeBytes(out);
         return 0;
       }
 
       // Forward: create hex dump
-      let data = content;
-      if (seekOffset > 0) data = data.substring(seekOffset);
-      if (limit >= 0) data = data.substring(0, limit);
+      // The input's bytes (byte-exact text), not its UTF-16 units
+      let data = encodeText(content);
+      if (seekOffset > 0) data = data.subarray(seekOffset);
+      if (limit >= 0) data = data.subarray(0, limit);
 
       if (plain) {
         // Plain hex dump
         const output: string[] = [];
         let line = '';
         for (let i = 0; i < data.length; i++) {
-          line += data.charCodeAt(i).toString(16).padStart(2, '0');
+          line += data[i].toString(16).padStart(2, '0');
           if ((i + 1) % cols === 0) {
             output.push(line);
             line = '';
@@ -74,16 +75,16 @@ export const xxdCmd: Command = {
         // Standard xxd format
         const output: string[] = [];
         for (let i = 0; i < data.length; i += cols) {
-          const chunk = data.substring(i, i + cols);
+          const chunk = data.subarray(i, i + cols);
           const offset = (seekOffset + i).toString(16).padStart(8, '0');
 
           // Hex groups (2-byte pairs separated by spaces)
           const hexParts: string[] = [];
           for (let j = 0; j < cols; j += 2) {
             let pair = '';
-            if (j < chunk.length) pair += chunk.charCodeAt(j).toString(16).padStart(2, '0');
+            if (j < chunk.length) pair += chunk[j].toString(16).padStart(2, '0');
             else pair += '  ';
-            if (j + 1 < chunk.length) pair += chunk.charCodeAt(j + 1).toString(16).padStart(2, '0');
+            if (j + 1 < chunk.length) pair += chunk[j + 1].toString(16).padStart(2, '0');
             else if (j < chunk.length) pair += '  ';
             else pair += '  ';
             if (j < chunk.length || j + 1 < chunk.length) hexParts.push(pair);
@@ -92,8 +93,8 @@ export const xxdCmd: Command = {
           // ASCII representation
           let ascii = '';
           for (let j = 0; j < chunk.length; j++) {
-            const code = chunk.charCodeAt(j);
-            ascii += (code >= 32 && code < 127) ? chunk[j] : '.';
+            const code = chunk[j];
+            ascii += (code >= 32 && code < 127) ? String.fromCharCode(code) : '.';
           }
 
           output.push(`${offset}: ${hexParts.join(' ').padEnd(Math.ceil(cols / 2) * 5 - 1)}  ${ascii}`);

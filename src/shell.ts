@@ -6315,51 +6315,13 @@ export class Shell {
         continue;
       }
 
-      // $'...' ANSI-C quoting: process escape sequences
+      // $'...' ANSI-C quoting: process escape sequences (\xHH and \NNN are bytes)
       if (ch === '$' && input[i + 1] === "'" && !inSingle && !inDouble) {
         quoted = true;
-        i += 2; // skip $'
-        while (i < input.length && input[i] !== "'") {
-          if (input[i] === '\\' && i + 1 < input.length) {
-            const esc = input[i + 1];
-            switch (esc) {
-              case 'n': current += '\n'; i += 2; break;
-              case 't': current += '\t'; i += 2; break;
-              case 'r': current += '\r'; i += 2; break;
-              case '\\': current += '\\'; i += 2; break;
-              case "'": current += "'"; i += 2; break;
-              case '"': current += '"'; i += 2; break;
-              case 'a': current += '\x07'; i += 2; break;
-              case 'b': current += '\b'; i += 2; break;
-              case 'e': case 'E': current += '\x1b'; i += 2; break;
-              case 'f': current += '\f'; i += 2; break;
-              case 'v': current += '\v'; i += 2; break;
-              case 'x': {
-                const hex = input.slice(i + 2, i + 4).match(/^[0-9a-fA-F]{1,2}/);
-                if (hex) { current += String.fromCharCode(parseInt(hex[0], 16)); i += 2 + hex[0].length; }
-                else { current += '\\x'; i += 2; }
-                break;
-              }
-              case 'u': {
-                const uni = input.slice(i + 2, i + 6).match(/^[0-9a-fA-F]{1,4}/);
-                if (uni) { current += String.fromCodePoint(parseInt(uni[0], 16)); i += 2 + uni[0].length; }
-                else { current += '\\u'; i += 2; }
-                break;
-              }
-              default:
-                if (esc >= '0' && esc <= '7') {
-                  const oct = input.slice(i + 1, i + 4).match(/^[0-7]{1,3}/);
-                  if (oct) { current += String.fromCharCode(parseInt(oct[0], 8)); i += 1 + oct[0].length; }
-                  else { current += '\\'; i++; }
-                } else {
-                  current += '\\' + esc; i += 2;
-                }
-            }
-          } else {
-            current += input[i]; i++;
-          }
-        }
-        if (i < input.length) i++; // skip closing '
+        const end = ansiCEnd(input, i);
+        // (unterminated: the rest of the input)
+        current += decodeAnsiC(input.slice(i + 2, input[end - 1] === "'" && end > i + 2 ? end - 1 : end));
+        i = end;
         continue;
       }
 

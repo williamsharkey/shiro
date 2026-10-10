@@ -2,6 +2,7 @@
  * Small coreutils: rev, tac, shuf, cmp
  */
 
+import { encodeText } from '../utils/byte-text';
 import type { Command } from './index';
 import { parseArgs, readInput } from './flags';
 
@@ -184,7 +185,7 @@ export const cmpCmd: Command = {
     const regular: boolean[] = [];
     for (const name of names) {
       if (name === '-') {
-        stdinBytes ??= new TextEncoder().encode(ctx.stdin);
+        stdinBytes ??= encodeText(ctx.stdin);
         data.push(stdinBytes);
         regular.push(false);
         continue;

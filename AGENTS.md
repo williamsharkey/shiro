@@ -297,8 +297,8 @@ Production is `https://tabcomputer.com` on its own DigitalOcean droplet, set up 
 - Pipeline elements: compound commands (`{ }`, loops, `( )`) and state-changing builtins (`PIPELINE_SUBSHELL_BUILTINS`: cd, eval, export, exit …) run in a forked subshell (`inSubshell`), except the last with `shopt -s lastpipe`; `read`/`mapfile` deliberately still set variables in this shell. Background `cmd &` (also mid-line) runs in a fork; `$!` is a made-up pid for in-page jobs.
 - cd keeps the working directory physical (the filesystem only follows a symlink as a path's last component) and the logical path in `$PWD`/`shell.logicalPwd`, which `pwd` prints.
 <<<<<<< HEAD
-- Known gaps (see docs/CONFORMANCE.md): output is a JS string, so bytes ≥ 0x80 written through a pipe or `>` are UTF-8 encoded (`printf '\377' | wc -c` is 2; the compressors undo this for their own formats); alias expansion happens after expansion, not at parse time; the command hash table (`hash`) isn't kept; no hard links (`ln` without `-s`, `cp -l`, tar's hard-link members).
+- Known gaps (see docs/CONFORMANCE.md): alias expansion happens after expansion, not at parse time; the command hash table (`hash`) isn't kept; no hard links (`ln` without `-s`, `cp -l`, tar's hard-link members).
 =======
-- Known gaps (see docs/CONFORMANCE.md): output is a JS string, so bytes ≥ 0x80 written through a pipe or `>` are UTF-8 encoded (`printf '\377' | wc -c` is 2; the compressors undo this for their own formats); alias expansion happens after expansion, not at parse time; `cmd > f` writes `f` after `cmd` finishes, so a command that writes `f` itself is overwritten; the command hash table (`hash`) isn't kept; no hard links (`ln` without `-s`, `cp -l`, tar's hard-link members).
+- Known gaps (see docs/CONFORMANCE.md): alias expansion happens after expansion, not at parse time; `cmd > f` writes `f` after `cmd` finishes, so a command that writes `f` itself is overwritten; the command hash table (`hash`) isn't kept; no hard links (`ln` without `-s`, `cp -l`, tar's hard-link members).
 >>>>>>> origin/unix/integration
 - Keep docs unified: update `AGENTS.md` first, keep `CLAUDE.md` as a shim.
