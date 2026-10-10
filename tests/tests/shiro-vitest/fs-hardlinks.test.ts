@@ -7,7 +7,9 @@ import { createTestShell, run } from './helpers';
 
 // Hard links (FileSystem.link): one file, several names. Data in an inode
 // record ("\u0001i/<ino>"), names as stubs, the name map at "\u0001links".
-describe('hard links', () => {
+// Generous timeouts: these run many IndexedDB transactions and kernel writes,
+// slow under a full parallel suite run (5 s, the default, was hit once)
+describe('hard links', { timeout: 60_000 }, () => {
   const saved = { min: FileSystem.BLOB_MIN, block: FileSystem.BLOCK };
   beforeEach(() => { FileSystem.BLOB_MIN = 8 << 10; FileSystem.BLOCK = 1 << 10; });
   afterEach(() => { FileSystem.BLOB_MIN = saved.min; FileSystem.BLOCK = saved.block; });
