@@ -1510,6 +1510,10 @@ export class Shell {
     const outer = this.abortController ?? this.inheritedAbort;
     outer?.signal.addEventListener('abort', () => abort.abort(outer.signal.reason), { once: true });
     child.inheritedAbort = abort;
+    // A script or a kernel process's `sh -c` (an agent's) has no job control: the job's stdin
+    // is /dev/null (POSIX 2.9.3.1), not the stream the shell reads, and no [N] pid is printed
+    const jobControl = this.options.has('monitor') || this.interactiveFlag || (!this.scriptShell && !this.kernelStdio);
+    if (!jobControl) child.kernelStdinLive = false;
     const job: BackgroundJob = {
       id: jobId,
       command,
@@ -1542,8 +1546,7 @@ export class Shell {
     this.backgroundJobs.set(jobId, job);
     if (job.status === 'running') inPageJobs.set(pid, job);
     this.env['!'] = String(pid);
-    // An interactive shell reports the job; a script doesn't
-    if (!this.scriptShell) writeStdout(`[${jobId}] ${pid}\n`);
+    if (jobControl) writeStdout(`[${jobId}] ${pid}\n`);
     return 0;
   }
 

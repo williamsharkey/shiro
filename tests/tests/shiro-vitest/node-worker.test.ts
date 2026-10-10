@@ -113,6 +113,15 @@ console.log(a[0], a[1] === me, b[0], b[1] === me);
     expect(r.out).toBe('x true y,z true\n');
   }, 60_000);
 
+  it("timeout signals its command's own process group, not the node and shell that run timeout (tabcomputer#13)", async () => {
+    const r = await sh(`node -e '
+      const r = require("child_process").spawnSync("sh", ["-c", "timeout 1 node -e \\"setInterval(() => {}, 1000)\\"; echo rc=$?; echo after"], { encoding: "utf8" });
+      console.log(r.status, r.signal, JSON.stringify(r.stdout));
+    ' < /dev/null; echo "node=$?"`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('0 null "rc=124\\nafter\\n"\nnode=0\n');
+  }, 60_000);
+
   it('in a script, node is the shell\'s child; its redirects and pipes are the shell\'s', async () => {
     const r = await sh(`node -e '
       const out = String(require("child_process").execSync("echo $$; node -e \\"console.log(require(\\\\\\"fs\\\\\\").readFileSync(\\\\\\"/proc/self/stat\\\\\\", \\\\\\"utf8\\\\\\").split(\\\\\\" \\\\\\")[3])\\" > /tmp/nk3; cat /tmp/nk3; node -p 6*7 | tr 4 x"));
