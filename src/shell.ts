@@ -603,6 +603,9 @@ function capturing<T extends object>(term: T, stdout: boolean, stderr: boolean):
 }
 
 
+/** Builtins that may run a server that never ends: their redirect files are created before they start */
+const STREAM_REDIRECT_CMDS = new Set(['node', 'nodejs', 'npm', 'npx']);
+
 /** Is fd 2 still the terminal after these redirects? (`stdoutTty`: fd 1 is, before them) */
 function stderrIsTty(redirects: Redirect[], stdoutTty: boolean): boolean {
   let out = stdoutTty;
@@ -4504,7 +4507,8 @@ export class Shell {
         // Redirect files are opened (and `>` truncates) before the command runs, as
         // in bash: what it writes goes in as it comes (`npm run dev > log &`), and a
         // file the command writes itself isn't overwritten afterwards
-        const liveOut = !live ? await this.openLiveRedirects(redirects, stderrWriter) : null;
+        const liveOut = !live
+          ? await this.openLiveRedirects(redirects, stderrWriter, !cmd || STREAM_REDIRECT_CMDS.has(effectiveCmdName)) : null;
         if (liveOut === 'failed') {
           exitCode = 1;
           this.redirectFailed = false;
@@ -4721,7 +4725,7 @@ export class Shell {
    * /dev/*, process substitution, noclobber), left to applyOutputRedirects;
    * 'failed': a file couldn't be opened (reported; the command doesn't run).
    */
-  private async openLiveRedirects(redirects: Redirect[], stderrWriter: (s: string) => void):
+  private async openLiveRedirects(redirects: Redirect[], stderrWriter: (s: string) => void, create = true):
     Promise<{ out?: (s: string) => void; err?: (s: string) => void; rest: Redirect[]; flush: () => Promise<void> } | null | 'failed'> {
     if (!redirects.some((r) => r.type === '>' || r.type === '>>' || r.type === '2>' || r.type === '2>>')) return null;
     if (this.options.has('noclobber')) return null;
@@ -4754,12 +4758,18 @@ export class Shell {
       else {
         if (fdOfRef(r.target) !== null || r.target.startsWith('/dev/') || /^>\(/.test(r.target)) return null;
         const path = this.fs.resolvePath(r.target, this.cwd);
+        // (a virtual file, /dom's say, takes each write as an action: one write at the end)
+        if (this.fs.isVirtual?.(path)) return null;
         if (writers.has(path)) {
           if (!append) return null;
           w = writers.get(path)!;
         } else {
           if (await fifo.isFifo(this, path)) return null;
-          if (!append || !(await this.fs.exists(path))) {
+          // `create`: the file exists from the start (a server's log). Otherwise a new
+          // file is made by the one write at the end (a watcher sees one add, not add
+          // then change) and only one with data in it is truncated now
+          const st = create || append ? null : await this.fs.stat(path).catch(() => null);
+          if (create ? (!append || !(await this.fs.exists(path))) : (!append && !!st && st.size > 0)) {
             await this.redirectWrite(path, r.target, '', false, stderrWriter);
             if (this.redirectFailed) return 'failed';
           }
