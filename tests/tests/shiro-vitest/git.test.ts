@@ -4,7 +4,7 @@ import { FileSystem } from '@shiro/filesystem';
 import { Shell } from '@shiro/shell';
 import { CommandRegistry } from '@shiro/commands/index';
 import { gitCmd } from '@shiro/commands/git';
-import { createTestShell } from './helpers';
+import { createTestShell, run } from './helpers';
 
 describe('git commands', () => {
   // These cover the built-in git on its own: keep the package mirror
@@ -359,5 +359,36 @@ describe('git commands', () => {
       expect(r.err).toContain("fatal: unable to access 'https://example.invalid/r.git'");
       expect(r.err).not.toContain('not a git repository');
     });
+  });
+});
+
+describe('git object cache', () => {
+  it('git log over a packed history reads the pack once, not once per commit', async () => {
+    const { shell, fs } = await createTestShell();
+    const git = (await import('isomorphic-git')).default;
+    const dir = '/tmp/packlog';
+    await run(shell, `rm -rf ${dir}; mkdir -p ${dir} && cd ${dir} && git init -q`);
+    for (let i = 0; i < 12; i++) await run(shell, `cd ${dir} && echo ${i} > f.txt && git add f.txt && git commit -q -m c${i}`);
+    // pack every object, then drop the loose ones
+    const ifs = fs.toIsomorphicGitFS();
+    const oids: string[] = [];
+    for (const d of await fs.readdir(`${dir}/.git/objects`)) {
+      if (d.length !== 2) continue;
+      for (const f of await fs.readdir(`${dir}/.git/objects/${d}`)) oids.push(d + f);
+    }
+    const { filename } = await git.packObjects({ fs: ifs, dir, oids, write: true });
+    await git.indexPack({ fs: ifs, dir, filepath: `.git/objects/pack/${filename}` });
+    for (const oid of oids) await fs.unlink(`${dir}/.git/objects/${oid.slice(0, 2)}/${oid.slice(2)}`);
+    const read = fs.readFile.bind(fs);
+    let packReads = 0;
+    fs.readFile = ((p: string, ...rest: any[]) => { if (String(p).endsWith('.pack')) packReads++; return (read as any)(p, ...rest); }) as any;
+    try {
+      const r = await run(shell, `cd ${dir} && git log --oneline`);
+      expect(r.output.trim().split('\n')).toHaveLength(12);
+      expect(r.output).toContain('c0');
+    } finally {
+      fs.readFile = read;
+    }
+    expect(packReads).toBe(1);
   });
 });
