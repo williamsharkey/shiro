@@ -1154,7 +1154,7 @@ export function inodeStat(fs: FileSystem, path: string): KStat | undefined {
 
 function inodeKStat(ino: Inode): KStat {
   return {
-    dev: 1, ino: inodeNumber(ino.fs, ino.path), mode: S_IFREG | (ino.mode & 0o7777), nlink: linkCount(ino.fs, ino.path), uid: 1000, gid: 1000, rdev: 0,
+    dev: 1, ino: inodeNumber(ino.fs, ino.path), mode: S_IFREG | (ino.mode & 0o7777), nlink: ino.unlinked ? 0 : linkCount(ino.fs, ino.path), uid: 1000, gid: 1000, rdev: 0,
     size: ino.size, blksize: 4096, blocks: Math.ceil(ino.size / 512),
     atimeMs: ino.atimeMs ?? ino.mtimeMs, mtimeMs: ino.mtimeMs, ctimeMs: ino.ctimeMs,
     atimeNs: ino.atimeMs === null ? ino.mtimeNs : ino.atimeNs, mtimeNs: ino.mtimeNs,
@@ -1371,7 +1371,11 @@ export class DirFile implements OpenFile {
   kind: OpenFileKind = 'dir';
   private entries: string[] | null = null;
   private listeners = new ReadyListeners();
-  constructor(private fs: FileSystem, public path: string, public flags: number) {}
+  /** The directory's last known stat: fstat still answers once it's removed (nlink 0), as on Linux */
+  private last: KStat | undefined;
+  constructor(private fs: FileSystem, public path: string, public flags: number) {
+    this.last = this.statSync();
+  }
   async read(): Promise<number> { return -EISDIR; }
   async write(): Promise<number> { return -EBADF; }
   seek(off: number, whence: number): number {
@@ -1390,8 +1394,15 @@ export class DirFile implements OpenFile {
   poll(events: number): number { return events & POLLIN; }
   onReady(cb: () => void): () => void { return this.listeners.add(cb); }
   async stat(): Promise<KStat> {
-    const st = await this.fs.stat(this.path);
-    return {
+    let st;
+    try { st = await this.fs.stat(this.path); } catch { st = null; }
+    if (!st || !st.isDirectory()) {
+      // removed (LTP readahead01's directory fd)
+      const now = Date.now();
+      return { ...(this.last ?? { dev: 1, ino: inodeNumber(this.fs, this.path), mode: S_IFDIR | 0o700, uid: 1000, gid: 1000, rdev: 0,
+        size: 4096, blksize: 4096, blocks: 8, atimeMs: now, mtimeMs: now, ctimeMs: now }), nlink: 0 };
+    }
+    return this.last = {
       dev: 1, ino: inodeNumber(this.fs, this.path), mode: S_IFDIR | (st.mode & 0o7777), nlink: 2, uid: 1000, gid: 1000, rdev: 0,
       size: 4096, blksize: 4096, blocks: 8,
       atimeMs: st.atimeMs ?? st.mtime.getTime(), mtimeMs: st.mtime.getTime(), ctimeMs: st.ctime.getTime(),
@@ -1522,17 +1533,21 @@ export class EventFile implements OpenFile {
     this.wake();
     return 8;
   }
-  async write(buf: Uint8Array): Promise<number> {
+  /** A write that would take the counter past its maximum waits for a read (EAGAIN nonblocking), as on Linux (LTP eventfd02) */
+  async write(buf: Uint8Array, signal?: AbortSignal): Promise<number> {
     if (buf.length < 8) return -EINVAL;
     const v = new DataView(buf.buffer, buf.byteOffset, 8).getBigUint64(0, true);
     if (v === 0xffffffffffffffffn) return -EINVAL;
+    while (this.count + v > 0xfffffffffffffffen) {
+      if (this.flags & O_NONBLOCK) return -EAGAIN;
+      if (!(await abortableWait(this.waiters, signal))) return -EINTR;
+    }
     this.count += v;
-    if (this.count > 0xfffffffffffffffen) this.count = 0xfffffffffffffffen;
     this.wake();
     return 8;
   }
   poll(events: number): number {
-    return ((this.count > 0n ? POLLIN : 0) | POLLOUT) & events;
+    return ((this.count > 0n ? POLLIN : 0) | (this.count < 0xfffffffffffffffen ? POLLOUT : 0)) & events;
   }
   onReady(cb: () => void): () => void { return this.listeners.add(cb); }
   async stat(): Promise<KStat> { return charDevStat(0); }

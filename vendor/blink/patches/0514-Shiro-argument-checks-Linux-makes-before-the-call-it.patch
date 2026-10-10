@@ -1,0 +1,314 @@
+From bbe867c7247e569957ce94754d5935c976158fdb Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 17:53:02 +0000
+Subject: [PATCH] Shiro: argument checks Linux makes before the call (itimers,
+ statfs, fadvise, sockets, statx, recvmsg, preadv2, timeouts, paths), mincore,
+ mlock commits pages
+
+---
+ blink/shiro.inc | 130 ++++++++++++++++++++++++++++++++++++++++++------
+ blink/syscall.c |  13 ++++-
+ 2 files changed, 127 insertions(+), 16 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 21cc66d..cd0741d 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -399,7 +399,11 @@ static int ShiroPath(struct Machine *m, i64 addr, char *buf, int off) {
+   char *s;
+   size_t n;
+   if (!addr) return -EFAULT_LINUX;
+-  if (!(s = LoadStr(m, addr))) return -EFAULT_LINUX;
++  if (!(s = LoadStr(m, addr))) {
++    // (4096 readable bytes without a NUL: too long, as Linux stops there; LTP mknod06)
++    char *t = (char *)ShiroAlloc(m, 4096);
++    return t && CopyFromUserRead(m, t, addr, 4096) != -1 && !memchr(t, 0, 4096) ? -ENAMETOOLONG_LINUX : -EFAULT_LINUX;
++  }
+   n = strlen(s);
+   if (n >= 4096) return -ENAMETOOLONG_LINUX;
+   memcpy(buf + off, s, n);
+@@ -687,6 +691,7 @@ static i64 ShiroAtCall(struct Machine *m, int nr, int dirfd, i64 path, int a2,
+   int n = ShiroPath(m, path, buf, 0);
+   if (n < 0) return n;
+   if (nr == 257 && ShiroIsOwnMaps(m, buf, n)) return ShiroMapsFd(m, a2);
++  if (!n && (nr == 268 || nr == 259)) return -ENOENT_LINUX;  // (an empty path: LTP fchmodat02)
+   return ShiroCall(m, nr, A12(dirfd, n, a2, a3), buf, n, 0, true, true);
+ }
+ 
+@@ -720,9 +725,13 @@ static i64 ShiroStatAt(struct Machine *m, int dirfd, i64 path, i64 st,
+ }
+ 
+ static i64 ShiroStatx(struct Machine *m, int dirfd, i64 path, int flags,
+-                      i64 out) {
++                      u32 mask, i64 out) {
+   u8 st[144], sx[256];
+   i64 r;
++  // unknown flags, or STATX__RESERVED in the mask: EINVAL (LTP statx03)
++  if ((flags & ~(0x100 | 0x800 | 0x1000 | 0x6000)) || (flags & 0x6000) == 0x6000 || (mask & 0x80000000)) {
++    return -EINVAL_LINUX;
++  }
+   if ((r = ShiroStatAt(m, dirfd, path, 0, flags & (0x100 | 0x1000), st)) < 0) {
+     return r;
+   }
+@@ -827,7 +836,7 @@ static int ShiroTimeoutMs(struct Machine *m, i64 tsaddr, bool nsec, int *ms) {
+   if (CopyFromUserRead(m, t, tsaddr, 16) == -1) return -EFAULT_LINUX;
+   sec = Read64(t);
+   frac = Read64(t + 8);
+-  if (sec < 0 || frac < 0) return -EINVAL_LINUX;
++  if (sec < 0 || frac < 0 || frac >= (nsec ? 1000000000 : 1000000)) return -EINVAL_LINUX;  // (LTP epoll_pwait05)
+   frac = nsec ? (frac + 999999) / 1000000 : (frac + 999) / 1000;
+   *ms = sec > 2000000 ? 2000000000 : (int)(sec * 1000 + frac);
+   return 0;
+@@ -1024,9 +1033,12 @@ static i64 ShiroAccept(struct Machine *m, int fd, i64 addr, i64 lenp, int flags)
+ }
+ 
+ static i64 ShiroSockName(struct Machine *m, int nr, int fd, i64 addr, i64 lenp) {
+-  u8 buf[128];
++  u8 buf[128], *lp;
+   i64 r;
+   memset(buf, 0, sizeof(buf));
++  // (no address or length: EFAULT; a negative length: EINVAL; LTP getsockname01)
++  if (!addr || !(lp = (u8 *)SchlepRW(m, lenp, 4))) return -EFAULT_LINUX;
++  if ((i32)Read32(lp) < 0) return -EINVAL_LINUX;
+   r = ShiroCall(m, nr, A12(fd), buf, 0, 110, false, false);
+   if (r < 0) return r;
+   return ShiroPutAddrLen(m, buf, r > 0 && r <= 110 ? (int)r : -1, addr, lenp);
+@@ -1063,6 +1075,11 @@ static i64 ShiroMsg(struct Machine *m, bool send, int fd, i64 msg, int flags) {
+   u64 i, iovlen, clen, ccap = 0;
+   u8 *buf;
+   if (!(hdr = (u8 *)SchlepRW(m, msg, 56))) return -EFAULT_LINUX;
++  // recvmsg: a negative name length EINVAL; no out-of-band data (MSG_OOB)
++  // EINVAL; an empty error queue (MSG_ERRQUEUE) EAGAIN (LTP recvmsg01)
++  if (!send && (i32)Read32(hdr + 8) < 0) return -EINVAL_LINUX;
++  if (!send && (flags & 0x2000)) return -EAGAIN_LINUX;
++  if (!send && (flags & 1)) return -EINVAL_LINUX;
+   iovlen = Read64(hdr + 24);
+   if (iovlen > 1024) return -EMSGSIZE_LINUX;
+   if (!(iov = (u8 *)SchlepR(m, Read64(hdr + 16), iovlen * 16))) return -EFAULT_LINUX;
+@@ -1655,6 +1672,9 @@ static i64 ShiroSetsockopt(struct Machine *m, int fd, int level, int name,
+   u8 b[16];
+   int v = 0;
+   memset(b, 0, sizeof(b));
++  // no buffer EFAULT; a SOL_SOCKET option is at least an int (LTP setsockopt01)
++  if (!val && len) return -EFAULT_LINUX;
++  if (level == 1 && len < 4) return -EINVAL_LINUX;
+   if (val && len && CopyFromUserRead(m, b, val, MIN(len, 16)) == -1) return -EFAULT_LINUX;
+   if (level == 1 && (name == 20 || name == 21) && len >= 16) {  // SO_RCVTIMEO/SNDTIMEO
+     v = (int)(Read64(b) * 1000 + Read64(b + 8) / 1000);
+@@ -1669,8 +1689,13 @@ static i64 ShiroSetsockopt(struct Machine *m, int fd, int level, int name,
+ static i64 ShiroGetsockopt(struct Machine *m, int fd, int level, int name,
+                            i64 val, i64 lenp) {
+   u8 *lp, b[16];
+-  i64 r = KS(m, 55, A12(fd, level, name));
++  i64 r;
+   u32 cap;
++  // Linux reads the length and checks the buffer first (LTP getsockopt01)
++  if (!(lp = (u8 *)SchlepRW(m, lenp, 4))) return -EFAULT_LINUX;
++  if ((i32)Read32(lp) < 0) return -EINVAL_LINUX;
++  if (Read32(lp) && !SchlepRW(m, val, MIN(Read32(lp), 4))) return -EFAULT_LINUX;
++  r = KS(m, 55, A12(fd, level, name));
+   if (r < 0) return r;
+   if (!val || !lenp) return 0;
+   if (!(lp = (u8 *)SchlepRW(m, lenp, 4))) return -EFAULT_LINUX;
+@@ -2312,6 +2337,42 @@ static u8 *ShiroPteSlot(struct System *s, i64 virt) {
+   }
+ }
+ 
++u64 HandlePageFault(struct Machine *, u8 *, u64);
++
++// mlock: the pages get their memory now, so that they're resident (mincore)
++static void ShiroCommitPages(struct Machine *m, i64 start, i64 end) {
++  u8 *slot;
++  u64 e;
++  i64 v;
++  for (v = start & -4096; v < end; v += 4096) {
++    if ((slot = ShiroPteSlot(m->system, v)) && ((e = LoadPte(slot)) & PAGE_V) && (e & PAGE_RSRV)) {
++      HandlePageFault(m, slot, e);
++    }
++  }
++}
++
++// mincore: a page is resident once it has its memory (not still reserved)
++static i64 ShiroMincore(struct Machine *m, i64 addr, u64 len, i64 vec) {
++  u8 *v, *slot;
++  u64 e, n, i;
++  bool ok;
++  if (addr & 4095) return -EINVAL_LINUX;
++  if (!len) return 0;
++  n = (len + 4095) / 4096;
++  if (n > ((u64)1 << 35)) return -ENOMEM_LINUX;
++  LOCK(&m->system->mmap_lock);
++  ok = IsFullyMapped(m->system, addr, n * 4096);
++  UNLOCK(&m->system->mmap_lock);
++  if (!ok) return -ENOMEM_LINUX;
++  if (!(v = (u8 *)ShiroAlloc(m, n))) return -ENOMEM_LINUX;
++  for (i = 0; i < n; ++i) {
++    slot = ShiroPteSlot(m->system, addr + i * 4096);
++    e = slot ? LoadPte(slot) : 0;
++    v[i] = (e & PAGE_V) && !(e & PAGE_RSRV);
++  }
++  return CopyToUserWrite(m, vec, v, n) == -1 ? -EFAULT_LINUX : 0;
++}
++
+ // Rebuild a forked process in `m` (a fresh machine) from snapshot `p`.
+ static void ShiroRestoreFrom(struct Machine *m, const u8 *p, size_t len) {
+   struct System *s = m->system;
+@@ -2498,6 +2559,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_mmaptail(void) { return 1; }
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_flock(void) { return 1; }
+ // 0513: splice, tee, copy_file_range go to the kernel; vmsplice
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_splice(void) { return 1; }
++// 0514: argument checks (LTP), mincore, mlock commits its pages
++EMSCRIPTEN_KEEPALIVE int blink_shiro_argchecks(void) { return 1; }
+ 
+ // the same with the signal's siginfo (the kernel's call 1030, made as `pid`)
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid_info(int pid, int sig, int w0, int w1, int w2,
+@@ -4240,10 +4303,15 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       }
+       break;
+     }
+-    case 0x127: r = ShiroIov(m, false, a, b, c, d); break;           // preadv
+-    case 0x128: r = ShiroIov(m, true, a, b, c, d); break;            // pwritev
+-    case 0x147: r = ShiroIov(m, false, a, b, c, (i64)d); break;      // preadv2
+-    case 0x148: r = ShiroIov(m, true, a, b, c, (i64)d); break;       // pwritev2
++    // a negative offset is EINVAL (preadv2's -1: the file position); RWF_
++    // flags other than HIPRI, DSYNC, SYNC, NOWAIT, APPEND: EOPNOTSUPP
++    // (LTP preadv02, preadv202)
++    case 0x127: r = (i64)d < 0 ? -EINVAL_LINUX : ShiroIov(m, false, a, b, c, d); break;  // preadv
++    case 0x128: r = (i64)d < 0 ? -EINVAL_LINUX : ShiroIov(m, true, a, b, c, d); break;   // pwritev
++    case 0x147: case 0x148:                                           // preadv2, pwritev2
++      r = (i64)d < -1 ? -EINVAL_LINUX : (f & ~0x1fu) ? -EOPNOTSUPP_LINUX
++        : ShiroIov(m, nr == 0x148, a, b, c, (i64)d);
++      break;
+     case 0x002: r = ShiroAtCall(m, 257, -100, a, b, c); break;       // open
+     case 0x055: r = ShiroAtCall(m, 257, -100, a, 0101 | 01000, b); break;  // creat
+     case 0x101: r = ShiroAtCall(m, 257, ShiroDirfd(a), b, c, d); break;    // openat
+@@ -4262,8 +4330,14 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       r = ShiroStatAt(m, a, b, c, d & (0x100 | 0x1000), 0);
+       if (!r && !c) r = -EFAULT_LINUX;
+       break;
+-    case 0x14C: r = ShiroStatx(m, a, b, c, e); break;                // statx
+-    case 0x089: case 0x08A: r = ShiroStatfs(m, b); break;            // statfs, fstatfs
++    case 0x14C: r = ShiroStatx(m, a, b, c, d, e); break;             // statx
++    case 0x089: case 0x08A: {                                         // statfs, fstatfs
++      // the path's or fd's errors first (ENOENT, ENOTDIR, ELOOP, EBADF...)
++      u8 st[144];
++      r = nr == 0x089 ? ShiroStatAt(m, AT_FDCWD_LINUX, a, 0, 0, st) : KS(m, 72, A12((int)a, 3, 0));
++      if (r >= 0) r = ShiroStatfs(m, b);
++      break;
++    }
+     case 0x015: r = ShiroPathCall(m, 21, a, b, 0, 0); break;          // access
+     case 0x10D: case 0x1B7: r = ShiroAtCall(m, 269, a, b, c, 0); break;  // faccessat(2)
+     case 0x007: r = ShiroPoll(m, a, b, (int)c); break;
+@@ -4301,7 +4375,26 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       break;
+     case 0x04A: case 0x04B: r = KS(m, 74, A12(a)); break;            // fsync, fdatasync
+     case 0x0A2: case 0x132: r = 0; break;                            // sync, syncfs
+-    case 0x0DD: case 0x0BB: case 0x115: r = 0; break;                // fadvise, readahead, sync_file_range
++    case 0x0DD: case 0x0BB: case 0x115: {                             // fadvise, readahead, sync_file_range
++      // nothing to do, but Linux's checks: a bad fd (or not readable, for
++      // readahead) EBADF; a pipe or socket ESPIPE (readahead: EINVAL); bad
++      // advice, flags or ranges EINVAL (LTP readahead01, sync_file_range01)
++      u8 st[144];
++      int fmt;
++      if ((r = KS(m, 72, A12((int)a, 3, 0))) < 0) break;              // F_GETFL
++      if ((r & 010000000) || (nr == 0x0BB && (r & 3) == 1)) { r = -EBADF_LINUX; break; }  // (O_PATH)
++      if ((r = ShiroStatAt(m, (int)a, 0, 0, 0x1000, st)) < 0) break;
++      fmt = Read32(st + 24) & 0170000;
++      if (nr == 0x0DD) {
++        r = fmt == 0010000 ? -ESPIPE_LINUX : (i64)c < 0 || d > 5 ? -EINVAL_LINUX : 0;
++      } else if (nr == 0x0BB) {
++        r = fmt != 0100000 ? -EINVAL_LINUX : 0;
++      } else {
++        r = (i64)b < 0 || (i64)c < 0 || (d & ~7) ? -EINVAL_LINUX
++          : fmt != 0100000 && fmt != 0040000 && fmt != 0060000 ? -ESPIPE_LINUX : 0;
++      }
++      break;
++    }
+     case 0x04C: r = ShiroPathCall(m, 76, a, (int)b, (int)((i64)b >> 32), 0); break;  // truncate
+     case 0x04D: r = KS(m, 77, A12(a, (int)b, (int)((i64)b >> 32))); break;       // ftruncate
+     case 0x04F: {                                                     // getcwd
+@@ -4354,7 +4447,10 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+     case 0x10B: r = ShiroReadlinkAt(m, a, b, c, d); break;            // readlinkat
+     case 0x05A: r = ShiroPathCall(m, 90, a, b, 0, 0); break;          // chmod
+     case 0x05B: r = KS(m, 91, A12(a, b)); break;                      // fchmod
+-    case 0x10C: case 0x1C4: r = ShiroAtCall(m, 268, a, b, c, 0); break;  // fchmodat(2)
++    case 0x10C: case 0x1C4:                                           // fchmodat(2)
++      // fchmodat2's flags: AT_SYMLINK_NOFOLLOW, AT_EMPTY_PATH (LTP fchmodat02)
++      r = nr == 0x1C4 && (d & ~(0x100 | 0x1000)) ? -EINVAL_LINUX : ShiroAtCall(m, 268, a, b, c, 0);
++      break;
+     // ownership isn't kept; these check that the file exists, and lchown and
+     // AT_SYMLINK_NOFOLLOW look at a symlink itself (dpkg lchowns NAME.dpkg-new
+     // links before their targets exist)
+@@ -4520,10 +4616,14 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+                       : ShiroAtCall(m, 259, a, b, c, d);
+       if (r == -ENOSYS_LINUX) r = -EPERM_LINUX;  // a kernel without them
+       break;
++    case 0x01B: r = ShiroMincore(m, a, b, c); break;                  // mincore
+     case 0x0FD: case 0x0FE: case 0x0FF: case 0x126: r = -ENOSYS_LINUX; break;  // inotify
+     case 0x11D: r = -EOPNOTSUPP_LINUX; break;                         // fallocate (Go's linker then writes)
+     case 0x11B: r = KS(m, 283, A12(a, b)); break;                     // timerfd_create
+-    case 0x11E: r = ShiroTimerfd(m, a, b, c, d); break;               // timerfd_settime
++    case 0x11E:                                                       // timerfd_settime
++      // TFD_TIMER_ABSTIME and TFD_TIMER_CANCEL_ON_SET only (LTP timerfd_settime01)
++      r = (int)b & ~3 ? -EINVAL_LINUX : ShiroTimerfd(m, a, b, c, d);
++      break;
+     case 0x11F: r = ShiroTimerfd(m, a, -1, 0, b); break;              // timerfd_gettime
+     case 0x1B2: case 0x1A8: r = -ENOSYS_LINUX; break;                 // pidfd_open, pidfd_send_signal
+     case 0x03D: r = ShiroWait4(m, a, b, c, d); break;                 // wait4
+@@ -4576,7 +4676,7 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+     case 0x024: case 0x026: {                                         // getitimer, setitimer
+       u8 it[32] = {0};
+       i64 out = nr == 0x024 ? b : c;
+-      if ((int)a < 0 || (int)a > 2) return false;
++      if ((int)a < 0 || (int)a > 2) { r = -EINVAL_LINUX; break; }  // (LTP getitimer02, setitimer02)
+       if (nr == 0x026 && b && CopyFromUser(m, it, b, 32) == -1) { r = -EFAULT_LINUX; break; }
+       r = ShiroCall(m, nr == 0x024 ? 36 : 38, A12((int)a), it, nr == 0x026 ? 32 : 0, 32, false, false);
+       if (r == -EINVAL_LINUX && (int)a) return false;  // (a kernel with ITIMER_REAL only)
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 847abbc..7bd3cfd 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -779,6 +779,7 @@ static void ShiroSyncMask(struct Machine *);
+ static void ShiroInterruptThread(struct Machine *);
+ static bool ShiroCpuTimes(struct Machine *, i64 *, i64 *);
+ static struct timespec CpuClockNow(struct Machine *, int);
++static void ShiroCommitPages(struct Machine *, i64, i64);
+ #else
+ #define ShiroSleeping(m, n) (void)0
+ #define ShiroSyncMask(m) (void)0
+@@ -4182,6 +4183,9 @@ static int SysGetrusage(struct Machine *m, i32 resource, i64 rusageaddr) {
+   int rc;
+   struct rusage hrusage;
+   struct rusage_linux grusage;
++#ifdef __EMSCRIPTEN__
++  if (resource != 0 && resource != -1 && resource != 1) return einval();  // (LTP getrusage02)
++#endif
+   if ((rc = getrusage(XlatRusage(resource), &hrusage)) != -1) {
+     XlatRusageToLinux(&grusage, &hrusage);
+ #ifdef __EMSCRIPTEN__
+@@ -6093,6 +6097,13 @@ static int SysMlock(struct Machine *m, i64 addr, u64 len) {
+   UNLOCK(&m->system->mmap_lock);
+   return ok ? 0 : enomem();
+ }
++static int SysMlockCommit(struct Machine *m, i64 addr, u64 len) {
++  int rc = SysMlock(m, addr, len);
++#ifdef __EMSCRIPTEN__
++  if (!rc && len) ShiroCommitPages(m, addr, addr + len);  // (resident: LTP mincore03)
++#endif
++  return rc;
++}
+ static int SysMlockall(struct Machine *m, int flags) {
+   if (!flags || (flags & ~7) || flags == 4) return einval();
+   return 0;
+@@ -6555,7 +6566,7 @@ void OpSyscall(P) {
+     SYSCALL(3, 0x078, "getresgid", SysGetresgid, STRACE_3);
+     SYSCALL(5, 0x09D, "prctl", SysPrctl, STRACE_5);
+ #ifdef __EMSCRIPTEN__
+-    SYSCALL(2, 0x095, "mlock", SysMlock, STRACE_2);
++    SYSCALL(2, 0x095, "mlock", SysMlockCommit, STRACE_2);
+     SYSCALL(2, 0x096, "munlock", SysMlock, STRACE_2);
+     SYSCALL(1, 0x097, "mlockall", SysMlockall, STRACE_1);
+     SYSCALL(0, 0x098, "munlockall", SysMunlockall, STRACE_0);
+-- 
+2.43.0
+

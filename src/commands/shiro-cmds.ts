@@ -202,13 +202,8 @@ export const lnCmd: Command = {
           await fs.symlink(target, dstAbs);
           if (verbose) ctx.stdout += `${q(dst)} -> ${q(target)}\n`;
         } else {
-          if (srcSt.isSymbolicLink()) {
-            await fs.symlink(await fs.readlink(srcAbs), dstAbs);
-          } else {
-            const data = await fs.readFile(srcAbs);
-            await fs.writeFile(dstAbs, data, { mode: srcSt.mode & 0o7777 });
-            await fs.utimes(dstAbs, srcSt.mtime.getTime(), srcSt.mtime.getTime()).catch(() => {});
-          }
+          // A real hard link: one inode, two names (-L links what a symlink points at)
+          await fs.link(srcAbs, dstAbs, { follow: logical });
           if (verbose) ctx.stdout += `${q(dst)} => ${q(src)}\n`;
         }
       } catch (e: any) {
@@ -353,7 +348,8 @@ export const whichCmd: Command = {
         const execPath = await ctx.shell.findExecutableInPath(name);
         if (execPath) found.push(execPath);
       }
-      if (!found.length && ctx.shell.commands.get(name)) found.push(name);
+      // (one of tabcomputer's commands: where it counts as installed)
+      if (!found.length && ctx.shell.commands.get(name)) found.push((await ctx.shell.programPath(name)) ?? name);
       if (!found.length && ctx.shell.functions?.[name]) found.push(`${name}: shell function`);
       if (found.length) ctx.stdout += found.map((f) => f + '\n').join('');
       else { ctx.stderr += `${name} not found\n`; missing++; }

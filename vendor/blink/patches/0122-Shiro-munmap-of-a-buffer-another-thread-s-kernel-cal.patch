@@ -1,0 +1,113 @@
+From bb78ca2822357f0d7e6a8eaf37470e770b2165af Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 17:02:34 +0000
+Subject: [PATCH] Shiro: munmap of a buffer another thread's kernel call holds
+ waits without the GIL
+
+A thread in write() (or any call that lets go of the GIL) keeps page
+locks on its buffer until the call returns. munmap of that buffer (free()
+of a 128 KiB+ chunk) waited for the locks holding the GIL and mmap_lock;
+the write waited on a reader that needed the GIL, or, once done, needed
+the GIL itself to give the locks back: a deadlock (Open POSIX
+aio_cancel_6-1; thread pools, node, Go). munmap now waits for the range's
+page locks first, without the GIL (and without mmap_lock), and checks
+again with it; and a call that let go of the GIL gives its page locks
+back before it takes the GIL again.
+---
+ blink/syscall.c | 53 +++++++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 51 insertions(+), 2 deletions(-)
+
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 847abbc..ee5352d 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -1557,8 +1557,44 @@ static i64 SysBrk(struct Machine *m, i64 addr) {
+   return rc;
+ }
+ 
++static u64 PeekPte(struct System *, i64);
++
++static bool HasLockedPages(struct System *s, i64 virt, u64 size) {
++  i64 v, end = virt + MIN(size, (u64)1 << 47);
++  for (v = virt & -4096; v < end; v += 4096) {
++    if ((PeekPte(s, v) & (PAGE_V | PAGE_LOCKS)) > PAGE_V) return true;
++  }
++  return false;
++}
++
++// munmap waits for the pages' locks (WaitForPageToNotBeLocked) holding the
++// GIL and mmap_lock. A lock's holder is a thread in a kernel call that
++// let go of the GIL (a write() of the buffer being freed), and that call
++// may wait on threads that need the GIL (the reader that drains the pipe):
++// so the locks are waited out here first, without the GIL, and checked
++// again with it (Open POSIX aio_cancel_6-1). Not when this thread holds
++// page locks itself (a handler inside a kernel call).
++static void WaitForUnlockedPages(struct Machine *m, i64 virt, u64 size) {
++  struct System *s = m->system;
++  struct timespec ts;
++  bool gil;
++  if (m->pagelocks.i || !HasLockedPages(s, virt, size)) return;
++  do {
++    if ((gil = GilHeld())) GilRelease();
++    LOCK(&s->pagelocks_lock);
++    if (HasLockedPages(s, virt, size)) {
++      clock_gettime(CLOCK_REALTIME, &ts);
++      ts = AddTime(ts, FromMilliseconds(50));
++      pthread_cond_timedwait(&s->pagelocks_cond, &s->pagelocks_lock, &ts);
++    }
++    UNLOCK(&s->pagelocks_lock);
++    if (gil) GilAcquire();
++  } while (HasLockedPages(s, virt, size));
++}
++
+ static int SysMunmap(struct Machine *m, i64 virt, u64 size) {
+   int rc;
++  WaitForUnlockedPages(m, virt, size);
+   BEGIN_NO_PAGE_FAULTS;
+   LOCK(&m->system->mmap_lock);
+   rc = FreeVirtual(m->system, virt, size);
+@@ -6293,6 +6329,17 @@ static int SysEpollWait(struct Machine *m, i32 epfd, i64 eventsaddr,
+ #include "blink/shiro.inc"
+ #endif
+ 
++// A call that let go of the GIL lets go of the pages it locked (its buffers)
++// before it waits for the GIL again: munmap of those pages keeps the GIL
++// while it waits for their locks (WaitForPageToNotBeLocked), so taking the
++// GIL first deadlocked (Open POSIX aio_cancel_6-1: a thread's write() of a
++// buffer the main thread frees). Its results are in registers by now.
++static void ReleaseSyscallPageLocks(struct Machine *m) {
++  --m->sysdepth;
++  CollectPageLocks(m);
++  ++m->sysdepth;
++}
++
+ void OpSyscall(P) {
+   size_t mark;
+   u64 ax, di, si, dx, r0, r8, r9;
+@@ -6359,12 +6406,13 @@ void OpSyscall(P) {
+ #endif
+   // Restore the lock state we entered with: a syscall nested in a signal
+   // handler (rt_sigreturn) must not leave an outer blocking wait holding it.
+-  bool gil = GilHeld();
+-  if (gil && GilReleasesFor(ax & 0xfff)) GilRelease();
++  bool gil = GilHeld(), gilfree = false;
++  if (gil && GilReleasesFor(ax & 0xfff)) GilRelease(), gilfree = true;
+ #ifdef __EMSCRIPTEN__
+   {
+     i64 shres;
+     if (ShiroSyscall(m, ax & 0xfff, di, si, dx, r0, r8, r9, &shres)) {
++      if (gilfree) ReleaseSyscallPageLocks(m);
+       if (gil) GilAcquire();
+       if (!m->interrupted) Put64(m->ax, shres);
+       goto ShiroDone;
+@@ -6616,6 +6664,7 @@ void OpSyscall(P) {
+       ax = enosys();
+       break;
+   }
++  if (gilfree) ReleaseSyscallPageLocks(m);
+   if (gil) GilAcquire();
+   if (!m->interrupted) {
+     Put64(m->ax, ax != -1 ? ax : -(XlatErrno(errno) & 0xfff));
+-- 
+2.43.0
+

@@ -158,6 +158,10 @@ const sse41bBin = join(out, 'sse41b');
 const haveSse41b = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', sse41bBin, 'sse41b.c']);
 const ssefloatBin = join(out, 'ssefloat');
 const haveSsefloat = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', ssefloatBin, 'ssefloat.c', '-lm']);
+const sigwakeBin = join(out, 'sigwake');
+const haveSigwake = tryBuild('gcc', ['-static', '-O1', '-w', '-o', sigwakeBin, 'sigwake.c']);
+const freewhilewriteBin = join(out, 'freewhilewrite');
+const haveFreewhilewrite = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', freewhilewriteBin, 'freewhilewrite.c']);
 const shmunlinkedBin = join(out, 'shmunlinked');
 const haveShmunlinked = tryBuild('gcc', ['-static', '-O1', '-o', shmunlinkedBin, 'shmunlinked.c']);
 const shmremoteBin = join(out, 'shmremote');
@@ -1314,6 +1318,24 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe('arith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\narith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\narith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\n');
   }, 60_000);
+
+  // a signal that comes while the guest is between kernel calls wakes the
+  // epoll_wait it goes into next (0123 and the page's pending kick): the
+  // rawepoll SIGWINCH flake, made likely
+  it.skipIf(!haveSigwake)('a signal between kernel calls still wakes the next epoll_wait (300 rounds)', async () => {
+    const { shell } = await setup(readFileSync(sigwakeBin));
+    const r = await run(shell, './prog; BLINK_WJIT=0 ./prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('300 wakeups\n300 wakeups\n');
+  }, 150_000);
+
+  // free() of a buffer another thread is writing to a pipe: munmap waited
+  // for the write's page locks holding the GIL the reader needed (0122)
+  it.skipIf(!haveFreewhilewrite)('munmap of a buffer another thread is still writing doesn\'t deadlock, JIT on and off', async () => {
+    const { shell } = await setup(readFileSync(freewhilewriteBin));
+    const r = await run(shell, 'timeout 20 ./prog; echo rc $?; BLINK_WJIT=0 timeout 20 ./prog; echo rc $?');
+    const ok = 'writer and reader done: read what was written\nrc 0\n';
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(ok + ok);
+  }, 90_000);
 
   // Open POSIX mmap_7-4: the object is unlinked before it's mapped, so its
   // fd's inode is no longer the path's; the fd still reads the mapping
