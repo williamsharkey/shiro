@@ -194,11 +194,17 @@ try {
   if (process.env.MEM) {
     await page.waitForTimeout(20_000);
     await rss('20 s after the build');
-    // The dev server stopped: what it loaded is let go once nothing uses it (30 s)
+    // The dev server stopped: what it loaded is let go once nothing uses it
+    // (30 s), and the page's esbuild after 60 s without a build
     await page.evaluate(() => window.__tabcomputer.terminal.term.focus());
     await page.keyboard.press('Control+C');
-    await page.waitForTimeout(40_000);
-    await rss('40 s after stopping the dev server');
+    await page.waitForTimeout(70_000);
+    await rss('70 s after stopping the dev server');
+    // (what is still referenced: V8 hasn't necessarily collected the rest yet)
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('HeapProfiler.collectGarbage');
+    await page.waitForTimeout(2_000);
+    await rss('then after a full GC');
     if (process.env.HEAPSNAP_END) await heapSnapshot(page, process.env.HEAPSNAP_END);
   }
   if (process.env.HEAPSNAP_AFTER_BUILD) await heapSnapshot(page, process.env.HEAPSNAP_AFTER_BUILD);
