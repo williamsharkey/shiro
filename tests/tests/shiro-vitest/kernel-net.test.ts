@@ -159,6 +159,17 @@ describe('kernel sockets over the TCP relay', () => {
     expect(src(AF_INET6, { family: AF_INET6, address: '2a04:4e42::223', port: 0 })).toBe('fd00::15');
     expect(src(AF_INET, v4('151.101.0.223', 0))).toBe('10.0.2.15');
     expect(src(AF_INET, v4('127.0.0.1', 53))).toBe('127.0.0.1');
+    // glibc reuses an IPv6 socket for an IPv4 answer: a plain sockaddr_in on
+    // an IPv6 socket is v4-mapped, and the source too (it asserts that; uv
+    // and aider's installer died of it)
+    expect(src(AF_INET6, v4('151.101.0.223', 443))).toBe('::ffff:10.0.2.15');
+    const d = stack.socket(AF_INET6, SOCK_DGRAM) as KDatagramSocket;
+    expect(d.connect({ family: AF_INET6, address: '2a04:4e42::223', port: 443 })).toBe(0);
+    expect(d.disconnect()).toBe(0);
+    expect(d.connect(v4('151.101.0.223', 443))).toBe(0);
+    expect(d.getsockname().address).toBe('::ffff:10.0.2.15');
+    expect((d.getpeername() as any).address).toBe('::ffff:151.101.0.223');
+    void d.close();
   });
 
   it('AF_UNIX SOCK_SEQPACKET socketpairs keep records whole (Rust std::process::Command)', async () => {
