@@ -22,30 +22,27 @@ interface SyncWatchdog {
  */
 /**
  * A file cache that reads through on a miss (node as a kernel guest: files
- * come from blocking syscalls, so nothing needs preloading). Misses are
- * remembered until something writes; binary files stay out, as in the page.
+ * come from blocking syscalls, so nothing needs preloading). A miss isn't
+ * remembered (another process, a rename or a binary write can make the file
+ * at any time; asking again is one stat). Directory markers ("dir/.") are
+ * answered by the directory being there. Binary files stay out, as in the page.
  */
 class ReadThroughMap extends Map<string, string> {
-  private misses = new Set<string>();
-  constructor(private read: (path: string) => string | undefined) { super(); }
+  constructor(private read: (path: string) => string | undefined, private isDir?: (path: string) => boolean) { super(); }
   get(key: string): string | undefined {
     if (super.has(key)) return super.get(key);
-    if (this.misses.has(key)) return undefined;
-    // a directory marker (node-compat's "dir/."): present when the directory is
-    const v = key.endsWith('/.') ? undefined : this.read(key);
-    if (v === undefined) { this.misses.add(key); return undefined; }
-    super.set(key, v);
+    if (key.endsWith('/.')) return this.isDir?.(key.slice(0, -2) || '/') ? '' : undefined;
+    const v = this.read(key);
+    if (v !== undefined) super.set(key, v);
     return v;
   }
-  has(key: string): boolean { return this.get(key) !== undefined || super.has(key); }
-  set(key: string, value: string): this { this.misses.delete(key); return super.set(key, value); }
-  delete(key: string): boolean { return super.delete(key); }
+  has(key: string): boolean { return super.has(key) || this.get(key) !== undefined; }
   /** Files changed elsewhere (a child process ran): read them again */
-  clear(): void { this.misses.clear(); super.clear(); }
+  clear(): void { super.clear(); }
 }
 
-export function createFileCache(readThrough?: (path: string) => string | undefined) {
-  const fileCache: Map<string, string> = readThrough ? new ReadThroughMap(readThrough) : new Map<string, string>();
+export function createFileCache(readThrough?: (path: string) => string | undefined, isDir?: (path: string) => boolean) {
+  const fileCache: Map<string, string> = readThrough ? new ReadThroughMap(readThrough, isDir) : new Map<string, string>();
   const fileMtimes = new Map<string, number>();
   const moduleCache = new Map<string, { exports: any }>();
   const watchdog: SyncWatchdog = { count: 0, resetScheduled: false };

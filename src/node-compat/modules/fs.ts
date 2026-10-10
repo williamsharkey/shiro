@@ -315,7 +315,12 @@ export function createFsModule(deps: FsDeps): any {
   // Files other processes change: the text cache follows them (it was filled
   // at start, so a watcher's re-read of a changed file got the old text).
   // Not while this script's own writes are in flight: the cache is ahead then.
-  if (deps.atExit) {
+  if (deps.atExit && nodeGuestOf(ctx)) {
+    // A guest's cache reads through: a changed path is just dropped (read again when asked),
+    // while a watcher has the page's change feed on
+    const drop = (p?: string) => { if (p) Map.prototype.delete.call(fileCache, p); };
+    deps.atExit((ctx.fs as any).onChangePassive((_event: string, path: string, newPath?: string) => { drop(path); drop(newPath); }));
+  } else if (deps.atExit) {
     const off = ctx.fs.onChange((event, path, newPath) => {
       queueMicrotask(() => {
         if (writeState.inflight.size) return;
@@ -432,6 +437,9 @@ export function createFsModule(deps: FsDeps): any {
     if (writeNowToo) {
       let r: Promise<unknown>;
       try { r = op(); } catch (e) { r = Promise.reject(e); }
+      // the mode writeFileSync(p, d, { mode }) asked for, now too (a child may exec the file next)
+      const m = pendingModes.get(path);
+      if (m !== undefined) { try { (ctx.fs as any).chmodSync(path, m); } catch { /* not there */ } }
       const done = Promise.resolve(r).then(() => {}, () => {});
       inflight.push(done);
       return done;
@@ -444,6 +452,12 @@ export function createFsModule(deps: FsDeps): any {
   const materializeOpenFile = (resolved: string) => {
     const content = fileCache.get(resolved) || '';
     const parentDir = resolved.substring(0, resolved.lastIndexOf('/')) || '/';
+    if (writeNowToo) {
+      // a guest: both syscalls now, in order (an await between them landed the write later)
+      try { (ctx.fs as any).mkdirSync(parentDir, true); } catch { /* there, or the write says why */ }
+      queueWrite(resolved, () => ctx.fs.writeFile(resolved, content));
+      return;
+    }
     queueWrite(resolved, async () => {
       await ctx.fs.mkdir(parentDir, { recursive: true }).catch(() => {});
       await ctx.fs.writeFile(resolved, content);
@@ -734,7 +748,12 @@ export function createFsModule(deps: FsDeps): any {
         return;
       }
       // Not in memory: copy the bytes once the writes in flight (the source's
-      // among them) have landed
+      // among them) have landed (a guest's have: copy now)
+      if (writeNowToo) {
+        const data = (ctx.fs as any).readSync(srcRes);
+        (ctx.fs as any).writeSync(dstRes, data);
+        return;
+      }
       const waitFor = [...writeState.inflight];
       queueWrite(dstRes, () => Promise.allSettled(waitFor).then(() => ctx.fs.readFile(srcRes)).then((data: any) => ctx.fs.writeFile(dstRes, data)));
     },
@@ -819,6 +838,7 @@ export function createFsModule(deps: FsDeps): any {
     // Modes are kept (pnpm and cmd-shim make their bin shims executable)
     chmodSync: (p: string, mode: any) => {
       const resolved = ctx.fs.resolvePath(String(p), ctx.cwd);
+      if (writeNowToo) { (ctx.fs as any).chmodSync(resolved, parseMode(mode)); return; } // a guest: chmod(2) now
       inflight.push(chmodAfterWrites(deps, resolved, mode).catch(() => {}));
     },
     chownSync: () => {},
