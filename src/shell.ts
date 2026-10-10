@@ -676,6 +676,19 @@ function withoutTty<T extends object>(term: T): T {
 const LOOP_ITERATION_LIMIT = 10_000_000;
 /** Let the page paint and handle input during long shell loops */
 const yieldToEventLoop = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+/** When the shell last let the page run (timers, input, rendering) */
+let lastYield = 0;
+/**
+ * Yield to the event loop if the shell has held it for a while: function
+ * calls and `source` (deep recursion, a ~/.profile and ~/.bashrc sourcing
+ * each other) otherwise never give the page a turn. Cheap when not due.
+ */
+async function maybeYield(): Promise<void> {
+  const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  if (now - lastYield < 30) return;
+  await yieldToEventLoop();
+  lastYield = typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
 
 /**
  * Expansion results ($VAR, ${NAME}, $(cmd)) are data: bash never re-reads their
@@ -4014,6 +4027,7 @@ export class Shell {
               const popFrame = this.pushCallFrame('source', srcArgs[0]);
               const savedSource = this.sourceFile;
               this.sourceFile = srcArgs[0];
+              await maybeYield();
               const srcView = this.aliasView;
               this.aliasView = null; // (a sourced file is parsed now)
               try {
@@ -7054,6 +7068,7 @@ export class Shell {
   ): Promise<number> {
     const func = this.functions[name];
     if (!func) return 127;
+    await maybeYield();
 
     // Save and set positional parameters
     // The function's positional parameters replace the caller's ($0 stays the script name)
