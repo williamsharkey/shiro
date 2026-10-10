@@ -1,0 +1,153 @@
+From 9d05d2326414d8e9920ae99b50f55e5c89ea6ef4 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 01:25:38 +0000
+Subject: [PATCH 76/76] Shiro: ppoll, pselect6 and epoll_pwait(2) take their
+ signal mask
+
+They ignored it: a signal the call should let through stayed blocked and
+the call slept its whole timeout (LTP ppoll01's SEND_SIGINT_RACE_TEST:
+SIGINT blocked, sent, then ppoll with an empty mask). The call now runs
+with the given mask; a signal delivered meanwhile keeps the caller's mask
+in its frame (sigreturn restores it, as after sigsuspend), else the
+caller's mask comes back when the call returns. ShiroCall also takes a
+signal the mask it just sent released before starting an interruptible
+call (it came back on that reply).
+---
+ blink/machine.h |  2 ++
+ blink/shiro.inc | 62 +++++++++++++++++++++++++++++++++++++++++++++----
+ blink/signal.c  |  4 +++-
+ 3 files changed, 63 insertions(+), 5 deletions(-)
+
+diff --git a/blink/machine.h b/blink/machine.h
+index 481041f..b6e48dd 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -449,6 +449,8 @@ struct Machine {               //
+   bool metal;                            //
+   bool interrupted;                      //
+   bool issigsuspend;                     //
++  bool hasoldmask;                       // a ppoll/pselect6/epoll_pwait mask is in effect:
++  u64 oldmask;                           // a signal frame saves this one instead (shiro.inc)
+   bool traprdtsc;                        //
+   bool trapcpuid;                        //
+   bool boop;                             //
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 88e3ceb..1b360bd 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -239,6 +239,13 @@ static i64 ShiroCall(struct Machine *m, int nr, const int a[12], void *data,
+   bool held;
+   i64 res;
+   if (m && nr != 14) ShiroSyncMask(m);
++  // The mask just sent can release a signal the kernel held (ppoll and
++  // pselect6 unblock theirs for the call): it came back on that reply, so
++  // take it now rather than wait out the call it should interrupt (LTP
++  // ppoll01's SIGINT race)
++  if (m && intr && !t_vfork && (m->signals & ~m->sigmask) && CheckInterrupt(m, restart)) {
++    return -EINTR_LINUX;
++  }
+   as = t_vfork ? t_vfork->pid
+                : m && m->system->pid && m->system->pid != g_shiro_pid ? m->system->pid : 0;
+   for (;;) {
+@@ -706,6 +713,28 @@ static int ShiroTimeoutMs(struct Machine *m, i64 tsaddr, bool nsec, int *ms) {
+   return 0;
+ }
+ 
++// ppoll, pselect6, epoll_pwait(2): the call runs with the guest's signal
++// mask at `addr` (none: the current one). A signal it lets through is
++// delivered with the caller's mask in its frame, as sigsuspend's is (and
++// sigreturn puts that back); otherwise the caller's mask returns after.
++static int ShiroMaskPush(struct Machine *m, i64 addr, u64 size, u64 *save) {
++  u8 w[8];
++  if (!addr) return 0;
++  if (size != 8) return -EINVAL_LINUX;
++  if (CopyFromUserRead(m, w, addr, 8) == -1) return -EFAULT_LINUX;
++  *save = m->sigmask;
++  m->oldmask = m->sigmask;
++  m->hasoldmask = true;
++  m->sigmask = Read64(w) & ~(((u64)1 << (SIGKILL_LINUX - 1)) | ((u64)1 << (SIGSTOP_LINUX - 1)));
++  return 1;
++}
++
++static void ShiroMaskPop(struct Machine *m, int pushed, u64 save) {
++  if (pushed != 1 || !m->hasoldmask) return;  // a handler's frame has it
++  m->hasoldmask = false;
++  m->sigmask = save;
++}
++
+ static i64 ShiroSelect(struct Machine *m, int nfds, i64 r, i64 w, i64 x,
+                        i64 tsaddr, bool nsec) {
+   int setbytes, present = 0, ms, err;
+@@ -2812,13 +2841,28 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+     case 0x10D: case 0x1B7: r = ShiroAtCall(m, 269, a, b, c, 0); break;  // faccessat(2)
+     case 0x007: r = ShiroPoll(m, a, b, (int)c); break;
+     case 0x10F: {                                                     // ppoll
+-      int ms;
++      int ms, pushed;
++      u64 save = 0;
+       if ((r = ShiroTimeoutMs(m, c, true, &ms)) < 0) break;
++      if ((r = pushed = ShiroMaskPush(m, d, e, &save)) < 0) break;
+       r = ShiroPoll(m, a, b, ms);
++      ShiroMaskPop(m, pushed, save);
+       break;
+     }
+     case 0x017: r = ShiroSelect(m, a, b, c, d, e, false); break;
+-    case 0x10E: r = ShiroSelect(m, a, b, c, d, e, true); break;      // pselect6
++    case 0x10E: {                                                     // pselect6
++      // the sixth argument: { const sigset_t *ss; size_t ss_len }
++      int pushed = 0;
++      u64 save = 0;
++      if (f) {
++        u8 sd[16];
++        if (CopyFromUserRead(m, sd, f, 16) == -1) { r = -EFAULT_LINUX; break; }
++        if ((r = pushed = ShiroMaskPush(m, Read64(sd), Read64(sd + 8), &save)) < 0) break;
++      }
++      r = ShiroSelect(m, a, b, c, d, e, true);
++      ShiroMaskPop(m, pushed, save);
++      break;
++    }
+     case 0x008: r = KS(m, 8, A12(a, (int)b, (int)((i64)b >> 32), c)); break;  // lseek
+     case 0x010: r = ShiroIoctl(m, a, b, c); break;
+     case 0x048: r = ShiroFcntl(m, a, b, c); break;
+@@ -2943,11 +2987,21 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       break;
+     }
+     case 0x0E8: r = ShiroEpollWait(m, a, b, c, d); break;             // epoll_wait
+-    case 0x119: r = ShiroEpollWait(m, a, b, c, d); break;             // epoll_pwait
++    case 0x119: {                                                     // epoll_pwait
++      int pushed;
++      u64 save = 0;
++      if ((r = pushed = ShiroMaskPush(m, e, f, &save)) < 0) break;
++      r = ShiroEpollWait(m, a, b, c, d);
++      ShiroMaskPop(m, pushed, save);
++      break;
++    }
+     case 0x1B9: {                                                     // epoll_pwait2
+-      int ms;
++      int ms, pushed;
++      u64 save = 0;
+       if ((r = ShiroTimeoutMs(m, d, true, &ms)) < 0) break;
++      if ((r = pushed = ShiroMaskPush(m, e, f, &save)) < 0) break;
+       r = ShiroEpollWait(m, a, b, c, ms);
++      ShiroMaskPop(m, pushed, save);
+       break;
+     }
+     case 0x029: r = KS(m, 41, A12(a, b, c)); break;                   // socket
+diff --git a/blink/signal.c b/blink/signal.c
+index 109532f..18343ec 100644
+--- a/blink/signal.c
++++ b/blink/signal.c
+@@ -95,7 +95,9 @@ void DeliverSignal(struct Machine *m, int sig, int code) {
+       Write64(sf.uc.trapno, m->trapno);
+     }
+   }
+-  Write64(sf.uc.sigmask, m->sigmask);
++  // during ppoll/pselect6/epoll_pwait, sigreturn gives back the caller's mask
++  Write64(sf.uc.sigmask, m->hasoldmask ? m->oldmask : m->sigmask);
++  m->hasoldmask = false;
+   memcpy(sf.uc.r8, m->r8, 8);
+   memcpy(sf.uc.r9, m->r9, 8);
+   memcpy(sf.uc.r10, m->r10, 8);
+-- 
+2.43.0
+
