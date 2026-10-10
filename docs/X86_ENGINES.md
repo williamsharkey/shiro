@@ -688,6 +688,26 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    caller's mask saved in its frame, as after sigsuspend; otherwise the
    caller's mask is restored when the call returns. An interruptible kernel
    call also takes a signal that the mask it just sent released (LTP ppoll01).
+77. System V semaphores are forwarded to the kernel's (unix/perf-kernel):
+   `semget`, `semop` and `semtimedop`, which block in the kernel, and
+   `semctl`, with its SETVAL int, the GETALL/SETALL arrays (sized by an
+   IPC_STAT) and the semid_ds/seminfo structs. SEM_UNDO is applied by the
+   kernel at process exit. Test: fixtures/x86/sysvsem.c, identical to native
+   output (Audacity's single-instance lock).
+78. A failed assertion's text goes to host.mjs through a synchronous call to
+   the main runtime thread (`Module.shiroNote`) before the abort. A guest
+   thread's stderr never reached host.mjs, so "blink: aborted" had arrived
+   without the file:line.
+79. System V message queues are forwarded to the kernel's: `msgget`,
+   `msgsnd`/`msgrcv` (mtype plus text; they block in the kernel) and
+   `msgctl`. Test: fixtures/x86/sysvmsg.c, identical to native output.
+80–82. unix/conformance's patches, folded into this series:
+   - LTP errnos: clock ids, getrlimit, iov lengths, waitid options, fchown
+     on O_PATH, personality, CLONE_PARENT, sigpending;
+   - record locks, pipe sizes and RLIMIT_NOFILE handled by the kernel;
+     EFAULT for read-only output buffers; fd checks;
+   - /proc/self/maps as a kernel memfd; nanosleep's rem written before the
+     signal frame.
 
 The page compiles blink.wasm once and gives the `WebAssembly.Module` to every
 Blink worker (src/x86-engine/blink.ts `blinkWasmModule`, host.mjs

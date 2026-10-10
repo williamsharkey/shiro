@@ -73,6 +73,26 @@ describe('node as a kernel guest', () => {
     expect(r.out).toBe('aaa ccc bbb /tmp/nc/o/f true\nfalse false\nback 4\n');
   }, 60_000);
 
+  it('a miss is not remembered; copies, modes and directories land before the next call', async () => {
+    const r = await sh(`node -e '
+      const fs = require("fs"), cp = require("child_process");
+      fs.mkdirSync("/tmp/nr/stage", { recursive: true });
+      const before = fs.existsSync("/tmp/nr/a.json");
+      fs.writeFileSync("/tmp/nr/a.json.tmp", "{\\"v\\":1}");
+      fs.renameSync("/tmp/nr/a.json.tmp", "/tmp/nr/a.json");
+      console.log(before, fs.readFileSync("/tmp/nr/a.json", "utf8"), require("/tmp/nr/a.json").v);
+      fs.writeFileSync("/tmp/nr/bin", Buffer.from([0, 255, 1]));          // binary: never in the text cache
+      cp.execSync("cp /tmp/nr/bin /tmp/nr/stage/x");                      // a copy the cache never saw
+      fs.copyFileSync("/tmp/nr/stage/x", "/tmp/nr/stage/y");
+      fs.renameSync("/tmp/nr/stage", "/tmp/nr/final");                   // stage, then rename (pnpm)
+      console.log(fs.readdirSync("/tmp/nr/final").join(","), fs.existsSync("/tmp/nr/stage"), [...fs.readFileSync("/tmp/nr/final/y")].join(" "));
+      fs.writeFileSync("/tmp/nr/run.sh", "#!/bin/sh\\necho ran\\n", { mode: 0o755 });
+      console.log(cp.execSync("/tmp/nr/run.sh").toString().trim(), fs.existsSync("/tmp/nr/final/"), fs.statSync("/tmp/nr/final").isDirectory());
+    ' < /dev/null`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('false {"v":1} 1\nx,y false 0 255 1\nran true true\n');
+  }, 60_000);
+
   it('node the kernel starts (sh -c, a #! script) is the guest itself', async () => {
     const r = await sh(`chmod +x /tmp/nk/inner.js && node /tmp/nk/outer.js < /dev/null`, async (fs) => {
       await fs.mkdir('/tmp/nk', { recursive: true });
@@ -168,6 +188,68 @@ srv.listen(18491, () => {
     expect(typeof res.body === 'string' ? res.body : new TextDecoder().decode(res.body as Uint8Array)).toBe('hi /preview');
     expect(await run).toBe(0);
     expect(err).toBe('');
+  }, 60_000);
+
+  it('worker_threads: each Worker is a thread of the process, running in parallel', async () => {
+    const r = await sh(`node /tmp/nt/main.js < /dev/null`, async (fs) => {
+      await fs.mkdir('/tmp/nt', { recursive: true });
+      await fs.writeFile('/tmp/nt/w.js', `const { parentPort, workerData, isMainThread, threadId } = require('worker_threads');
+const fs = require('fs');
+parentPort.on('message', (m) => {
+  if (m.cmd === 'sum') parentPort.postMessage({ sum: m.n.reduce((a, b) => a + b, 0), data: workerData.tag, isMainThread, same: threadId === workerData.id });
+  if (m.cmd === 'wake') { const a = new Int32Array(m.sab); Atomics.store(a, 0, 42); Atomics.notify(a, 0); }
+  if (m.cmd === 'file') { fs.writeFileSync('/tmp/nt/from-thread', 'hi'); parentPort.postMessage('wrote'); }
+  if (m.cmd === 'bye') process.exit(7);
+});
+`);
+      await fs.writeFile('/tmp/nt/main.js', `const { Worker, isMainThread } = require('worker_threads');
+const fs = require('fs');
+const w = new Worker('/tmp/nt/w.js', { workerData: { tag: 't1', id: 0 } });
+const replies = [];
+w.on('online', () => replies.push('online'));
+w.on('message', (m) => {
+  replies.push(m);
+  if (m.sum !== undefined) {
+    // the main thread blocks; only a worker running in parallel can wake it
+    const sab = new SharedArrayBuffer(4), a = new Int32Array(sab);
+    w.postMessage({ cmd: 'wake', sab });
+    const r = Atomics.wait(a, 0, 0, 5000);
+    replies.push(r + ' ' + Atomics.load(a, 0));
+    w.postMessage({ cmd: 'file' });
+  } else if (m === 'wrote') {
+    replies.push(fs.readFileSync('/tmp/nt/from-thread', 'utf8'));
+    w.postMessage({ cmd: 'bye' });
+  }
+});
+w.on('exit', (code) => {
+  console.log(isMainThread, JSON.stringify(replies.map((x) => typeof x === 'object' ? { ...x, same: undefined } : x)), code);
+  new Worker('throw new Error("bad thread")', { eval: true }).on('error', (e) => console.log('error:', /bad thread/.test(e.message))).on('exit', (c) => console.log('exit', c));
+});
+w.postMessage({ cmd: 'sum', n: [1, 2, 3] });
+`);
+    });
+    expect(r.err).toBe('');
+    expect(r.out).toBe('true ["online",{"sum":6,"data":"t1","isMainThread":false},"ok 42","wrote","hi"] 7\nerror: true\nexit 1\n');
+  }, 60_000);
+
+  it('worker_threads: a message posted at once waits for the listener; the main thread can block on the worker', async () => {
+    const r = await sh(`node /tmp/nt2/m.js < /dev/null`, async (fs) => {
+      await fs.mkdir('/tmp/nt2', { recursive: true });
+      // the listener comes after a slow require: the message waits for it
+      await fs.writeFile('/tmp/nt2/w.js', `const { parentPort } = require('worker_threads');
+const t0 = Date.now(); while (Date.now() - t0 < 100) {}
+parentPort.on('message', (m) => { const a = new Int32Array(m.sab); Atomics.store(a, 0, 42); Atomics.notify(a, 0); });
+`);
+      await fs.writeFile('/tmp/nt2/m.js', `const { Worker } = require('worker_threads');
+const w = new Worker('/tmp/nt2/w.js');
+const sab = new SharedArrayBuffer(4), a = new Int32Array(sab);
+w.postMessage({ sab });
+console.log(Atomics.wait(a, 0, 0, 10000), Atomics.load(a, 0));
+w.terminate();
+`);
+    });
+    expect(r.err).toBe('');
+    expect(r.out).toBe('ok 42\n');
   }, 60_000);
 
   it('stdin from a pipe; async exec', async () => {

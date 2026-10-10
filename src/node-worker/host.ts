@@ -10,7 +10,8 @@ import * as A from '../kernel/abi';
 import { canBlock } from '../kernel/channel';
 import { BufferFile, type OpenFile } from '../kernel/fd';
 import type { Kernel, Runner } from '../kernel/kernel';
-import { webWorker, workerRunner, type GuestWorker } from '../kernel/worker-host';
+import { attachThread, webWorker, workerRunner, type GuestThread, type GuestWorker } from '../kernel/worker-host';
+import type { Process } from '../kernel/process';
 
 let factory: (() => GuestWorker) | null = null;
 
@@ -40,13 +41,76 @@ function openPreview(port: number): void {
   }, 1000);
 }
 
+/**
+ * The page's side of a node guest worker (the process's main thread or a
+ * worker_threads thread): its preview pane, the filesystem's changes once it
+ * watches, and the threads it starts (each a guest of its own, attached to
+ * the process; their messages pass through here).
+ */
+function wire(w: GuestWorker, proc: Process, kernel: Kernel): void {
+  let watching = false;
+  const threads = new Map<number, GuestThread>();
+  const toGuest = (m: unknown) => { try { w.postMessage(m); } catch { /* gone */ } };
+  w.onMessage((m: any) => {
+    switch (m?.type) {
+      case 'node-guest-listen':
+        if (typeof m.port === 'number') openPreview(m.port);
+        return;
+      case 'node-guest-watch': {
+        // fs.watch in the guest: the filesystem's changes (every process's writes) go to it
+        if (watching || !kernel.fs) return;
+        watching = true;
+        const off = kernel.fs.onChange((event, path, newPath) => toGuest({ type: 'node-guest-fs', event, path, newPath }));
+        proc.onTerminate(off);
+        return;
+      }
+      case 'node-guest-thread': {
+        const id = m.id as number;
+        let exited = false;
+        const ev = (kind: string, value?: unknown) => {
+          if (exited) return;
+          if (kind === 'exit') { exited = true; threads.delete(id); }
+          toGuest({ type: 'node-guest-thread-ev', id, kind, value });
+        };
+        let th: GuestThread;
+        try {
+          th = attachThread(kernel, proc, () => {
+            const tw = createNodeWorker();
+            wire(tw, proc, kernel);
+            tw.onMessage((o: any) => { if (o?.type === 'node-thread-out') ev(o.kind, o.value); });
+            return tw;
+          }, {
+            dataSize: 1 << 20,
+            startData: { nodeThread: { file: m.file, eval: m.eval, workerData: m.workerData, argv: m.argv, threadId: m.threadId } },
+          });
+        } catch (e: any) {
+          ev('error', { message: String(e?.message ?? e) });
+          ev('exit', 1);
+          return;
+        }
+        threads.set(id, th);
+        ev('online');
+        // A thread says when it exits, after its last messages; one that was killed doesn't
+        void th.exited.then((code) => setTimeout(() => ev('exit', code ?? 1), 200));
+        return;
+      }
+      case 'node-guest-thread-post':
+        try { threads.get(m.id)?.worker.postMessage({ type: 'node-guest-parent-msg', value: m.value }); } catch { /* gone */ }
+        return;
+      case 'node-guest-thread-kill':
+        threads.get(m.id)?.terminate();
+        return;
+    }
+  });
+}
+
 /** The kernel Runner: the process's program is a node guest worker */
 export function nodeWorkerRunner(): Runner {
-  return workerRunner(() => {
+  return (proc, kernel) => workerRunner((p) => {
     const w = createNodeWorker();
-    w.onMessage((m: any) => { if (m?.type === 'node-guest-listen' && typeof m.port === 'number') openPreview(m.port); });
+    wire(w, p, kernel);
     return w;
-  }, { dataSize: 1 << 20 });
+  }, { dataSize: 1 << 20 })(proc, kernel);
 }
 
 /** `#!/usr/bin/env node`, `#!/usr/bin/env -S node --flag`, `#!/usr/local/bin/node`: the flags after node, or null */

@@ -53,6 +53,9 @@ export async function run(h) {
   });
 
   await h.try('hygiene.panes10', 'MiB', async () => {
+    // Tiling panes belong to the terminal UI; the default boot on localhost is the desktop
+    await h.page?.context().close().catch(() => {});
+    await h.boot({ path: '/?ui=terminal' });
     const ds = [];
     let first = null, last = null;
     let opened = 0;

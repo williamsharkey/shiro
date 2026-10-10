@@ -23,6 +23,7 @@ These record measurements. Each says how it was produced; rerun the tool to upda
 | [DEBIAN_SCORE.md](DEBIAN_SCORE.md) | Debian popcon top 500: install + smoke test | `npm run debian-score` |
 | [CONFORMANCE.md](CONFORMANCE.md) | Shell specs, busybox, LTP under Blink, wasi-testsuite | `npm run conformance` |
 | [COMPAT.md](COMPAT.md) | Popular tools, languages, agent CLIs, GUI apps, developer workflows | per-section smoke tests in `tests/` |
+| [GUI_SCORE.md](GUI_SCORE.md) | 29 Debian GUI apps: install, window, render, input, DOM text | `npm run gui-score` |
 | [WEB_SCORE.md](WEB_SCORE.md) | The Browser app against real sites | `tests/browser/web-score.mjs` |
 | [BENCHMARKS.md](BENCHMARKS.md) | Speed and memory baselines, round by round | `npm run bench` ([bench/README.md](../bench/README.md)) |
 
@@ -38,4 +39,7 @@ These record measurements. Each says how it was produced; rerun the tool to upda
 ## Research and drafts
 
 - [research/AGENT-EXPERIMENTS.md](research/AGENT-EXPERIMENTS.md): coding-agent workflows inside tabcomputer, and the limits they hit (2026-10-09).
+- [research/DEV-TOOLS.md](research/DEV-TOOLS.md): developer tools tested in tabcomputer.
+- [research/SANDBOXES.md](research/SANDBOXES.md): code sandboxes compared, and what tabcomputer offers.
+- [research/OPPORTUNITIES.md](research/OPPORTUNITIES.md): things people can't easily do without installing software, checked in tabcomputer.
 - [upstream/vim-inchar-negative-wait.md](upstream/vim-inchar-negative-wait.md): a vim fix drafted for upstream.

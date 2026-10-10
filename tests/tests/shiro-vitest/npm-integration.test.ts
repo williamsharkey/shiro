@@ -55,12 +55,12 @@ describe('npm integration', () => {
   // ─── npm install ─────────────────────────────────────────────
 
   describe('npm install', () => {
-    it('should error when no package.json exists', async () => {
+    it('is up to date when no package.json exists (as npm)', async () => {
       await run(shell, 'mkdir -p /tmp/ni-nopkg');
       await run(shell, 'cd /tmp/ni-nopkg');
       const { exitCode, output } = await run(shell, 'npm install');
-      // Without package.json, npm should report an error
-      expect(exitCode).toBe(1);
+      expect(exitCode).toBe(0);
+      expect(output).toContain('up to date');
     });
 
     it('should report no dependencies when package.json has none', async () => {

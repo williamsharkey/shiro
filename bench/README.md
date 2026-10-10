@@ -2,7 +2,7 @@
 
 ```bash
 npm run bench                  # full run, both modes: bench/results/<date>-<sha>.json + docs/BENCHMARKS.md
-npm run bench:quick            # key metrics, ~2.5 min (isolated + JSPI kernel), doesn't touch docs/
+npm run bench:quick            # key metrics, ~5 min (isolated + JSPI kernel; ~3 min with --skip workflow.go,workflow.apt), doesn't touch docs/
 node bench/compare.mjs bench/results/A.json bench/results/B.json   # flags only same-machine, A/B-confirmed regressions (exit 1)
 node bench/ab.mjs origin/unix/integration                          # A/B: that ref vs the working tree, with a significance test
 node bench/report.mjs bench/results/X.json                          # regenerate the docs table from a file
@@ -14,9 +14,10 @@ Options for `node bench/run.mjs`:
 |---|---|
 | `--quick` | fewer/lighter metrics; isolated mode plus the non-isolated kernel suite |
 | `--runs N` | samples per metric (default 5; boot uses 3 in `--quick`) |
-| `--suites a,b` | default `boot shell kernel wasm x86 net node hygiene workloads`; optional `debian x86first workloads-slow toolchains` |
+| `--suites a,b` | default `boot shell kernel wasm x86 net node hygiene workloads workflows`; optional `debian x86first workloads-slow toolchains` |
 | `--modes isolated,nonisolated` | cross-origin isolated (SAB, Workers, Blink) and/or the fallbacks |
 | `--only re1,re2` | only metrics whose name matches |
+| `--skip re1,re2` | leave out metrics (or `h.try` groups) whose name matches, e.g. `--quick --skip workflow.go,workflow.apt` |
 | `--no-build` | reuse `dist/` (otherwise `vite build` first) |
 | `--no-gh` | skip the 59 MB `gh --version` x86 fixture |
 | `--offline` | never fetch; external requests must be in `bench/.cache/net` |
@@ -67,6 +68,27 @@ JS: handy for poking at something a benchmark flagged.
   `bench/.cache/fixtures/ld-musl-x86_64.so.1`; `claude install --native`
   inside tabcomputer fetches the same two files (src/commands/claude-native.ts).
   Without them the metric is recorded as skipped with that note.
+
+## User workflows (`workflows`, in quick and full runs)
+
+Isolated only, each from a fresh profile, time and RSS peak:
+
+- Vite's React template typed into the real terminal (as
+  `tests/browser/vite-react.mjs`): `npm create vite`, `npm i`, `npm run dev`
+  until ready, `serve open 5173` until the preview renders, and HMR latency
+  of an edit to `src/App.jsx` (checked to be a hot update, not a reload).
+  npm and the template come from the net cache.
+- `go run hello.go`, first and warm, after `debian install` + `toolchain
+  install go`. The layer is served from `TABCOMPUTER_DEBIAN_LAYERS` (default
+  `.toolchain-build/layers`); `sudo bash scripts/debian/build-layers.sh go`
+  builds it locally in about a minute (112 MB). Without it the metric is
+  skipped with that note.
+- `apt-get update` + `apt-get install -y hello` + `hello`, in a profile of
+  its own, from server.mjs's mirror disk cache (warm after the machine's
+  first run).
+
+Node REPL first prompt and node-worker startup/`fs_200` are in the `node`
+suite (quick included).
 
 ## Comparing runs (`bench/compare.mjs`)
 

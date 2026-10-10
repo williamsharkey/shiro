@@ -271,6 +271,41 @@ untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
 
+### Integration b63f9d9 → 073944d: boot requests, and what wasn't real (unix/bench)
+
+**Boot requests, confirmed by the hourly compare.** Cold and warm boots go
+11 → 13 requests, settled 13 → 15. Diffing the two builds' request lists
+gives exactly two new URLs:
+
+- `/assets/host-*.js`, the node-worker host.
+- `/assets/index-*.css`, the entry's CSS, which is already inlined in
+  index.html. Vite preloads it because that chunk's dynamic import lists
+  the entry chunk and its CSS as dependencies.
+
+Both come from ff6875a (node-worker, compat-tools). It added
+`import('./node-worker/host').then(m => m.installNodeLoader(kernel))` to
+main.ts, which runs on every boot even with `TABCOMPUTER_NODE_WORKER`
+unset. Reported, with a suggestion to load the host on the first node guest.
+It wasn't compat-dev's preview service worker, which doesn't register at
+boot in either build.
+
+**The rest, re-run with `ab.mjs b63f9d9 073944d`** (5 rounds × 5 runs,
+quick, machine `e57125c23b92`):
+
+| metric | base → new | shift (99% CI) | rounds | verdict |
+|---|---|---|---|---|
+| `wasm.ripgrep.tree` | 145 → 154 ms | −0.6% (−40…+30) | `+--+-` | same |
+| `wasm.builtin_grep_r.tree` | 16.4 → 16.5 ms | −1.7% (−73…+13) | `--+++` | same |
+| `wasm.peak_rss.ripgrep_tree` | 9.3 → 9.2 MiB | 0.0% (−88…+92) | `-+++-` | same (very noisy) |
+| `wasm.tree_create` | 19.9 → 21.6 ms | +6.4% (−57…+50) | `--+-+` | same |
+| `npm.install_small.first` | 102 → 103 ms | −2.4% (−35…+21) | `-++-+` | same |
+| `claude.version` | 847 → 891 ms | +5.7% (−1.4…+13.6) | `+++++` | same (interval includes 0) |
+
+Why the hourly A/B had no samples for the three ripgrep/grep metrics:
+compare.mjs's filter named only those metrics, so the wasm suite skipped
+its `wasm.tree` setup and `rg`/`grep -r` searched an empty directory. The
+tree is now built whenever a metric that searches it is wanted (98873f8).
+
 ### Integration 1d9582a → 9bb1a06: A/B-confirmed candidates (unix/bench)
 
 `node bench/compare.mjs bench/results/integration-1d9582a-quick.json

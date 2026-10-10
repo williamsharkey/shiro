@@ -37,6 +37,8 @@ export interface BundleOptions {
   builtins?: (name: string) => any;
   /** Extra export conditions, ahead of browser/import/module/default */
   conditions?: string[];
+  /** Edits to a file's source as it is bundled (path → [from, to] pairs) */
+  patch?: Record<string, [string, string][]>;
 }
 
 const dirOf = (p: string) => p.slice(0, p.lastIndexOf('/')) || '/';
@@ -144,7 +146,8 @@ export async function bundleFromVfs(fs: BundleFs, entry: string, opts: BundleOpt
         };
       });
       build.onLoad({ filter: /.*/, namespace: 'vfs' }, async (args) => {
-        const source = await fs.readFile(args.path, 'utf8') as string;
+        let source = await fs.readFile(args.path, 'utf8') as string;
+        for (const [from, to] of opts.patch?.[args.path] ?? []) source = source.replace(from, to);
         const dir = dirOf(args.path);
         // In code only (not in strings: rolldown has "import.meta.url" as an object key)
         const mask = source.includes('import.meta.url') ? codeMask(source) : null;

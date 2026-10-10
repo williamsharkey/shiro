@@ -11,7 +11,7 @@ import { decodeTermios, encodeTermios, decodeWinsize, makeRaw, TCSETS, TERMIOS_S
 import { SyscallFs } from './sys-fs';
 import { runChild, runChildSync } from './child';
 import { GuestNetStack, installGuestPorts } from './net';
-import type { NodeGuestHooks } from './hooks';
+import type { NodeGuestHooks, ThreadEvents } from './hooks';
 
 const dec = new TextDecoder();
 
@@ -72,12 +72,25 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
   const sys = connectGuest(start, post);
   try {
     const fs = new SyscallFs(sys);
+    // fs.watch: the page sends its filesystem's changes once asked (host.ts)
+    fs.requestChanges = () => post({ type: 'node-guest-watch' });
+    fsEvents = (m) => fs.changed(m.event, m.path, m.newPath);
     const stdinTTY = isatty(sys, 0);
     const stdoutTTY = isatty(sys, 1);
     // Networking over socket syscalls; servers listen on kernel ports (the page previews them)
     const net = new GuestNetStack(sys);
     const { iframeServer } = await import('../iframe-server');
     installGuestPorts(iframeServer as any, net, (port) => { if (stdoutTTY) post({ type: 'node-guest-listen', port }); });
+    // Unhandled rejections: the worker's own event (a browser Worker; node's process in tests)
+    let rejection: ((reason: unknown, promise: Promise<unknown>) => void) | null = null;
+    const g: any = globalThis;
+    if (typeof g.addEventListener === 'function') {
+      g.addEventListener('unhandledrejection', (e: any) => { if (rejection) { e.preventDefault(); rejection(e.reason, e.promise); } });
+    } else if (typeof g.process?.on === 'function' && g.process.versions?.node) {
+      g.process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) => { rejection?.(reason, promise); });
+    }
+    // A worker_threads thread of a node process (host.ts started it with attachThread)
+    const nodeThread = (start as any).nodeThread as { file: string; eval?: boolean; workerData?: unknown; argv?: string[]; threadId: number } | undefined;
     const hooks: NodeGuestHooks = {
       readText(path) {
         const b = fs.readRaw(path);
@@ -90,11 +103,33 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
       writeOut: (fd, s) => { sys.write(fd, s); },
       netStack: net,
       busy: () => net.busy,
+      onUnhandledRejection: (fn) => { rejection = fn; },
+      // worker_threads: a thread of this process, a guest of its own; messages go by way of the page
+      startThread(file, opts, events) {
+        const id = ++lastThread;
+        threadEvents.set(id, events);
+        post({ type: 'node-guest-thread', id, file, eval: !!opts.eval, workerData: opts.workerData, argv: opts.argv ?? [], env: opts.env, threadId: opts.threadId });
+        return {
+          post: (value) => post({ type: 'node-guest-thread-post', id, value }),
+          terminate: () => post({ type: 'node-guest-thread-kill', id }),
+        };
+      },
+      ...(nodeThread ? {
+        thread: {
+          threadId: nodeThread.threadId,
+          workerData: nodeThread.workerData,
+          post: (value: unknown) => post({ type: 'node-thread-out', kind: 'message', value }),
+          onMessage: (fn: (value: unknown) => void) => {
+            parentMessages = fn;
+            for (const v of earlyMessages.splice(0)) fn(v);
+          },
+        },
+      } : {}),
     };
     const env = { ...start.env };
     const shell: any = { cwd: start.cwd, env, abortController: null, fork() { throw new Error('no shell in a node guest'); } };
     const ctx: any = {
-      args: start.argv.slice(1),
+      args: nodeThread ? (nodeThread.eval ? ['-e', nodeThread.file] : [nodeThread.file, ...(nodeThread.argv ?? [])]) : start.argv.slice(1),
       fs,
       cwd: start.cwd,
       env,
@@ -107,8 +142,8 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
       terminal: stdoutTTY ? terminalFacade(sys, stdinTTY) : undefined,
       nodeGuest: hooks,
     };
-    // stdin: read when the program asks for it (a pipe until its end)
-    if (!stdinTTY) {
+    // stdin: read when the program asks for it (a pipe until its end); a thread's is the main thread's
+    if (!stdinTTY && !nodeThread) {
       ctx.readStdin = async () => {
         const r = sys.readAll(0);
         return typeof r === 'number' ? '' : dec.decode(r);
@@ -127,6 +162,13 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
       status = 1;
     }
     if (ctx.stdout) sys.write(1, ctx.stdout);
+    if (nodeThread) {
+      // A thread's uncaught error is its Worker's 'error' event; its exit ends only the thread
+      if (status !== 0 && ctx.stderr) post({ type: 'node-thread-out', kind: 'error', value: { message: ctx.stderr.trim() } });
+      else if (ctx.stderr) sys.write(2, ctx.stderr);
+      post({ type: 'node-thread-out', kind: 'exit', value: status }); // after its messages (the kernel's exit can overtake them)
+      sys.exitThread(status);
+    }
     if (ctx.stderr) sys.write(2, ctx.stderr);
     sys.exit(status);
   } catch (e) {
@@ -135,10 +177,30 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
   }
 }
 
-/** The worker's message handler: the first start message runs node */
+/** Where the page's filesystem changes go (the running guest's SyscallFs) */
+let fsEvents: ((m: { event: string; path: string; newPath?: string }) => void) | null = null;
+/** worker_threads: this guest's threads' events by id, and (in a thread) its parent's messages */
+let lastThread = 0;
+const threadEvents = new Map<number, ThreadEvents>();
+let parentMessages: ((value: unknown) => void) | null = null;
+/** The parent's messages that came before the thread's script was listening */
+const earlyMessages: unknown[] = [];
+
+/** The worker's message handler: the first start message runs node; then filesystem changes */
 export function nodeGuestMain(on: (handler: (m: unknown) => void) => void, post: (m: unknown) => void): void {
   let started = false;
   on((m) => {
+    const t = (m as any)?.type;
+    if (started && t === 'node-guest-fs') { fsEvents?.(m as any); return; }
+    if (started && t === 'node-guest-parent-msg') { if (parentMessages) parentMessages((m as any).value); else earlyMessages.push((m as any).value); return; }
+    if (started && t === 'node-guest-thread-ev') {
+      const { id, kind, value } = m as any;
+      const ev = threadEvents.get(id);
+      if (!ev) return;
+      if (kind === 'exit') threadEvents.delete(id);
+      (ev as any)[kind]?.(value);
+      return;
+    }
     if (started || !isStartMessage(m)) return;
     started = true;
     void runNodeGuest(m, post);
