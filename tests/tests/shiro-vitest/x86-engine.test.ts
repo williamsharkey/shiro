@@ -57,6 +57,8 @@ const forkBin = join(out, 'forkcopy');
 const haveFork = tryBuild('gcc', ['-static', '-O1', '-o', forkBin, 'forkcopy.c']);
 const mtchildBin = join(out, 'mtchild');
 const haveMtchild = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', mtchildBin, 'mtchild.c']);
+const psemBin = join(out, 'psem');
+const havePsem = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', psemBin, 'psem.c']);
 const fsidentBin = join(out, 'fsident');
 const haveFsident = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', fsidentBin, 'fsident.c']);
 // musl's libc (native Claude Code's) resolves paths and stats files its own way
@@ -112,6 +114,10 @@ const sse2dBin = join(out, 'sse2d');
 const haveSse2d = tryBuild('gcc', ['-static', '-O1', '-o', sse2dBin, 'sse2d.c']);
 const futexckptBin = join(out, 'futexckpt');
 const haveFutexckpt = tryBuild('gcc', ['-static', '-O1', '-o', futexckptBin, 'futexckpt.c']);
+const sysvsemBin = join(out, 'sysvsem');
+const haveSysvsem = 'SYS_semget' in Abi && tryBuild('gcc', ['-static', '-O1', '-o', sysvsemBin, 'sysvsem.c']);
+const sysvmsgBin = join(out, 'sysvmsg');
+const haveSysvmsg = 'SYS_msgget' in Abi && tryBuild('gcc', ['-static', '-O1', '-o', sysvmsgBin, 'sysvmsg.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -913,6 +919,20 @@ describe('Blink engine: CPU and syscall fixes', () => {
     expect(r.output.replace(/\r\n/g, '\n')).toBe('anon: 0 of 10 rounds bad\nfile: 0 of 10 rounds bad\n');
   }, 120_000);
 
+  // Audacity's single-instance lock: System V semaphores (the kernel's, forwarded)
+  it.skipIf(!haveSysvsem)('System V semaphores: values, blocking semop, SEM_UNDO at exit, timeouts, IPC_RMID', async () => {
+    const { shell } = await setup(readFileSync(sysvsemBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe("semget ok\nsetval 0 getval 1\ngetall 1 0 nsems 2\nnowait while held -1 Resource temporarily unavailable\nblocking semop 0 after child exit 1\nsemtimedop -1 Resource temporarily unavailable waited 1\nrmid 0\nsemop after rmid -1 Invalid argument\n");
+  }, 60_000);
+
+  // System V message queues (the kernel's, forwarded)
+  it.skipIf(!haveSysvmsg)('System V message queues: typed receive, IPC_NOWAIT, a blocked receiver, IPC_RMID', async () => {
+    const { shell } = await setup(readFileSync(sysvmsgBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe("msgget ok\nsend 0 0\nqnum 2\nrcv type 2: 6 2 world\nrcv any: 6 1 hello\nrcv empty nowait: -1 No message of desired type\nchild got 5 7 late\nrmid 0\nsend after rmid -1 Invalid argument\n");
+  }, 60_000);
+
   // vim's typeahead check blocked for a key when two reads straddled a ms tick
   it.skipIf(!haveRealtime)('CLOCK_REALTIME and gettimeofday have sub-ms resolution', async () => {
     const { shell } = await setup(readFileSync(realtimeBin));
@@ -976,6 +996,18 @@ describe('Blink engine: CPU and syscall fixes', () => {
       expect(typeof st).not.toBe('number');
       expect(a[i]).toBe(`${(st as any).dev}:${(st as any).ino}`);
     }
+  }, 60_000);
+
+  // The acceptance test of docs/research/SHARED_MAPPINGS.md: within a process
+  // and across fork today; an exec'd process's sem_post needs the Blink half
+  // (remote pages). it.fails until then: flip it to `it` when it lands.
+  it.skipIf(!havePsem).fails('POSIX named semaphores across exec (sem_open, /dev/shm)', async () => {
+    const { shell } = await setup(readFileSync(psemBin));
+    const r = await run(shell, './prog');
+    const out = r.output.replace(/\r\n/g, '\n');
+    expect(out).toContain('initial 1\nafter wait 0\n');
+    expect(out).toContain('after fork child post 1\n');
+    expect(out).toContain("exec'd process post seen: yes\n");
   }, 60_000);
 
   it.skipIf(!haveStatnull)('the stat family with a NULL buffer is EFAULT once the file is found', async () => {

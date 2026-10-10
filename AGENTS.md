@@ -16,13 +16,13 @@ Page (everything under `src/` is the engine; products are profiles):
 
 - `src/main.ts`: boot, filesystem init, command registration, the profile's preinstall, seeded runtime hydration.
 - `src/profile.ts` + `profiles/<id>/profile.json`: product profiles. Code asks `activeProfile()`, never the hostname. [docs/PROFILES.md](docs/PROFILES.md).
-- `src/kernel/*`: the Unix kernel: process table (`process.ts`), fd tables (`fd.ts`), pipes, ptys (`pty.ts`), signals and job control (`signals.ts`), epoll, file locks, `/proc` (`procfs.ts`), sockets (`net.ts`, `netlink.ts`), the SharedArrayBuffer syscall channel for Worker guests (`channel.ts`, `worker-host.ts`). Contract: [docs/KERNEL_ABI.md](docs/KERNEL_ABI.md). `window.__tabcomputer.kernel`; kernel processes show in `ps`.
+- `src/kernel/*`: the Unix kernel: process table (`process.ts`), fd tables (`fd.ts`), pipes, ptys (`pty.ts`), signals and job control (`signals.ts`), epoll, file locks, `/proc` (`procfs.ts`), sockets (`net.ts`, `netlink.ts`), signalfd, System V IPC (`sysvshm.ts`, `sysvsem.ts`, `sysvmsg.ts`; `ipcs`/`ipcrm` read `/proc/sysvipc`), the SharedArrayBuffer syscall channel for Worker guests (`channel.ts`, `worker-host.ts`). Contract: [docs/KERNEL_ABI.md](docs/KERNEL_ABI.md). `window.__tabcomputer.kernel`; kernel processes show in `ps`.
 - Kernel log (`src/kernel/klog.ts`): `dmesg` (builtin; Debian's util-linux dmesg replaces it in Debian mode and reads the same log through `/dev/kmsg`), `/dev/kmsg`, `syslog(2)`. Engines and subsystems log with `klog.log`/`klog.logRatelimited` (`net: ...`, `traps: comm[pid] ...`); relay refusals (token, handshake, `op:error`, no relay) land there, so check `dmesg` when curl/git only say "Could not connect".
 - `src/filesystem.ts`: the IndexedDB-backed POSIX-like filesystem (lazy placeholders for Debian, virtual providers such as `/dom`).
 - `src/shell.ts` + `src/shell-*.ts`: the bash-compatible shell. `src/shell-kernel.ts` runs WASM/ELF pipeline stages as kernel processes.
 - `src/terminal.ts` (xterm.js, the classic HUD banner), `src/window-terminal.ts`, `src/panes.ts`.
 - `src/commands/*`: builtins, one command per file or small group (`doctor.ts`, `claude.ts`, `claude-native.ts`, `debian.ts`, `gui.ts`, `serve.ts`, `page.ts`, `remote.ts`, `pkg.ts`, `gh*.ts`, `git*.ts`, ...).
-- `src/node-compat/*`: the Node.js runtime used by `node`, npm packages and the npm build of Claude Code.
+- `src/node-compat/*`: the Node.js runtime used by `node`, npm packages and the npm build of Claude Code. `src/node-worker/*`: experimental, opt-in with `TABCOMPUTER_NODE_WORKER=1` on a cross-origin isolated page: `node` runs as a kernel process in a Worker, so its file calls are real syscalls and `*Sync` child_process calls block.
 - `src/wasi/*`: WASM programs as kernel processes (WASI preview1, WASIX fork/exec/signals/sockets, dynamic linking). `src/wasi-runtime.ts` is the old in-page runtime, kept as the fallback.
 - `src/x86-engine/*` + `public/engines/blink/` + `vendor/blink/` (`build.sh`, `patches/`, `shiro-kernel.js`, `shiro-net.js`): x86-64 Linux ELF in Blink as kernel processes. `src/x86/*` is the fallback interpreter when the page isn't cross-origin isolated. [docs/X86_ENGINES.md](docs/X86_ENGINES.md).
 - `src/pkg-manager.ts`, `src/pkg-index.json`, `src/commands/pkg.ts`: `pkg`/`apt` before Debian mode. Recipes in `scripts/pkgbuild/` (`x86/` for static x86-64 builds). [docs/PACKAGES.md](docs/PACKAGES.md).
@@ -54,7 +54,7 @@ PORT=5299 STATIC_DIR=$PWD/dist node server.mjs                     # serve a bui
 ```
 
 - Browser checks (need a build and a running server; they use the pre-installed Chromium at `/opt/pw-browsers`, never `playwright install`): `tests/browser/first-run.mjs` (first impressions, desktop and `?ui=terminal`), `tests/browser/dev-workflows.mjs` (git, npm, venv + pytest, make, ssh), `tests/browser/no-reflow.mjs` (one draw at load), `tests/browser/gui-first-launch.mjs`, `tests/browser/job-control.mjs`, `tests/browser/vim-keys.mjs`, `tests/browser/web-score.mjs`. `scripts/browser-check.mjs URL 'cmd' ...` runs any commands.
-- Scoreboards: `npm run conformance` (docs/CONFORMANCE.md), `npm run debian-score` (docs/DEBIAN_SCORE.md), `npm run bench:quick` before and after a performance change.
+- Scoreboards: `npm run conformance` (docs/CONFORMANCE.md), `npm run debian-score` (docs/DEBIAN_SCORE.md), `npm run gui-score` (docs/GUI_SCORE.md), `node tests/browser/vite-react.mjs` (vite dev + HMR), `npm run bench:quick` before and after a performance change.
 - CI (`.github/workflows/ci.yml`, pull requests to main) runs `npm test`, `npx tsc --noEmit` and `npm run build`.
 
 ## Branches and integration

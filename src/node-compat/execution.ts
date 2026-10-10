@@ -185,7 +185,7 @@ export async function executeNodeScript(
     // File cache, module cache, and sync watchdog
     // As a kernel guest (node-worker), files come from blocking syscalls as they're needed
     const guest = nodeGuestOf(ctx);
-    const { fileCache, fileMtimes, moduleCache, tickSyncOps } = createFileCache(guest?.readText);
+    const { fileCache, fileMtimes, moduleCache, tickSyncOps } = createFileCache(guest?.readText, guest ? (p) => !!(ctx.fs as any).isDirCached?.(p) : undefined);
 
     // Pre-load environment (the page's: files into the cache, Claude's bootstrap)
     if (!guest) await preloadEnvironment(ctx, fileCache, fileMtimes, scriptPath);
@@ -399,6 +399,9 @@ export async function executeNodeScript(
 
     if (typeof window !== 'undefined') {
       window.addEventListener('unhandledrejection', suppressRejection);
+    } else {
+      // a kernel guest: the worker hears them
+      nodeGuestOf(ctx)?.onUnhandledRejection?.((reason, promise) => suppressRejection({ reason, promise, preventDefault() {} } as unknown as PromiseRejectionEvent));
     }
     runningScripts++;
     let counted = true;

@@ -271,6 +271,41 @@ untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
 
+### Integration b63f9d9 → 073944d: boot requests, and what wasn't real (unix/bench)
+
+**Boot requests, confirmed by the hourly compare.** Cold and warm boots go
+11 → 13 requests, settled 13 → 15. Diffing the two builds' request lists
+gives exactly two new URLs:
+
+- `/assets/host-*.js`, the node-worker host.
+- `/assets/index-*.css`, the entry's CSS, which is already inlined in
+  index.html. Vite preloads it because that chunk's dynamic import lists
+  the entry chunk and its CSS as dependencies.
+
+Both come from ff6875a (node-worker, compat-tools). It added
+`import('./node-worker/host').then(m => m.installNodeLoader(kernel))` to
+main.ts, which runs on every boot even with `TABCOMPUTER_NODE_WORKER`
+unset. Reported, with a suggestion to load the host on the first node guest.
+It wasn't compat-dev's preview service worker, which doesn't register at
+boot in either build.
+
+**The rest, re-run with `ab.mjs b63f9d9 073944d`** (5 rounds × 5 runs,
+quick, machine `e57125c23b92`):
+
+| metric | base → new | shift (99% CI) | rounds | verdict |
+|---|---|---|---|---|
+| `wasm.ripgrep.tree` | 145 → 154 ms | −0.6% (−40…+30) | `+--+-` | same |
+| `wasm.builtin_grep_r.tree` | 16.4 → 16.5 ms | −1.7% (−73…+13) | `--+++` | same |
+| `wasm.peak_rss.ripgrep_tree` | 9.3 → 9.2 MiB | 0.0% (−88…+92) | `-+++-` | same (very noisy) |
+| `wasm.tree_create` | 19.9 → 21.6 ms | +6.4% (−57…+50) | `--+-+` | same |
+| `npm.install_small.first` | 102 → 103 ms | −2.4% (−35…+21) | `-++-+` | same |
+| `claude.version` | 847 → 891 ms | +5.7% (−1.4…+13.6) | `+++++` | same (interval includes 0) |
+
+Why the hourly A/B had no samples for the three ripgrep/grep metrics:
+compare.mjs's filter named only those metrics, so the wasm suite skipped
+its `wasm.tree` setup and `rg`/`grep -r` searched an empty directory. The
+tree is now built whenever a metric that searches it is wanted (98873f8).
+
 ### Integration 1d9582a → 9bb1a06: A/B-confirmed candidates (unix/bench)
 
 `node bench/compare.mjs bench/results/integration-1d9582a-quick.json
@@ -1461,6 +1496,31 @@ The coordinator's `ab.mjs a5e66fb 7382bdc` showed `kernel.epoll_wakeup`
 - **Both, a5e66fb → this branch, 5 rounds:** `epoll_wakeup` 100.1 → 96.8 µs
   (−3%, p 0.41) and `pty_echo.kernel` 0.245 → 0.245 ms. Both are back
   within noise.
+
+### unix/perf-kernel, round 10: Blink pool channels on watched state words; sync create/unlink
+
+- **Pool channels on watched state words:** host.mjs stores the hosted pid in
+  a trailer word, stores REQUEST and notifies. The page serves the channel from
+  an `Atomics.waitAsync` loop rather than a `blink-sys` message, and the host
+  awaits REPLY the same way rather than a `blink-done` message. A/B against
+  f298f8f, `--suites debian`, 6 rounds × 5 runs; every row is "same":
+  - `debian.rootfs.first_bash` (`bash -c true`): 834 → 830 ms (−0.6%, p 0.80).
+  - `first_dpkg_list`: 1931 → 1977 ms (+2.0%, p 0.12, 5 of 6 rounds worse).
+  - `rootfs.install`: 540 → 522 ms (−3.3%, p 0.27).
+  - `warm.first_bash`: 442 → 436 ms (−2.3%, p 0.35).
+  - An earlier 3-round run had shown −20%. It didn't hold up at 6 rounds.
+  - Profiling (round 9 notes) puts the page's main thread 76–86% idle during
+    these commands, so the message hop isn't on the critical path.
+  - The code stays, but opt-in: `TABCOMPUTER_BLINK_POOL_WAKE=atomics`. The
+    default is still messages.
+- **Sync O_CREAT/O_TRUNC open and unlink** (compat-tools asked; they measured
+  openat create at about 75 µs and unlinkat at about 25 µs through the async
+  path). `syscallSync` now answers these when the parent directory and file
+  are in the write-behind cache:
+  - creating an empty file, truncating an existing one, and EEXIST/ELOOP;
+  - unlinking a file that no fd has open and that isn't a socket or fifo.
+  Anything else still takes the async path. Not yet measured end to end;
+  compat-tools' harness is the one that shows it.
 
 ### unix/perf-fs-shell 7 — 1d9582a → bb39a38 regressions: shell-stdio's per-command pass; ab.mjs decides on rounds
 

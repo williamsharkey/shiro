@@ -418,6 +418,15 @@ body.sd-active #shiro-layout { display: none; }
 .sd-status-line { font-size: 12px; color: var(--sd-text-2); margin-top: 8px; min-height: 16px; }
 .sd-status-line.ok { color: #2fb457; } .sd-status-line.err { color: #ff5a52; }
 
+/* Previews of in-tab servers (preview.ts) */
+.sd-preview .sd-preview-addr { font: 12px var(--sd-mono); color: var(--sd-text-2); }
+.sd-preview .sd-icon-btn svg { width: 15px; height: 15px; }
+.sd-preview-body { position: relative; flex: 1; min-height: 0; background: #fff; }
+.sd-preview-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #fff; }
+.sd-preview-stopped { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 20px; background: color-mix(in srgb, var(--sd-window) 88%, transparent); color: var(--sd-text); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
+.sd-toast.sd-preview-toast { display: flex; align-items: center; gap: 10px; min-width: 320px; max-width: 460px; cursor: default; }
+.sd-preview-toast .sd-icon-btn { width: 26px; padding: 0; font-size: 16px; }
+
 /* Accounts (accounts.ts): Settings → Accounts and the menu bar popover */
 .sd-btn.sd-danger { background: #e5484d; border-color: transparent; color: #fff; }
 

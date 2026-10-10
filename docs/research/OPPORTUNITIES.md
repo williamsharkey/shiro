@@ -59,8 +59,8 @@ summarised in the sections below.
 | 13 | **Science long tail** (BLAST+, Octave + Forge, R from source, EMBOSS) | 3 | 4 | 2 | 24 | a | R: `Rscript` with `lm()` 18 s (install 10 min); BLAST+: `makeblastdb` 3.2 s, `blastn` 4.9 s; Octave install hung (not verified) | webR 0.6 (2026-06) and Pyodide beat emulation on speed; biowasm covers samtools-class tools; JSLinux NumPy matmul measured ~2500× slower ([HN](https://news.ycombinator.com/item?id=47311484)) |
 | 14 | **CAD batch conversion and repair** (admesh, assimp, freecadcmd) | 4 | 3 | 2 | 24 | a | `assimp export tri.stl tri.obj` 0.8 s; admesh runs (0.5 s) but read my one-facet ASCII STL as empty; freecadcmd not tried | OpenSCAD Playground is excellent; FreeCAD WASM ports (2026) are ~200 MB, Chrome-only |
 | 15 | **GIS beyond simple conversion** (full ogr2ogr, SpatiaLite, QGIS) | 3 | 3 | 2 | 18 | a | `ogr2ogr` GeoJSON→GeoPackage→CSV and `ogrinfo` 12.6 s; gdal-bin install 22 min, needing one `--fix-broken` retry | mapshaper and gdal3.js already do simple conversions locally |
-| 16 | **OCR to searchable PDF** (ocrmypdf, PDF/A) | 4 | 3 | 1 | 12 | a | ocrmypdf runs (it refused my 16-bit PNG, a test-file issue); the tesseract install hung, so OCR itself is not verified | browser OCR uses tesseract.js (BentoPDF) without OCRmyPDF's PDF/A |
-| 17 | **Office to PDF** (LibreOffice headless) | 4 | 3 | 1 | 12 | a | **not verified**: libreoffice-writer-nogui installs failed in dpkg twice and hung once (`soffice`: "oosplash: not found") | ZetaOffice is the only local wasm option (~150 MB+ builds) |
+| 16 | **OCR to searchable PDF** (ocrmypdf, PDF/A) | 4 | 3 | 1 | 12 | a | ocrmypdf runs (it refused my 16-bit PNG, a test-file issue); the tesseract install hung, so OCR itself is not verified | browser OCR uses tesseract.js (BentoPDF) without OCRmyPDF's PDF/A **Verified 2026-10-10:** `apt install tesseract-ocr` (4 min) and `tesseract img.png stdout` read a line of text correctly (7.5 s); ocrmypdf not rerun. |
+| 17 | **Office to PDF** (LibreOffice headless) | 4 | 3 | 1 | 12 | a | **not verified**: libreoffice-writer-nogui installs failed in dpkg twice and hung once (`soffice`: "oosplash: not found") | ZetaOffice is the only local wasm option (~150 MB+ builds) **Verified 2026-10-10:** `apt install libreoffice-writer-nogui` (10 min), then `soffice --headless --convert-to pdf note.txt` wrote the PDF (37 s). |
 | — | PDF merge/split/rotate/compress | 5 | 1 | 5 | — | a, d | `qpdf` merge+rotate, `pdfinfo`, `pdftotext`, `gs` compress all work | BentoPDF (15.9k★, fully local) and dozens more |
 | — | Pandoc conversions | 3 | 1 | 5 | — | a, d | md→html/docx/epub and docx→md work (Debian's pandoc 3.1.11) | official pandoc.wasm 3.9 at [pandoc.org/app](https://pandoc.org/app/) |
 | — | HEIC→JPG, image compression | 5 | 1 | 4 | — | d | ImageMagick works through `magick` (`convert` needed the argv[0] fix) | dozens of libheif-wasm sites, Squoosh |
@@ -150,7 +150,7 @@ contention; "Run" is the command shown.
 | BLAST+ (`ncbi-blast+`), assimp, admesh | 9 min | `makeblastdb` 3.2 s, `blastn` 4.9 s; `assimp export` 0.8 s | run; assimp writes OBJ |
 | Redis 8 (`redis-server`) | 131 s | `redis-cli ping`: 1.1 s | PONG; `redis-benchmark` passes on 8f6b521 (before: needed `--maxclients 1000`) |
 | builtin `ffmpeg` (ffmpeg.wasm) | none | wav→mp3 1.3 s, mp4→gif 0.2 s, x264 0.3 s | small test clips |
-| **Not verified** (install failed in dpkg or hung): LibreOffice, calibre, tesseract/ocrmypdf, Octave, Debian's ffmpeg | | | see "Bugs found" |
+| **Not verified** (install failed in dpkg or hung): calibre, ocrmypdf (LibreOffice headless and tesseract verified 2026-10-10), Octave, Debian's ffmpeg | | | see "Bugs found" |
 
 ### Bugs found by these workloads
 
