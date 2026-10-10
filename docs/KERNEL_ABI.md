@@ -4,6 +4,13 @@
 
 All changes so far are additive; nothing below renames or removes an earlier name.
 
+- **2026-10-10 (unix/perf-kernel)** — additive: shared objects (src/kernel/shmobj.ts).
+  - `shiro_shmobj_map` 1020 `(fd | shmid, kind, lenLo, lenHi)` → id; data
+    i32 = 1 when remote. kind 0: a /dev/shm or /run/shm file, or a memfd;
+    1: a SysV shmid. `| 0x100` (SHMOBJ_EAGER): remote from the first map.
+  - `shiro_shmobj_unmap` 1021 `(id)`, `shiro_shmobj_published` 1022 `(id)`.
+    1023 is reserved. Messages to the instance: `{type: 'blink-shmobj', id,
+    sab}` and `{type: 'blink-publish', id}`.
 - **2026-10-10 (unix/perf-kernel)** — behavior fix, additive.
   - exec of a dynamic ELF whose PT_INTERP loader doesn't exist fails with
     ENOENT, as on Linux. It used to start and exit 127 with no message. The
