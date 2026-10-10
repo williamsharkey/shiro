@@ -186,10 +186,11 @@ async function smoke(m, pkg) {
       // (some return their own negative error: JxrDecApp's -105 is exit 151, not a signal)
       const crashSig = /terminating due to SIG|Segmentation fault|Illegal instruction|Bus error|core dumped|blink: aborted|SCORE-TIMEOUT/.test(r.out);
       if (r.code > 0 && r.code !== 124 && r.code !== 126 && r.code !== 127 && !crashSig && !broken && /usage|version|options|--help/i.test(r.out)) return { ok: true, how: `${bin} ${flagArg} (usage, exit ${r.code})${who(bin)}`, ms: r.ms, sample: r.out.trim().split('\n')[0].slice(0, 100) };
-      // A client of a system daemon (udisksctl: udisksd on the system bus) runs but has
-      // nothing to talk to, as in a Debian container without it
-      const daemon = /Error connecting to the \S+ daemon|Failed to connect to (?:the )?bus|Could not connect to (?:D-Bus|the system bus)|Cannot connect to the \S+ daemon/.exec(r.out);
-      if (daemon && !crashed) return { ok: true, how: `${bin} ${flagArg} (ran; needs its daemon: "${daemon[0]}")${who(bin)}`, ms: r.ms };
+      // A client of a system daemon (udisksctl: udisksd on the system bus) or of hardware's
+      // X extension (vmwarectrl: VMWARE_CTRL) runs but has nothing to talk to, as in a
+      // Debian container or on other hardware
+      const absent = /Error connecting to the \S+ daemon|Failed to connect to (?:the )?bus|Could not connect to (?:D-Bus|the system bus)|Cannot connect to the \S+ daemon|extension "\S+" missing on display/.exec(r.out);
+      if (absent && !crashed) return { ok: true, how: `${bin} ${flagArg} (ran; "${absent[0]}")${who(bin)}`, ms: r.ms };
       if (crashed) return { ok: false, how: `${bin} ${flagArg}`, category: r.code === 124 ? 'timeout' : 'engine-crash', error: firstError(r.out) || `exit ${r.code}` };
       const mod = /Can't locate (\S+\.pm) in @INC/.exec(r.out)?.[1];
       if (mod && !undeclared && !(await m.run(`dpkg -S '*/${mod}' 2>/dev/null`)).out.trim()) undeclared = { bin, mod };
