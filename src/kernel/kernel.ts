@@ -1964,10 +1964,22 @@ export class Kernel {
           if (!instance) return -A.ENOSYS;
           const len = (args[2] >>> 0) + (args[3] >>> 0) * 0x100000000;
           let key: string, size = len;
-          let initial: (() => Promise<Uint8Array>) | undefined;
-          let writeBack: ((b: Uint8Array) => Promise<void>) | undefined;
-          if (args[1] === 0) {
-            const f = proc.fds.get(args[0]);
+          let initial: (() => Uint8Array | Promise<Uint8Array>) | undefined;
+          let writeBack: ((b: Uint8Array) => void | Promise<void>) | undefined;
+          let onRemote: ((sab: SharedArrayBuffer) => void) | undefined;
+          const kind = args[1] & ~A.SHMOBJ_EAGER;
+          if (kind & ~0xff) return -A.EINVAL;
+          const f = kind === 0 ? proc.fds.get(args[0]) : undefined;
+          if (kind === 0 && f instanceof MemFile) {
+            // A memfd (Firefox's font list, passed over SCM_RIGHTS): keyed by
+            // the description; read/write go through the buffer while remote
+            const mf = f;
+            key = mf.shareKey;
+            size = Math.max(len, mf.statSync().size);
+            initial = () => mf.bytes();
+            onRemote = (sab) => mf.attachShared(sab);
+            writeBack = (b) => mf.detachShared(b);
+          } else if (kind === 0) {
             if (!f) return -A.EBADF;
             const path = f.path;
             if (f.kind !== 'file' || !path || !isShareablePath(path) || !this.fs) return -A.EINVAL;
@@ -1975,13 +1987,13 @@ export class Kernel {
             key = `file:${inodeNumber(fs, path)}`;
             initial = async () => { const b = await fs.readFile(path); return typeof b === 'string' ? new TextEncoder().encode(b) : b; };
             writeBack = async (b) => { if (await fs.exists(path)) await fs.writeFile(path, b); };
-          } else if (args[1] === 1) {
+          } else if (kind === 1) {
             const seg = this.shm.list().find((x) => x.id === args[0]);
             if (!seg) return -A.EINVAL;
             key = `shm:${seg.id}`;
             size = seg.size;
           } else return -A.EINVAL;
-          const r = await this.shmobj.map(instance, key, size, initial, writeBack);
+          const r = await this.shmobj.map(instance, key, size, initial, writeBack, { eager: !!(args[1] & A.SHMOBJ_EAGER), onRemote });
           if (typeof r === 'number') return r;
           if (data.length >= 4) new DataView(data.buffer, data.byteOffset, 4).setInt32(0, r.remote ? 1 : 0, true);
           return r.id;
