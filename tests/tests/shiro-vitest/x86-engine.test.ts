@@ -110,6 +110,8 @@ const sysvshmBin = join(out, 'sysvshm');
 const haveSysvshm = 'SYS_shmget' in Abi && tryBuild('gcc', ['-static', '-O1', '-o', sysvshmBin, 'sysvshm.c']);
 const sse2dBin = join(out, 'sse2d');
 const haveSse2d = tryBuild('gcc', ['-static', '-O1', '-o', sse2dBin, 'sse2d.c']);
+const futexckptBin = join(out, 'futexckpt');
+const haveFutexckpt = tryBuild('gcc', ['-static', '-O1', '-o', futexckptBin, 'futexckpt.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -891,6 +893,13 @@ describe('Blink engine: CPU and syscall fixes', () => {
       expect(r.output.replace(/\r\n/g, '\n')).toBe(NATIVE_SSE2D);
     }
   }, 60_000);
+
+  // LTP waitpid08/10: one of 8 forked children never woke from its checkpoint
+  it.skipIf(!haveFutexckpt)('every wake a waker counts reaches a waiter (futex in shared memory, 8 children)', async () => {
+    const { shell } = await setup(readFileSync(futexckptBin));
+    const r = await run(shell, './prog a 10; ./prog f 10');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('anon: 0 of 10 rounds bad\nfile: 0 of 10 rounds bad\n');
+  }, 120_000);
 
   // vim's typeahead check blocked for a key when two reads straddled a ms tick
   it.skipIf(!haveRealtime)('CLOCK_REALTIME and gettimeofday have sub-ms resolution', async () => {
