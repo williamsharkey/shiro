@@ -197,6 +197,9 @@ export class Harness {
     this.log(`  ${name.padEnd(44)} ${'—'.padStart(10)} ${unit.padEnd(6)} ${reason}`);
   }
 
+  /** A block that records several metrics (some named outside its group, like *.peak_rss.*) runs when the group or any of them is wanted. */
+  wantsAny(group, ...names) { return this.wants(group) || names.some((n) => this.wants(n)); }
+
   wants(name) { return (!this.only || this.only.some((re) => re.test(name))) && !this.skipRe?.some((re) => re.test(name)); }
 
   /** Run a measurement; record a skip if it throws. `force`: run even if --only/--skip leave it out (setup other metrics need). */
