@@ -1196,7 +1196,7 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe(
       'seals 0 add 0 seals 6 truncate -1 EPERM grow -1 EPERM overwrite 1 seal 0 again -1 EPERM \n' +
-      'plain seals 1 add -1 EPERM pipe -1 EINVAL\n');
+      'plain seals 1 add -1 EPERM pipe -1 EINVAL \n');
   }, 60_000);
 
   // Open POSIX sigqueue_1-1: a same-instance child's handler gets the queued value (0110)
