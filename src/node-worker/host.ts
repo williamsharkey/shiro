@@ -12,6 +12,7 @@ import type { Kernel, Runner } from '../kernel/kernel';
 import { attachThread, webWorker, workerRunner, type GuestThread, type GuestWorker } from '../kernel/worker-host';
 import { installNodeWorkerBoot, nodeWorkerFactory, nodeWorkerMode } from './boot';
 import { isStartMessage } from '../kernel/channel';
+import { getShiroOrigin } from '../utils/shiro-origin';
 
 /** (guest.ts writes it; the value only, so the page doesn't load the guest's code) */
 const EXITING_MARK = 0x45584954;
@@ -81,7 +82,7 @@ function wire(w: GuestWorker, proc: Process, kernel: Kernel): void {
             return tw;
           }, {
             dataSize: 1 << 20,
-            startData: { nodeThread: { file: m.file, eval: m.eval, workerData: m.workerData, argv: m.argv, threadId: m.threadId } },
+            startData: { pageOrigin: getShiroOrigin(), nodeThread: { file: m.file, eval: m.eval, workerData: m.workerData, argv: m.argv, threadId: m.threadId } },
           });
         } catch (e: any) {
           ev('error', { message: String(e?.message ?? e) });
@@ -183,7 +184,7 @@ export function nodeWorkerRunner(): Runner {
     const w = lease(pooledWorker());
     wire(w, p, kernel);
     return w;
-  }, { dataSize: 1 << 20 })(proc, kernel);
+  }, { dataSize: 1 << 20, startData: { pageOrigin: getShiroOrigin() } })(proc, kernel);
 }
 
 /** `#!/usr/bin/env node`, `#!/usr/bin/env -S node --flag`, `#!/usr/local/bin/node`: the flags after node, or null */

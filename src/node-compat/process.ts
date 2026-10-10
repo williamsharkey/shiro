@@ -28,8 +28,8 @@ export function createFakeProcess(
   const processEnv: Record<string, string> = {
     ...ctx.env,
     MCP_CONNECTION_NONBLOCKING: '1',
-    // Route API calls through CORS proxy when in browser
-    ...(typeof window !== 'undefined' && !ctx.env['ANTHROPIC_BASE_URL'] ? {
+    // Route API calls through CORS proxy when in browser (the page, or a guest's Worker)
+    ...((typeof window !== 'undefined' || (ctx as any).nodeGuest) && !ctx.env['ANTHROPIC_BASE_URL'] ? {
       ANTHROPIC_BASE_URL: `${getShiroOrigin()}/api/anthropic`,
     } : {}),
   };
