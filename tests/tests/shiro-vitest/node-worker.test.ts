@@ -252,6 +252,31 @@ w.terminate();
     expect(r.out).toBe('ok 42\n');
   }, 60_000);
 
+  it("a guest's server-sent events stream to the page as they are written", async () => {
+    const { iframeServer } = await import('@shiro/iframe-server');
+    const { shell, fs } = await createTestShell();
+    await fs.writeFile('/tmp/nh-sse.js', `require('http').createServer((req, res) => {
+  res.writeHead(200, { 'content-type': 'text/event-stream' });
+  let n = 0;
+  const t = setInterval(() => { res.write('data: ' + (++n) + '\\n\\n'); if (n === 3) { clearInterval(t); res.end(); setTimeout(() => process.exit(0), 50); } }, 150);
+}).listen(18494);`);
+    const run = shell.execute('export TABCOMPUTER_NODE_WORKER=1; node /tmp/nh-sse.js < /dev/null', () => {}, () => {});
+    const t0 = Date.now();
+    while (!iframeServer.isPortInUse(18494) && Date.now() - t0 < 20_000) await new Promise((r) => setTimeout(r, 20));
+    const start = Date.now();
+    const res = await iframeServer.fetch(18494, '/events');
+    expect(res.headers?.['content-type']).toBe('text/event-stream');
+    expect(res.body).toBeInstanceOf(ReadableStream);
+    const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+    const first = await reader.read();
+    const firstAt = Date.now() - start;
+    let all = new TextDecoder().decode(first.value);
+    for (;;) { const { value, done } = await reader.read(); if (done) break; all += new TextDecoder().decode(value); }
+    expect(firstAt).toBeLessThan(Date.now() - start - 150); // the first event came well before the end
+    expect(all).toBe('data: 1\n\ndata: 2\n\ndata: 3\n\n');
+    expect(await run).toBe(0);
+  }, 60_000);
+
   it('stdin from a pipe; async exec', async () => {
     const r = await sh(`printf 'a\\nb\\n' | node -e '
       let t = ""; process.stdin.on("data", (d) => t += d).on("end", () => {
