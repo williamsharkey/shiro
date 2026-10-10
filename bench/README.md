@@ -2,7 +2,7 @@
 
 ```bash
 npm run bench                  # full run, both modes: bench/results/<date>-<sha>.json + docs/BENCHMARKS.md
-npm run bench:quick            # key metrics, ~2.5 min (isolated + JSPI kernel), doesn't touch docs/
+npm run bench:quick            # key metrics, ~5 min (isolated + JSPI kernel; ~3 min with --skip workflow.go,workflow.apt), doesn't touch docs/
 node bench/compare.mjs bench/results/A.json bench/results/B.json   # flags only same-machine, A/B-confirmed regressions (exit 1)
 node bench/ab.mjs origin/unix/integration                          # A/B: that ref vs the working tree, with a significance test
 node bench/report.mjs bench/results/X.json                          # regenerate the docs table from a file
