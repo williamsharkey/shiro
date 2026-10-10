@@ -52,6 +52,16 @@ class IframeServerManager {
   private servers: Map<number, RegisteredServer> = new Map();
   private defaultContainer: HTMLElement | null = null;
   private resourceProxySetup = false;
+  private portListeners = new Set<(port: number, up: boolean) => void>();
+
+  /** Called when a server starts (up) or stops on a port; returns an unsubscribe */
+  onPortChange(cb: (port: number, up: boolean) => void): () => void {
+    this.portListeners.add(cb);
+    return () => { this.portListeners.delete(cb); };
+  }
+  private emitPort(port: number, up: boolean): void {
+    for (const cb of this.portListeners) { try { cb(port, up); } catch {} }
+  }
 
   /**
    * Set the default container where iframes will be spawned
@@ -70,6 +80,7 @@ class IframeServerManager {
 
     this.servers.set(port, { port, handler, name, connect: opts?.connect });
     console.log(`[IframeServer] Server "${name || 'unnamed'}" listening on port ${port}`);
+    this.emitPort(port, true);
 
     // Return cleanup function
     return () => this.close(port);
@@ -608,6 +619,12 @@ class IframeServerManager {
     if (!server?.iframe) {
       throw new Error(`No iframe for port ${port}`);
     }
+    // A service-worker preview (preview-sw-host.ts) is a document at a URL
+    if (server.iframe.hasAttribute('data-preview-sw')) {
+      const { previewUrl } = await import('./preview-sw-host');
+      const url = await previewUrl(port, path);
+      if (url) { server.iframe.setAttribute('data-virtual-path', path); server.iframe.src = url; return; }
+    }
 
     const response = await this.fetch(port, path);
     let html: string;
@@ -639,7 +656,9 @@ class IframeServerManager {
       ? [this.servers.get(port)].filter(Boolean)
       : Array.from(this.servers.values());
     for (const server of targets) {
-      if (server?.iframe?.contentWindow) {
+      if (server?.iframe?.contentWindow && server.iframe.hasAttribute('data-preview-sw')) {
+        try { server.iframe.contentWindow.location.reload(); } catch { /* navigated away */ }
+      } else if (server?.iframe?.contentWindow) {
         server.iframe.contentWindow.postMessage({ type: 'shiro-reload' }, '*');
       }
     }
@@ -662,6 +681,7 @@ class IframeServerManager {
 
       this.servers.delete(port);
       console.log(`[IframeServer] Server on port ${port} closed`);
+      this.emitPort(port, false);
     }
   }
 

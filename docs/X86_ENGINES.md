@@ -676,6 +676,71 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    4.8 s, of which 3.0 s is compiled code (0.67 s of it compiling) and ~1.8 s
    is the interpreter, at ~290 ns per instruction with the profile's own
    overhead.
+75. A woken futex waiter stops counting as a waiter as soon as it takes its
+   wake. It used to stay counted until SysFutexWait ended, after letting go
+   of the lock and making a kernel round trip, so a FUTEX_WAKE in between
+   counted it twice. A waker that counts its wakes, like LTP's checkpoints,
+   then stopped early and the last waiter timed out: waitpid08/10, 3 to 5
+   rounds in 10 of fixtures/x86/futexckpt.c. LTP waitpid went from 4/11 to
+   8/11.
+76. ppoll, pselect6 and epoll_pwait(2) apply their signal-mask argument; they
+   used to ignore it. A signal the call lets through is delivered with the
+   caller's mask saved in its frame, as after sigsuspend; otherwise the
+   caller's mask is restored when the call returns. An interruptible kernel
+   call also takes a signal that the mask it just sent released (LTP ppoll01).
+77. System V semaphores are forwarded to the kernel's (unix/perf-kernel):
+   `semget`, `semop` and `semtimedop`, which block in the kernel, and
+   `semctl`, with its SETVAL int, the GETALL/SETALL arrays (sized by an
+   IPC_STAT) and the semid_ds/seminfo structs. SEM_UNDO is applied by the
+   kernel at process exit. Test: fixtures/x86/sysvsem.c, identical to native
+   output (Audacity's single-instance lock).
+78. A failed assertion's text goes to host.mjs through a synchronous call to
+   the main runtime thread (`Module.shiroNote`) before the abort. A guest
+   thread's stderr never reached host.mjs, so "blink: aborted" had arrived
+   without the file:line.
+79. System V message queues are forwarded to the kernel's: `msgget`,
+   `msgsnd`/`msgrcv` (mtype plus text; they block in the kernel) and
+   `msgctl`. Test: fixtures/x86/sysvmsg.c, identical to native output.
+80–82. unix/conformance's patches, folded into this series:
+   - LTP errnos: clock ids, getrlimit, iov lengths, waitid options, fchown
+     on O_PATH, personality, CLONE_PARENT, sigpending;
+   - record locks, pipe sizes and RLIMIT_NOFILE handled by the kernel;
+     EFAULT for read-only output buffers; fd checks;
+   - /proc/self/maps as a kernel memfd; nanosleep's rem written before the
+     signal frame.
+85. From one compiled block straight to the next: after a block, WjExecute
+   runs the next one directly when it has code (an indirect jmp's target, a
+   block cut at its length). It does up to 64 blocks before going back
+   through Actor's loop, and stops for signals, a JIT epoch change, or
+   another thread wanting the GIL. A computed-goto bytecode loop, one block
+   per op like JSC's LLInt, went from 131 to 92 ns per op (2 ns native, 660
+   ns interpreted). The x86 suite A/B is unchanged ("same" everywhere).
+83–84. unix/conformance's: raise(SIGKILL)/raise(SIGSTOP) and
+   rt_sigqueueinfo/rt_tgsigqueueinfo go to the kernel (as kill).
+86. unix/conformance's: POSIX message queues go to the kernel
+   (mq_open … mq_getsetattr).
+87. rt_sigtimedwait (sigwait, sigwaitinfo, sigtimedwait) goes to the kernel's
+   new call 128. It takes the lowest pending signal of the set that the
+   process blocked, without running a handler. Blink first takes one sent to
+   this thread (pthread_kill), and waits in the kernel in slices of at most
+   50 ms so it sees those too. It returns EAGAIN at the timeout and EINTR
+   for a signal let through. VLC's main thread sigwaits and quit at once on
+   ENOSYS. Test: fixtures/x86/sigwait.c, identical to native output.
+88. SHIRO_BLINK_PROFILE samples its timing. 1 in SHIRO_BLINK_PROFILE_EVERY
+   (default 64) compiled entries is timed, with any compile left out. 1 in N
+   interpreted instructions goes in the address and opcode tables. Both are
+   scaled by N. Timing every entry slowed native Claude's startup by 55%
+   and inflated its "in compiled code" share. After 0085, "blocks run"
+   counts entries, each running up to 65 blocks.
+90. FUTEX_REQUEUE and FUTEX_CMP_REQUEUE (they were EINVAL). Up to `val`
+   waiters are woken, and up to `val2` more move to uaddr2. The moved ones
+   count at uaddr2 at once, so a wake there right after finds them. Each
+   steps over when it next looks, keeping its timeout. A waiter that leaves
+   (timeout, signal) while a move is meant for it steps over and leaves from
+   there, so the counts stay right. LTP futex_cmp_requeue02/03 pass.
+   futex_cmp_requeue01 passes its 10- and 100-waiter cases, but 1000 forked
+   waiters don't fit its 30 s. Test: fixtures/x86/futexrequeue.c, identical
+   to native output.
 
 The page compiles blink.wasm once and gives the `WebAssembly.Module` to every
 Blink worker (src/x86-engine/blink.ts `blinkWasmModule`, host.mjs

@@ -74,7 +74,7 @@ and terminal UIs. It must not look at the hostname to decide behavior. It asks
 Still engine defaults, not product choices. They are candidates if a third
 product needs them different:
 
-- `DEFAULT_MIRROR` (src/pkg-manager.ts, `https://shiro.computer`): where
+- `DEFAULT_MIRROR` (src/pkg-manager.ts, `https://tabcomputer.com`): where
   packages come from when the page isn't served with them.
 - `getShiroOrigin()` (src/utils/shiro-origin.ts): the API/proxy origin for
   embedded and seeded pages.
@@ -149,7 +149,7 @@ data, so nothing is carried over from the old names:
   the other `__shiro…` page globals (`__shiroDesktop`, `__shiroNet`, …), and the
   `shiro://cmd/` terminal links.
 - The `shiro-mcp` package name (it now reads `TABCOMPUTER_SIGNALING_URL`).
-- Infrastructure URLs on shiro.computer: `DEFAULT_MIRROR`, `/bins`, the
+- Infrastructure URLs on shiro.computer: `/bins`, the
   WebRTC signaling server and the GitHub OAuth app. They are real services, which
   tabcomputer.com mirrors where it serves them itself.
 - Engine internals: TS constants such as `SHIRO_VERSION`, class and file names (`ShiroTerminal`, `shell.ts`,

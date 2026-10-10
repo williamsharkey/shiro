@@ -17,7 +17,7 @@ import { buildTree, binDirOf, binEntries, WASM_ALTERNATES, type BuildResult, typ
  * Resolves dependency trees with semver
  *
  * Performance optimizations:
- *   - Package metadata cached in memory with 1-hour TTL
+ *   - Package metadata cached in memory (1-hour TTL; trimmed to the most recently used 16 MB between commands)
  *   - In-flight request deduplication prevents duplicate fetches
  */
 
@@ -25,7 +25,20 @@ import { buildTree, binDirOf, binEntries, WASM_ALTERNATES, type BuildResult, typ
 /** What `npm -v` says: the npm that node 20 ships with (tools parse a bare semver) */
 export const NPM_VERSION = '10.8.2';
 
-const metadataCache = new Map<string, { data: NpmPackageMetadata; timestamp: number }>();
+const metadataCache = new Map<string, { data: NpmPackageMetadata; timestamp: number; bytes: number }>();
+/** Metadata kept between npm commands (the most recently used, by response size) */
+const METADATA_KEEP_BYTES = 16 << 20;
+
+/** Trim the metadata cache to METADATA_KEEP_BYTES, least recently used first */
+function trimMetadataCache(): void {
+  let total = 0;
+  for (const e of metadataCache.values()) total += e.bytes;
+  for (const [name, e] of metadataCache) {
+    if (total <= METADATA_KEEP_BYTES) break;
+    metadataCache.delete(name);
+    total -= e.bytes;
+  }
+}
 const METADATA_CACHE_TTL = 60 * 60 * 1000; // 1 hour in milliseconds
 
 // In-flight request deduplication: maps package name -> pending promise
@@ -65,11 +78,27 @@ interface NpmPackageMetadata {
 }
 
 
+/** npm commands running: the metadata cache lives while any is */
+let activeCommands = 0;
+
 export const npmCmd: Command = {
   name: 'npm',
   description: 'Browser-native package manager for Node.js packages',
 
   async exec(ctx: CommandContext): Promise<number> {
+    activeCommands++;
+    try {
+      return await npmMain(ctx);
+    } finally {
+      // The abbreviated documents of a big tree (vite+react+eslint+typescript:
+      // ~300 packages) held ~45 MB for an hour after the install: keep the
+      // most recently used 16 MB (a small project's whole tree)
+      if (--activeCommands === 0) trimMetadataCache();
+    }
+  },
+};
+
+async function npmMain(ctx: CommandContext): Promise<number> {
     const subcommand = ctx.args[0];
 
     if (!subcommand || subcommand === '--help' || subcommand === '-h') {
@@ -152,8 +181,7 @@ export const npmCmd: Command = {
         ctx.stderr += "Run 'npm --help' for usage.\n";
         return 1;
     }
-  },
-};
+}
 
 /**
  * npm create <initializer> [args]: npx create-<name> with the arguments
@@ -219,6 +247,9 @@ async function fetchPackageMetadata(packageName: string): Promise<NpmPackageMeta
   // Check in-memory cache first
   const cached = metadataCache.get(packageName);
   if (cached && (Date.now() - cached.timestamp) < METADATA_CACHE_TTL) {
+    // Most recently used last (trimMetadataCache drops from the front)
+    metadataCache.delete(packageName);
+    metadataCache.set(packageName, cached);
     return cached.data;
   }
 
@@ -247,10 +278,11 @@ async function fetchPackageMetadata(packageName: string): Promise<NpmPackageMeta
       throw new Error(`Failed to fetch package metadata: ${response.statusText}`);
     }
 
-    const data: NpmPackageMetadata = await response.json();
+    const text = await response.text();
+    const data: NpmPackageMetadata = JSON.parse(text);
 
     // Cache the result
-    metadataCache.set(packageName, { data, timestamp: Date.now() });
+    metadataCache.set(packageName, { data, timestamp: Date.now(), bytes: text.length });
 
     return data;
   })();
@@ -294,7 +326,7 @@ async function installTree(
         try {
           try {
             const have = JSON.parse(await ctx.fs.readFile(`${dir}/package.json`, 'utf8') as string);
-            if (have.version === n.version && (have.name === n.source || have.name === n.name)) continue;
+            if (have.version === n.version && have.name === n.source) continue; // (an alternate's files carry its own name)
             await ctx.fs.rm(dir, { recursive: true, force: true } as any);
           } catch { /* not installed */ }
           const response = await fetch(n.tarball);
@@ -368,12 +400,13 @@ async function npmInstall(ctx: CommandContext): Promise<number> {
     const content = await ctx.fs.readFile(pkgPath, 'utf8') as string;
     pkg = JSON.parse(content);
   } catch (e: any) {
-    if (e.message.includes('ENOENT')) {
-      ctx.stderr += 'npm: package.json not found. Run "npm init" first.\n';
+    if (!e.message.includes('ENOENT')) {
+      ctx.stderr += `npm: failed to parse package.json: ${e.message}\n`;
       return 1;
     }
-    ctx.stderr += `npm: failed to parse package.json: ${e.message}\n`;
-    return 1;
+    // As npm: installing into a directory without one starts it (`npm i x` → {"dependencies": {"x": …}})
+    if (!packagesToInstall.length) { ctx.stdout += 'up to date, audited 0 packages\n'; return 0; }
+    pkg = {} as PackageJson;
   }
 
   let depsToResolve: Record<string, string> = {};

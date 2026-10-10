@@ -21,6 +21,12 @@ export interface NetDeps {
 
 type Listener = (...args: any[]) => void;
 
+/** An IPv6 literal in its short form, as libuv parses it ('0000:…:0000' is '::', vite probes both) */
+function canonicalIp(host: string): string {
+  if (ipFamily(host) !== 6) return host;
+  try { return new URL(`http://[${host}]/`).hostname.slice(1, -1); } catch { return host; }
+}
+
 class Emitter {
   _events: Record<string, Listener[]> = {};
   on(ev: string, fn: Listener) { (this._events[ev] ||= []).push(fn); this._onListener(ev); return this; }
@@ -154,7 +160,7 @@ export function createNetModule(deps: NetDeps = {}): any {
       this._ksock = k;
       (async () => {
         const r = ipFamily(host)
-          ? await k.connect({ family: ipFamily(host) === 6 ? AF_INET6 : AF_INET, address: host, port })
+          ? await k.connect({ family: ipFamily(host) === 6 ? AF_INET6 : AF_INET, address: canonicalIp(host), port })
           : await k.connectHost(host, port);
         if (this.destroyed) { void k.close(); return; }
         this.connecting = false;
@@ -374,7 +380,7 @@ export function createNetModule(deps: NetDeps = {}): any {
       if (cb) this.once('listening', cb);
       const fam = host && ipFamily(host) === 6 ? AF_INET6 : AF_INET;
       const k = stack.socket(fam, SOCK_STREAM) as KSocket;
-      const addr = host && ipFamily(host) ? host : fam === AF_INET6 ? '::' : '0.0.0.0';
+      const addr = host && ipFamily(host) ? canonicalIp(host) : fam === AF_INET6 ? '::' : '0.0.0.0';
       let r = k.bind({ family: fam, address: addr, port });
       if (r === 0) r = k.listen(backlog);
       if (r < 0) {

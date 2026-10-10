@@ -40,10 +40,17 @@ export function createFakeBuffer(): any {
     }
     return new TextDecoder().decode(slice);
   };
-  FakeBuffer.prototype.write = function(str: string, offset?: number, length?: number, _encoding?: string) {
-    const bytes = new TextEncoder().encode(str);
+  // write(string[, offset[, length]][, encoding]): es-module-lexer (vite's
+  // import analysis) writes its source as utf16le into WebAssembly memory
+  FakeBuffer.prototype.write = function(str: string, offset?: any, length?: any, encoding?: string) {
+    if (typeof offset === 'string') { encoding = offset; offset = undefined; length = undefined; }
+    else if (typeof length === 'string') { encoding = length; length = undefined; }
+    const enc = (encoding || 'utf8').toLowerCase();
+    const bytes: Uint8Array = enc === 'utf8' || enc === 'utf-8' ? new TextEncoder().encode(str) : FakeBuffer.from(str, enc);
     const off = offset ?? 0;
-    const len = Math.min(length ?? bytes.length, bytes.length, this.length - off);
+    let len = Math.min(length ?? bytes.length, bytes.length, this.length - off);
+    // never half a character (utf16le: whole code units)
+    if ((enc === 'utf16le' || enc === 'utf-16le' || enc === 'ucs2' || enc === 'ucs-2') && len % 2) len--;
     for (let i = 0; i < len; i++) this[off + i] = bytes[i];
     return len;
   };

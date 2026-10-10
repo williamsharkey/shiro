@@ -120,3 +120,45 @@ describe('FileSystem write-behind', () => {
     expect(await onDisk('/tmp/wb-sync.txt')).toBe('durable\n');
   });
 });
+
+// rm -r deletes a directory's contents from IndexedDB as one key range
+describe('FileSystem rm -r (range delete)', () => {
+  async function onDisk(path: string): Promise<string | null> {
+    const other = new FileSystem();
+    await other.init();
+    try { return await other.readFile(path, 'utf8') as string; } catch { return null; }
+  }
+
+  it('removes the tree at once, keeps what is created in it afterwards, and spares lookalike siblings', async () => {
+    const fs = new FileSystem();
+    await fs.init();
+    await fs.mkdir('/tmp/rr/nm/a/b', { recursive: true });
+    for (let i = 0; i < 50; i++) await fs.writeFile(`/tmp/rr/nm/a/b/f${i}`, `x${i}`);
+    await fs.mkdir('/tmp/rr/nm2', { recursive: true });
+    await fs.writeFile('/tmp/rr/nm2/keep', 'sibling');
+    await fs.writeFile('/tmp/rr/nm-x', 'lookalike');
+    await fs.sync();
+    await fs.writeFile('/tmp/rr/nm/a/pending', 'not yet stored'); // queued, superseded by the rm
+    await fs.rm('/tmp/rr/nm', { recursive: true });
+    expect(await fs.exists('/tmp/rr/nm')).toBe(false);
+    expect(await fs.exists('/tmp/rr/nm/a/b/f1')).toBe(false);
+    expect(await fs.readdir('/tmp/rr')).toEqual(expect.arrayContaining(['nm2', 'nm-x']));
+    expect(await fs.readdir('/tmp/rr')).not.toContain('nm');
+    // re-created before the range delete is committed: kept
+    await fs.mkdir('/tmp/rr/nm/a', { recursive: true });
+    await fs.writeFile('/tmp/rr/nm/a/new', 'new');
+    // a reload of the cache before the commit doesn't bring the old tree back
+    fs.clearCache();
+    expect(await fs.exists('/tmp/rr/nm/a/b/f1')).toBe(false);
+    expect(await fs.readFile('/tmp/rr/nm/a/new', 'utf8')).toBe('new');
+    await fs.sync();
+    expect(await onDisk('/tmp/rr/nm/a/b/f1')).toBeNull();
+    expect(await onDisk('/tmp/rr/nm/a/pending')).toBeNull();
+    expect(await onDisk('/tmp/rr/nm/a/new')).toBe('new');
+    expect(await onDisk('/tmp/rr/nm2/keep')).toBe('sibling');
+    expect(await onDisk('/tmp/rr/nm-x')).toBe('lookalike');
+    const other = new FileSystem();
+    await other.init();
+    expect((await other.readdir('/tmp/rr/nm/a')).sort()).toEqual(['new']);
+  });
+});

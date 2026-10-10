@@ -3,9 +3,17 @@
  * `ctx.fs` is when node runs as a kernel guest in a Worker
  * (TABCOMPUTER_NODE_WORKER=1). Every call goes to the kernel through the
  * guest's channel and returns its answer at once, so the *Cached methods
- * (node's readFileSync, existsSync, readdirSync) are never stale and never
- * "not cached": there is no cache here. The async ones are the same calls
- * behind a resolved promise.
+ * (node's readFileSync, existsSync, readdirSync) are never "not cached".
+ * The async ones are the same calls behind a resolved promise.
+ *
+ * Two caches keep repeated calls to one syscall or none:
+ * - file bytes, keyed by path and checked with one stat (dev, ino, size,
+ *   mtime, ctime) before each use, so a read of an unchanged file is a stat;
+ * - directories known to be directories (not symlinks), so realpath lstats
+ *   only the components it hasn't seen. Our own unlink/rmdir/rename/symlink
+ *   drop what they touch, and `invalidate()` (after a child process ran)
+ *   drops them all; a directory another process swaps for a symlink while
+ *   this one runs isn't noticed until then.
  */
 import * as A from '../kernel/abi';
 import type { GuestSys } from '../kernel/channel';
@@ -20,8 +28,10 @@ const MESSAGES: Record<number, string> = {
   [A.ENOSPC]: 'no space left on device', [A.EROFS]: 'read-only file system', [A.EBUSY]: 'resource busy or locked',
   [A.EIO]: 'i/o error',
 };
+// errno names (not EPOLL* and the other E-names that share their numbers)
 const CODES: Record<number, string> = Object.fromEntries(Object.entries(A)
-  .filter(([k, v]) => /^E[A-Z0-9]+$/.test(k) && typeof v === 'number')
+  .filter(([k, v]) => /^E[A-Z0-9]+$/.test(k) && !k.startsWith('EPOLL') && typeof v === 'number' && v > 0 && v < 200)
+  .reverse() // the first name wins (EAGAIN over EWOULDBLOCK)
   .map(([k, v]) => [v as number, k]));
 
 /** An Error like FileSystem's (and node's): code, errno, syscall, path */
@@ -57,8 +67,59 @@ function statResult(s: A.KStat): any {
   };
 }
 
+/** Files above this aren't kept; the whole cache is dropped past MAX_CACHED */
+const MAX_FILE = 1 << 20;
+const MAX_CACHED = 64 << 20;
+
+interface CachedFile { dev: number; ino: number; size: number; mtimeMs: number; mtimeNs: number; ctimeMs: number; bytes: Uint8Array }
+
+const sameFile = (c: CachedFile, s: A.KStat) =>
+  c.ino === s.ino && c.dev === s.dev && c.size === s.size && c.mtimeMs === s.mtimeMs && c.mtimeNs === (s.mtimeNs ?? 0) && c.ctimeMs === s.ctimeMs;
+
+const isDir = (s: A.KStat) => (s.mode & A.S_IFMT) === A.S_IFDIR;
+
 export class SyscallFs {
-  constructor(private sys: GuestSys) {}
+  private files = new Map<string, CachedFile>();
+  private cachedBytes = 0;
+  /** Canonical paths that were directories (not symlinks) when last seen */
+  private dirs = new Set<string>();
+
+  /** Syscalls this guest has made (any: a change could come from one) */
+  private calls = 0;
+  /**
+   * realpath's lstat of the last component, for the lookup that follows it in
+   * the same fs call (node-compat resolves a path, then asks about it): used
+   * once, and only while no other syscall came in between, within a ms.
+   */
+  private last: { path: string; s: A.KStat | number; calls: number; at: number } | null = null;
+
+  constructor(private sys: GuestSys) {
+    const call = sys.ch.call.bind(sys.ch);
+    sys.ch.call = (nr: number, ...args: number[]) => { this.calls++; return call(nr, ...args); };
+  }
+
+  /** Forget directories (something else may have changed the tree: a child process ran) */
+  invalidate(): void { this.dirs.clear(); this.last = null; }
+
+  /** Forget `path` and everything under it (we removed, renamed or replaced it) */
+  private forget(path: string): void {
+    const c = this.files.get(path);
+    if (c) { this.files.delete(path); this.cachedBytes -= c.size; }
+    // a directory's descendants are only known if it was (realpath walks down from the root)
+    if (!this.dirs.delete(path)) return;
+    const under = path === '/' ? '/' : path + '/';
+    for (const d of this.dirs) if (d.startsWith(under)) this.dirs.delete(d);
+    for (const [f, fc] of this.files) if (f.startsWith(under)) { this.files.delete(f); this.cachedBytes -= fc.size; }
+  }
+
+  private remember(path: string, s: A.KStat, bytes: Uint8Array): void {
+    const old = this.files.get(path);
+    if (old) { this.files.delete(path); this.cachedBytes -= old.size; }
+    if (bytes.length > MAX_FILE || bytes.length !== s.size) return;
+    if (this.cachedBytes + bytes.length > MAX_CACHED) { this.files.clear(); this.cachedBytes = 0; }
+    this.files.set(path, { dev: s.dev, ino: s.ino, size: s.size, mtimeMs: s.mtimeMs, mtimeNs: s.mtimeNs ?? 0, ctimeMs: s.ctimeMs, bytes });
+    this.cachedBytes += bytes.length;
+  }
 
   // ── synchronous core ──
 
@@ -73,14 +134,20 @@ export class SyscallFs {
     return statResult(s);
   }
 
-  /** A file's bytes, or -errno */
+  /** A file's bytes (a copy: callers may change it), or -errno */
   readRaw(path: string): Uint8Array | number {
+    const s = this.sys.stat(path);
+    if (typeof s === 'number') return s;
+    if (isDir(s)) return -A.EISDIR;
+    const c = this.files.get(path);
+    if (c && sameFile(c, s)) return c.bytes.slice();
     const fd = this.sys.open(path, A.O_RDONLY);
     if (fd < 0) return fd;
     try {
-      const st = this.sys.fstat(fd);
-      if (typeof st !== 'number' && (st.mode & A.S_IFMT) === A.S_IFDIR) return -A.EISDIR;
       const r = this.sys.readAll(fd);
+      // keyed by the stat before the read: a change since then fails the next check. A file
+      // written this very millisecond could change again without its stat changing: not kept
+      if (typeof r !== 'number' && (s.mode & A.S_IFMT) === A.S_IFREG && Date.now() - s.mtimeMs > 1) this.remember(path, s, r.slice());
       return r;
     } finally {
       this.sys.close(fd);
@@ -94,10 +161,11 @@ export class SyscallFs {
   }
 
   writeSync(path: string, data: Uint8Array | string, mode = 0o666): void {
+    this.forget(path);
+    const bytes = typeof data === 'string' ? enc.encode(data) : data;
     const fd = this.sys.open(path, A.O_WRONLY | A.O_CREAT | A.O_TRUNC, mode);
     if (fd < 0) throw sysError(-fd, 'open', path);
     try {
-      const bytes = typeof data === 'string' ? enc.encode(data) : data;
       const n = this.sys.write(fd, bytes);
       if (n < 0) throw sysError(-n, 'write', path);
     } finally {
@@ -151,9 +219,9 @@ export class SyscallFs {
       cur += '/' + part;
       const r = this.sys.mkdir(cur, mode);
       if (r < 0 && r !== -A.EEXIST) throw sysError(-r, 'mkdir', cur);
-      if (r === -A.EEXIST) {
+      if (r === -A.EEXIST && !this.dirs.has(cur)) {
         const s = this.statRaw(cur);
-        if (typeof s === 'number' || (s.mode & A.S_IFMT) !== A.S_IFDIR) throw sysError(A.ENOTDIR, 'mkdir', cur);
+        if (typeof s === 'number' || !isDir(s)) throw sysError(A.ENOTDIR, 'mkdir', cur);
       }
     }
   }
@@ -173,8 +241,11 @@ export class SyscallFs {
       if (p === '.') continue;
       if (p === '..') { out.pop(); continue; }
       const cand = '/' + [...out, p].join('/');
+      if (this.dirs.has(cand)) { out.push(p); continue; }
       const s = this.statRaw(cand, false);
+      if (i === parts.length - 1 && (typeof s === 'number' || !isDir(s))) this.last = { path: cand, s, calls: this.calls, at: performance.now() };
       if (typeof s === 'number') return s;
+      if (isDir(s)) this.dirs.add(cand);
       if ((s.mode & A.S_IFMT) === A.S_IFLNK) {
         if (++links > 40) return -A.ELOOP;
         const target = this.sys.readlink(cand);
@@ -237,15 +308,51 @@ export class SyscallFs {
 
   /** { path, node } like FileSystem's (canonical path, the node's type and times); null if missing */
   lookupCached(path: string, follow = true): { path: string; node: any } | null | undefined {
-    const s = this.statRaw(path, follow);
+    // lstat first: unless it's a symlink that's the answer, and only the parent needs resolving
+    const last = this.last;
+    this.last = null;
+    let s = last && last.path === path && last.calls === this.calls && performance.now() - last.at < 1 ? last.s : this.statRaw(path, false);
+    let real = path;
+    if (typeof s !== 'number' && follow) {
+      if ((s.mode & A.S_IFMT) === A.S_IFLNK) {
+        s = this.statRaw(path, true);
+        if (typeof s !== 'number') real = this.realpathCached(path) ?? path;
+      } else {
+        const slash = path.lastIndexOf('/');
+        const dir = slash <= 0 ? '/' : this.realpathCached(path.slice(0, slash)) ?? path.slice(0, slash);
+        real = path === '/' ? '/' : (dir === '/' ? '' : dir) + path.slice(slash);
+        if (isDir(s)) this.dirs.add(real);
+      }
+    }
     if (typeof s === 'number') return s === -A.ENOENT || s === -A.ENOTDIR ? null : undefined;
-    const real = follow ? this.realpathCached(path) ?? path : path;
     const st = statResult(s);
     return { path: real, node: { path: real, type: st.type, mode: s.mode, size: s.size, mtime: s.mtimeMs, ctime: s.ctimeMs, ino: s.ino, special: st.isFIFO() ? 'fifo' : undefined } };
   }
 
-  /** node-compat watches for writes from elsewhere; a guest has no such feed (yet) */
-  onChange(_listener: (...a: any[]) => void): () => void { return () => {}; }
+  private listeners = new Set<(event: string, path: string, newPath?: string) => void>();
+  /** Set by the guest: ask the page for its filesystem's change feed (once) */
+  requestChanges: (() => void) | null = null;
+
+  /** The page's filesystem changes (any process's writes), for fs.watch and chokidar */
+  onChange(listener: (event: string, path: string, newPath?: string) => void): () => void {
+    this.listeners.add(listener);
+    if (this.requestChanges) { this.requestChanges(); this.requestChanges = null; }
+    return () => { this.listeners.delete(listener); };
+  }
+
+  /** Hear changes while something else has the feed on (a watcher), without asking for it */
+  onChangePassive(listener: (event: string, path: string, newPath?: string) => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+
+  /** A change the page reported: what we cached about those paths goes, then the listeners hear it */
+  changed(event: string, path: string, newPath?: string): void {
+    this.forget(path);
+    if (newPath) this.forget(newPath);
+    this.last = null;
+    for (const fn of this.listeners) { try { fn(event, path, newPath); } catch { /* a listener's problem */ } }
+  }
 
   // ── FileSystem's async surface: the same calls ──
 
@@ -261,12 +368,12 @@ export class SyscallFs {
   async readdir(path: string): Promise<string[]> { return this.readdirSync(path); }
   async mkdir(path: string, options?: { recursive?: boolean; mode?: number }): Promise<void> { this.mkdirSync(path, !!options?.recursive, options?.mode); }
   mkdirNow(path: string, options?: { recursive?: boolean }): Promise<void> { this.mkdirSync(path, !!options?.recursive); return Promise.resolve(); }
-  async unlink(path: string): Promise<void> { const r = this.sys.unlink(path); if (r < 0) throw sysError(-r, 'unlink', path); }
+  async unlink(path: string): Promise<void> { this.forget(path); const r = this.sys.unlink(path); if (r < 0) throw sysError(-r, 'unlink', path); }
   unlinkNow(path: string): Promise<void> { return this.unlink(path); }
-  async rmdir(path: string): Promise<void> { const r = this.sys.rmdir(path); if (r < 0) throw sysError(-r, 'rmdir', path); }
-  renameSync(from: string, to: string): void { const r = this.sys.rename(from, to); if (r < 0) throw sysError(-r, 'rename', from); }
+  async rmdir(path: string): Promise<void> { this.forget(path); const r = this.sys.rmdir(path); if (r < 0) throw sysError(-r, 'rmdir', path); }
+  renameSync(from: string, to: string): void { this.forget(from); this.forget(to); const r = this.sys.rename(from, to); if (r < 0) throw sysError(-r, 'rename', from); }
   async rename(from: string, to: string): Promise<void> { this.renameSync(from, to); }
-  async symlink(target: string, path: string): Promise<void> { const r = this.sys.symlink(target, path); if (r < 0) throw sysError(-r, 'symlink', path); }
+  async symlink(target: string, path: string): Promise<void> { this.forget(path); const r = this.sys.symlink(target, path); if (r < 0) throw sysError(-r, 'symlink', path); }
   symlinkNow(target: string, path: string): Promise<void> { return this.symlink(target, path); }
   async readlink(path: string): Promise<string> { return this.readlinkSync(path); }
   async realpath(path: string): Promise<string> {
@@ -274,12 +381,13 @@ export class SyscallFs {
     if (typeof r === 'number') throw sysError(-r, 'realpath', path);
     return r;
   }
-  async chmod(path: string, mode: number): Promise<void> {
+  chmodSync(path: string, mode: number): void {
     const b = enc.encode(path);
     this.sys.ch.data.set(b);
     const r = this.sys.ch.call(A.SYS_fchmodat, A.AT_FDCWD, b.length, mode);
     if (r < 0) throw sysError(-r, 'chmod', path);
   }
+  async chmod(path: string, mode: number): Promise<void> { this.chmodSync(path, mode); }
   async utimes(path: string, atimeMs: number, mtimeMs: number): Promise<void> {
     const r = this.sys.utimensat(A.AT_FDCWD, path, atimeMs, mtimeMs);
     if (r < 0) throw sysError(-r, 'utime', path);

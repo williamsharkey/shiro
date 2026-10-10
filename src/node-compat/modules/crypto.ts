@@ -75,6 +75,8 @@ export function createCryptoModule(deps: CryptoDeps): any {
     },
     hash: (algo: string, data: string | Uint8Array, enc = 'hex') => encodeDigest(hashFor(algo)[0](toBytes(data)), enc),
     randomUUID: () => crypto.randomUUID(),
+    // (vite makes its dev server's WebSocket token with it)
+    getRandomValues: <T extends ArrayBufferView>(a: T): T => crypto.getRandomValues(a as any) as T,
     randomFillSync: (buf: Uint8Array) => { crypto.getRandomValues(buf); return buf; },
     timingSafeEqual: (a: Uint8Array, b: Uint8Array) => {
       if (a.length !== b.length) throw new RangeError('Input buffers must have the same byte length');

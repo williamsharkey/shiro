@@ -1,7 +1,8 @@
 /**
  * The node suites again, with node as a kernel guest in a Worker
- * (TABCOMPUTER_NODE_WORKER=1): node-compat.test.ts and the issue-6 tests
- * (node-runtime-compat.test.ts), each test's shell starting in worker mode.
+ * (TABCOMPUTER_NODE_WORKER=1): node-compat.test.ts, the issue-6 tests
+ * (node-runtime-compat.test.ts) and node-inspect.test.ts, each test's shell
+ * starting in worker mode.
  */
 import { afterAll, describe, expect, it } from 'vitest';
 import { createTestShell, testShellEnv } from './helpers';
@@ -13,6 +14,7 @@ afterAll(() => { delete testShellEnv.TABCOMPUTER_NODE_WORKER; cleanup(); });
 
 await import('./node-compat.test');
 await import('./node-runtime-compat.test');
+await import('./node-inspect.test');
 
 describe('these suites ran with node as a kernel guest', () => {
   it('an execSync in a plain function has its output (only a guest can block)', async () => {

@@ -39,6 +39,9 @@ export interface PackageMetadata {
 export const WASM_ALTERNATES: Record<string, string> = {
   esbuild: 'esbuild-wasm',
   rollup: '@rollup/wasm-node',
+  // its browser build (node-compat runs it as page code: browser-packages.ts)
+  rolldown: '@rolldown/browser',
+  lightningcss: 'lightningcss-wasm',
 };
 
 /**
@@ -46,9 +49,7 @@ export const WASM_ALTERNATES: Record<string, string> = {
  * doesn't depend on (rolldown leaves its -wasm32-wasi binding to an explicit
  * install): added beside it, at its version.
  */
-export const WASM_COMPANIONS: Record<string, string> = {
-  rolldown: '@rolldown/binding-wasm32-wasi',
-};
+export const WASM_COMPANIONS: Record<string, string> = {};
 
 export interface TreeNode {
   /** The name it is installed as (node_modules/<name>) */

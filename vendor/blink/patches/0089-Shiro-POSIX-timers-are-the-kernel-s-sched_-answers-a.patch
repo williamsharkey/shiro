@@ -1,0 +1,142 @@
+From 976e6a5448fabb97bf5dbe453049bcda2a107ec5 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 03:14:18 +0000
+Subject: [PATCH 89/89] Shiro: POSIX timers are the kernel's; sched_* answers
+ as Linux's
+
+Conformance (Open POSIX timer_*, sched_*):
+- timer_create, timer_settime, timer_gettime, timer_getoverrun and
+  timer_delete were ENOSYS; they go to the kernel's per-process timers
+  (unix/conformance src/kernel/posixtimers.ts), whose expiries send the
+  signal like kill and count overruns while it is pending.
+- sched_getparam wrote 8 bytes into a 4-byte struct sched_param (stack
+  smashing); sched_{get,set}param and sched_{get,set}scheduler now keep a
+  policy per process (SCHED_OTHER/BATCH/IDLE; fork keeps it), refuse the
+  real-time ones (EPERM: RLIMIT_RTPRIO 0), check priorities against the
+  policy's range and the pid (ESRCH); sched_get_priority_max/min give
+  Linux's ranges.
+Exports blink_shiro_timers (rt_sigtimedwait is 0086's).
+---
+ blink/machine.h |  1 +
+ blink/shiro.inc | 65 +++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 66 insertions(+)
+
+diff --git a/blink/machine.h b/blink/machine.h
+index fe8bab8..c62c678 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -307,6 +307,7 @@ struct System {
+   struct rlimit_linux rlim[RLIM_NLIMITS_LINUX];
+   int nice;  // getpriority/setpriority (Shiro: nothing is scheduled by it)
+   u32 persona;  // personality(2) (Shiro: UNAME26 changes uname's release)
++  int sched_policy;  // sched_setscheduler (Shiro: SCHED_OTHER/BATCH/IDLE; nothing is scheduled by it)
+   bool kmask_ok;  // Shiro: the kernel has this process's signal mask...
+   u64 kmask;      // ...this one (the main thread's)
+ #ifdef HAVE_THREADS
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 31ebee4..4a49e9a 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -1831,6 +1831,7 @@ struct ShiroForkHeader {
+   struct rlimit_linux rlim[RLIM_NLIMITS_LINUX];
+   int nice;
+   u32 persona;
++  int sched_policy;
+   i64 elfbase, at_base, at_phdr, at_phent, at_entry, at_phnum;
+   u8 rng[16];
+   u32 proglen, execfnlen, interplen;
+@@ -2002,6 +2003,7 @@ static int ShiroSnapshot(struct Machine *m, u64 flags, i64 stack, i64 ctid,
+   memcpy(h.rlim, s->rlim, sizeof(h.rlim));
+   h.nice = s->nice;
+   h.persona = s->persona;
++  h.sched_policy = s->sched_policy;
+   h.elfbase = s->elf.base;
+   h.at_base = s->elf.at_base, h.at_phdr = s->elf.at_phdr, h.at_phent = s->elf.at_phent;
+   h.at_entry = s->elf.at_entry, h.at_phnum = s->elf.at_phnum;
+@@ -2141,6 +2143,7 @@ static void ShiroRestoreFrom(struct Machine *m, const u8 *p, size_t len) {
+   memcpy(s->rlim, h.rlim, sizeof(h.rlim));
+   s->nice = h.nice;
+   s->persona = h.persona;
++  s->sched_policy = h.sched_policy;
+   memcpy(m->beg, h.regs, sizeof(h.regs));
+   memcpy(m->xmm, h.xmm, sizeof(h.xmm));
+   m->ip = h.ip;
+@@ -2231,6 +2234,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_raise_kill(void) { return 1; }
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_sigqueue(void) { return 1; }
+ // 0086: POSIX message queues are the kernel's
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_mqueue(void) { return 1; }
++// 0087: POSIX timers are the kernel's; sched_* answers as Linux's
++EMSCRIPTEN_KEEPALIVE int blink_shiro_timers(void) { return 1; }
+ 
+ // the kernel signalled hosted child `pid` (host.mjs routes by pid)
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid(int pid, int sig) {
+@@ -3041,6 +3046,66 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       r = CopyToUserWrite(m, a, w, 8) == -1 ? -EFAULT_LINUX : 0;
+       break;
+     }
++    // Scheduling policies, as Linux answers an unprivileged process: a
++    // policy per process (SCHED_OTHER 0, BATCH 3, IDLE 5; fork keeps it), the
++    // real-time ones (FIFO 1, RR 2) EPERM, priorities in their ranges, ESRCH
++    // for no such process; struct sched_param is one int
++    case 0x08E: case 0x08F: case 0x090: case 0x091: {                 // sched_{set,get}param, sched_{set,get}scheduler
++      int pid = (int)a, self, policy, prio = 0;
++      u8 p[4];
++      if (pid < 0) { r = -EINVAL_LINUX; break; }
++      self = !pid || pid == m->system->pid;
++      if (!self && (r = KS(m, 62, A12(pid, 0))) == -ESRCH_LINUX) break;  // kill(pid, 0): does it exist?
++      if (nr == 0x091) { r = self ? m->system->sched_policy : 0; break; }
++      if (nr == 0x08F) {
++        if (!b) { r = -EINVAL_LINUX; break; }
++        Write32(p, 0);
++        r = CopyToUserWrite(m, b, p, 4) == -1 ? -EFAULT_LINUX : 0;
++        break;
++      }
++      policy = nr == 0x090 ? (int)b & ~0x40000000 : self ? m->system->sched_policy : 0;  // (SCHED_RESET_ON_FORK)
++      if ((nr == 0x090 ? !c : !b) || CopyFromUserRead(m, p, nr == 0x090 ? c : b, 4) == -1) { r = -EINVAL_LINUX; break; }
++      prio = (i32)Read32(p);
++      if (policy != 0 && policy != 1 && policy != 2 && policy != 3 && policy != 5) { r = -EINVAL_LINUX; break; }
++      if ((policy == 1 || policy == 2) ? prio < 1 || prio > 99 : prio != 0) { r = -EINVAL_LINUX; break; }
++      if (policy == 1 || policy == 2) { r = -EPERM_LINUX; break; }   // RLIMIT_RTPRIO is 0
++      if (!self) { r = 0; break; }                                     // (another process's: same user, nothing to keep)
++      m->system->sched_policy = policy;
++      r = 0;
++      break;
++    }
++    // POSIX timers are the kernel's: its expiries send the signal to this
++    // process like any other (the kernel keeps the overruns)
++    case 0x0DE: {                                                     // timer_create
++      u8 sev[24], id[4];
++      if (b && CopyFromUserRead(m, sev, b, 24) == -1) { r = -EFAULT_LINUX; break; }
++      if (b && Read32(sev + 12) == 2) { r = -EINVAL_LINUX; break; }  // (glibc turns SIGEV_THREAD into SIGEV_THREAD_ID)
++      r = ShiroCall(m, 222, A12((int)a, b ? 1 : 0), sev, b ? 24 : 0, 0, false, false);
++      if (r >= 0) {
++        Write32(id, (u32)r);
++        if (CopyToUserWrite(m, c, id, 4) == -1) { KS(m, 226, A12((int)r)); r = -EFAULT_LINUX; break; }
++        r = 0;
++      }
++      break;
++    }
++    case 0x0DF: {                                                     // timer_settime
++      u8 its[32];
++      if (CopyFromUserRead(m, its, c, 32) == -1) { r = -EFAULT_LINUX; break; }
++      r = ShiroCall(m, 223, A12((int)a, (int)b), its, 32, 32, false, false);
++      if (r >= 0 && d && CopyToUserWrite(m, d, its, 32) == -1) r = -EFAULT_LINUX;
++      break;
++    }
++    case 0x0E0: {                                                     // timer_gettime
++      u8 its[32];
++      r = ShiroCall(m, 224, A12((int)a), its, 0, 32, false, false);
++      if (r >= 0 && CopyToUserWrite(m, b, its, 32) == -1) r = -EFAULT_LINUX;
++      break;
++    }
++    case 0x0E1: r = KS(m, 225, A12((int)a)); break;                   // timer_getoverrun
++    case 0x0E2: r = KS(m, 226, A12((int)a)); break;                   // timer_delete
++    case 0x092: case 0x093:                                           // sched_get_priority_max/min
++      r = a == 1 || a == 2 ? (nr == 0x092 ? 99 : 1) : a == 0 || a == 3 || a == 5 ? 0 : -EINVAL_LINUX;
++      break;
+     case 0x087:                                                       // personality
+       // kept per process (fork inherits it); 0xffffffff only reads it
+       r = m->system->persona;
+-- 
+2.43.0
+

@@ -278,9 +278,11 @@ describe('Deficiency v3 fixes', () => {
       expect(output.trim()).toBe('hello');
     });
 
-    it('local VAR=val sets variable', async () => {
-      const { output } = await run(shell, 'local Y=world; echo $Y');
-      expect(output.trim()).toBe('world');
+    it('local VAR=val sets a variable in a function; outside one it is an error (bash)', async () => {
+      const { output } = await run(shell, 'f() { local Y=world; echo $Y; }; f; local Z=1; echo "[$Z] $?"');
+      expect(output.replace(/\r/g, '')).toContain('world\n');
+      expect(output).toContain('local: can only be used in a function');
+      expect(output.replace(/\r/g, '')).toContain('[] 1');
     });
   });
 

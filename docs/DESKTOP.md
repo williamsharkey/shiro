@@ -153,6 +153,32 @@ destroyed), and the next Terminal window adopts it again.
   `public/fonts/`, SIL OFL, license files next to them). Only the desktop
   loads them.
 
+## Previews
+
+A server running in this tab (in-page node, a node worker, an emulated
+program such as `python3 -m http.server`, `serve`) is shown in a **Preview**
+window (`src/desktop/preview.ts`): a real document at
+`/__preview/<tab>/<port>/` served by the preview service worker
+(`src/preview-sw-host.ts`, so ES modules and Vite's HMR work), or a srcdoc
+copy where service workers aren't available. One window per port, tiled
+right with the Terminal on the left; its toolbar reloads, shows the address
+and opens it in a browser tab.
+
+- `serve open PORT [PATH]` and `serve PORT --split` open (or focus and
+  navigate) it.
+- A server that starts listening by itself (`node server.js`, express,
+  `npm run dev`, any port that stays up a second) gets a notification with
+  **Open Preview** instead of a window popping up; the notification goes when
+  a preview opens or the server stops.
+- When the server stops, the window says so; it reloads when a server
+  listens on that port again.
+- The hook: `setPreviewUI({ open, listening })` (`src/preview-ui.ts`), set by
+  the desktop; without it the classic layout's split pane and floating
+  windows are used. `iframeServer.onPortChange(cb)` reports ports going up
+  and down.
+- Tests: `tests/browser/previews.mjs` (serve open, stop and restart, the
+  offer) and `tests/browser/vite-react.mjs` (Vite + React with HMR).
+
 ## Developer tools
 
 Two dock stacks from the research in `docs/research/DEV-TOOLS.md` (catalog:

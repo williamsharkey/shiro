@@ -79,6 +79,7 @@ export const SYS_symlink = 88;
 export const SYS_chmod = 90;
 export const SYS_fchmod = 91;
 export const SYS_rt_sigpending = 127;
+export const SYS_rt_sigtimedwait = 128;
 export const SYS_rt_sigsuspend = 130;
 export const SYS_sigaltstack = 131;
 export const SYS_gettid = 186;
@@ -177,6 +178,8 @@ export const SYS_getenv = 1001;
  * for it. Returns the child pid.
  */
 export const SYS_shiro_vfork = 1010;
+/** clone(2) flag: the child's parent is the caller's parent (SYS_shiro_vfork takes it in args[0]) */
+export const CLONE_PARENT = 0x8000;
 /**
  * Shiro: execve. Data area: JSON `{ path, argv, env: ["K=V", ...], inproc? }`.
  * For a SYS_shiro_vfork child the program starts in it and the result is 0.
@@ -195,6 +198,10 @@ export const SYS_shiro_sleeping = 1012;
 /** SysV shm attach/detach bookkeeping (the engine maps the memory; src/kernel/sysvshm.ts). */
 export const SYS_shiro_shmat = 1013;
 export const SYS_shiro_shmdt = 1014;
+/** Shared objects across engine instances (src/kernel/shmobj.ts, docs/research/SHARED_MAPPINGS.md) */
+export const SYS_shiro_shmobj_map = 1020;
+export const SYS_shiro_shmobj_unmap = 1021;
+export const SYS_shiro_shmobj_published = 1022;
 export const SYS_shmget = 29;
 export const SYS_shmat = 30;
 export const SYS_shmctl = 31;
@@ -204,6 +211,11 @@ export const SYS_semget = 64;
 export const SYS_semop = 65;
 export const SYS_semctl = 66;
 export const SYS_semtimedop = 220;
+/** SysV message queues (src/kernel/sysvmsg.ts) */
+export const SYS_msgget = 68;
+export const SYS_msgsnd = 69;
+export const SYS_msgrcv = 70;
+export const SYS_msgctl = 71;
 
 // ── errno (Linux) ──────────────────────────────────────────────────────────
 export const EPERM = 1;
@@ -236,6 +248,7 @@ export const ESPIPE = 29;
 export const EROFS = 30;
 export const EPIPE = 32;
 export const ERANGE = 34;
+export const ENOMSG = 42;
 export const EIDRM = 43;
 export const ENAMETOOLONG = 36;
 export const ENOSYS = 38;
@@ -418,6 +431,8 @@ export const SIGTERM = 15;
 export const SIGCHLD = 17;
 export const SIGCONT = 18;
 export const SIGSTOP = 19;
+/** sizeof(siginfo_t) */
+export const SIGINFO_SIZE = 128;
 export const SIGTSTP = 20;
 export const SIGTTIN = 21;
 export const SIGTTOU = 22;
@@ -585,6 +600,26 @@ export const PIPE_CAPACITY = 65536;
 
 /** Most fds a process may hold. */
 export const OPEN_MAX = 1024;
+/** fs.nr_open: the most fds RLIMIT_NOFILE can allow (Linux's default) */
+export const NR_OPEN = 1048576;
+export const RLIMIT_NOFILE = 7;
+export const SYS_prlimit64 = 302;
+export const SYS_memfd_create = 319;
+/** POSIX message queues (src/kernel/mqueue.ts) */
+export const SYS_mq_open = 240;
+export const SYS_mq_unlink = 241;
+export const SYS_mq_timedsend = 242;
+export const SYS_mq_timedreceive = 243;
+export const SYS_mq_notify = 244;
+export const SYS_mq_getsetattr = 245;
+/** POSIX timers (src/kernel/posixtimers.ts) */
+export const SYS_timer_create = 222;
+export const SYS_timer_settime = 223;
+export const SYS_timer_gettime = 224;
+export const SYS_timer_getoverrun = 225;
+export const SYS_timer_delete = 226;
+export const MFD_CLOEXEC = 1;
+export const MFD_ALLOW_SEALING = 2;
 
 // ── struct stat ─────────────────────────────────────────────────────────────
 export interface KStat {

@@ -20,7 +20,7 @@ import { packageShadows, pkgOwnShadows, packageArgsForPath, PKG_BIN_DIR } from '
 import * as A from './abi';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
-  RegularFile, DirFile, abortableWait, openInode, openInodeSync, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
+  RegularFile, DirFile, abortableWait, openInode, openInodeSync, isInodeOpen, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
   shareInodeNumber, forgetInodeNumber, renameLinkName, linkCount, writeBackAll,
 } from './fd';
 import { createPipe, Pipe, PipeEnd, FifoRdWr } from './pipe';
@@ -29,9 +29,13 @@ import { LockTable, F_RDLCK, F_WRLCK, F_UNLCK } from './locks';
 import { Process } from './process';
 import { SysvShm } from './sysvshm';
 import { SysvSem } from './sysvsem';
+import { SysvMsg } from './sysvmsg';
+import { MessageQueues, MqFile } from './mqueue';
+import { PosixTimers } from './posixtimers';
+import { SharedObjects, isShareablePath, type ShmObjMessage } from './shmobj';
 import { EpollFile, waitReady } from './epoll';
-import { SignalFile, notifySignalPending } from './signalfd';
-import { EventFile, TimerFile } from './fd';
+import { SignalFile, notifySignalPending, pendingSignalListeners } from './signalfd';
+import { EventFile, MemFile, TimerFile } from './fd';
 import { activeProfile, unameRelease, UNAME_VERSION } from '../profile';
 import { memoryInfo } from '../utils/sysinfo';
 
@@ -191,6 +195,30 @@ export class Kernel {
   readonly shm = new SysvShm();
   /** SysV semaphore sets (semget, semop, semctl) */
   readonly sem = new SysvSem();
+  /** SysV message queues (msgget, msgsnd, msgrcv, msgctl) */
+  readonly msg = new SysvMsg();
+  /** POSIX message queues (mq_open, mq_timedsend, ...) */
+  readonly mq = new MessageQueues((pid, sig) => { const p = this.procs.get(pid); if (p) this.deliver(p, sig); });
+  /** POSIX timers (timer_create, timer_settime, ...) */
+  readonly timers = new PosixTimers((proc, sig) => this.deliver(proc, sig), bootMs);
+  /** Engine instances (a Blink worker each) and how to post to them: shared objects' messages */
+  private engineInstances = new Map<number, (msg: ShmObjMessage) => void>();
+  private nextEngineInstance = 1;
+  /** Shared objects across engine instances (/dev/shm files, SysV shm mapped by unrelated processes) */
+  readonly shmobj = new SharedObjects((instance, msg) => this.engineInstances.get(instance)?.(msg));
+
+  /** An engine instance (a Blink worker) that maps shared objects: its id; set it as proc.data.engineInstance. */
+  registerEngineInstance(post: (msg: ShmObjMessage) => void): number {
+    const id = this.nextEngineInstance++;
+    this.engineInstances.set(id, post);
+    return id;
+  }
+
+  /** The instance ended: its mappings go (and a last one writes a file object back). */
+  async engineInstanceGone(id: number): Promise<void> {
+    this.engineInstances.delete(id);
+    await this.shmobj.instanceGone(id);
+  }
   /** fcntl record locks (F_SETLK, F_OFD_SETLK) */
   readonly locks = new LockTable();
   private detachTable?: () => void;
@@ -269,6 +297,12 @@ export class Kernel {
   addLoader(loader: Loader): void {
     this.loaders.unshift(loader);
   }
+
+  /**
+   * Builtins that `sh -c 'NAME args'` should exec in place (findProgram)
+   * rather than run in the forked shell, when `claim(NAME, process)` says so.
+   */
+  readonly execDirect: ((name: string, proc: Process) => boolean)[] = [];
 
   registerDevice(path: string, opener: DeviceOpener): void {
     this.devices.set(path, opener);
@@ -437,6 +471,8 @@ export class Kernel {
       if (typeof p === 'string' && (await this.fs?.exists(p))) path = p;
     } else if (this.fs && this.shell?.commands.get(name) && packageShadows(this.fs).has(name)) {
       path = `${PKG_BIN_DIR}/${name}`; // an installed package replaces the builtin
+    } else if (this.shell?.commands.get(name) && this.execDirect.some(f => f(name, probe))) {
+      path = name; // a loader runs this builtin as the process itself (node as a guest)
     } else if (!this.shell?.commands.get(name)) {
       for (const dir of (probe.env.PATH ?? '/usr/local/bin:/usr/bin:/bin').split(':')) {
         if (!dir) continue;
@@ -968,20 +1004,139 @@ export class Kernel {
    * creating or truncating: the description, -errno, or undefined when it
    * needs `open` (devices, O_CREAT/O_TRUNC, anything not cached).
    */
-  openSync(proc: Process, path: string, flags: number, dirfd = A.AT_FDCWD): OpenFile | number | undefined {
+  openSync(proc: Process, path: string, flags: number, dirfd = A.AT_FDCWD, mode = 0o666): OpenFile | number | undefined {
     const fs = this.fs;
-    if (!fs || flags & (A.O_CREAT | A.O_TRUNC | A.O_NOFOLLOW | A.O_PATH) || trailingSlash(path)) return undefined;
+    if (!fs || flags & A.O_PATH || trailingSlash(path)) return undefined;
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
     if (this.devices.has(p) || /^\/(?:dev|proc)\//.test(p)) return undefined;
+    const statusFlags = flags & ~(A.O_CREAT | A.O_EXCL | A.O_TRUNC | A.O_CLOEXEC | A.O_NOCTTY | A.O_DIRECTORY | A.O_NOFOLLOW);
+    if (flags & (A.O_CREAT | A.O_TRUNC | A.O_NOFOLLOW)) {
+      // Creating, truncating or not following: decided on the last component itself
+      const own = fs.lookupCached(p, false);
+      if (own === undefined) return undefined;
+      if (own === null) {
+        if (!(flags & A.O_CREAT)) return -A.ENOENT;
+        if (flags & A.O_DIRECTORY) return undefined; // EINVAL, as open() says
+        const name = p.slice(p.lastIndexOf('/') + 1);
+        const dir = fs.lookupCached(p.slice(0, p.lastIndexOf('/')) || '/');
+        if (!dir || dir.node.type !== 'dir') return undefined;
+        const real = dir.path === '/' ? '/' + name : dir.path + '/' + name;
+        const node = fs.createEmptyCachedSync(real, mode & ~proc.umask & 0o7777);
+        if (!node) return undefined;
+        return new RegularFile(openInodeSync(fs, real, node), statusFlags);
+      }
+      if (own.node.type === 'symlink') return flags & A.O_NOFOLLOW ? -A.ELOOP : undefined;
+      if ((flags & A.O_CREAT) && (flags & A.O_EXCL)) return -A.EEXIST;
+      if (own.node.type !== 'file' || own.node.lazy || own.node.special) return undefined;
+      if (flags & A.O_DIRECTORY) return -A.ENOTDIR;
+      const file = new RegularFile(openInodeSync(fs, own.path, own.node), statusFlags);
+      if ((flags & A.O_TRUNC) && canWrite(flags)) file.truncateSync(0);
+      return file;
+    }
     const hit = fs.lookupCached(p);
     if (hit === undefined) return undefined;
     if (hit === null) return -A.ENOENT;
-    const statusFlags = flags & ~(A.O_CREAT | A.O_EXCL | A.O_TRUNC | A.O_CLOEXEC | A.O_NOCTTY | A.O_DIRECTORY | A.O_NOFOLLOW);
     if (hit.node.type === 'dir') return canWrite(flags) ? -A.EISDIR : new DirFile(fs, hit.path, statusFlags);
     if (flags & A.O_DIRECTORY) return -A.ENOTDIR;
     if (hit.node.type !== 'file' || hit.node.lazy || hit.node.special) return undefined; // lazy: open() fetches it; FIFOs block
     return new RegularFile(openInodeSync(fs, hit.path, hit.node), statusFlags);
+  }
+
+  /** unlink(2) from memory: 0, -errno, or undefined (use the async path). */
+  private unlinkSync(proc: Process, path: string, dirfd: number): number | undefined {
+    const fs = this.fs;
+    if (!fs || !path || trailingSlash(path)) return undefined;
+    const p = this.resolvePath(proc, path, dirfd);
+    if (typeof p === 'number') return p;
+    if (this.devices.has(p) || /^\/(?:dev|proc)\//.test(p) || this.socketPaths?.has(p) || this.fifos.has(p)) return undefined;
+    const hit = fs.lookupCached(p, false);
+    if (hit === undefined) return undefined;
+    if (hit === null) return -A.ENOENT;
+    if (hit.node.type === 'dir') return -A.EISDIR;
+    if (isInodeOpen(fs, hit.path)) return undefined; // the open fds keep its data: unlinkInode
+    if (!fs.unlinkCachedSync(hit.path)) return undefined;
+    forgetInodeNumber(fs, hit.path);
+    return 0;
+  }
+
+  /**
+   * The canonical path for a new entry `p` (resolved, absent) from the
+   * cached parent: the path, -ENOENT/-ENOTDIR, or undefined when the parent
+   * isn't in memory.
+   */
+  private childPathSync(p: string): string | number | undefined {
+    const slash = p.lastIndexOf('/');
+    const parent = this.fs!.lookupCached(slash <= 0 ? '/' : p.slice(0, slash));
+    if (parent === undefined) return undefined;
+    if (parent === null) return -A.ENOENT;
+    if (parent.node.type !== 'dir') return -A.ENOTDIR;
+    return (parent.path === '/' ? '' : parent.path) + p.slice(slash);
+  }
+
+  /**
+   * rmdir, mkdir and rename from memory (node in a Worker makes these back
+   * to back): the result, or undefined for the async path (uncached, open,
+   * a symlink or directory rename would move, sockets, FIFOs).
+   */
+  private pathOpSync(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): number | undefined {
+    const fs = this.fs;
+    if (!fs) return undefined;
+    const at = (dirfd: number, off: number, len: number): string | number | undefined => {
+      if (len <= 0 || off < 0 || off + len > data.length) return undefined;
+      const s = A.decodeText(data.subarray(off, off + len));
+      if (trailingSlash(s)) return undefined;
+      const p = this.resolvePath(proc, s, dirfd);
+      if (typeof p === 'string' && (this.devices.has(p) || /^\/(?:dev|proc)(?:\/|$)/.test(p) || this.socketPaths?.has(p) || this.fifos.has(p))) return undefined;
+      return p;
+    };
+    switch (nr) {
+      case A.SYS_rmdir: case A.SYS_unlinkat: {
+        const [dirfd, len] = nr === A.SYS_rmdir ? [A.AT_FDCWD, args[0]] : [args[0], args[1]];
+        const p = at(dirfd, 0, len);
+        if (typeof p !== 'string') return p;
+        const own = fs.lookupCached(p, false);
+        if (!own) return undefined; // missing: the async path tells ENOENT from ENOTDIR
+        if (own.node.type !== 'dir') return -A.ENOTDIR;
+        const r = fs.rmdirNow(own.path);
+        return r === undefined ? undefined : r ? 0 : -A.ENOTEMPTY;
+      }
+      case A.SYS_mkdir: case A.SYS_mkdirat: {
+        const [dirfd, len, mode] = nr === A.SYS_mkdir ? [A.AT_FDCWD, args[0], args[1]] : [args[0], args[1], args[2]];
+        const p = at(dirfd, 0, len);
+        if (typeof p !== 'string') return p;
+        const own = fs.lookupCached(p, false);
+        if (own === undefined) return undefined;
+        if (own) return -A.EEXIST;
+        const real = this.childPathSync(p);
+        if (typeof real !== 'string') return real;
+        return fs.createDirNow(real, mode & ~proc.umask) ? 0 : undefined;
+      }
+      case A.SYS_rename: case A.SYS_renameat: case A.SYS_renameat2: {
+        const [od, ol, nd, nl, flags] = nr === A.SYS_rename
+          ? [A.AT_FDCWD, args[0], A.AT_FDCWD, args[1], 0]
+          : [args[0], args[1], args[2], args[3], nr === A.SYS_renameat2 ? args[4] : 0];
+        if (flags & ~A.RENAME_NOREPLACE) return undefined;
+        const from = at(od, 0, ol), to = at(nd, ol, nl);
+        if (typeof from !== 'string') return from;
+        if (typeof to !== 'string') return to;
+        const src = fs.lookupCached(from, false);
+        const dst = fs.lookupCached(to, false);
+        if (!src || dst === undefined || src.node.type === 'dir' || src.node.special) return undefined;
+        if (from === to || src.path === dst?.path) return 0;
+        if (dst) {
+          if (flags & A.RENAME_NOREPLACE) return -A.EEXIST;
+          if (dst.node.type === 'dir') return -A.EISDIR;
+        }
+        const real = dst ? dst.path : this.childPathSync(to);
+        if (typeof real !== 'string') return real;
+        if (isInodeOpen(fs, src.path) || isInodeOpen(fs, real) || !fs.renameNow(src.path, real)) return undefined;
+        forgetInodeNumber(fs, real);
+        renameLinkName(src.path, real);
+        return 0;
+      }
+    }
+    return undefined;
   }
 
   /** statPath from memory, encoded into `data`: 0, -errno, or undefined (use statPath). */
@@ -1362,14 +1517,25 @@ export class Kernel {
       }
       case A.SYS_open:
       case A.SYS_openat: {
-        const [dirfd, len, flags] = nr === A.SYS_open ? [A.AT_FDCWD, args[0], args[1]] : [args[0], args[1], args[2]];
+        const [dirfd, len, flags, mode] = nr === A.SYS_open ? [A.AT_FDCWD, args[0], args[1], args[2]] : [args[0], args[1], args[2], args[3]];
         if (len < 0 || len > data.length) return undefined;
-        const f = this.openSync(proc, A.decodeText(data.subarray(0, len)), flags, dirfd);
+        const f = this.openSync(proc, A.decodeText(data.subarray(0, len)), flags, dirfd, mode);
         if (f === undefined || typeof f === 'number') return f;
         const fd = proc.fds.alloc(f, 0, !!(flags & A.O_CLOEXEC));
         if (fd < 0 && refCount(f) === 0) f.closeSync?.();
         return fd;
       }
+      case A.SYS_unlink:
+      case A.SYS_unlinkat: {
+        const [dirfd, len, flg] = nr === A.SYS_unlink ? [A.AT_FDCWD, args[0], 0] : [args[0], args[1], args[2]];
+        if (flg === A.AT_REMOVEDIR) return this.pathOpSync(proc, nr, args, data);
+        if (flg !== 0 || len <= 0 || len > data.length) return undefined; // bad flags: the async path
+        return this.unlinkSync(proc, A.decodeText(data.subarray(0, len)), dirfd);
+      }
+      case A.SYS_rmdir:
+      case A.SYS_mkdir: case A.SYS_mkdirat:
+      case A.SYS_rename: case A.SYS_renameat: case A.SYS_renameat2:
+        return this.pathOpSync(proc, nr, args, data);
       case A.SYS_stat:
       case A.SYS_lstat: {
         if (args[0] < 0 || args[0] > data.length) return undefined;
@@ -1642,6 +1808,88 @@ export class Kernel {
           return await this.sem.semop(proc, args[0], args[1], data, args[3] * 1000 + Math.floor(args[4] / 1e6), sig);
         }
         case A.SYS_semctl: return this.sem.semctl(proc, args[0], args[1], args[2], args[3], data);
+        case A.SYS_timer_create:
+          return this.timers.create(proc, args[0] | 0, args[1] ? new DataView(data.buffer, data.byteOffset, 24) : null);
+        case A.SYS_timer_settime:
+          return this.timers.settime(proc, args[0] | 0, args[1], new DataView(data.buffer, data.byteOffset, 32));
+        case A.SYS_timer_gettime:
+          return this.timers.gettime(proc, args[0] | 0, new DataView(data.buffer, data.byteOffset, 32));
+        case A.SYS_timer_getoverrun: return this.timers.getoverrun(proc, args[0] | 0);
+        case A.SYS_timer_delete: return this.timers.delete(proc, args[0] | 0);
+        case A.SYS_mq_open: {
+          const name = str(0, args[0]);
+          const attr = args[3] ? new DataView(data.buffer, data.byteOffset + args[0], 32) : null;
+          const f = this.mq.open(proc, name, args[1], args[2], attr);
+          return typeof f === 'number' ? f : fds.alloc(f, 0, (args[1] & A.O_CLOEXEC) !== 0);
+        }
+        case A.SYS_mq_unlink: return this.mq.unlink(proc, str(0, args[0]));
+        case A.SYS_mq_timedsend: {
+          const f = file(args[0]);
+          if (!(f instanceof MqFile)) return -A.EBADF;
+          const len = args[1] >>> 0;
+          const ts = args[3] ? new DataView(data.buffer, data.byteOffset + len, 16) : null;
+          return await this.mq.send(f, data.subarray(0, len), args[2] >>> 0, ts, sig);
+        }
+        case A.SYS_mq_timedreceive: {
+          const f = file(args[0]);
+          if (!(f instanceof MqFile)) return -A.EBADF;
+          const len = args[1] >>> 0;
+          const ts = args[2] ? new DataView(data.buffer.slice(data.byteOffset, data.byteOffset + 16)) : null;
+          const r = await this.mq.receive(f, data.subarray(8, 8 + len), ts, sig);
+          if (typeof r === 'number') return r;
+          new DataView(data.buffer, data.byteOffset, 8).setUint32(0, r.prio, true);
+          return r.n;
+        }
+        case A.SYS_mq_notify: {
+          const f = file(args[0]);
+          if (!(f instanceof MqFile)) return -A.EBADF;
+          return this.mq.notify(proc, f, args[1] ? new DataView(data.buffer, data.byteOffset, 16) : null);
+        }
+        case A.SYS_mq_getsetattr: {
+          const f = file(args[0]);
+          if (!(f instanceof MqFile)) return -A.EBADF;
+          const next = args[1] ? new DataView(data.buffer.slice(data.byteOffset, data.byteOffset + 32)) : null;
+          return this.mq.getsetattr(f, next, new DataView(data.buffer, data.byteOffset, 32));
+        }
+        case A.SYS_msgget: return this.msg.msgget(proc, args[0], args[1]);
+        case A.SYS_msgsnd: return await this.msg.msgsnd(proc, args[0], args[1], args[2], data, sig);
+        case A.SYS_msgrcv: return await this.msg.msgrcv(proc, args[0], args[1], i64(args[2], args[3]), args[4], data, sig);
+        case A.SYS_msgctl: return this.msg.msgctl(proc, args[0], args[1], data);
+        case A.SYS_shiro_shmobj_map: {
+          const instance = proc.data.engineInstance as number | undefined;
+          if (!instance) return -A.ENOSYS;
+          const len = (args[2] >>> 0) + (args[3] >>> 0) * 0x100000000;
+          let key: string, size = len;
+          let initial: (() => Promise<Uint8Array>) | undefined;
+          let writeBack: ((b: Uint8Array) => Promise<void>) | undefined;
+          if (args[1] === 0) {
+            const f = proc.fds.get(args[0]);
+            if (!f) return -A.EBADF;
+            const path = f.path;
+            if (f.kind !== 'file' || !path || !isShareablePath(path) || !this.fs) return -A.EINVAL;
+            const fs = this.fs;
+            key = `file:${inodeNumber(fs, path)}`;
+            initial = async () => { const b = await fs.readFile(path); return typeof b === 'string' ? new TextEncoder().encode(b) : b; };
+            writeBack = async (b) => { if (await fs.exists(path)) await fs.writeFile(path, b); };
+          } else if (args[1] === 1) {
+            const seg = this.shm.list().find((x) => x.id === args[0]);
+            if (!seg) return -A.EINVAL;
+            key = `shm:${seg.id}`;
+            size = seg.size;
+          } else return -A.EINVAL;
+          const r = await this.shmobj.map(instance, key, size, initial, writeBack);
+          if (typeof r === 'number') return r;
+          if (data.length >= 4) new DataView(data.buffer, data.byteOffset, 4).setInt32(0, r.remote ? 1 : 0, true);
+          return r.id;
+        }
+        case A.SYS_shiro_shmobj_unmap: {
+          const instance = proc.data.engineInstance as number | undefined;
+          return instance ? await this.shmobj.unmap(instance, args[0]) : -A.ENOSYS;
+        }
+        case A.SYS_shiro_shmobj_published: {
+          const instance = proc.data.engineInstance as number | undefined;
+          return instance ? this.shmobj.published(instance, args[0]) : -A.ENOSYS;
+        }
         case A.SYS_setuid: case A.SYS_setgid: case A.SYS_setreuid: case A.SYS_setregid:
         case A.SYS_setresuid: case A.SYS_setresgid: case A.SYS_getresuid: case A.SYS_getresgid:
         case A.SYS_getgroups: case A.SYS_setgroups: case A.SYS_setfsuid: case A.SYS_setfsgid:
@@ -1704,7 +1952,7 @@ export class Kernel {
         }
         case A.SYS_close_range: {
           const first = args[0] >>> 0;
-          const last = Math.min(args[1] >>> 0, A.OPEN_MAX - 1);
+          const last = args[1] >>> 0;
           if (first > (args[1] >>> 0)) return -A.EINVAL;
           for (const [fd] of fds.entries()) {
             if (fd < first || fd > last) continue;
@@ -1714,8 +1962,9 @@ export class Kernel {
           return 0;
         }
         case A.SYS_shiro_vfork: {
-          // the child is running code (its engine's), not idle like a builtin that makes no syscalls
-          const child = this.vfork(proc);
+          // the child is running code (its engine's), not idle like a builtin that makes no syscalls;
+          // args[0] CLONE_PARENT: the child is the caller's sibling (its parent's child)
+          const child = this.vfork(proc, (args[0] & A.CLONE_PARENT) !== 0);
           child.syscalls = 1;
           return child.pid;
         }
@@ -1828,6 +2077,36 @@ export class Kernel {
           dv.setUint32(0, lo, true);
           dv.setUint32(4, hi, true);
           return 0;
+        }
+        case A.SYS_rt_sigtimedwait: {
+          // args: timeout ms (-1: none); data: the set in, siginfo out. Takes the
+          // lowest pending blocked signal in the set without running a handler
+          // (sigwait, sigwaitinfo, sigtimedwait); EAGAIN at the timeout, EINTR
+          // when a signal the caller lets through arrives
+          const dv = new DataView(data.buffer, data.byteOffset, A.SIGINFO_SIZE);
+          const want = A.sigsetFromWords(dv.getUint32(0, true), dv.getUint32(4, true));
+          want.delete(A.SIGKILL);
+          want.delete(A.SIGSTOP);
+          const next = () => { let b = 0; for (const s of proc.deferredSignals) if (want.has(s) && (!b || s < b)) b = s; return b; };
+          const ms = args[0] | 0;
+          const end = ms >= 0 ? Date.now() + ms : Infinity;
+          let got: number;
+          while (!(got = next())) {
+            const left = end - Date.now();
+            if (left <= 0) return -A.EAGAIN;
+            const wakes = new Set<() => void>();
+            const off = pendingSignalListeners(proc).add(() => { for (const w of [...wakes]) w(); });
+            const timer = end === Infinity ? undefined : setTimeout(() => { for (const w of [...wakes]) w(); }, left);
+            const ok = await abortableWait(wakes, sig);
+            off();
+            if (timer !== undefined) clearTimeout(timer);
+            if (!ok) return -A.EINTR;
+          }
+          proc.deferredSignals.delete(got);
+          for (let i = 0; i < A.SIGINFO_SIZE; i += 4) dv.setUint32(i, 0, true);
+          dv.setInt32(0, got, true); // si_signo (si_code 0: SI_USER)
+          dv.setUint32(20, proc.uid, true); // si_uid
+          return got;
         }
         case A.SYS_rt_sigsuspend: {
           const dv = new DataView(data.buffer, data.byteOffset, 8);
@@ -2171,6 +2450,33 @@ export class Kernel {
           v.setUint32(104, 1, true); // mem_unit
           return 0;
         }
+        case A.SYS_memfd_create: { // nameLen, flags; data = name → an fd on an anonymous in-memory file
+          const name = str(0, args[0]);
+          if (name.length > 249) return -A.EINVAL;
+          if (args[1] & ~(A.MFD_CLOEXEC | A.MFD_ALLOW_SEALING)) return -A.EINVAL;
+          return fds.alloc(new MemFile(`/memfd:${name} (deleted)`), 0, (args[1] & A.MFD_CLOEXEC) !== 0);
+        }
+        case A.SYS_prlimit64: { // pid, resource, set → data: old {cur, max} (u64s); a new one first when set
+          // RLIMIT_NOFILE only (the fd table's): engines keep the other limits
+          if (args[1] !== A.RLIMIT_NOFILE) return -A.EINVAL;
+          const target = args[0] ? this.procs.get(args[0]) : proc;
+          if (!target) return -A.ESRCH;
+          if (data.length < 16) return -A.EFAULT;
+          const dv = new DataView(data.buffer, data.byteOffset, 16);
+          const t = target.fds;
+          const old = [t.limit, t.hardLimit];
+          if (args[2]) {
+            const big = (o: number) => { const v = dv.getBigUint64(o, true); return v > BigInt(A.NR_OPEN) ? Infinity : Number(v); };
+            const cur = big(0), max = big(8);
+            if (cur > max) return -A.EINVAL;
+            // nothing above fs.nr_open; raising the hard limit takes root
+            if (max > A.NR_OPEN || (max > t.hardLimit && proc.uid !== 0)) return -A.EPERM;
+            t.limit = cur; t.hardLimit = max;
+          }
+          dv.setBigUint64(0, BigInt(old[0]), true);
+          dv.setBigUint64(8, BigInt(old[1]), true);
+          return 0;
+        }
         case A.SYS_uname: { // → struct utsname (engines that report their own machine take the names from here)
           if (data.length < A.UTSNAME_FIELD * 6) return -A.EFAULT;
           const fields = ['Linux', this.hostname, unameRelease(this.hostname), UNAME_VERSION, 'x86_64', '(none)'];
@@ -2305,7 +2611,8 @@ export class Kernel {
       case A.F_DUPFD_CLOEXEC: return fds.dup(fd, arg, true);
       case A.F_GETFD: return fds.getCloexec(fd) ? A.FD_CLOEXEC : 0;
       case A.F_SETFD: return fds.setCloexec(fd, !!(arg & A.FD_CLOEXEC));
-      case A.F_GETFL: return f.flags;
+      // a socket is open for reading and writing (Linux reports O_RDWR)
+      case A.F_GETFL: return f.kind === 'socket' ? (f.flags & ~A.O_ACCMODE) | A.O_RDWR : f.flags;
       case A.F_SETFL: {
         const mask = A.O_NONBLOCK | A.O_APPEND;
         f.flags = (f.flags & ~mask) | (arg & mask);
@@ -2326,7 +2633,7 @@ export class Kernel {
 
   /** poll(2) over `nfds` struct pollfd entries at the start of `data`. timeout < 0 waits forever. */
   async poll(proc: Process, data: Uint8Array, nfds: number, timeoutMs: number): Promise<number> {
-    if (nfds < 0 || nfds * A.POLLFD_SIZE > data.length) return -A.EINVAL;
+    if (nfds < 0 || nfds > Math.max(A.OPEN_MAX, proc.fds.limit) || nfds * A.POLLFD_SIZE > data.length) return -A.EINVAL;
     const dv = new DataView(data.buffer, data.byteOffset, nfds * A.POLLFD_SIZE);
     const files: OpenFile[] = [];
     for (let i = 0; i < nfds; i++) {
@@ -2360,7 +2667,7 @@ export class Kernel {
    */
   private async select(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): Promise<number> {
     const nfds = args[0];
-    if (nfds < 0 || nfds > A.OPEN_MAX) return -A.EINVAL;
+    if (nfds < 0 || nfds > Math.max(A.OPEN_MAX, proc.fds.limit)) return -A.EINVAL;
     const setBytes = Math.ceil(nfds / 64) * 8;
     if (setBytes * 3 > data.length) return -A.EINVAL;
     const present = args[1];
@@ -2446,10 +2753,10 @@ export class Kernel {
    * program starts at SYS_shiro_execve; until then the parent's engine makes
    * syscalls on its behalf.
    */
-  vfork(parent: Process): Process {
+  vfork(parent: Process, cloneParent = false): Process {
     const pid = this.allocPid();
     const child = new Process({
-      pid, ppid: parent.pid, pgid: parent.pgid, sid: parent.sid,
+      pid, ppid: cloneParent ? parent.ppid : parent.pid, pgid: parent.pgid, sid: parent.sid,
       path: parent.path, argv: [...parent.argv], env: { ...parent.env }, cwd: parent.cwd,
       fds: parent.fds.fork(), umask: parent.umask,
     });
@@ -2534,6 +2841,7 @@ export class Kernel {
     // The point of no return: exec bookkeeping, as Linux does it
     await proc.fds.closeOnExec();
     this.shm.detachAll(proc); // exec drops SysV shm attachments
+    this.timers.clear(proc); // and POSIX timers
     proc.path = path;
     proc.argv = argv;
     proc.env = env;

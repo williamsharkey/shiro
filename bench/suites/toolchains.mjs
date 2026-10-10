@@ -51,7 +51,7 @@ const USE = {
   go: {
     cmd: "printf 'package main\\nimport \"fmt\"\\nfunc main(){fmt.Println(\"hello\")}\\n' > /tmp/hello.go && cd /tmp && go run hello.go", ok: /^hello$/m, what: '`go run hello.go`',
     // net/http server and client in one program, over loopback
-    extra: { name: 'nethttp', cmd: `echo ${Buffer.from(GO_HTTP).toString('base64')} | base64 -d > /tmp/srv.go && cd /tmp && go run srv.go`, ok: /ok from net\/http/, what: '`go run` of a net/http server + client over loopback' },
+    extra: { name: 'nethttp', cmd: `echo ${Buffer.from(GO_HTTP).toString('base64')} | base64 -d > /tmp/srv.go && cd /tmp && go build -o srv srv.go && ./srv`, ok: /ok from net\/http/, what: '`go build` and run of a net/http server + client over loopback' },
   },
   tex: { cmd: "printf '\\\\documentclass{article}\\\\begin{document}Hello, \\\\LaTeX.\\\\end{document}\\n' > /tmp/t.tex && cd /tmp && pdflatex -interaction=nonstopmode t.tex && test -s t.pdf && echo pdf-ok", ok: /pdf-ok/, what: '`pdflatex` on a one-line article' },
 };
