@@ -154,6 +154,10 @@ const haveLtpErrnos = blinkHasLtpErrnos && tryBuild('gcc', ['-static', '-O1', '-
 const raiseKillBin = join(out, 'raise-kill');
 const blinkHasRaiseKill = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_raise_kill');
 const haveRaiseKill = blinkHasRaiseKill && tryBuild('gcc', ['-static', '-O1', '-w', '-o', raiseKillBin, 'raise-kill.c']);
+// Blink 0084: rt_sigqueueinfo is the kernel's (POSIX AIO's completion notice, sigqueue)
+const aioSigqueueBin = join(out, 'aio-sigqueue');
+const blinkHasSigqueue = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_sigqueue');
+const haveAioSigqueue = blinkHasSigqueue && tryBuild('gcc', ['-static', '-O1', '-w', '-o', aioSigqueueBin, 'aio-sigqueue.c', '-lrt', '-pthread']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -643,6 +647,13 @@ it.skipIf(!haveRaiseKill)('raise(SIGKILL) ends the child and its parent\'s wait 
   const { shell } = await setup(readFileSync(raiseKillBin));
   const r = await run(shell, './prog');
   expect(r.output.replace(/\r\n/g, '\n')).toBe('-1:11 0:11 1:11 \n');
+}, 60_000);
+
+// Open POSIX aio_*, sigqueue: an AIO write completes (not ENOSYS), sigqueue delivers, signal 0 probes
+it.skipIf(!haveAioSigqueue)('POSIX AIO completes and sigqueue delivers', async () => {
+  const { shell } = await setup(readFileSync(aioSigqueueBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('aio 0 9 sigqueue 0 1 probe 0\n');
 }, 60_000);
 
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
