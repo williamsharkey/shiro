@@ -81,6 +81,11 @@ const POSIX_CLASSES: Record<string, string> = {
 /** A tilde expansion's text: one field, never globbed, literal in [[ =~ ]] (as if quoted) */
 const tildeText = (dir: string) => `"${protectExpansion(dir)}"`;
 
+/** `cmd` with its quoted parts ('…', "…", \x) dropped: for looking at its unquoted operators */
+function withoutQuoted(cmd: string): string {
+  return cmd.replace(/\\.|'[^']*'|"(?:\\.|[^"\\])*"/gs, '');
+}
+
 /** Does `cmd` end with the `&` operator (not &&, >&, an escaped \& or one in quotes)? */
 function endsWithBackgroundAmp(cmd: string): boolean {
   if (!/[^&]&$/.test(cmd)) return false;
@@ -201,6 +206,9 @@ const SHELL_BUILTIN_NAMES = new Set([':', '.', '[', 'alias', 'bg', 'bind', 'brea
 /** Builtins that run in a subshell as a pipeline element (they change the shell's state) */
 const PIPELINE_SUBSHELL_BUILTINS = new Set(['cd', 'pushd', 'popd', 'eval', 'source', '.', 'exit', 'export', 'unset',
   'set', 'shift', 'declare', 'typeset', 'local', 'readonly', 'alias', 'unalias', 'trap', 'umask', 'shopt', 'hash']);
+
+/** Signals whose default action doesn't end a process: CHLD, CONT, STOP, TSTP, TTIN, TTOU, URG, WINCH */
+const NONFATAL_SIGNALS = new Set([17, 18, 19, 20, 21, 22, 23, 28]);
 
 /** Signal names by number, as trap and kill use them (0 is EXIT) */
 const SIGNALS = ['EXIT', 'HUP', 'INT', 'QUIT', 'ILL', 'TRAP', 'ABRT', 'BUS', 'FPE', 'KILL', 'USR1', 'SEGV', 'USR2',
@@ -1060,6 +1068,11 @@ export class Shell {
     this.parentPid = ppid;
     this.shellPid = pid;
     shellsByPid.set(pid, new WeakRef(this));
+    const own = new AbortController();
+    const outer = this.inheritedAbort?.signal;
+    if (outer?.aborted) own.abort();
+    else outer?.addEventListener('abort', () => own.abort(), { once: true });
+    this.processAbort = this.inheritedAbort = own;
     // A new process starts with no call stack, and getopts at the start (OPTIND=1, not exported)
     this.sourceFile = '';
     this.env['OPTIND'] = '1';
@@ -1156,7 +1169,18 @@ export class Shell {
   /** `kill -SIG $$`: handled before the shell's next command (processSignals) */
   queueSignal(sig: number): void {
     this.pendingSignals.push(sig);
+    // One that ends the shell ends it now, as bash dies while it waits for a
+    // command: the abort stops the wait (Ctrl-C's path), then processSignals
+    // ends the shell with 128+sig
+    if (this.processAbort && this.scriptShell && !this.traps.has(SIGNALS[sig]) && !NONFATAL_SIGNALS.has(sig)) {
+      this.killedMidCommand = true;
+      this.processAbort.abort();
+    }
   }
+  /** A shell process's own abort (startProcess): its parent's aborts reach it, not the reverse */
+  private processAbort?: AbortController;
+  /** A fatal signal aborted the command in progress: the EXIT trap gets a fresh abort */
+  private killedMidCommand = false;
 
   /**
    * Act on signals sent to this shell: run its trap (keeping $?), ignore it
@@ -1323,7 +1347,8 @@ export class Shell {
     // A shell run as the job's only command gets the job's pid as its $$, as if exec'd
     // (in a pipeline $! is its last element: the earlier ones must not start a shell themselves)
     const parts = splitTopLevelPipes(command);
-    if (!/[;&]/.test(command) && parts.slice(0, -1).every((p) => !/^(\S*\/)?(sh|bash)\b|^\$/.test(p.trim()))) {
+    // (one command: a quoted ; or & inside `bash -c '...'` doesn't count)
+    if (!/[;&]/.test(withoutQuoted(command)) && parts.slice(0, -1).every((p) => !/^(\S*\/)?(sh|bash)\b|^\$/.test(p.trim()))) {
       child.execPid = pid;
       child.execPpid = this.bashPid;
     }
@@ -1489,6 +1514,7 @@ export class Shell {
       if (e instanceof ExitSignal && depth === 0 && this.sourcing === 0) {
         this.executeDepth = 0;
         this.exited = true;
+        if (this.killedMidCommand) this.abortController = new AbortController();
         const code = (await this.runExitTrap(writeStdout, writeStderr || writeStdout, terminalOverride)) ?? e.code;
         this.lastExitCode = code;
         this.env['?'] = String(code);
@@ -8559,6 +8585,7 @@ export class Shell {
     let exitCode = 0;
     try {
       for (const stmt of groupStatements(stripComments(content))) {
+        if (this.pendingSignals.length) await this.processSignals(writeStdout, writeStderr);
         if (this.abortController?.signal.aborted) { exitCode = 130; break; }
         // set -n (noexec): a non-interactive shell reads the rest without running it
         if (this.options.has('noexec') && !this.interactiveFlag) break;
@@ -8585,6 +8612,7 @@ export class Shell {
     }
     this.lastExitCode = exitCode;
     this.env['?'] = String(exitCode);
+    if (this.killedMidCommand) this.abortController = new AbortController();
     const trapExit = await this.runExitTrap(writeStdout, writeStderr, terminal);
     if (trapExit !== undefined) { exitCode = trapExit; this.env['?'] = String(exitCode); }
     if (this.execOutSubs.length) {

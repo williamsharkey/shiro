@@ -288,6 +288,7 @@ export class Kernel {
   /** Stop listing this kernel's processes in the page process table (tests). */
   dispose(): void {
     this.detachTable?.();
+    this.procfs.dispose();
     this.detachWriteBack?.();
     this.detachWriteBack = undefined;
     this.detachTable = undefined;
@@ -622,15 +623,21 @@ export class Kernel {
     this.sem.exited(proc);
     for (const child of this.procs.values()) {
       if (child.ppid === proc.pid) {
+        // An orphan: init reaps it as soon as it is a zombie, as Linux's does
         child.ppid = 1;
-        if (child.state === 'zombie') this.scheduleInitReap(child);
+        child.data.orphaned = true;
+        if (child.state === 'zombie') this.procs.delete(child.pid);
       }
     }
     proc.markExited(status);
     this.logTrap(proc, status);
     const parent = this.procs.get(proc.ppid);
     if (parent && parent.pid !== 1) this.deliver(parent, A.SIGCHLD);
-    if (proc.ppid === 1) this.scheduleInitReap(proc);
+    if (proc.ppid === 1) {
+      // A child the page spawned directly (ppid 1) waits for its runner's waitpid
+      if (proc.data.orphaned) this.procs.delete(proc.pid);
+      else this.scheduleInitReap(proc);
+    }
     this.notify();
   }
 
@@ -1494,7 +1501,13 @@ export class Kernel {
     shell.fileDescriptors = new Map();
     // A new process: only the page shell's `export -f` functions come along
     shell.dropUnexportedFunctions();
-    proc.onTerminate(() => shell.abortController?.abort());
+    // Its own abort, which its end fires. Not the page shell's: killing a
+    // program's `sh -c` child would abort the page's foreground job, whose
+    // abort SIGINTs that program's whole group (codex's "turn interrupted")
+    const abort = new AbortController();
+    shell.abortController = null;
+    shell.inheritedAbort = abort;
+    proc.onTerminate(() => abort.abort());
     return shell;
   }
 
@@ -2510,9 +2523,9 @@ export class Kernel {
           const v = new DataView(data.buffer, data.byteOffset, A.SYSINFO_SIZE);
           data.fill(0, 0, A.SYSINFO_SIZE);
           const mem = memoryInfo();
-          const load = BigInt(Math.round(this.procfs.running() * 65536));
+          const loads = this.procfs.loadavg();
           v.setBigInt64(0, BigInt(Math.floor((Date.now() - bootMs) / 1000)), true); // uptime
-          for (let i = 0; i < 3; i++) v.setBigUint64(8 + i * 8, load, true); // loads[3], 1<<16 fixed point
+          for (let i = 0; i < 3; i++) v.setBigUint64(8 + i * 8, BigInt(Math.round(loads[i] * 65536)), true); // loads[3], 1<<16 fixed point
           v.setBigUint64(32, BigInt(mem.total), true); // totalram
           v.setBigUint64(40, BigInt(mem.free), true); // freeram
           v.setUint16(80, Math.min(0xffff, this.procs.size), true); // procs

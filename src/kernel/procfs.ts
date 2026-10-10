@@ -15,7 +15,7 @@
  * the kernel and read as 0.
  */
 import * as A from './abi';
-import { DirFile, ReadyListeners, type OpenFile } from './fd';
+import { DirFile, EventFile, ReadyListeners, TimerFile, type OpenFile } from './fd';
 import type { FileSystem } from '../filesystem';
 import type { Kernel } from './kernel';
 import type { Process } from './process';
@@ -330,16 +330,40 @@ export class ProcFs {
     return lines.join('\n') + '\n';
   }
 
-  /** Running processes: the load average (it doesn't decay) */
+  /** Processes running now (state R). */
   running(): number {
     return this.live().filter((p) => this.stateLetter(p) === 'R').length;
+  }
+
+  /** The 1, 5 and 15 minute load averages (/proc/loadavg, sysinfo). */
+  readonly load = new LoadAvg();
+  private loadTimer?: ReturnType<typeof setInterval>;
+
+  /** Brings the load averages up to now and keeps them sampled every 5 s while there are processes. */
+  loadavg(now = Date.now()): [number, number, number] {
+    this.load.sample(this.running(), now);
+    if (!this.loadTimer && this.live().length) {
+      this.loadTimer = setInterval(() => {
+        this.load.sample(this.running());
+        // Stop once idle and decayed to nothing; the next read restarts it
+        if (!this.live().length && this.load.avg.every((v) => v < 0.005)) { clearInterval(this.loadTimer); this.loadTimer = undefined; }
+      }, LOAD_FREQ_MS);
+      (this.loadTimer as { unref?: () => void })?.unref?.();
+    }
+    return this.load.avg;
+  }
+
+  /** Stops the sampling timer (the kernel is going away). */
+  dispose(): void {
+    if (this.loadTimer) clearInterval(this.loadTimer);
+    this.loadTimer = undefined;
   }
 
   private loadavgText(): string {
     const procs = this.live();
     const running = this.running();
-    const l = running.toFixed(2);
-    return `${l} ${l} ${l} ${Math.max(1, running)}/${procs.length} ${this.kernel.lastPid}\n`;
+    const [a, b, c] = this.loadavg();
+    return `${a.toFixed(2)} ${b.toFixed(2)} ${c.toFixed(2)} ${Math.max(1, running)}/${procs.length} ${this.kernel.lastPid}\n`;
   }
 
   // ── what the kernel calls ──
@@ -396,6 +420,31 @@ export class ProcFs {
   }
 }
 
+/** Linux samples the run queue every 5 s (LOAD_FREQ). */
+export const LOAD_FREQ_MS = 5000;
+
+/**
+ * Linux's load averages: every 5 s each average moves toward the number of
+ * running processes by 1 - e^(-5/60), e^(-5/300), e^(-5/900) (the 1, 5 and 15
+ * minute windows). A sample after a longer gap applies the missed steps at
+ * the current count.
+ */
+export class LoadAvg {
+  avg: [number, number, number] = [0, 0, 0];
+  private last: number;
+  private static readonly WINDOWS = [60, 300, 900];
+  constructor(now = Date.now()) { this.last = now; }
+  sample(running: number, now = Date.now()): void {
+    const steps = Math.floor((now - this.last) / LOAD_FREQ_MS);
+    if (steps <= 0) return;
+    this.last += steps * LOAD_FREQ_MS;
+    this.avg = this.avg.map((v, i) => {
+      const e = Math.exp((-LOAD_FREQ_MS / 1000 / LoadAvg.WINDOWS[i]) * steps);
+      return v * e + running * (1 - e);
+    }) as [number, number, number];
+  }
+}
+
 /** /proc/vmstat: the counters vmstat(8) reads, all 0 (there is no paging to count). */
 const VMSTAT_KEYS = [
   'nr_free_pages', 'nr_inactive_anon', 'nr_active_anon', 'nr_inactive_file', 'nr_active_file', 'nr_dirty', 'nr_writeback',
@@ -421,7 +470,10 @@ export function syscallText(p: Process): string {
 /** What /proc/PID/fd/N points at. */
 export function fdTarget(f: OpenFile): string {
   if (f.path) return f.path;
-  const ino = (f as { ino?: number }).ino ?? 0;
+  // (a pipe end's inode is its pipe's: both ends of one pipe show the same pipe:[N])
+  const ino = (f as { ino?: number }).ino ?? (f as { pipe?: { ino?: number } }).pipe?.ino ?? 0;
+  if (f instanceof EventFile) return 'anon_inode:[eventfd]';
+  if (f instanceof TimerFile) return 'anon_inode:[timerfd]';
   switch (f.kind) {
     case 'pipe': return `pipe:[${ino}]`;
     case 'socket': return `socket:[${ino}]`;
