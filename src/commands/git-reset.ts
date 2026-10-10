@@ -1,4 +1,4 @@
-import git from 'isomorphic-git';
+import git from './git-cached';
 import { CommandContext } from './index';
 
 export async function gitResetHandler(ctx: CommandContext, fs: any, dir: string): Promise<number> {

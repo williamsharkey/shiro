@@ -19,7 +19,7 @@ import type { Kernel } from './kernel';
 import { Process } from './process';
 import { processTable } from '../process-table';
 import { notifySignalPending } from './signalfd';
-import { SI_USER, SIGRTMIN as KSIGRTMIN, type SigInfo } from './abi';
+import { SI_USER, SIGRTMIN as KSIGRTMIN, CLD_STOPPED, CLD_CONTINUED, type SigInfo } from './abi';
 
 // ── Linux signal numbers ────────────────────────────────────────────────────
 export const SIGHUP = 1;
@@ -297,6 +297,10 @@ export interface SignalTarget {
   managed?: boolean;
   /** True once the process is gone from its owner's table (reaped); job control then forgets it */
   reaped?(): boolean;
+  /** The process's uid (SIGCHLD's si_uid) */
+  uid?: number;
+  /** Run `fn` (a send to this process) with the siginfo the signal carries */
+  carry?(info: SigInfo, fn: () => void): void;
 }
 
 export type JobEvent =
@@ -565,7 +569,7 @@ export class JobControl {
     this.reported.set(p.pid, 'stopped');
     this.lastStatus.set(p.pid, W_STOPCODE(sig));
     this.emit({ type: 'stopped', pid: p.pid, sig });
-    this.notifyParent(p, true);
+    this.notifyParent(p, true, sig);
   }
 
   /** Record a continue (SIGCONT, from either path). */
@@ -579,11 +583,14 @@ export class JobControl {
     this.notifyParent(p, true);
   }
 
-  private notifyParent(p: SignalTarget, stopOrCont: boolean): void {
+  /** SIGCHLD for a stop (with its signal) or a continue: si_code CLD_STOPPED or CLD_CONTINUED, the child's pid */
+  private notifyParent(p: SignalTarget, stopOrCont: boolean, stopSig?: number): void {
     const parent = this.procs.get(p.ppid);
     if (!parent || parent.runState === 'zombie') return;
     if (stopOrCont && (parent.signals.getAction(SIGCHLD).flags & SA_NOCLDSTOP)) return;
-    this.send(parent, SIGCHLD);
+    const info: SigInfo = { signo: SIGCHLD, code: stopSig ? CLD_STOPPED : CLD_CONTINUED, pid: p.pid, uid: p.uid ?? 0, status: stopSig ?? SIGCONT };
+    if (parent.carry) parent.carry(info, () => this.send(parent, SIGCHLD));
+    else this.send(parent, SIGCHLD);
   }
 
   /**
@@ -772,7 +779,8 @@ class ProcessSignalState extends SignalState {
     const local = this.actions.get(sig);
     if (local) return local;
     const d = this.proc.dispositions.get(sig);
-    return { handler: d === 'ignore' ? SIG_IGN : typeof d === 'number' ? d : SIG_DFL, flags: 0, mask: 0n };
+    // (the flags rt_sigaction gave the kernel: SA_NOCLDSTOP for SIGCHLD)
+    return { handler: d === 'ignore' ? SIG_IGN : typeof d === 'number' ? d : SIG_DFL, flags: this.proc.sigactions.get(sig)?.flags ?? 0, mask: 0n };
   }
 
   setAction(sig: number, act: SigAction): number {
@@ -805,6 +813,11 @@ function kernelTarget(kernel: Kernel, proc: Process, jc: JobControl): SignalTarg
     get runState(): RunState { return proc.state; },
     set runState(_v: RunState | undefined) { /* driven by the kernel's markStopped/markContinued/markExited */ },
     signals: new ProcessSignalState(proc),
+    get uid() { return proc.ruid ?? proc.uid; },
+    carry(info, fn) {
+      proc.data.sigInFlight = info;
+      try { fn(); } finally { delete proc.data.sigInFlight; }
+    },
     managed: true,
     reaped: () => kernel.procs.get(proc.pid) !== proc,
     terminate(sig, core) {

@@ -1,0 +1,40 @@
+From b45501948bced382ed1c41edab61f8f5aa573649 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 06:15:31 +0000
+Subject: [PATCH 108/109] Shiro: comisd/ucomisd (and ss) clear AF too, as x86
+ does
+
+---
+ blink/ssefloat.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/blink/ssefloat.c b/blink/ssefloat.c
+index b832e2c..09591ea 100644
+--- a/blink/ssefloat.c
++++ b/blink/ssefloat.c
+@@ -371,12 +371,14 @@ static void ComissKernel(const u8 rxr[8], const u8 reg[8], struct Machine *m) {
+     m->flags = SetFlag(m->flags, FLAGS_PF, false);
+     m->flags = SetFlag(m->flags, FLAGS_SF, false);
+     m->flags = SetFlag(m->flags, FLAGS_OF, false);
++    m->flags = SetFlag(m->flags, FLAGS_AF, false);
+   } else {
+     m->flags = SetFlag(m->flags, FLAGS_ZF, true);
+     m->flags = SetFlag(m->flags, FLAGS_CF, true);
+     m->flags = SetFlag(m->flags, FLAGS_PF, true);
+     m->flags = SetFlag(m->flags, FLAGS_SF, false);
+     m->flags = SetFlag(m->flags, FLAGS_OF, false);
++    m->flags = SetFlag(m->flags, FLAGS_AF, false);
+     m->mxcsr |= kMxcsrIe;
+     if (!(m->mxcsr & kMxcsrIm)) {
+       HaltMachine(m, kMachineSimdException);
+@@ -430,6 +432,7 @@ void OpComissVsWs(P) {
+   m->flags = SetFlag(m->flags, FLAGS_CF, cf);
+   m->flags = SetFlag(m->flags, FLAGS_SF, false);
+   m->flags = SetFlag(m->flags, FLAGS_OF, false);
++  m->flags = SetFlag(m->flags, FLAGS_AF, false);  // (comis/ucomis clear OF, SF and AF)
+   if (!isucomiss) {
+     m->mxcsr &= ~kMxcsrIe;
+     if (ie) {
+-- 
+2.43.0
+

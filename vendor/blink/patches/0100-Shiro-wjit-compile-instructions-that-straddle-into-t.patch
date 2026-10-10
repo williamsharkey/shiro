@@ -1,8 +1,8 @@
-From 02bade4b5a67ee2fa9a9f843cfc82630e7bd1b44 Mon Sep 17 00:00:00 2001
+From 546c927332748f3b25b2486911d0d2b8b9a5d8a1 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 04:56:38 +0000
-Subject: [PATCH] Shiro wjit: compile instructions that straddle into the next
- code page by default
+Subject: [PATCH 100/109] Shiro wjit: compile instructions that straddle into
+ the next code page by default
 
 ---
  blink/wjit.c | 13 +++++++------

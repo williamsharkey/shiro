@@ -1274,6 +1274,8 @@ export class Shell {
     child.shellPid = this.shellPid;
     child.parentPid = this.parentPid;
     child.localVars = new Set(this.localVars);
+    // A subshell of a function is still in it (local works there, as in bash)
+    child.localVarStack = this.localVarStack.map((f) => new Map(f));
     child.invokedAsSh = this.invokedAsSh;
     child.exportedUnset = new Set(this.exportedUnset);
     child.arrays = new Map(Array.from(this.arrays.entries()).map(([k, v]) => [k, copyArray(v)]));
@@ -4279,7 +4281,10 @@ export class Shell {
         }
         // A package installed with `pkg install` provides the real program in
         // place of a builtin of the same name (lua, sqlite3, jq, ...)
+        // (never bash's own builtins: bash runs its echo, true, printf, test, ...
+        // even with /usr/bin/echo there, and each would be an x86 process)
         let pkgShadowed = !_builtinDisabled && this.pkgShadowBypass !== effectiveCmdName &&
+          !SHELL_BUILTIN_NAMES.has(effectiveCmdName) &&
           !!this.commands.get(effectiveCmdName) &&
           packageShadows(this.fs).has(effectiveCmdName);
         // A Debian program that is gone (apt remove) no longer shadows the builtin
@@ -8573,22 +8578,10 @@ export class Shell {
     // __dirname, relative requires, and per-package runtime tweaks see the package.
     try { filePath = await this.fs.realpath(filePath); } catch { /* keep as given */ }
 
-    const nodeCtx: CommandContext = {
-      args: [filePath, ...args],
-      fs: ctx.fs,
-      cwd: ctx.cwd,
-      env: ctx.env,
-      stdin: ctx.stdin,
-      stdout: '',
-      stderr: '',
-      shell: ctx.shell,
-      terminal: ctx.terminal,
-    };
-
-    const exitCode = await nodeCmd.exec(nodeCtx);
-    if (nodeCtx.stdout) writeStdout(nodeCtx.stdout.replace(/\n/g, '\r\n'));
-    if (nodeCtx.stderr) writeStderr(nodeCtx.stderr.replace(/\n/g, '\r\n'));
-    return exitCode;
+    // The command's own context, as `node FILE` gets it: its redirects and pipes (stdoutIsTTY,
+    // streamStdout…) with it; `./x.js > out` wrote to the terminal while the shell had one
+    ctx.args = [filePath, ...args];
+    return this.runCommand(nodeCmd, ctx);
   }
 
   /**

@@ -107,6 +107,17 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
     for (const ext of ['.ts', '.tsx', '.js', '.jsx', '.json']) {
       if (fileCache.has(base + ext)) return base + ext;
     }
+    // A directory with a package.json names its file in "main" (next/dist/compiled/zod: index.cjs)
+    const pj = fileCache.get(base + '/package.json');
+    if (pj) {
+      try {
+        const main = JSON.parse(pj).main;
+        if (typeof main === 'string' && main) {
+          const m = ctx.fs.resolvePath(main, base);
+          for (const c of [m, m + '.js', m + '.json', m + '/index.js']) if (fileCache.has(c)) return c;
+        }
+      } catch { /* not JSON */ }
+    }
     for (const idx of ['/index.ts', '/index.tsx', '/index.js', '/index.jsx', '/index.json']) {
       if (fileCache.has(base + idx)) return base + idx;
     }
@@ -550,6 +561,7 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
         ? { value: moduleCache.get(k), enumerable: true, configurable: true } : undefined,
     });
     req.main = mainModule;
+    req.extensions = extensions;
     if (mod) {
       mod.require = req;
       mod.paths ??= req.resolve.paths('x');
@@ -558,6 +570,17 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
   }
   let mainModule: any;
   (requireModule as any).makeRequire = makeRequire;
+  /**
+   * require.extensions / Module._extensions: what loads each kind of file, as
+   * node has them (Next's config loader reads `require.extensions['.js']` to
+   * chain its .ts hook). Loading goes through this module's own loader.
+   */
+  const extensions: Record<string, (mod: any, filename: string) => void> = {
+    '.js': (mod, filename) => { mod.exports = requireModule(filename, '/'); },
+    '.json': (mod, filename) => { mod.exports = requireModule(filename, '/'); },
+    '.node': (_mod, filename) => { throw Object.assign(new Error(`Cannot load native addon ${filename}`), { code: 'ERR_DLOPEN_FAILED' }); },
+  };
+  (requireModule as any).extensions = extensions;
   (requireModule as any).setMain = (m: any) => { mainModule = m; };
 
   return Object.assign(requireModule, { ready: requireReady });

@@ -1,0 +1,45 @@
+From 91896d1b331d2d13c544e13436d82e303b48c93e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 06:03:07 +0000
+Subject: [PATCH 107/109] Shiro wjit: aligned SSE moves with memory operands
+ inline (an alignment check exits to the interpreter's #GP)
+
+---
+ blink/wjit.c | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/blink/wjit.c b/blink/wjit.c
+index 0bdcd94..a5f96fc 100644
+--- a/blink/wjit.c
++++ b/blink/wjit.c
+@@ -1861,14 +1861,13 @@ static void Analyze(struct Ins *in) {
+       if ((Rep(rde) | Osz(rde)) == 3) goto Call;
+       if (Rep(rde) == 2 && IsModrmRegister(rde)) goto Call;  // merges
+       return;
+-    case 0x128:  // movaps/movapd Vx,Wx (register form: no alignment check)
++    case 0x128:  // movaps/movapd Vx,Wx (memory: aligned, else #GP)
+     case 0x129:
+-      if (!IsModrmRegister(rde)) goto Call;
++      if (Rep(rde)) goto Call;
+       return;
+     case 0x16F:  // movdqa/movdqu Vx,Wx
+     case 0x17F:
+       if (!Osz(rde) && Rep(rde) != 3) goto Call;  // mmx movq
+-      if (Osz(rde) && !IsModrmRegister(rde)) goto Call;  // aligned
+       return;
+     case 0x1A3:  // bt Ev,Gv
+     case 0x1AB:  // bts
+@@ -3314,6 +3313,10 @@ static void Translate(struct Cg *g, struct Ins *in) {
+         Simd(g, V128_STORE, XMM(dst));
+       } else {
+         Ea(g, in, true);
++        // movaps/movapd/movdqa: a misaligned operand is the interpreter's #GP
++        if (op == 0x128 || op == 0x129 || ((op == 0x16F || op == 0x17F) && Osz(rde))) {
++          AlignOrExit(g, in);
++        }
+         if (store) {
+           XmmStore(g, in, reg, n);
+         } else {
+-- 
+2.43.0
+

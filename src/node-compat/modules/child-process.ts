@@ -1,3 +1,4 @@
+import { ipcLine, ipcReader } from '../ipc';
 import { stdinPipe } from '../live-stdin';
 import type { CommandContext } from '../../commands/index';
 import { parseShellArgs } from '../../shell-args';
@@ -31,6 +32,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
     const proc = deps.getProcess?.();
     return !!proc && s != null && s === (i === 1 ? proc.stdout : i === 2 ? proc.stderr : proc.stdin);
   };
+  const ignores = (stdio: any, i: number): boolean => stdio === 'ignore' || (Array.isArray(stdio) && stdio[i] === 'ignore');
 
   // Synchronous fast-path responses for version/detection checks.
   // spawnSync/execSync/execFileSync are async under the hood but some callers
@@ -376,6 +378,128 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
     });
     return child;
   };
+  /**
+   * A kernel guest's spawn() with piped stdin: a real child whose stdin the
+   * parent writes as it goes and whose output comes as bytes when written
+   * (esbuild's service speaks a binary protocol over them). The parent waits
+   * for it only while it is ref()'d; an unref()'d one sees EOF when the
+   * parent ends (the kernel closes the parent's end of its stdin).
+   */
+  const spawnGuestLive = (child: any, cmd: string, opts: any, io: {
+    stdoutEvents: Record<string, Function[]>; stderrEvents: Record<string, Function[]>; events: Record<string, Function[]>;
+    inheritOut: boolean; inheritErr: boolean; resolve: (v: any) => void;
+    /** the program and its arguments, when it ran without a shell */
+    argv?: string[];
+  }): any => {
+    const { FakeBuffer } = deps;
+    const bytesOf = (d: any, enc?: string): Uint8Array => typeof d === 'string' ? FakeBuffer.from(d, enc) : d instanceof Uint8Array ? d : FakeBuffer.from(d);
+    let outOpen = true, errOpen = true;
+    const proc = deps.getProcess?.();
+    // Delivered on a microtask, in order: the parent's listeners don't run inside the child's
+    // poll (an error there is the parent's: its 'error' listeners, else its stderr; as spawnNodeLive)
+    const deliver = (fn: () => void) => queueMicrotask(() => {
+      try { fn(); } catch (e: any) { (io.events['error'] || []).length ? (io.events['error'] || []).forEach((h) => h(e)) : proc?.stderr?.write(`${e?.stack ?? e}\n`); }
+    });
+    let control: import('../../node-worker/child').ChildControl | null = null;
+    const early: (Uint8Array | null)[] = []; // (writes before the child is there: null is end())
+    const write = (b: Uint8Array) => { if (control) control.write(b); else early.push(b); };
+    const end = () => { if (control) control.end(); else early.push(null); };
+    child.stdin = {
+      writable: true,
+      write: (data: any, encOrCb?: any, cb?: any) => {
+        write(bytesOf(data, typeof encOrCb === 'string' ? encOrCb : undefined));
+        const done = typeof encOrCb === 'function' ? encOrCb : cb;
+        if (done) queueMicrotask(() => done(null));
+        return true;
+      },
+      end: (data?: any, encOrCb?: any, cb?: any) => {
+        if (typeof data === 'function') { cb = data; data = undefined; }
+        if (data !== undefined && data !== null) write(bytesOf(data, typeof encOrCb === 'string' ? encOrCb : undefined));
+        end();
+        const done = typeof encOrCb === 'function' ? encOrCb : cb;
+        if (done) queueMicrotask(() => done());
+      },
+      destroy: () => { end(); },
+      on: () => child.stdin, once: () => child.stdin, off: () => child.stdin, removeListener: () => child.stdin,
+      ref: () => child.stdin, unref: () => child.stdin,
+    };
+    if (child.stdout) { child.stdout.destroy = () => { outOpen = false; return child.stdout; }; child.stdout.ref = child.stdout.unref = () => child.stdout; }
+    if (child.stderr) { child.stderr.destroy = () => { errOpen = false; return child.stderr; }; child.stderr.ref = child.stderr.unref = () => child.stderr; }
+    let release: (() => void) | null = null;
+    let exited = false;
+    const hold = () => { if (!release && !exited) deps.pendingPromises.push(new Promise<void>((r) => { release = r; })); };
+    const unhold = () => { const r = release; release = null; r?.(); };
+    child.ref = () => { hold(); return child; };
+    child.unref = () => { unhold(); return child; };
+    const SIG: Record<string, number> = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGKILL: 9, SIGTERM: 15 };
+    child.kill = (sig?: string | number) => {
+      const n = typeof sig === 'number' ? sig : SIG[sig ?? 'SIGTERM'] ?? 15;
+      const ok = control?.kill(n) ?? false;
+      if (ok) child.killed = true;
+      return ok;
+    };
+    // stdio 'ipc' (fork()): child.send / 'message' / disconnect() over a socketpair (child.ts)
+    const wantsIpc = Array.isArray(opts?.stdio) && opts.stdio.includes('ipc');
+    let ipcIn: ((b: Uint8Array) => void) | null = null;
+    const ipcGone = () => {
+      if (!child.connected) return;
+      child.connected = false;
+      deliver(() => (io.events['disconnect'] || []).forEach((fn) => fn()));
+    };
+    if (wantsIpc) {
+      child.connected = true;
+      child.channel = { ref: () => child.channel, unref: () => child.channel };
+      child.send = (message: unknown, ...rest: unknown[]) => {
+        const cb = rest.find((a) => typeof a === 'function') as ((e: Error | null) => void) | undefined;
+        if (!child.connected || !control) {
+          const e = Object.assign(new Error('Channel closed'), { code: 'ERR_IPC_CHANNEL_CLOSED' });
+          queueMicrotask(() => (cb ? cb(e) : (io.events['error'] || []).forEach((fn) => fn(e))));
+          return false;
+        }
+        control.send(new TextEncoder().encode(ipcLine(message)));
+        if (cb) queueMicrotask(() => cb(null));
+        return true;
+      };
+      child.disconnect = () => { if (child.connected) control?.disconnect(); };
+      ipcIn = ipcReader((m) => deliver(() => (io.events['message'] || []).forEach((fn) => fn(m, undefined))));
+    }
+    hold();
+    // (a forked node runs as itself, the channel its fd 3, with this process's environment unless given one)
+    const direct = wantsIpc && io.argv && /(^|\/)node$/.test(io.argv[0]) ? ['node', ...io.argv.slice(1)] : undefined;
+    const envGiven = opts?.env ?? (direct ? proc?.env : undefined);
+    const env = envGiven ? Object.fromEntries(Object.entries(envGiven).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)])) : undefined;
+    deps.guest!.runChild(cmd, {
+      cwd: opts?.cwd ? ctx.fs.resolvePath(String(opts.cwd), ctx.cwd) : ctx.cwd,
+      ...(env ? { env } : {}),
+      onStdout: (b) => deliver(() => {
+        if (io.inheritOut) proc?.stdout?.write(b);
+        else if (outOpen) (io.stdoutEvents['data'] || []).forEach((fn) => fn(FakeBuffer.from(b)));
+      }),
+      onStderr: (b) => deliver(() => {
+        if (io.inheritErr) proc?.stderr?.write(b);
+        else if (errOpen) (io.stderrEvents['data'] || []).forEach((fn) => fn(FakeBuffer.from(b)));
+      }),
+      ...(ipcIn ? { ipc: (b: Uint8Array | null) => { if (b) ipcIn!(b); else ipcGone(); } } : {}),
+      ...(direct ? { argv: direct } : {}),
+      control: (c) => {
+        control = c;
+        child.pid = c.pid;
+        for (const b of early.splice(0)) if (b) c.write(b); else c.end();
+      },
+    }).then((r) => deliver(() => {
+      exited = true;
+      fileCache.clear(); // files it changed are read again
+      const code = r.status ?? 128 + (r.signal ?? 0);
+      for (const ev of ['end', 'close']) { (io.stdoutEvents[ev] || []).forEach((fn) => fn()); (io.stderrEvents[ev] || []).forEach((fn) => fn()); }
+      child.exitCode = r.status;
+      child.signalCode = r.signal === null ? null : Object.keys(SIG).find((k) => SIG[k] === r.signal) ?? null;
+      (io.events['exit'] || []).forEach((fn) => fn(r.status, child.signalCode));
+      (io.events['close'] || []).forEach((fn) => fn(r.status, child.signalCode));
+      io.resolve({ stdout: '', stderr: '', exitCode: code });
+      unhold();
+    }));
+    return child;
+  };
   /** The `input` option as text (a string, Buffer or typed array) */
   const inputOf = (opts: any): string | undefined => {
     const v = opts?.input;
@@ -707,6 +831,10 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
         out: (t) => { if (inheritOut) deps.getProcess?.()?.stdout?.write(t); else (stdoutEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(t))); },
         err: (t) => { if (inheritErr) deps.getProcess?.()?.stderr?.write(t); else (stderrEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(t))); },
       } : undefined;
+      // A guest's child with piped stdin: live pipes both ways, a real process
+      if (deps.guest && !isClipboardCmd && !stdioOutPath && !stdioErrPath && !inherits(opts?.stdio, 0) && !ignores(opts?.stdio, 0)) {
+        return spawnGuestLive(child, fullCmd, opts, { stdoutEvents, stderrEvents, events, inheritOut, inheritErr, resolve: (v) => _resolveChild?.(v), argv: !opts?.shell && args ? [cmd, ...args.map(String)] : undefined });
+      }
       // A node child with piped stdio in the page: live pipes both ways (live-stdin.ts),
       // for programs that talk to it while it runs (esbuild's API and its --service)
       if (!deps.guest && !isClipboardCmd && !opts?.shell && args && /(^|\/)node$/.test(cmd) && !stdioOutPath && !stdioErrPath
@@ -790,6 +918,15 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
     },
     // fork() — spawn a new Node.js process (delegates to spawn)
     fork: (modulePath: string, args?: string[], options?: any) => {
+      if (args && !Array.isArray(args)) { options = args; args = undefined; }
+      if (deps.guest) {
+        // A real node child with its IPC channel: stdout/stderr its parent's unless silent (as node), stdin a pipe
+        const o = options ?? {};
+        const given = o.stdio ?? (o.silent ? 'pipe' : ['pipe', 'inherit', 'inherit']);
+        const stdio = (Array.isArray(given) ? [...given] : [given, given, given]).map((s: any, i: number) => (i === 0 && (s === 'inherit' || s === 0) ? 'pipe' : s));
+        if (!stdio.includes('ipc')) stdio.push('ipc');
+        return cpModule.spawn('node', [...(o.execArgv ?? []).map(String), modulePath, ...(args || []).map(String)], { ...o, stdio });
+      }
       const nodeArgs = [modulePath, ...(args || [])];
       return cpModule.spawn('node', nodeArgs, { ...options, stdio: 'pipe' });
     },

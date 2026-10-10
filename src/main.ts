@@ -141,6 +141,7 @@ async function main() {
 
   // Initialize filesystem
   const fs = new FileSystem();
+  fs.holdKeyIndex(); // until the first prompt (below)
   await fs.init();
   setActiveFileSystem(fs);
   // Persistent storage (no eviction under storage pressure) once the machine
@@ -735,6 +736,7 @@ async function main() {
   if (!desktop) initPanes(terminal, makeShell);
 
   await terminal.start();
+  fs.releaseKeyIndex();
 
   // Check for become mode (app mode) — restore full-screen app if configured
   if (becomeConfig) {

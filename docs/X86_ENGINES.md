@@ -796,6 +796,79 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    agent-clis' sampled profile of native Claude's startup shows such loops
    (0x434cffe: 461 k interpreted passes). BLINK_WJIT_STRADDLE=0 gives 57's
    behaviour. The x86 suite A/B is unchanged ("same" everywhere).
+101. SHIRO_BLINK_MMLOG=3 logs, besides the mappings, each write, pwrite
+   and pwritev to a file (fd > 2): source address, length, offset and the
+   first 16 bytes as Blink gathered them. It shows whether data a file
+   lost (PostgreSQL's zeroed WAL page) left Blink intact.
+102. MAP_HUGETLB is ENOMEM, as on Linux with no huge pages reserved.
+   PostgreSQL's huge_pages=try then maps ordinary pages; Blink used to
+   accept the flag silently. Test: fixtures/x86/hugetlb.c.
+103. SHIRO_BLINK_PROFILE also lists compiled code's calls to Blink's
+   handlers (the instructions not inlined), by count.
+104. rol/ror by a constant are inline: 8-, 32- and 64-bit, registers and
+   memory, with CF/OF as alu.c's Rol/Ror. 16-bit and by-%cl rotates still
+   call.
+105. Hint nops (0F 18–1E, including endbr64 at every function of a CET
+   build) and prefetch are inline as nothing.
+106. SSE2/SSSE3 integer ops with a 66 prefix are inline as wasm SIMD:
+   padd/psub b/w/d/q, pand/pandn/por/pxor, pcmpeq/pcmpgt b/w/d,
+   pminub/pmaxub, punpck{l,h}{bw,wd,dq,qdq}, pshufd, pshufb (selector
+   bytes with the top bit set give 0), palignr up to 16, psrl/psra/psll
+   w/d/q and psrldq/pslldq by immediates (counts past the lane width as
+   on x86), pmovmskb. Memory operands must be 16-byte aligned: otherwise
+   the interpreter runs the instruction and raises the #GP.
+107. movaps/movapd/movdqa with a memory operand are inline, with the same
+   alignment check. OpenSSL's SSSE3 SHA-1 runs 5x faster (3300 → 650 ms
+   for 16 MB); see BENCHMARKS.md "unix/perf-blink 11". Tests:
+   fixtures/x86/rotates.c and ssei.c, identical to native.
+108. comisd/ucomisd/comiss/ucomiss clear AF along with OF and SF, as x86
+   does (Blink left AF alone). Found by fixtures/x86/ssefloat.c: scalar
+   double ops (arithmetic, min/max, the eight cmpsd predicates, sqrt,
+   cvt* to 32/64-bit, roundsd in all modes, movmskpd) over NaN, ±inf, ±0,
+   denormals and integer limits. Now identical to native in the
+   interpreter and in compiled code.
+109. Same-instance fork shares private pages copy-on-write. A writable
+   page of its own becomes a refcounted shared host page (PAGE_GROW), read
+   only, with PAGE_COW and PAGE_COWRW (the mapping's write intent); parent
+   and child map the same page. Pages a thread holds locked in a system
+   call are still copied. Blink writes through a resolved pointer on many
+   paths without checking PAGE_RW. So any address it resolves in a COW
+   page (LookupAddress2: interpreter, system calls, string ops, stack)
+   gives the process its own copy first, or the page itself once nobody
+   else maps it. It copies before dropping the reference and swaps the PTE
+   with a CAS. Only compiled code's inline reads keep sharing: its writes
+   miss its write cache and come back through the interpreter.
+   - mprotect keeps COW pages read-only and records write intent in
+     COWRW.
+   - madvise(DONTNEED) breaks COW first, then zeros.
+   - mremap, /proc/self/maps and IsValidMemory count COWRW as writable.
+   - The JIT doesn't treat a COW page as fixed code.
+   - Blink's own writes (futex words, clear-tid, robust lists, CopyToUser)
+     resolve with LookupAddressWrite.
+   - BLINK_FORK_COW=0 gives the copying fork.
+96–98. unix/conformance's:
+   - 0096: a blocked real-time raise() queues in the kernel;
+     sigprocmask leaves SIGKILL/SIGSTOP out; sigaltstack modes as on
+     Linux.
+   - 0097: mprotect(PROT_WRITE) keeps the page readable.
+   - 0098: writable shared mappings of kernel files are written back
+     before a new mapping reads the file, and at exit.
+110. A same-instance child's signals carry their siginfo too: host.mjs
+   makes call 1030 as the child, and blink_shiro_signal_pid_info queues it
+   on the child's System. Open POSIX sigqueue_1-1 (the child's handler
+   checks si_value) passes. Test: fixtures/x86/siginfochild.c.
+
+   fork+exit+wait with 16 MiB of dirty heap went from 30 to 7.5 ms, and
+   with 64 MiB from 104 to 12 ms (native: 3.1 ms). Test:
+   fixtures/x86/cowfork.c covers:
+   - heap, brk, .data, mmap and stack views on both sides after either
+     writes;
+   - a signal frame in the child;
+   - mprotect, madvise and mremap after fork;
+   - a grandchild, 8 children, and exec.
+
+   It matches native, and the gowait stress, the xz threaded decode, Open
+   POSIX fork_21-1 and the LTP fork/mm subset are unchanged.
 
 The page compiles blink.wasm once and gives the `WebAssembly.Module` to every
 Blink worker (src/x86-engine/blink.ts `blinkWasmModule`, host.mjs
