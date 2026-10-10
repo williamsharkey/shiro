@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { FileSystem } from '@shiro/filesystem';
 import { openInode, RegularFile } from '@shiro/kernel/fd';
 import * as A from '@shiro/kernel/abi';
+import { Kernel } from '@shiro/kernel/kernel';
+import { createTestShell } from './helpers';
 
 // Big files (FSNode.blob): stored as block records, written and read by the
 // kernel's open files a page at a time. Small BLOB_MIN/BLOCK keep it quick.
@@ -169,5 +171,28 @@ describe('FileSystem big files', () => {
     expect(recs.get('/tmp/bf6.bin').blob).toBeUndefined();
     expect(blocksOf(recs, id)).toHaveLength(0);
     expect(await fs.readFile('/tmp/bf6.bin', 'utf8')).toBe('hello');
+  });
+
+  it('a read the kernel can\'t finish at once (a page to load) takes the async path, not a readiness wait', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.writeFile('/tmp/bf7.bin', pattern(50000));
+    await fs.sync();
+    fs.sweepContent(Date.now() + FileSystem.CONTENT_IDLE_MS + 1); // the content leaves memory: pages load from blocks
+    const kernel = new Kernel({ shell });
+    try {
+      const proc = kernel.spawn({ path: 'reader', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
+      const data = new Uint8Array(4096);
+      const path = new TextEncoder().encode('/tmp/bf7.bin');
+      data.set(path);
+      const fd = await kernel.syscall(proc, A.SYS_open, [path.length, A.O_RDONLY, 0], data);
+      expect(fd).toBeGreaterThanOrEqual(0);
+      expect(kernel.syscallSync(proc, A.SYS_read, [fd, 4096], data)).toBeUndefined();
+      expect(kernel.readinessFile(proc, A.SYS_read, [fd, 4096])).toBeUndefined();
+      expect(await kernel.syscall(proc, A.SYS_read, [fd, 1000], data)).toBe(1000);
+      expect(data.subarray(0, 1000)).toEqual(pattern(50000).subarray(0, 1000));
+      expect(kernel.syscallSync(proc, A.SYS_read, [fd, 24], data)).toBe(24); // the rest of that page is loaded now
+      expect(data.subarray(0, 24)).toEqual(pattern(50000).subarray(1000, 1024));
+      kernel.kill(proc.pid, A.SIGKILL);
+    } finally { kernel.dispose(); }
   });
 });
