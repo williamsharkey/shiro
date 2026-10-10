@@ -189,8 +189,20 @@ Shell and platform fixes these needed (all with tests in the same file):
   is loading rolldown), `serve open 5173` until the app renders 1.7–2.1 s, an
   edit to `src/App.jsx` shown by HMR (no reload) 0.1 s; 15 s in all. JS heap
   ≈245 MB with the dev server up, 260–300 MB with the preview (boot: 8 MB).
-  Six runs on 2026-10-10: five passed; one had `/@vite/client` answer 500
-  after vite cleared the screen (not yet explained). What it took:
+  `npm run build` (vite build, CSS minified by lightningcss) then 2–3.6 s.
+  Of 17 runs on 2026-10-10, 16 passed; the one failure (an early one) had
+  `/@vite/client` answer 500 after vite cleared the screen. It hasn't come
+  back in 15 runs since; the script now keeps the terminal's whole output
+  for a failure report (VERBOSE=1).
+  Memory (MEM=1: resident, Linux, Chromium's renderer process): 212 MB booted,
+  371 MB after `npm i`, 712 MB with the dev server up, 1061 MB after
+  `vite build` (its process loads vite, rolldown's workers and lightningcss
+  again). The JS heap is 250–310 MB of that; the rest is WebAssembly
+  (rolldown's 11 MB module compiled, its workers, esbuild-wasm's 64 MB Go
+  memory, lightningcss's 16 MB module) and ArrayBuffers (file contents).
+  Rolldown's shared memory used to start at 1 GB (16384 pages; the module
+  needs 1001): it starts at 64 MB now and grows (−23 MB resident, and no
+  1 GB commit on a phone). What it took:
   - Rolldown runs as its browser build. `npm install` puts `@rolldown/browser`
     where `rolldown` goes (same API and versions); a process that imports it
     gets it bundled from the VFS with the page's esbuild
@@ -219,10 +231,16 @@ Shell and platform fixes these needed (all with tests in the same file):
   - ES module export names that are strings (`export { x as "module.exports" }`),
     `x as default` among other exports, `url.pathToFileURL` of relative and
     `\0`-prefixed ids, `crypto.getRandomValues` in node:crypto.
-  Not yet: `vite build` stops at CSS minification (lightningcss is a native
-  addon; its WebAssembly build has an async init); node output into a pipe
-  or file comes when the process exits (only the terminal streams), so
-  `npm run dev > log &` shows nothing while it runs.
+  - lightningcss (vite's CSS minifier) is a native addon; npm installs
+    `lightningcss-wasm` (same API and versions) in its place, and it runs as
+    a browser package too: its node build compiles its 16 MB .wasm
+    synchronously, which Chromium refuses on a page's main thread over 8 MB,
+    so its browser build's async `init()` runs before the script starts.
+  - `npm install x` in a directory without package.json creates one (as
+    npm); `npm install` there is "up to date".
+  Not yet: node output into a pipe or file comes when the process exits
+  (only the terminal streams), so `npm run dev > log &` shows nothing while
+  it runs.
 - Node: a script's timers and intervals end with it. An interval left by a
   script that called `process.exit()` kept firing in the page, and its
   `setTimeout`s became the next script's timers, so that script never went
