@@ -70,11 +70,11 @@ export class Pipe {
   }
 
   private wakeReaders() {
-    for (const w of [...this.readWaiters]) w();
+    if (this.readWaiters.size) for (const w of [...this.readWaiters]) w();
     this.listeners.fire(POLLIN);
   }
   private wakeWriters() {
-    for (const w of [...this.writeWaiters]) w();
+    if (this.writeWaiters.size) for (const w of [...this.writeWaiters]) w();
     this.listeners.fire(POLLOUT);
   }
 

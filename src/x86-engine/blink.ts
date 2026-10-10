@@ -214,7 +214,10 @@ async function servePoolChannel(kernel: Kernel, proc: Process, sab: SharedArrayB
     const nr = i32[CH_SYSNO];
     const args = Array.from(i32.subarray(CH_ARGS, CH_ARGS + CH_NARGS));
     const target = as ? kernel.procs.get(as) : proc;
-    let result = target ? await kernel.syscall(target, nr, args, data) : -ESRCH;
+    // A call the kernel can answer from memory (stat, fstat, getpid, pipe and
+    // file I/O that needn't wait) skips the async path, as WASI guests' do
+    const fast = target ? kernel.syscallSync(target, nr, args, data) : undefined;
+    let result = fast !== undefined ? fast : target ? await kernel.syscall(target, nr, args, data) : -ESRCH;
     if (!as && proc.exiting) return false;
     if (result > 0x7fffffff || result < -0x80000000) {
       i32[CH_ARGS] = Math.floor(result / 0x100000000);
@@ -246,6 +249,8 @@ async function servePoolChannel(kernel: Kernel, proc: Process, sab: SharedArrayB
 export function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: SharedArrayBuffer[]): void {
   const busy = new Set<SharedArrayBuffer>();
   const direct: KernelChannel[] = [];
+  // a blink-kick that found no call of this process in the kernel
+  let kickPending = false;
   // Same-instance fork children (Blink): kernel processes this worker runs
   // too. The worker outlives its own process until the last of them ends.
   const hosted = new Set<number>();
@@ -355,7 +360,19 @@ export function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: 
   w.onMessage((m: any) => {
     if (m?.type === 'blink-sys') {
       const sab = pool[m.ch];
-      if (sab) void servePoolChannel(kernel, proc, sab, m.as | 0, busy).then((ok) => { if (ok) w.postMessage({ type: 'blink-done', ch: m.ch }); });
+      if (sab) {
+        const served = servePoolChannel(kernel, proc, sab, m.as | 0, busy);
+        // a kick that came first ends the call once it waits (twice: the
+        // kernel may await before it starts waiting); an extra EINTR is
+        // only a call again for Blink
+        if (kickPending) {
+          kickPending = false;
+          const kick = () => { if (busy.has(sab)) proc.interruptSyscalls(); };
+          setTimeout(kick, 0);
+          setTimeout(kick, 5);
+        }
+        void served.then((ok) => { if (ok) w.postMessage({ type: 'blink-done', ch: m.ch }); });
+      }
     } else if (m?.type === 'blink-direct') {
       // Channels in Blink's wasm memory that its threads use themselves
       // (Blink patch 0065): served here by watching their state words, with
@@ -370,8 +387,11 @@ export function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: 
       // A guest thread is in a kernel call with a signal to take (it came
       // between the call's start and the kernel's interrupt, or another
       // thread's tkill queued it in Blink): end the process's blocking calls
-      // with EINTR, as a signal would; the threads it wasn't for call again
+      // with EINTR, as a signal would; the threads it wasn't for call again.
+      // A kick before its call reaches us (host.mjs posts both, in order)
+      // interrupts that call once it has started (Linux's pending signal)
       if (busy.size || direct.some(ch => ch.pending)) proc.interruptSyscalls();
+      else kickPending = true;
     } else if (m?.type === 'blink-grow') {
       // every channel is busy (blocked calls): one more, shared by this
       // process's workers like the rest (indices match host.mjs's order)
