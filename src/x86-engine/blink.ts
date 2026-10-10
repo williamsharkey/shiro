@@ -64,6 +64,7 @@ export function blinkAssetUrl(name: string): string {
  * plain name. Looked up once per page.
  */
 let wasmUrl: Promise<string | undefined> | null = null;
+let wasmModule: Promise<WebAssembly.Module | undefined> | null = null;
 function blinkWasmUrl(): Promise<string | undefined> {
   if (isNode()) return Promise.resolve(undefined);
   return (wasmUrl ??= (async () => {
@@ -71,6 +72,30 @@ function blinkWasmUrl(): Promise<string | undefined> {
       const r = await fetch(new URL('../manifest.json', defaultAssetBase()).href, { cache: 'no-cache' });
       const hashed = r.ok ? (await r.json())['blink/blink.wasm'] : undefined;
       return typeof hashed === 'string' ? new URL('../' + hashed, defaultAssetBase()).href : undefined;
+    } catch {
+      return undefined;
+    }
+  })());
+}
+
+/**
+ * blink.wasm compiled once for the page and handed to every Blink worker.
+ * Holding the Module keeps V8's optimized code: without it, each time the
+ * last Blink worker ended the code went too, and the next process compiled
+ * blink.wasm again and started on Liftoff's (go_hello 163 -> 235 ms in
+ * Chromium once workers ended promptly, Blink patch 0053).
+ */
+function blinkWasmModule(url: string | undefined): Promise<WebAssembly.Module | undefined> {
+  return (wasmModule ??= (async () => {
+    try {
+      if (isNode()) {
+        const p = nodeProcess();
+        const file = p.getBuiltinModule('url').fileURLToPath(defaultAssetBase() + 'blink.wasm');
+        return await WebAssembly.compile(p.getBuiltinModule('fs').readFileSync(file));
+      }
+      const r = await fetch(url ?? defaultAssetBase() + 'blink.wasm');
+      if (!r.ok) return undefined;
+      return await WebAssembly.compile(await r.arrayBuffer());
     } catch {
       return undefined;
     }
@@ -148,13 +173,14 @@ export function blinkRunner(path: string, restore?: ArrayBuffer): Runner {
     const mounts = kernel.fs ? (await kernel.fs.readdir('/')).map((n) => '/' + n) : [];
     const pool = Array.from({ length: POOL_CHANNELS }, () => createChannelBuffer(POOL_DATA));
     const wasm = await blinkWasmUrl();
+    const wasmModule = proc.env?.TABCOMPUTER_BLINK_SHARED_MODULE === '0' ? undefined : await blinkWasmModule(wasm);
     const runner = workerRunner((p) => {
       const w = create();
       wireWorker(p, w, kernel, pool);
       return w;
     }, {
       // TABCOMPUTER_BLINK_DEBUG=1: the worker logs kernel syscalls and Blink's own messages to the console
-      startData: { path, moduleUrl: defaultAssetBase() + 'blink.mjs', wasmUrl: wasm, mounts, pool, restore, debug: proc.env?.TABCOMPUTER_BLINK_DEBUG === '1' },
+      startData: { path, moduleUrl: defaultAssetBase() + 'blink.mjs', wasmUrl: wasm, wasmModule, mounts, pool, restore, debug: proc.env?.TABCOMPUTER_BLINK_DEBUG === '1' },
     });
     return runner(proc, kernel);
   };

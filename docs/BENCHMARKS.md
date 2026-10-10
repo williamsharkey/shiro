@@ -652,6 +652,54 @@ medians 1240 and 1215 proc/s, base 1200. One of those passes stalled at
 ≈10 proc/s for its last 11 samples and did not recur in two more; worth
 watching if it shows up on other branches.
 
+### unix/perf-blink 9 — shared pages in a hash table
+
+Blink patch 0068. Same-instance fork shares a process's MAP_SHARED pages
+with the child through a registry of shared host pages. That registry was
+an array searched end to end on every share and unshare, so it was
+quadratic in the pages shared (PostgreSQL's 128 MiB of shared buffers are
+32768 pages). It is now a hash table. A static program that maps 128 MiB
+MAP_SHARED, touches it, then forks and waits three times, run in Node
+(vitest; the full suite was running alongside):
+
+| | before | after |
+|---|---:|---:|
+| first fork | 2679 ms | 812 ms |
+| later forks | 1286–1346 ms | 12–14 ms |
+| whole program | 9.2 s | 4.0 s |
+
+### unix/perf-blink 8 — the page keeps blink.wasm compiled
+
+unix/bench bisected a startup regression to patch 0053 (go_hello +62%,
+hello_musl +33%). That patch lets a finished Blink worker end promptly
+rather than park for ~2 s. But V8 keeps a wasm module's optimized code only
+while something holds the module: with no Blink worker left, the code went,
+and the next process compiled blink.wasm again and started on Liftoff's.
+The parked workers had been keeping it alive. Now the page compiles
+blink.wasm once and passes the `WebAssembly.Module` to every Blink worker
+(host.mjs instantiates it through emscripten's `instantiateWasm`). Each
+process also stops paying for its own copy of the code.
+`TABCOMPUTER_BLINK_SHARED_MODULE=0` goes back to each worker fetching and
+compiling it.
+
+`node bench/ab.mjs HEAD --suites x86 --only 'x86\.blink\.' --rounds 3`:
+
+| metric (isolated) | base | new | shift | verdict |
+|---|---:|---:|---:|---|
+| x86.blink.hello_glibc | 128 ms | 86 ms | -28.9% | improved (p=8.2e-6) |
+| x86.blink.go_hello | 208 ms | 137 ms | -34.2% | improved (p=3.4e-6) |
+| x86.blink.go_cpuloop_5m | 213 ms | 131 ms | -37.6% | improved (p=1.3e-8) |
+| x86.blink.vim_defaults | 1076 ms | 988 ms | -8.4% | improved (p=5.6e-5) |
+| x86.blink.go_nethttp | 463 ms | 349 ms | -21.0% | same (below the bar) |
+| x86.blink.hello_musl | 85.5 ms | 64.7 ms | -22.3% | same (below the bar) |
+| x86.blink.peak_rss.go_hello | 15.6 MiB | 6.0 MiB | -64.6% | improved (p=1.3e-8) |
+| x86.blink.peak_rss.go_cpuloop_5m | 16.7 MiB | 7.5 MiB | -56.9% | improved (p=2.5e-6) |
+| x86.blink.peak_rss.go_nethttp | 23.6 MiB | 13.7 MiB | -41.4% | improved (p=8.8e-6) |
+| x86.blink.peak_rss.hello_glibc | 6.5 MiB | 0.9 MiB | -74.5% | improved (p=1.7e-3) |
+
+Against 5a4e756 (before 0053), go_hello was 149 ms in unix/bench's A/B,
+so the regression is gone.
+
 ### unix/perf-blink 7 — direct kernel channels (opt-in)
 
 Blink patch 0065: with `TABCOMPUTER_BLINK_DIRECT=1` a Blink thread's own

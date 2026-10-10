@@ -104,6 +104,8 @@ const sigchldBin = join(out, 'sigchldwait');
 const haveSigchld = tryBuild('gcc', ['-static', '-O1', '-o', sigchldBin, 'sigchldwait.c']);
 const getcpuBin = join(out, 'getcpu');
 const haveGetcpu = tryBuild('gcc', ['-static', '-O1', '-o', getcpuBin, 'getcpu.c']);
+const sysvshmBin = join(out, 'sysvshm');
+const haveSysvshm = 'SYS_shmget' in Abi && tryBuild('gcc', ['-static', '-O1', '-o', sysvshmBin, 'sysvshm.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -866,6 +868,15 @@ describe('Blink engine: CPU and syscall fixes', () => {
     expect(r.output).toContain('hello from c');
     expect(r.output).toContain('arg1=x');
     expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  // PostgreSQL's initdb: a SysV segment shared across fork, shm_nattch, IPC_RMID
+  it.skipIf(!haveSysvshm)('System V shared memory across fork, and POSIX shm', async () => {
+    const { shell } = await setup(readFileSync(sysvshmBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('shmget ok\nshmat ok\nnattch 1 size 56\n' +
+      'child sees "parent" nattch 2\nchild second attach sees "child"\nparent sees "child" nattch 1\n' +
+      'shmdt 0\nshmdt again -1 Invalid argument\nrmid 0\nattach after rmid Invalid argument\nposix shm "from child"\n');
   }, 60_000);
 
   // vim's typeahead check blocked for a key when two reads straddled a ms tick

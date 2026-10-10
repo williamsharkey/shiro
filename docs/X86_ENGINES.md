@@ -21,7 +21,7 @@ machine). See "The wasm JIT" and "What agy still needs".
 
 | Engine | amd64 | Kind | License / can tabcomputer ship it | SAB needed | Go hello | Go cpuloop 50M (native 107 ms) | Go net/http (loopback) |
 |---|---|---|---|---|---|---|---|
-| **Blink → wasm (this branch)** | yes | user-mode syscalls | ISC, yes (self-hosted, 550 KB wasm) | yes (pthreads) | **0.17 s** per process | **0.25 s wall (2.4x native) with the wasm JIT**; 12.8 s (~120x) interpreted | **works**, 0.34–0.37 s |
+| **Blink → wasm (this branch)** | yes | user-mode syscalls | ISC, yes (self-hosted, 550 KB wasm) | yes (pthreads) | **0.145 s** per process | **0.25 s wall (2.4x native) with the wasm JIT**; 12.8 s (~120x) interpreted | **works**, 0.34–0.37 s |
 | src/x86 (current built-in) | partial | user-mode, TS interpreter | ours | no | fails: `fatal error: float64nan` | fails (same) | fails (same) |
 | container2wasm (Bochs, WASI) | yes | full system: Linux 6.1 + runc | Apache-2.0 / LGPL-2.1 / GPL | no (1 vCPU) | 60–85 ms *inside a booted VM* (boot ≈ 3 s) | 9.0 s (~84x) | fails: `lo` down in the container |
 | JSLinux x86_64 (Bellard) | yes | full system: Linux 6.19 | **closed source, no license** | no | 0.13 s inside the VM (boot ≈ 14 s) | 7.6 s (~71x) | works, 0.57 s |
@@ -50,23 +50,27 @@ Notes:
 
 Measured end to end through tabcomputer's shell (`./binary`, a kernel process in a
 Worker), in Chromium on a cross-origin isolated page, three runs each. The
-"before" column is the round-1 build (patches 0001–0005).
+"before" column is the round-1 build (patches 0001–0005). The Blink column's
+musl, glibc, Go hello, net/http, Go 5M loop, gh and vim rows were re-measured
+on 2026-10-09 with `node bench/run.mjs --suites x86` (medians of 5), after
+the page started keeping blink.wasm compiled (docs/BENCHMARKS.md, perf-blink
+8). The other rows are older hand measurements.
 
 | Program | Blink-wasm + JIT, Chromium | interpreter only (same machine) | round 1 | Native | src/x86, Chromium |
 |---|---|---|---|---|---|
-| static musl C hello (38 KB) | 77–96 ms (first run 158 ms) | 102–107 ms | 92–132 ms | 1 ms | 25–88 ms |
-| static glibc C hello (785 KB) | 94–104 ms (first run 133 ms) | 116 ms | 123–149 ms | 1 ms | fails: `Unknown two-byte opcode: 0F 62` |
-| static Go hello (1.4 MB) | 171–173 ms (first run 202 ms) | 237–245 ms | 477–620 ms | 2 ms | fails: `float64nan` |
-| Go goroutines + net/http server and 4 clients | 343–371 ms (first run 531 ms) | 470–487 ms | 1.1–1.6 s | 5 ms | fails: `float64nan` |
+| static musl C hello (38 KB) | 80 ms (first run 192 ms) | 102–107 ms | 92–132 ms | 1 ms | 25–88 ms |
+| static glibc C hello (785 KB) | 88 ms (first run 87 ms) | 116 ms | 123–149 ms | 1 ms | fails: `Unknown two-byte opcode: 0F 62` |
+| static Go hello (1.4 MB) | 145 ms (first run 134 ms) | 237–245 ms | 477–620 ms | 2 ms | fails: `float64nan` |
+| Go goroutines + net/http server and 4 clients | 366 ms (first run 389 ms) | 470–487 ms | 1.1–1.6 s | 5 ms | fails: `float64nan` |
 | Go TLS 1.3 handshake + 3 HTTPS requests over loopback (9.5 MB) | 572 ms (first run 791 ms) | 0.96–1.06 s | 1.6–1.8 s | 5 ms | — |
 | C loop, 5M iterations (wall at the prompt) | 112 ms | 1.41 s | 1.57–1.70 s | 10 ms | 29.8 s |
-| Go loop, 5M iterations (wall at the prompt) | 175 ms | 1.82 s | 1.91–2.04 s | 10 ms | fails |
+| Go loop, 5M iterations (wall at the prompt) | 129 ms | 1.82 s | 1.91–2.04 s | 10 ms | fails |
 | Go loop, 50M iterations (wall at the prompt) | 253 ms | 14.4 s | 21.7 s | 107 ms | fails |
 | C mul/div/bit-op loop, 10M iterations (`vendor/blink/bench/arith.c`) | 173–190 ms (first run 297 ms; 2.5–2.8 s before the ops were inlined) | 9.7 s | — | 40 ms | — |
-| `gh --version`, GitHub CLI 2.62 (59 MB static Go): first run in the page | 5.0 s | 26.7 s | — | 71–79 ms | — |
-| same, later runs (V8 reuses the compiled regions) | 2.5 s | 26.6 s | 20.3–20.9 s | | |
+| `gh --version`, GitHub CLI 2.62 (59 MB static Go): first run in the page | 3.6 s | 26.7 s | — | 71–79 ms | — |
+| same, later runs (V8 reuses the compiled regions) | 3.5 s (2.5 s in an older measurement) | 26.6 s | 20.3–20.9 s | | |
 | same, Node (`run.mjs`-style host, no kernel), wall / peak RSS | 3.2–3.6 s / 374 MB | 28.5 s / 278 MB | 32.7 s / 999 MB | | |
-| Vim 9.2 (static) opening a C file: `vim --not-a-term -c qa x.c`, later runs (defaults.vim: filetype, syntax) | 1.51 s (1.66 s before patch 0041) | ~3.0 s | — | 41 ms | — |
+| Vim 9.2 (static) opening a C file: `vim --not-a-term -c qa x.c`, later runs (defaults.vim: filetype, syntax) | 2.02 s in the x86 bench (`vim_startup`; 1.51 s in an earlier hand measurement) | ~3.0 s | — | 41 ms | — |
 
 The Vim row is from `bench/ab.mjs` on 2026-10-09 (medians of 15 runs;
 the interpreter-only figure is compat-tools' Chromium measurement with
@@ -628,6 +632,36 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    family 6, model 0x5e (OpenCV reads the family before the feature bits).
    An ELF whose name ends in `.bin` loads as an ELF, not a flat binary
    (LibreOffice's `soffice.bin`).
+68. The host pages several processes map (MAP_SHARED across a same-instance
+   fork) are counted in a hash table, not an array searched end to end:
+   forking a process with 128 MiB of shared memory went from 1.3 s per fork
+   to ~13 ms.
+69. System V shared memory: shmget and shmctl go to the kernel, which keeps
+   the segments (ids, permissions, attach counts, 1013/1014). shmat maps one
+   set of host pages per shmid, shared by every attacher in the instance, so
+   a same-instance fork child inherits the attachment and its bytes. shmdt
+   unmaps, and exec and exit drop a process's attachments. A segment's pages
+   go once the kernel has destroyed it. Processes in other Blink instances
+   (a separate worker) can't share a segment. Test: fixtures/x86/sysvshm.c
+   (with POSIX shm across fork).
+70. `sysinfo(2)` is the kernel's: uptime, loads, and the same memory totals
+   `free` and /proc/meminfo report. A kernel without it gets Blink's own
+   answer. SHIRO_BLINK_PROFILE's address table has 2^17 slots, and addresses
+   that find none are counted apart; they used to be lumped into slot 0,
+   which made one address look like 95% of the time. An engine abort's
+   report (the guest's stderr and dmesg, "blink: aborted …") ends with the
+   last lines of Blink's own stderr, so an assertion names its file and line.
+   `vendor/blink/blink.symbols` (wasm function index → name, from
+   `--emit-symbol-map`) comes with each build, for naming `wasm-function[N]`
+   frames in a stack.
+
+The page compiles blink.wasm once and gives the `WebAssembly.Module` to every
+Blink worker (src/x86-engine/blink.ts `blinkWasmModule`, host.mjs
+`instantiateWasm`). V8 keeps a module's optimized code only while something
+holds the module. Once finished workers ended promptly (patch 0053), the next
+process compiled blink.wasm again and ran on Liftoff code: go_hello +62%.
+`TABCOMPUTER_BLINK_SHARED_MODULE=0` makes each worker fetch and compile it
+itself.
 
 The guest's kernel calls go over a pool of channels (`src/x86-engine/blink.ts`
 → `public/engines/blink/host.mjs`). It starts at 6, and host.mjs asks the
