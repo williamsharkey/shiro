@@ -28,8 +28,10 @@ const MESSAGES: Record<number, string> = {
   [A.ENOSPC]: 'no space left on device', [A.EROFS]: 'read-only file system', [A.EBUSY]: 'resource busy or locked',
   [A.EIO]: 'i/o error',
 };
+// errno names (not EPOLL* and the other E-names that share their numbers)
 const CODES: Record<number, string> = Object.fromEntries(Object.entries(A)
-  .filter(([k, v]) => /^E[A-Z0-9]+$/.test(k) && typeof v === 'number')
+  .filter(([k, v]) => /^E[A-Z0-9]+$/.test(k) && !k.startsWith('EPOLL') && typeof v === 'number' && v > 0 && v < 200)
+  .reverse() // the first name wins (EAGAIN over EWOULDBLOCK)
   .map(([k, v]) => [v as number, k]));
 
 /** An Error like FileSystem's (and node's): code, errno, syscall, path */
@@ -327,8 +329,30 @@ export class SyscallFs {
     return { path: real, node: { path: real, type: st.type, mode: s.mode, size: s.size, mtime: s.mtimeMs, ctime: s.ctimeMs, ino: s.ino, special: st.isFIFO() ? 'fifo' : undefined } };
   }
 
-  /** node-compat watches for writes from elsewhere; a guest has no such feed (yet) */
-  onChange(_listener: (...a: any[]) => void): () => void { return () => {}; }
+  private listeners = new Set<(event: string, path: string, newPath?: string) => void>();
+  /** Set by the guest: ask the page for its filesystem's change feed (once) */
+  requestChanges: (() => void) | null = null;
+
+  /** The page's filesystem changes (any process's writes), for fs.watch and chokidar */
+  onChange(listener: (event: string, path: string, newPath?: string) => void): () => void {
+    this.listeners.add(listener);
+    if (this.requestChanges) { this.requestChanges(); this.requestChanges = null; }
+    return () => { this.listeners.delete(listener); };
+  }
+
+  /** Hear changes while something else has the feed on (a watcher), without asking for it */
+  onChangePassive(listener: (event: string, path: string, newPath?: string) => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+
+  /** A change the page reported: what we cached about those paths goes, then the listeners hear it */
+  changed(event: string, path: string, newPath?: string): void {
+    this.forget(path);
+    if (newPath) this.forget(newPath);
+    this.last = null;
+    for (const fn of this.listeners) { try { fn(event, path, newPath); } catch { /* a listener's problem */ } }
+  }
 
   // ── FileSystem's async surface: the same calls ──
 
@@ -357,12 +381,13 @@ export class SyscallFs {
     if (typeof r === 'number') throw sysError(-r, 'realpath', path);
     return r;
   }
-  async chmod(path: string, mode: number): Promise<void> {
+  chmodSync(path: string, mode: number): void {
     const b = enc.encode(path);
     this.sys.ch.data.set(b);
     const r = this.sys.ch.call(A.SYS_fchmodat, A.AT_FDCWD, b.length, mode);
     if (r < 0) throw sysError(-r, 'chmod', path);
   }
+  async chmod(path: string, mode: number): Promise<void> { this.chmodSync(path, mode); }
   async utimes(path: string, atimeMs: number, mtimeMs: number): Promise<void> {
     const r = this.sys.utimensat(A.AT_FDCWD, path, atimeMs, mtimeMs);
     if (r < 0) throw sysError(-r, 'utime', path);

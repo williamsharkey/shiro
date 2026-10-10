@@ -73,6 +73,26 @@ describe('node as a kernel guest', () => {
     expect(r.out).toBe('aaa ccc bbb /tmp/nc/o/f true\nfalse false\nback 4\n');
   }, 60_000);
 
+  it('a miss is not remembered; copies, modes and directories land before the next call', async () => {
+    const r = await sh(`node -e '
+      const fs = require("fs"), cp = require("child_process");
+      fs.mkdirSync("/tmp/nr/stage", { recursive: true });
+      const before = fs.existsSync("/tmp/nr/a.json");
+      fs.writeFileSync("/tmp/nr/a.json.tmp", "{\\"v\\":1}");
+      fs.renameSync("/tmp/nr/a.json.tmp", "/tmp/nr/a.json");
+      console.log(before, fs.readFileSync("/tmp/nr/a.json", "utf8"), require("/tmp/nr/a.json").v);
+      fs.writeFileSync("/tmp/nr/bin", Buffer.from([0, 255, 1]));          // binary: never in the text cache
+      cp.execSync("cp /tmp/nr/bin /tmp/nr/stage/x");                      // a copy the cache never saw
+      fs.copyFileSync("/tmp/nr/stage/x", "/tmp/nr/stage/y");
+      fs.renameSync("/tmp/nr/stage", "/tmp/nr/final");                   // stage, then rename (pnpm)
+      console.log(fs.readdirSync("/tmp/nr/final").join(","), fs.existsSync("/tmp/nr/stage"), [...fs.readFileSync("/tmp/nr/final/y")].join(" "));
+      fs.writeFileSync("/tmp/nr/run.sh", "#!/bin/sh\\necho ran\\n", { mode: 0o755 });
+      console.log(cp.execSync("/tmp/nr/run.sh").toString().trim(), fs.existsSync("/tmp/nr/final/"), fs.statSync("/tmp/nr/final").isDirectory());
+    ' < /dev/null`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('false {"v":1} 1\nx,y false 0 255 1\nran true true\n');
+  }, 60_000);
+
   it('node the kernel starts (sh -c, a #! script) is the guest itself', async () => {
     const r = await sh(`chmod +x /tmp/nk/inner.js && node /tmp/nk/outer.js < /dev/null`, async (fs) => {
       await fs.mkdir('/tmp/nk', { recursive: true });
@@ -123,6 +143,51 @@ c.on('close', (code) => console.log(JSON.stringify(out), JSON.stringify(err), co
       const t = setInterval(() => { if (++n === 30) { clearInterval(t); console.log("ticks", n, Date.now() - t0 >= 500); } }, 20);
     ' < /dev/null; node -e 'setInterval(() => console.log("never"), 5000).unref(); console.log("bye")' < /dev/null`);
     expect(r.out).toBe('ticks 30 true\nbye\n');
+  }, 60_000);
+
+  it('http and net over kernel sockets: a server, its client, and a child process as a client', async () => {
+    const r = await sh(`node /tmp/nh/s.js < /dev/null`, async (fs) => {
+      await fs.mkdir('/tmp/nh', { recursive: true });
+      await fs.writeFile('/tmp/nh/s.js', `const http = require('http'), net = require('net'), cp = require('child_process');
+const srv = http.createServer((req, res) => {
+  let body = '';
+  req.on('data', (d) => body += d).on('end', () => { res.setHeader('x-who', 'guest'); res.end(req.method + ' ' + req.url + ' ' + body); });
+});
+srv.listen(18491, () => {
+  http.get('http://localhost:18491/a?b=1', (res) => {
+    let t = ''; res.on('data', (d) => t += d).on('end', () => {
+      console.log(res.statusCode, res.headers['x-who'], t);
+      // another process (a child node guest) reaches this server through the kernel
+      cp.exec("node -e \\"require('http').get('http://127.0.0.1:18491/child', (r) => { let t = ''; r.on('data', (d) => t += d).on('end', () => console.log(t)); })\\"", (e, out) => {
+        console.log('child:', out.trim());
+        srv.close();
+        const echo = net.createServer((c) => c.pipe(c)).listen(18492, () => {
+          const c = net.connect(18492, '127.0.0.1', () => c.end('ping'));
+          let got = ''; c.on('data', (d) => got += d).on('close', () => { console.log('echo:', got); echo.close(); });
+        });
+      });
+    });
+  });
+});
+`);
+    });
+    expect(r.err).toBe('');
+    expect(r.out).toBe('200 guest GET /a?b=1 \nchild: GET /child\necho: ping\n');
+  }, 60_000);
+
+  it("a guest server is on the page's port table (previews reach it)", async () => {
+    const { iframeServer } = await import('@shiro/iframe-server');
+    const { shell, fs } = await createTestShell();
+    await fs.writeFile('/tmp/nh-page.js', `require('http').createServer((req, res) => { res.end('hi ' + req.url); this.done = true; setTimeout(() => process.exit(0), 50); }).listen(18493);`);
+    let out = '', err = '';
+    const run = shell.execute('export TABCOMPUTER_NODE_WORKER=1; node /tmp/nh-page.js < /dev/null', (s) => { out += s; }, (s) => { err += s; });
+    const t0 = Date.now();
+    while (!iframeServer.isPortInUse(18493) && Date.now() - t0 < 20_000) await new Promise((r) => setTimeout(r, 20));
+    const res = await iframeServer.fetch(18493, '/preview');
+    expect(res.status).toBe(200);
+    expect(typeof res.body === 'string' ? res.body : new TextDecoder().decode(res.body as Uint8Array)).toBe('hi /preview');
+    expect(await run).toBe(0);
+    expect(err).toBe('');
   }, 60_000);
 
   it('stdin from a pipe; async exec', async () => {

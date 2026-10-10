@@ -1,0 +1,147 @@
+From 391b1e7412933fd40e002eb27d8937ba6c83fc97 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 01:39:11 +0000
+Subject: [PATCH 82/82] Shiro: /proc/self/maps is a kernel memfd; nanosleep's
+ rem is written before the signal frame
+
+Conformance (LTP syscalls):
+- /proc/self/maps comes from a kernel memfd (memfd_create, a regular file
+  in memory) instead of a pipe: it seeks, fstats as a regular file, and
+  epoll refuses it as on Linux (epoll_ctl06). A kernel without
+  memfd_create gets the pipe, as before.
+- nanosleep and clock_nanosleep write rem before CheckInterrupt runs the
+  guest's handler, whose signal frame keeps -EINTR as the call's result:
+  an unwritable rem is EFAULT (the signal is delivered after the call),
+  and nanosleep no longer fails an unwritable rem before sleeping (Linux
+  only writes it when a signal ends the sleep) (clock_nanosleep01).
+---
+ blink/shiro.inc | 24 ++++++++++++++++--------
+ blink/syscall.c | 46 +++++++++++++++++++++++++---------------------
+ 2 files changed, 41 insertions(+), 29 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 20d71a8..fe3d5c6 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -548,20 +548,28 @@ static i64 ShiroMapsFd(struct Machine *m, int oflags) {
+   if (s->cr3) ShiroMapsWalk(s, &u, s->cr3, 0, 0);
+   ShiroMapsEnd(&u, (i64)1 << 47);
+   free(u.starts);
+-  // O_CLOEXEC is 02000000 for open and pipe2 alike
+-  r = ShiroCall(m, 293, A12(oflags & 02000000), fds, 0, 8, false, false);
+-  if (r < 0) {
+-    free(u.b);
+-    return r;
++  // A kernel memfd: a regular file, so it seeks and polls (epoll refuses
++  // it) as Linux's /proc/self/maps does; a kernel without memfd_create gets
++  // a pipe. O_CLOEXEC is 02000000 for open and pipe2 alike (MFD_CLOEXEC 1).
++  r = ShiroCall(m, 319, A12(4, oflags & 02000000 ? 1 : 0), (void *)"maps", 4, 0, false, false);
++  if (r >= 0) {
++    rfd = wfd = r;
++  } else {
++    r = ShiroCall(m, 293, A12(oflags & 02000000), fds, 0, 8, false, false);
++    if (r < 0) {
++      free(u.b);
++      return r;
++    }
++    rfd = Read32(fds);
++    wfd = Read32(fds + 4);
+   }
+-  rfd = Read32(fds);
+-  wfd = Read32(fds + 4);
+   for (off = 0; off < u.n; off += k) {
+     k = MIN(u.n - off, 16384);
+     if ((r = ShiroCall(m, 1, A12(wfd, k), u.b + off, k, 0, false, false)) <= 0) break;
+     k = r;
+   }
+-  KS(m, 3, A12(wfd));
++  if (wfd != rfd) KS(m, 3, A12(wfd));
++  else KS(m, 8, A12(rfd, 0, 0, 0));  // lseek to the start
+   free(u.b);
+   return rfd;
+ }
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 2870ff0..388b0a9 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -4251,8 +4251,9 @@ static int SysNanosleep(struct Machine *m, i64 req, i64 rem) {
+   const struct timespec_linux *gtp;
+   struct timespec ts, now, deadline;
+   now = GetMonotonic();
+-  if ((rem && !IsValidMemory(m, rem, sizeof(gtp), PROT_WRITE)) ||
+-      !(gtp = (const struct timespec_linux *)SchlepR(m, req, sizeof(*gtp)))) {
++  // (rem is only written when a signal ends the sleep: Linux doesn't look
++  // at it before, and an unwritable one is EFAULT then)
++  if (!(gtp = (const struct timespec_linux *)SchlepR(m, req, sizeof(*gtp)))) {
+     return -1;
+   }
+   ts.tv_sec = Read64(gtp->sec);
+@@ -4290,22 +4291,22 @@ static int SysNanosleep(struct Machine *m, i64 req, i64 rem) {
+     if (nanosleep(&ts, 0)) {
+       unassert(errno == EINTR);
+ #endif
++      // rem is written before CheckInterrupt runs the guest's handler: the
++      // signal frame keeps -EINTR as the result, so an unwritable rem must
++      // be found first (EFAULT, and the signal is delivered after the call)
++      if (rem && (m->signals & ~m->sigmask)) {
++        now = GetMonotonic();
++        ts = CompareTime(now, deadline) < 0 ? SubtractTime(deadline, now) : GetZeroTime();
++        Write64(gt.sec, ts.tv_sec);
++        Write64(gt.nsec, ts.tv_nsec);
++        if (CopyToUserWrite(m, rem, &gt, sizeof(gt)) == -1) {
++          if (sleeping) ShiroSleeping(m, -1);
++          return -1;
++        }
++      }
+       // this may run a guest signal handler before returning
+       if (CheckInterrupt(m, false)) {
+         if (sleeping) ShiroSleeping(m, -1);
+-        // a signal was delivered or is about to be delivered
+-        if (rem) {
+-          // rem is only updated when -1 w/ eintr is returned
+-          now = GetMonotonic();
+-          if (CompareTime(now, deadline) < 0) {
+-            ts = SubtractTime(deadline, now);
+-          } else {
+-            ts = GetZeroTime();
+-          }
+-          Write64(gt.sec, ts.tv_sec);
+-          Write64(gt.nsec, ts.tv_nsec);
+-          CopyToUserWrite(m, rem, &gt, sizeof(gt));
+-        }
+         return -1;
+       }
+     }
+@@ -4376,20 +4377,23 @@ static int SysClockNanosleep(struct Machine *m, int clock, int flags,
+         rc = -1;
+         break;
+       }
+-      if ((m->signals & ~m->sigmask) && CheckInterrupt(m, false)) {
++      if (m->signals & ~m->sigmask) {
++        // rem first (CheckInterrupt's signal frame keeps -EINTR as the
++        // result): an unwritable one is EFAULT, the signal delivered after
+         if (!(flags & TIMER_ABSTIME_LINUX) && remaddr) {
+-          rem = SubtractTime(deadline, now);
++          rem = CompareTime(now, deadline) < 0 ? SubtractTime(deadline, now) : GetZeroTime();
+           Write64(gtimespec.sec, rem.tv_sec);
+           Write64(gtimespec.nsec, rem.tv_nsec);
+-          // an unwritable rem is EFAULT, as Linux reports it
+           if (CopyToUserWrite(m, remaddr, &gtimespec, sizeof(gtimespec)) == -1) {
+             rc = -1;
+             break;
+           }
+         }
+-        errno = EINTR;
+-        rc = -1;
+-        break;
++        if (CheckInterrupt(m, false)) {
++          errno = EINTR;
++          rc = -1;
++          break;
++        }
+       }
+       ts = SubtractTime(deadline, now);
+       if (sleeping) ts = SubtractTime(ts, FromMilliseconds(3));  // unmark before the end
+-- 
+2.43.0
+

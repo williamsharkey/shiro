@@ -169,7 +169,9 @@ export class EpollFile implements OpenFile {
           fd, file, events, dataLo, dataHi, armed: true, disabled: false,
           off: () => {},
         };
-        entry.off = file.onReady(() => {
+        entry.off = (file.onReady as (cb: (mask?: number) => void) => () => void).call(file, (mask?: number) => {
+          // a wake-up about other events than this entry's (a read making room, for an EPOLLIN watcher) doesn't arm it
+          if (mask && !(mask & entry.events & 0xffff)) return;
           // EPOLLEXCLUSIVE: one readiness event wakes the first exclusive entry with a blocked
           // waiter and skips the rest (entries without a waiter are still queued, like Linux)
           if (entry.events & EPOLLEXCLUSIVE) {

@@ -184,7 +184,7 @@ export async function executeNodeScript(
     // File cache, module cache, and sync watchdog
     // As a kernel guest (node-worker), files come from blocking syscalls as they're needed
     const guest = nodeGuestOf(ctx);
-    const { fileCache, fileMtimes, moduleCache, tickSyncOps } = createFileCache(guest?.readText);
+    const { fileCache, fileMtimes, moduleCache, tickSyncOps } = createFileCache(guest?.readText, guest ? (p) => !!(ctx.fs as any).isDirCached?.(p) : undefined);
 
     // Pre-load environment (the page's: files into the cache, Claude's bootstrap)
     if (!guest) await preloadEnvironment(ctx, fileCache, fileMtimes, scriptPath);
@@ -242,7 +242,7 @@ export async function executeNodeScript(
         case 'https':
         case 'node:https': return createHttpsModule({ ctx, iframeServer, fakeConsole, getBuiltinModule, trackAsync });
         case 'net':
-        case 'node:net': return createNetModule({ Buffer: FakeBuffer });
+        case 'node:net': return createNetModule({ Buffer: FakeBuffer, ...(nodeGuestOf(ctx)?.netStack ? { stack: nodeGuestOf(ctx)!.netStack as any } : {}) });
         case 'tls':
         case 'node:tls': return createTlsModule({ getBuiltinModule });
         case 'http2':
@@ -398,6 +398,9 @@ export async function executeNodeScript(
 
     if (typeof window !== 'undefined') {
       window.addEventListener('unhandledrejection', suppressRejection);
+    } else {
+      // a kernel guest: the worker hears them
+      nodeGuestOf(ctx)?.onUnhandledRejection?.((reason, promise) => suppressRejection({ reason, promise, preventDefault() {} } as unknown as PromiseRejectionEvent));
     }
     runningScripts++;
     let counted = true;
@@ -609,7 +612,8 @@ export async function executeNodeScript(
     const _timerIds = new Set<any>();
     const _intervalIds = new Set<any>();
     const _refdIntervals = new Set<any>(); // a guest's ref'd intervals: activity, as in node
-    const intervalsAlive = () => _refdIntervals.size > 0;
+    // (and its open sockets and servers)
+    const intervalsAlive = () => _refdIntervals.size > 0 || !!guest?.busy?.();
     if (code.length <= 500000) {
       const settle = () => { if (_activeTimers <= 0 && _timersResolve) { _timersResolve(); _timersResolve = null; _timersDone = null; } };
       globalThis.setTimeout = _st.installedSetTimeout = function(fn: any, ms?: number, ...args: any[]) {

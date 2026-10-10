@@ -77,6 +77,33 @@ describe('kernel syscalls found by LTP', () => {
     expect(await call(A.SYS_listen, [fd, 1])).toBe(-A.EBADF);
   });
 
+  it('epoll_wait06: a pipe is writable again only once a read empties a page, not after a partial read', async () => {
+    const [r, w] = await pipe(A.O_NONBLOCK);
+    expect(await call(A.SYS_fcntl, [w, A.F_SETPIPE_SZ, 4096])).toBe(4096);
+    expect(await kernel.syscall(proc, A.SYS_write, [w, 4096], new Uint8Array(4096))).toBe(4096);
+    const pollOut = async () => {
+      const pfd = new Uint8Array(8);
+      new DataView(pfd.buffer).setInt32(0, w, true);
+      new DataView(pfd.buffer).setInt16(4, A.POLLOUT, true);
+      await kernel.syscall(proc, A.SYS_poll, [1, 0], pfd);
+      return new DataView(pfd.buffer).getInt16(6, true) & A.POLLOUT;
+    };
+    expect(await pollOut()).toBe(0);
+    // an edge-triggered reader isn't woken by a read making room (only data arriving arms it)
+    const ep = await call(A.SYS_epoll_create1, [0]);
+    expect(await call(A.SYS_epoll_ctl, [ep, A.EPOLL_CTL_ADD, r, A.POLLIN | A.EPOLLET, r, 0])).toBe(0);
+    expect(await call(A.SYS_epoll_ctl, [ep, A.EPOLL_CTL_ADD, w, A.POLLOUT | A.EPOLLET, w, 0])).toBe(0);
+    const evs = new Uint8Array(64);
+    expect(await kernel.syscall(proc, A.SYS_epoll_wait, [ep, 4, 0], evs)).toBe(1); // the reader: data
+    expect(await kernel.syscall(proc, A.SYS_read, [r, 2048], new Uint8Array(2048))).toBe(2048);
+    expect(await pollOut()).toBe(0);
+    expect(await kernel.syscall(proc, A.SYS_epoll_wait, [ep, 4, 0], evs)).toBe(0);
+    expect(await kernel.syscall(proc, A.SYS_read, [r, 2048], new Uint8Array(2048))).toBe(2048);
+    expect(await pollOut()).toBe(A.POLLOUT);
+    expect(await kernel.syscall(proc, A.SYS_epoll_wait, [ep, 4, 0], evs)).toBe(1); // the writer: a page is free
+    for (const fd of [r, w, ep]) await call(A.SYS_close, [fd]);
+  });
+
   it('fcntl30/37: F_GETPIPE_SZ and F_SETPIPE_SZ resize a pipe (pipe-max-size 1 MiB)', async () => {
     const [r, w] = await pipe(A.O_NONBLOCK);
     expect(await call(A.SYS_fcntl, [w, A.F_GETPIPE_SZ])).toBe(65536);
@@ -206,6 +233,23 @@ describe('kernel syscalls found by LTP', () => {
     expect(kernel.procs.get(sib)!.ppid).toBe(proc.pid);
     for (const pid of [grandchild.pid, sib, child.pid]) kernel.kill(pid, A.SIGKILL);
     for (const pid of [sib, child.pid]) await kernel.syscall(proc, A.SYS_wait4, [pid, 0], new Uint8Array(8));
+  });
+
+  it('memfd_create: an in-memory regular file that seeks, truncates, and epoll refuses (epoll_ctl06 /proc/self/maps)', async () => {
+    const fd = await call(A.SYS_memfd_create, [L('maps'), A.MFD_CLOEXEC], 'maps');
+    expect(fd).toBeGreaterThanOrEqual(0);
+    expect(await kernel.syscall(proc, A.SYS_write, [fd, 5], enc.encode('hello'))).toBe(5);
+    expect(await call(A.SYS_lseek, [fd, 1, 0, A.SEEK_SET])).toBe(1);
+    const buf = new Uint8Array(8);
+    expect(await kernel.syscall(proc, A.SYS_read, [fd, 8], buf)).toBe(4);
+    expect(new TextDecoder().decode(buf.subarray(0, 4))).toBe('ello');
+    expect((await fstatMode(fd)) & A.S_IFMT).toBe(A.S_IFREG);
+    expect(await call(A.SYS_ftruncate, [fd, 2, 0])).toBe(0);
+    expect(await kernel.syscall(proc, A.SYS_pread64, [fd, 8, 0, 0], buf)).toBe(2);
+    const ep = await call(A.SYS_epoll_create1, [0]);
+    expect(await call(A.SYS_epoll_ctl, [ep, A.EPOLL_CTL_ADD, fd, A.POLLIN, 0, 0])).toBe(-A.EPERM);
+    expect(await call(A.SYS_memfd_create, [L('x'), 8], 'x')).toBe(-A.EINVAL);
+    for (const f of [fd, ep]) await call(A.SYS_close, [f]);
   });
 
   it('connect03: connecting to an AF_UNIX socket file takes write permission on it', async () => {
@@ -351,6 +395,40 @@ describe('kernel syscalls found by LTP', () => {
     expect(await kernel.syscall(proc, A.SYS_connect, [st, 110], sun)).toBe(-A.EPROTOTYPE);
     for (const fd of [a, b, s, c, st]) await call(A.SYS_close, [fd]);
     off();
+  });
+
+  it('O_CREAT/O_TRUNC/O_EXCL/O_NOFOLLOW opens and unlink are answered synchronously from the cache', async () => {
+    const enc2 = new TextEncoder();
+    const sync = (nr: number, args: number[], path: string) => {
+      const d = new Uint8Array(512);
+      const b = enc2.encode(path);
+      d.set(b);
+      return kernel.syscallSync(proc, nr, nr === A.SYS_unlink ? [b.length] : [A.AT_FDCWD, b.length, ...args], d);
+    };
+    await fs.writeFile('/tmp/kc/old', 'abc');
+    await fs.readFile('/tmp/kc/old'); // cached
+    const fd = sync(A.SYS_openat, [A.O_WRONLY | A.O_CREAT | A.O_TRUNC, 0o640], '/tmp/kc/new');
+    expect(fd).toBeGreaterThanOrEqual(0);
+    expect((await fs.stat('/tmp/kc/new')).size).toBe(0);
+    expect((await fs.stat('/tmp/kc/new')).mode & 0o777).toBe(0o640 & ~proc.umask);
+    expect(sync(A.SYS_openat, [A.O_WRONLY | A.O_CREAT | A.O_EXCL, 0o600], '/tmp/kc/new')).toBe(-A.EEXIST);
+    const t = sync(A.SYS_openat, [A.O_WRONLY | A.O_TRUNC, 0], '/tmp/kc/old');
+    expect(t).toBeGreaterThanOrEqual(0);
+    await call(A.SYS_close, [t]);
+    expect(await fs.readFile('/tmp/kc/old', 'utf8')).toBe('');
+    expect(sync(A.SYS_openat, [A.O_RDONLY, 0], '/tmp/kc/nope')).toBe(-A.ENOENT);
+    await fs.symlink('/tmp/kc/old', '/tmp/kc/ln');
+    await fs.lstat('/tmp/kc/ln');
+    expect(sync(A.SYS_openat, [A.O_RDONLY | A.O_NOFOLLOW, 0], '/tmp/kc/ln')).toBe(-A.ELOOP);
+    // unlink: done in memory unless the file is open (fd is still open: async path)
+    expect(sync(A.SYS_unlink, [], '/tmp/kc/new')).toBe(undefined);
+    await call(A.SYS_close, [fd]);
+    expect(sync(A.SYS_unlink, [], '/tmp/kc/new')).toBe(0);
+    expect(await fs.exists('/tmp/kc/new')).toBe(false);
+    expect(sync(A.SYS_unlink, [], '/tmp/kc/new')).toBe(-A.ENOENT);
+    expect(sync(A.SYS_unlink, [], '/tmp/kc')).toBe(-A.EISDIR);
+    expect(sync(A.SYS_unlink, [], '/tmp/kc/ln')).toBe(0); // the link, not its target
+    expect(await fs.exists('/tmp/kc/old')).toBe(true);
   });
 
   it('paths below /proc/self/fd/N (and /dev/fd/N) name entries of that open directory', async () => {

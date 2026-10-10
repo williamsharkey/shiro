@@ -14,6 +14,12 @@ export interface NodeGuestHooks {
   runChild(cmd: string, opts?: ChildOptions): Promise<ChildResult>;
   /** Write to fd 1 or 2 now (output streams to a pipe or file instead of waiting for exit) */
   writeOut?(fd: 1 | 2, s: string): void;
+  /** node's net module's stack: sockets over socket syscalls (net.ts) */
+  netStack?: unknown;
+  /** Who hears the worker's unhandled promise rejections (node's process 'unhandledRejection'; null: nobody) */
+  onUnhandledRejection?(fn: ((reason: unknown, promise: Promise<unknown>) => void) | null): void;
+  /** Whether open handles (sockets, servers) keep the program running */
+  busy?(): boolean;
 }
 
 export function nodeGuestOf(ctx: unknown): NodeGuestHooks | undefined {

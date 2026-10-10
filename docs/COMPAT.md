@@ -23,7 +23,7 @@ Blink engine.
 | ruby, gem, rake | `pkg install ruby` (ruby.wasm 3.4.1) | works (no sockets) |
 | perl | `pkg install perl` (x86-64 in Blink) | works |
 | lua | `pkg install lua` | works |
-| go | `pkg install go` (wasip1) / Debian `golang-go` | builds and runs / fails: link step (Blink `fallocate`, reported) |
+| go | `pkg install go` (wasip1) / Debian `golang-go` (`toolchain install go`) | builds and runs / builds and runs: std comes precompiled in the `go` layer |
 | clang, make, ninja, cmake | `pkg install llvm make ninja cmake` | works (zlib's own build, CMake → Ninja/Make, CTest) |
 | gcc, make (Debian) | `apt install build-essential` | works: hello.c with gcc and through make |
 | node (Debian) | `apt install nodejs` | works (Blink patch 0047), 22–26 s per script; `builtin node` runs tabcomputer's |
@@ -85,7 +85,8 @@ the page (`apt-get update` ≈2m20s first).
 | node: which wins | Debian's | — | in Debian mode a program file on PATH replaces the builtin of that name, so `node` is `/usr/bin/node` once nodejs is installed (22–26 s per script under emulation); `builtin node` still runs tabcomputer's (0.2 s) |
 | `node -e` / `node script.js` (Debian's node) | pass | 22–26s per run | crashed in Blink until patch 0047 (`pop m64` addressed relative to the old `rsp`, overwriting V8's CEntry return address); JS, `require`, `os` and fs work, slowly (emulated V8) |
 | `sudo apt-get install -y golang-go` | installs | 5m05s–10m40s | go1.24.4 linux/amd64 |
-| `go run hello.go` | **fail** (Blink) | 35m to the link step | the compile of `fmt` and its std dependencies under Blink finishes (into GOCACHE, kept for later runs), then cmd/link stops: "mapping output file failed: function not implemented" (Blink answers `fallocate` with ENOSYS; Go tolerates only EOPNOTSUPP; sent to perf-blink). tabcomputer's own `pkg install go` (wasip1 toolchain) builds and runs Go programs |
+| `go run hello.go` | pass | apt + cold cache: compiling `fmt` and its std dependencies takes ~35 min under Blink. With `toolchain install go` (std precompiled into GOCACHE): 42s first, 17s warm | the link step works since Blink 0052 (`fallocate` → EOPNOTSUPP). The layer sets `CGO_ENABLED=0` in `~/.config/go/env`: with cgo on, `go` found tabcomputer's WASM-only `cc` on PATH and `net` failed to build (docs/DEBIAN.md "Toolchain layers") |
+| net/http server + client over loopback | pass (with a caveat) | `go build` 84s (compiles only `main`), the binary runs in 0.7s | `go run` of it works with its output redirected (87s) or piped (34s once its binary is cached), but hangs when its output is the shell's terminal; `go run hello.go` doesn't. Reported to the kernel owners |
 | `sudo apt-get install -y cargo` | installs | 9m35s | cargo 1.85.1, rustc 1.85.1 |
 | `cargo new hello_rs && cargo build && cargo run` | pass (after fix) | `new` 2.3s, `build` 54s, `run` 1.9s | failed at first: Rust's `std::process::Command` makes an AF_UNIX `SOCK_SEQPACKET` socketpair for every spawn, which the kernel refused (EOPNOTSUPP), so cargo couldn't start rustc nor rustc its linker |
 | `sudo apt-get install -y ruby` | installs | 2m43s | ruby 3.3.8 (`ruby` is `/usr/bin/ruby`) |
@@ -189,8 +190,20 @@ Shell and platform fixes these needed (all with tests in the same file):
   is loading rolldown), `serve open 5173` until the app renders 1.7–2.1 s, an
   edit to `src/App.jsx` shown by HMR (no reload) 0.1 s; 15 s in all. JS heap
   ≈245 MB with the dev server up, 260–300 MB with the preview (boot: 8 MB).
-  Six runs on 2026-10-10: five passed; one had `/@vite/client` answer 500
-  after vite cleared the screen (not yet explained). What it took:
+  `npm run build` (vite build, CSS minified by lightningcss) then 2–3.6 s.
+  Of 17 runs on 2026-10-10, 16 passed; the one failure (an early one) had
+  `/@vite/client` answer 500 after vite cleared the screen. It hasn't come
+  back in 15 runs since; the script now keeps the terminal's whole output
+  for a failure report (VERBOSE=1).
+  Memory (MEM=1: resident, Linux, Chromium's renderer process): 212 MB booted,
+  371 MB after `npm i`, 712 MB with the dev server up, 1061 MB after
+  `vite build` (its process loads vite, rolldown's workers and lightningcss
+  again). The JS heap is 250–310 MB of that; the rest is WebAssembly
+  (rolldown's 11 MB module compiled, its workers, esbuild-wasm's 64 MB Go
+  memory, lightningcss's 16 MB module) and ArrayBuffers (file contents).
+  Rolldown's shared memory used to start at 1 GB (16384 pages; the module
+  needs 1001): it starts at 64 MB now and grows (−23 MB resident, and no
+  1 GB commit on a phone). What it took:
   - Rolldown runs as its browser build. `npm install` puts `@rolldown/browser`
     where `rolldown` goes (same API and versions); a process that imports it
     gets it bundled from the VFS with the page's esbuild
@@ -219,10 +232,16 @@ Shell and platform fixes these needed (all with tests in the same file):
   - ES module export names that are strings (`export { x as "module.exports" }`),
     `x as default` among other exports, `url.pathToFileURL` of relative and
     `\0`-prefixed ids, `crypto.getRandomValues` in node:crypto.
-  Not yet: `vite build` stops at CSS minification (lightningcss is a native
-  addon; its WebAssembly build has an async init); node output into a pipe
-  or file comes when the process exits (only the terminal streams), so
-  `npm run dev > log &` shows nothing while it runs.
+  - lightningcss (vite's CSS minifier) is a native addon; npm installs
+    `lightningcss-wasm` (same API and versions) in its place, and it runs as
+    a browser package too: its node build compiles its 16 MB .wasm
+    synchronously, which Chromium refuses on a page's main thread over 8 MB,
+    so its browser build's async `init()` runs before the script starts.
+  - `npm install x` in a directory without package.json creates one (as
+    npm); `npm install` there is "up to date".
+  Not yet: node output into a pipe or file comes when the process exits
+  (only the terminal streams), so `npm run dev > log &` shows nothing while
+  it runs.
 - Node: a script's timers and intervals end with it. An interval left by a
   script that called `process.exit()` kept firing in the page, and its
   `setTimeout`s became the next script's timers, so that script never went
@@ -646,6 +665,34 @@ took `venv` for a script; pytest needs `dup()` (output capture,
 faulthandler) and `umask()` (its cache), which WASI lacks, so the CPython
 package sets `PYTEST_ADDOPTS="--capture=sys -p no:faulthandler -p
 no:cacheprovider"`.
+
+## Shared memory and IPC between processes (unix/perf-kernel)
+
+What works across x86-64 (Blink) processes, as of 2026-10-10:
+
+- **Work everywhere (the kernel holds the state):**
+  - SysV semaphores (`semget`/`semop`/`semctl`) and message queues
+    (`msgget`/`msgsnd`/`msgrcv`/`msgctl`);
+  - pipes, FIFOs, sockets, files read and written with syscalls;
+  - `ipcs`/`ipcrm`, and `/proc/sysvipc`.
+- **Work within a fork tree:** `MAP_SHARED` memory, futexes in it,
+  `PTHREAD_PROCESS_SHARED` mutexes, POSIX shm (`shm_open` + `mmap`), named
+  semaphores (`sem_open`) and SysV shm. Same-instance fork children share
+  their parent's pages, so PostgreSQL's postmaster and backends work.
+- **Don't work between processes that don't share an instance:**
+  - a program and something it exec'd;
+  - two programs started separately.
+  - Each has its own copy of a shared mapping, and atomics and futex wakes
+    don't cross. Measured: an exec'd process's `sem_post` is never seen
+    (fixture `psem.c`).
+  - The fix is designed and approved (docs/research/SHARED_MAPPINGS.md:
+    kernel-owned SharedArrayBuffers with slow-path pages in Blink) but not
+    built yet.
+  - Programs this matters for: Firefox and Chromium-style multi-process
+    browsers (content processes share memory with the parent), pulseaudio
+    and PipeWire clients (shm audio rings), and test suites that `sem_open`
+    across exec. X11 clients are unaffected: Shiro's X server doesn't offer
+    MIT-SHM, so they use plain `PutImage`.
 
 ## Claude Code native binary (unix/perf-kernel)
 

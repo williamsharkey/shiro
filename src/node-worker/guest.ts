@@ -10,6 +10,7 @@ import { connectGuest, isStartMessage, ChannelClosed, type GuestStartMessage, ty
 import { decodeTermios, encodeTermios, decodeWinsize, makeRaw, TCSETS, TERMIOS_SIZE, WINSIZE_SIZE } from '../kernel/pty';
 import { SyscallFs } from './sys-fs';
 import { runChild, runChildSync } from './child';
+import { GuestNetStack, installGuestPorts } from './net';
 import type { NodeGuestHooks } from './hooks';
 
 const dec = new TextDecoder();
@@ -71,8 +72,23 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
   const sys = connectGuest(start, post);
   try {
     const fs = new SyscallFs(sys);
+    // fs.watch: the page sends its filesystem's changes once asked (host.ts)
+    fs.requestChanges = () => post({ type: 'node-guest-watch' });
+    fsEvents = (m) => fs.changed(m.event, m.path, m.newPath);
     const stdinTTY = isatty(sys, 0);
     const stdoutTTY = isatty(sys, 1);
+    // Networking over socket syscalls; servers listen on kernel ports (the page previews them)
+    const net = new GuestNetStack(sys);
+    const { iframeServer } = await import('../iframe-server');
+    installGuestPorts(iframeServer as any, net, (port) => { if (stdoutTTY) post({ type: 'node-guest-listen', port }); });
+    // Unhandled rejections: the worker's own event (a browser Worker; node's process in tests)
+    let rejection: ((reason: unknown, promise: Promise<unknown>) => void) | null = null;
+    const g: any = globalThis;
+    if (typeof g.addEventListener === 'function') {
+      g.addEventListener('unhandledrejection', (e: any) => { if (rejection) { e.preventDefault(); rejection(e.reason, e.promise); } });
+    } else if (typeof g.process?.on === 'function' && g.process.versions?.node) {
+      g.process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) => { rejection?.(reason, promise); });
+    }
     const hooks: NodeGuestHooks = {
       readText(path) {
         const b = fs.readRaw(path);
@@ -83,6 +99,9 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
       runChildSync: (cmd, opts) => { try { return runChildSync(sys, cmd, opts); } finally { fs.invalidate(); } },
       runChild: (cmd, opts) => runChild(sys, cmd, opts).finally(() => fs.invalidate()),
       writeOut: (fd, s) => { sys.write(fd, s); },
+      netStack: net,
+      busy: () => net.busy,
+      onUnhandledRejection: (fn) => { rejection = fn; },
     };
     const env = { ...start.env };
     const shell: any = { cwd: start.cwd, env, abortController: null, fork() { throw new Error('no shell in a node guest'); } };
@@ -128,10 +147,14 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
   }
 }
 
-/** The worker's message handler: the first start message runs node */
+/** Where the page's filesystem changes go (the running guest's SyscallFs) */
+let fsEvents: ((m: { event: string; path: string; newPath?: string }) => void) | null = null;
+
+/** The worker's message handler: the first start message runs node; then filesystem changes */
 export function nodeGuestMain(on: (handler: (m: unknown) => void) => void, post: (m: unknown) => void): void {
   let started = false;
   on((m) => {
+    if (started && (m as any)?.type === 'node-guest-fs') { fsEvents?.(m as any); return; }
     if (started || !isStartMessage(m)) return;
     started = true;
     void runNodeGuest(m, post);
