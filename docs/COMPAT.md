@@ -23,7 +23,7 @@ Blink engine.
 | ruby, gem, rake | `pkg install ruby` (ruby.wasm 3.4.1) | works (no sockets) |
 | perl | `pkg install perl` (x86-64 in Blink) | works |
 | lua | `pkg install lua` | works |
-| go | `pkg install go` (wasip1) / Debian `golang-go` | builds and runs / fails: link step (Blink `fallocate`, reported) |
+| go | `pkg install go` (wasip1) / Debian `golang-go` (`toolchain install go`) | builds and runs / builds and runs: std comes precompiled in the `go` layer |
 | clang, make, ninja, cmake | `pkg install llvm make ninja cmake` | works (zlib's own build, CMake → Ninja/Make, CTest) |
 | gcc, make (Debian) | `apt install build-essential` | works: hello.c with gcc and through make |
 | node (Debian) | `apt install nodejs` | works (Blink patch 0047), 22–26 s per script; `builtin node` runs tabcomputer's |
@@ -85,7 +85,8 @@ the page (`apt-get update` ≈2m20s first).
 | node: which wins | Debian's | — | in Debian mode a program file on PATH replaces the builtin of that name, so `node` is `/usr/bin/node` once nodejs is installed (22–26 s per script under emulation); `builtin node` still runs tabcomputer's (0.2 s) |
 | `node -e` / `node script.js` (Debian's node) | pass | 22–26s per run | crashed in Blink until patch 0047 (`pop m64` addressed relative to the old `rsp`, overwriting V8's CEntry return address); JS, `require`, `os` and fs work, slowly (emulated V8) |
 | `sudo apt-get install -y golang-go` | installs | 5m05s–10m40s | go1.24.4 linux/amd64 |
-| `go run hello.go` | **fail** (Blink) | 35m to the link step | the compile of `fmt` and its std dependencies under Blink finishes (into GOCACHE, kept for later runs), then cmd/link stops: "mapping output file failed: function not implemented" (Blink answers `fallocate` with ENOSYS; Go tolerates only EOPNOTSUPP; sent to perf-blink). tabcomputer's own `pkg install go` (wasip1 toolchain) builds and runs Go programs |
+| `go run hello.go` | pass | apt + cold cache: compiling `fmt` and its std dependencies takes ~35 min under Blink. With `toolchain install go` (std precompiled into GOCACHE): 42s first, 17s warm | the link step works since Blink 0052 (`fallocate` → EOPNOTSUPP). The layer sets `CGO_ENABLED=0` in `~/.config/go/env`: with cgo on, `go` found tabcomputer's WASM-only `cc` on PATH and `net` failed to build (docs/DEBIAN.md "Toolchain layers") |
+| net/http server + client over loopback | pass (with a caveat) | `go build` 84s (compiles only `main`), the binary runs in 0.7s | `go run` of it works with its output redirected (87s) or piped (34s once its binary is cached), but hangs when its output is the shell's terminal; `go run hello.go` doesn't. Reported to the kernel owners |
 | `sudo apt-get install -y cargo` | installs | 9m35s | cargo 1.85.1, rustc 1.85.1 |
 | `cargo new hello_rs && cargo build && cargo run` | pass (after fix) | `new` 2.3s, `build` 54s, `run` 1.9s | failed at first: Rust's `std::process::Command` makes an AF_UNIX `SOCK_SEQPACKET` socketpair for every spawn, which the kernel refused (EOPNOTSUPP), so cargo couldn't start rustc nor rustc its linker |
 | `sudo apt-get install -y ruby` | installs | 2m43s | ruby 3.3.8 (`ruby` is `/usr/bin/ruby`) |
