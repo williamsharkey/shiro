@@ -21,13 +21,13 @@ import * as A from './abi';
 import { elfInterpreter } from '../elf-interp';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
-  RegularFile, DirFile, abortableWait, openInode, openInodeSync, isInodeOpen, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
+  RegularFile, DirFile, abortableWait, openInode, openInodeSync, isInodeOpen, exchangeInodes, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
   linkCount, writeBackAll, attachInodeShared, detachOpenFileShared, unlinkedFileKey, sharedBufferOf,
 } from './fd';
 import { createPipe, Pipe, PipeEnd, FifoRdWr } from './pipe';
 import type { PtyFile } from './pty';
 import { LockTable, F_RDLCK, F_WRLCK, F_UNLCK } from './locks';
-import { Process } from './process';
+import { Process, abortReason } from './process';
 import { SysvShm } from './sysvshm';
 import { SysvSem } from './sysvsem';
 import { SysvMsg } from './sysvmsg';
@@ -37,7 +37,7 @@ import { splice, tee, vmsplice, copyFileRange, type Moved } from './splice';
 import { CONTROL_BYTES, SharedObjects, isShareablePath, type ShmObjMessage } from './shmobj';
 import { EpollFile, waitReady } from './epoll';
 import { SignalFile, notifySignalPending, pendingSignalListeners } from './signalfd';
-import { EventFile, MemFile, TimerFile, writeInodeBytes } from './fd';
+import { EventFile, MemFile, TimerFile, writeInodeBytes, SymlinkPathFile, anonymousInode, linkAnonymousInode } from './fd';
 import { activeProfile, unameRelease, UNAME_VERSION } from '../profile';
 import { memoryInfo } from '../utils/sysinfo';
 
@@ -560,6 +560,8 @@ export class Kernel {
     }
     for (const sig of opts.sigdefault ?? []) proc.dispositions.delete(sig);
     this.procs.set(pid, proc);
+    const cpu = parent.data.cpuLimit as { cur: number; max: number } | undefined;
+    if (cpu) this.setCpuLimit(proc, cpu.cur, cpu.max);
     for (const h of [...this.spawnHooks]) {
       try { h(proc); } catch (e) { console.warn('[kernel] onSpawn hook failed', e); }
     }
@@ -649,6 +651,34 @@ export class Kernel {
     }
     arm(valueMs);
     return old;
+  }
+
+  /** RLIMIT_CPU of `proc` in seconds (Infinity: none) */
+  cpuLimit(proc: Process): { cur: number; max: number } {
+    const l = proc.data.cpuLimit as { cur: number; max: number } | undefined;
+    return l ? { cur: l.cur, max: l.max } : { cur: Infinity, max: Infinity };
+  }
+
+  /**
+   * Set RLIMIT_CPU, as Linux enforces it: SIGXCPU when the process's CPU
+   * time (ProcFs.cpuMs: running, not asleep in the engine or in long calls)
+   * reaches the soft limit and at each second after it, SIGKILL at the hard
+   * limit (LTP setrlimit06). Fork children inherit it (spawn).
+   */
+  setCpuLimit(proc: Process, cur: number, max: number): void {
+    const prev = proc.data.cpuLimit as { timer?: ReturnType<typeof setInterval> } | undefined;
+    if (prev?.timer) clearInterval(prev.timer);
+    if (cur === Infinity && max === Infinity) { delete proc.data.cpuLimit; return; }
+    const limit: { cur: number; max: number; next: number; timer?: ReturnType<typeof setInterval> } = { cur, max, next: cur };
+    proc.data.cpuLimit = limit;
+    limit.timer = setInterval(() => {
+      if (proc.exiting || proc.state === 'zombie') { clearInterval(limit.timer); return; }
+      const s = ProcFs.cpuMs(proc) / 1000;
+      if (s >= limit.max) { clearInterval(limit.timer); this.deliver(proc, A.SIGKILL); return; }
+      if (s >= limit.next) { limit.next = Math.floor(s) + 1; this.deliver(proc, A.SIGXCPU); }
+    }, 100);
+    (limit.timer as any)?.unref?.();
+    proc.onTerminate(() => clearInterval(limit.timer));
   }
 
   /** Terminate `proc` with a wait status: close its fds, reparent its children, notify its parent. */
@@ -1057,12 +1087,35 @@ export class Kernel {
   async open(proc: Process, path: string, flags: number, mode = 0o666, dirfd = A.AT_FDCWD): Promise<OpenFile | number> {
     // O_PATH: a descriptor that only names the file (fstat, fchdir, *at, dup, close)
     if (flags & A.O_PATH) {
+      // With O_NOFOLLOW a symlink is opened itself (readlinkat(fd, ""), fstat of the link)
+      if ((flags & A.O_NOFOLLOW) && this.fs && !trailingSlash(path)) {
+        const p = this.resolvePath(proc, path, dirfd);
+        if (typeof p === 'string' && !/^\/(?:proc|dev)(?:\/|$)/.test(p)) {
+          if (this.searchDenied(proc, p)) return -A.EACCES;
+          const lst = await this.fs.lstat(p).catch(() => null);
+          if (lst?.isSymbolicLink()) {
+            if (flags & A.O_DIRECTORY) return -A.ENOTDIR;
+            return new SymlinkPathFile(p, () => this.statPath(proc, p, false));
+          }
+        }
+      }
       const f = await this.open(proc, path, (flags & (A.O_NOFOLLOW | A.O_DIRECTORY)) | A.O_RDONLY, mode, dirfd);
       return typeof f === 'number' ? f : pathOnlyFile(f);
     }
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
     if (this.searchDenied(proc, p)) return -A.EACCES;
+    // O_TMPFILE: an unnamed regular file in directory `p` (linkat names it)
+    if (flags & A.__O_TMPFILE) {
+      if (!canWrite(flags)) return -A.EINVAL;
+      if (!this.fs) return -A.ENOSYS;
+      const st = await this.fs.stat(p).catch(() => null);
+      if (!st) return -A.ENOENT;
+      if (!st.isDirectory()) return -A.ENOTDIR;
+      const real = await this.fs.realpath(p);
+      const statusFlags = flags & ~(A.O_TMPFILE | A.O_CREAT | A.O_EXCL | A.O_TRUNC | A.O_CLOEXEC | A.O_NOCTTY | A.O_NOFOLLOW);
+      return new RegularFile(anonymousInode(this.fs, real, mode & ~proc.umask, !(flags & A.O_EXCL)), statusFlags);
+    }
     // /proc/PID/fd/N, /dev/fd/N, /dev/stdin…: what the fd refers to, opened anew (reopenFile)
     const fdm = /^\/(?:dev\/fd|proc\/(self|thread-self|\d+)\/fd)\/(\d+)$/.exec(p);
     const stdm = /^\/dev\/(stdin|stdout|stderr)$/.exec(p);
@@ -1206,10 +1259,11 @@ export class Kernel {
    */
   openSync(proc: Process, path: string, flags: number, dirfd = A.AT_FDCWD, mode = 0o666): OpenFile | number | undefined {
     const fs = this.fs;
-    if (!fs || flags & A.O_PATH || trailingSlash(path)) return undefined;
+    if (!fs || flags & (A.O_PATH | A.__O_TMPFILE) || trailingSlash(path)) return undefined;
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
     if (this.devices.has(p) || /^\/(?:dev|proc)\//.test(p)) return undefined;
+    if (this.searchDenied(proc, p)) return -A.EACCES;
     const statusFlags = flags & ~(A.O_CREAT | A.O_EXCL | A.O_TRUNC | A.O_CLOEXEC | A.O_NOCTTY | A.O_DIRECTORY | A.O_NOFOLLOW);
     if (flags & (A.O_CREAT | A.O_TRUNC | A.O_NOFOLLOW)) {
       // Creating, truncating or not following: decided on the last component itself
@@ -1345,6 +1399,7 @@ export class Kernel {
     if (!fs || trailingSlash(path)) return undefined;
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
+    if (this.searchDenied(proc, p)) return -A.EACCES;
     if (this.devices.has(p) || p === '/proc' || p.startsWith('/proc/') || this.socketPaths?.has(p)) return undefined;
     const hit = fs.lookupCached(p, follow);
     if (hit === undefined) return undefined;
@@ -1411,6 +1466,10 @@ export class Kernel {
     }
     const fs = this.fs;
     if (!fs) return -A.ENOSYS;
+    // Known missing in memory: ENOENT without fs.stat's thrown error (an
+    // Error with its stack: most of a missing-file stat, as node's module
+    // resolution makes by the hundred)
+    if (!this.socketPaths?.has(p) && fs.lookupCached?.(p, follow) === null) return -A.ENOENT;
     try {
       const st = follow ? await fs.stat(p) : await fs.lstat(p);
       let type = st.isDirectory() ? A.S_IFDIR : st.isSymbolicLink() ? A.S_IFLNK : st.isFIFO?.() ? A.S_IFIFO : A.S_IFREG;
@@ -1686,7 +1745,7 @@ export class Kernel {
     const abort = new AbortController();
     shell.abortController = null;
     shell.inheritedAbort = abort;
-    proc.onTerminate(() => abort.abort());
+    proc.onTerminate(() => abort.abort(abortReason()));
     return shell;
   }
 
@@ -2546,10 +2605,27 @@ export class Kernel {
           const to = at(nd, ol, nl);
           if (typeof from === 'number') return from;
           if (typeof to === 'number') return to;
-          if (flags & ~A.RENAME_NOREPLACE) return -A.EINVAL;
+          if (flags & ~(A.RENAME_NOREPLACE | A.RENAME_EXCHANGE)) return -A.EINVAL;
+          if ((flags & A.RENAME_NOREPLACE) && (flags & A.RENAME_EXCHANGE)) return -A.EINVAL;
           const src = await this.statPath(proc, from, false);
           if (typeof src === 'number') return src;
           const srcDir = (src.mode & A.S_IFMT) === A.S_IFDIR;
+          if (flags & A.RENAME_EXCHANGE) {
+            const dst = await this.statPath(proc, to, false);
+            if (typeof dst === 'number') return dst;
+            const dstDir = (dst.mode & A.S_IFMT) === A.S_IFDIR;
+            if ((!srcDir && trailingSlash(str(0, ol))) || (!dstDir && trailingSlash(str(ol, nl)))) return -A.ENOTDIR;
+            if (from === to) return 0;
+            const under = (a: string, b: string) => b.startsWith(a === '/' ? '/' : a + '/');
+            if (from === '/' || to === '/' || under(from, to) || under(to, from)) return -A.EINVAL;
+            // One swap of the two names; open files follow their file
+            const swap = await exchangeInodes(fs(), from, to);
+            await fs().exchange(from, to);
+            swap();
+            const sf = this.socketPaths?.has(from), st = this.socketPaths?.has(to);
+            if (sf !== st) { this.socketPaths!.delete(sf ? from : to); this.socketPaths!.add(sf ? to : from); }
+            return 0;
+          }
           // "name/" on either side only names a directory
           if (!srcDir && (trailingSlash(str(0, ol)) || trailingSlash(str(ol, nl)))) return -A.ENOTDIR;
           if (from === to) return 0;
@@ -2637,6 +2713,36 @@ export class Kernel {
           const [od, ol, nd, nl, lflags] = nr === A.SYS_link
             ? [A.AT_FDCWD, args[0], A.AT_FDCWD, args[1], 0] : [args[0], args[1], args[2], args[3], args[4]];
           if (lflags & ~(A.AT_SYMLINK_FOLLOW | A.AT_EMPTY_PATH)) return -A.EINVAL;
+          // The file an fd has open: linkat(fd, "", AT_EMPTY_PATH), or its
+          // /proc/self/fd/N with AT_SYMLINK_FOLLOW (an O_TMPFILE file gets its name so)
+          const fdLink = ol === 0 && (lflags & A.AT_EMPTY_PATH) ? od : undefined;
+          const fromStr = ol > 0 ? str(0, ol) : '';
+          const procFd = (lflags & A.AT_SYMLINK_FOLLOW) ? /^\/proc\/(self|thread-self|\d+)\/fd\/(\d+)$/.exec(normalize(fromStr.startsWith('/') ? fromStr : '/')) : null;
+          if (fdLink !== undefined || procFd) {
+            const owner = procFd && procFd[1] !== 'self' && procFd[1] !== 'thread-self' ? this.procs.get(Number(procFd[1])) : proc;
+            const f = owner?.fds.get(fdLink ?? Number(procFd![2]));
+            if (!f) return fdLink !== undefined ? -A.EBADF : -A.ENOENT;
+            const to = at(nd, ol, nl);
+            if (typeof to === 'number') return to;
+            if (trailingSlash(str(ol, nl))) return -A.ENOENT;
+            try {
+              if (await fs().exists(to)) return -A.EEXIST;
+              if (f instanceof RegularFile && f.inode.unlinked) {
+                // The canonical new name (its directory through symlinks): the inode's path from now on
+                const slash = to.lastIndexOf('/');
+                const dir = await fs().realpath(to.slice(0, slash) || '/');
+                if (!(await fs().stat(dir)).isDirectory()) return -A.ENOTDIR;
+                await linkAnonymousInode(fs(), f.inode, (dir === '/' ? '' : dir) + to.slice(slash));
+              }
+              else if (f instanceof SymlinkPathFile) await fs().link(f.path, to, { follow: false });
+              else if (f.kind === 'dir') return -A.EPERM;
+              else if (f instanceof RegularFile) await fs().link(f.inode.path, to, { follow: false });
+              else return -A.ENOENT;
+            } catch (e) {
+              return A.errnoFromError(e);
+            }
+            return 0;
+          }
           const from = at(od, 0, ol);
           const to = at(nd, ol, nl);
           if (typeof from === 'number') return from;
@@ -2656,6 +2762,18 @@ export class Kernel {
         case A.SYS_readlink:
         case A.SYS_readlinkat: {
           const [dirfd, len, bufsiz] = nr === A.SYS_readlink ? [A.AT_FDCWD, args[0], args[1]] : [args[0], args[1], args[2]];
+          // An empty path: the symlink an O_PATH|O_NOFOLLOW fd names
+          if (nr === A.SYS_readlinkat && len === 0) {
+            const f = file(dirfd);
+            if (!f) return -A.EBADF;
+            if (!(f instanceof SymlinkPathFile)) return -A.ENOENT;
+            let t: string;
+            try { t = await fs().readlink(f.path); } catch (e) { return A.errnoFromError(e, A.EINVAL); }
+            const b = enc.encode(t);
+            const n = Math.min(b.length, bufsiz >>> 0 || data.length, data.length);
+            data.set(b.subarray(0, n));
+            return n;
+          }
           const p = at(dirfd, 0, len);
           if (typeof p === 'number') return p;
           let target: string;
@@ -2792,12 +2910,26 @@ export class Kernel {
           return fds.alloc(file, 0, (args[1] & A.MFD_CLOEXEC) !== 0);
         }
         case A.SYS_prlimit64: { // pid, resource, set → data: old {cur, max} (u64s); a new one first when set
-          // RLIMIT_NOFILE only (the fd table's): engines keep the other limits
-          if (args[1] !== A.RLIMIT_NOFILE) return -A.EINVAL;
+          // RLIMIT_NOFILE (the fd table's) and RLIMIT_CPU (enforced here): engines keep the other limits
+          if (args[1] !== A.RLIMIT_NOFILE && args[1] !== A.RLIMIT_CPU) return -A.EINVAL;
           const target = args[0] ? this.procs.get(args[0]) : proc;
           if (!target) return -A.ESRCH;
           if (data.length < 16) return -A.EFAULT;
           const dv = new DataView(data.buffer, data.byteOffset, 16);
+          if (args[1] === A.RLIMIT_CPU) {
+            const INF = 0xffffffffffffffffn;
+            const old = this.cpuLimit(target);
+            if (args[2]) {
+              const sec = (o: number) => { const v = dv.getBigUint64(o, true); return v === INF ? Infinity : Number(v); };
+              const cur = sec(0), max = sec(8);
+              if (cur > max) return -A.EINVAL;
+              if (max > old.max && proc.uid !== 0) return -A.EPERM;
+              this.setCpuLimit(target, cur, max);
+            }
+            dv.setBigUint64(0, old.cur === Infinity ? INF : BigInt(old.cur), true);
+            dv.setBigUint64(8, old.max === Infinity ? INF : BigInt(old.max), true);
+            return 0;
+          }
           const t = target.fds;
           const old = [t.limit, t.hardLimit];
           if (args[2]) {
@@ -3143,6 +3275,8 @@ export class Kernel {
     child.data.embryo = true;
     child.data.forkParent = parent.pid; // startForkChild: the parent may have exited (and the child been reparented) by then
     this.procs.set(pid, child);
+    const cpu = parent.data.cpuLimit as { cur: number; max: number } | undefined;
+    if (cpu) this.setCpuLimit(child, cpu.cur, cpu.max);
     for (const h of [...this.spawnHooks]) {
       try { h(child); } catch (e) { console.warn('[kernel] onSpawn hook failed', e); }
     }

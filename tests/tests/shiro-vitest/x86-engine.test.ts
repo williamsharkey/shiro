@@ -158,6 +158,8 @@ const sse41bBin = join(out, 'sse41b');
 const haveSse41b = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', sse41bBin, 'sse41b.c']);
 const ssefloatBin = join(out, 'ssefloat');
 const haveSsefloat = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', ssefloatBin, 'ssefloat.c', '-lm']);
+const sigwakeBin = join(out, 'sigwake');
+const haveSigwake = tryBuild('gcc', ['-static', '-O1', '-w', '-o', sigwakeBin, 'sigwake.c']);
 const freewhilewriteBin = join(out, 'freewhilewrite');
 const haveFreewhilewrite = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', freewhilewriteBin, 'freewhilewrite.c']);
 const shmunlinkedBin = join(out, 'shmunlinked');
@@ -204,6 +206,8 @@ const rawepollBin = join(out, 'rawepoll');
 const haveRawepoll = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', rawepollBin, 'rawepoll.c']);
 const bigfileBin = join(out, 'bigfile');
 const haveBigfile = tryBuild('gcc', ['-static', '-O1', '-o', bigfileBin, 'bigfile.c']);
+const bigwriteBin = join(out, 'bigwrite');
+const haveBigwrite = tryBuild('gcc', ['-static', '-O1', '-o', bigwriteBin, 'bigwrite.c']);
 const getgroupsBin = join(out, 'getgroups');
 const haveGetgroups = tryBuild('gcc', ['-static', '-O1', '-o', getgroupsBin, 'getgroups.c']);
 const fionbioBin = join(out, 'fionbio');
@@ -296,6 +300,15 @@ const haveTimerthread = blinkHasTimerthread && tryBuild('gcc', ['-static', '-O1'
 const mmaptailBin = join(out, 'mmaptail');
 const blinkHasMmaptail = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_mmaptail');
 const haveMmaptail = blinkHasMmaptail && tryBuild('gcc', ['-static', '-O1', '-w', '-o', mmaptailBin, 'mmaptail.c']);
+// Blink 0515: leases and RLIMIT_CPU are the kernel's; a CLONE_VM process
+const blinkHas0515 = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_cpulimit');
+const clonevmBin = join(out, 'clonevm');
+const haveClonevm = blinkHas0515 && tryBuild('gcc', ['-static', '-O1', '-w', '-o', clonevmBin, 'clonevm.c']);
+const cpulimitBin = join(out, 'cpulimit');
+const haveCpulimit = blinkHas0515 && tryBuild('gcc', ['-static', '-O1', '-w', '-o', cpulimitBin, 'cpulimit.c']);
+// (and the kernel's leases: perf-kernel's F_SETLEASE)
+const leaseBin = join(out, 'lease');
+const haveLease = blinkHas0515 && (Abi as Record<string, unknown>).F_SETLEASE !== undefined && tryBuild('gcc', ['-static', '-O1', '-w', '-o', leaseBin, 'lease.c']);
 // a named semaphore's count survives sem_close (the kernel writes a /dev/shm object back to its linked names)
 const semreopenBin = join(out, 'semreopen');
 const haveSemreopen = tryBuild('gcc', ['-static', '-O1', '-w', '-o', semreopenBin, 'semreopen.c', '-lpthread']);
@@ -980,6 +993,24 @@ it.skipIf(!haveTimerthread)('a SIGEV_THREAD timer runs its function in another t
   expect(r.output.replace(/\r\n/g, '\n')).toBe('runs 1 value 42 other thread 1\nchild runs 0\nparent runs 1\n');
 }, 60_000);
 
+it.skipIf(!haveClonevm)('clone(CLONE_VM | CLONE_PARENT_SETTID) on its own stack: a process sharing its parent\'s memory, ptid set first, reaped by its parent (LTP clone08)', async () => {
+  const { shell } = await setup(readFileSync(clonevmBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('ptid 1 shared 1 exit 7\n');
+}, 60_000);
+
+it.skipIf(!haveCpulimit)('RLIMIT_CPU: SIGXCPU at the soft limit and SIGKILL at the hard one, inherited by a fork child; time asleep or blocked in wait() is not CPU time (LTP setrlimit06)', async () => {
+  const { shell } = await setup(readFileSync(cpulimitBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('limit 1 2\nafter sleep 0\ngrandchild SIGKILL xcpu 1\n');
+}, 60_000);
+
+it.skipIf(!haveLease)('fcntl leases: a read lease on a file open for writing is EAGAIN; on a read-only open it is granted and F_GETLEASE reports it (LTP fcntl27)', async () => {
+  const { shell } = await setup(readFileSync(leaseBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('rdwr rdlck Resource temporarily unavailable\nwronly rdlck Resource temporarily unavailable\nrdonly rdlck ok get 0\nunlck ok get 2\n');
+}, 60_000);
+
 it.skipIf(!haveMmaptail)('a file mapping whose length ends mid-page shows the file to the end of the page; MAP_FIXED over it shows the new file (Open POSIX mmap_3-1)', async () => {
   const { shell } = await setup(readFileSync(mmaptailBin));
   const r = await run(shell, './prog');
@@ -1076,6 +1107,13 @@ describe('Blink engine: CPU and syscall fixes', () => {
     expect(new TextDecoder().decode(after.subarray(size - 4))).toBe('WXYZ');
     expect(Buffer.compare(after.subarray(0, size - 4), big.subarray(0, size - 4))).toBe(0);
     expect((await fs.readFile('/home/user/work/trunc.bin') as Uint8Array).length).toBe(1);
+  }, 60_000);
+
+  // host.mjs's chunk is a pool channel's data area exactly (not the page's word after it)
+  it.skipIf(!haveBigwrite)('a 10 MiB write goes whole to a file, linked or unlinked; a 3 MiB pwrite too (Open POSIX aio_suspend_1-1)', async () => {
+    const { shell } = await setup(readFileSync(bigwriteBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('unlinked 10485760\nwrite 10485760\npwrite 3145728\nbyte 1\nsize 10485760\n');
   }, 60_000);
 
   // LTP futex_wake02, futex_wait_bitset01
@@ -1316,6 +1354,15 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe('arith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\narith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\narith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\n');
   }, 60_000);
+
+  // a signal that comes while the guest is between kernel calls wakes the
+  // epoll_wait it goes into next (0123 and the page's pending kick): the
+  // rawepoll SIGWINCH flake, made likely
+  it.skipIf(!haveSigwake)('a signal between kernel calls still wakes the next epoll_wait (300 rounds)', async () => {
+    const { shell } = await setup(readFileSync(sigwakeBin));
+    const r = await run(shell, './prog; BLINK_WJIT=0 ./prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('300 wakeups\n300 wakeups\n');
+  }, 150_000);
 
   // free() of a buffer another thread is writing to a pipe: munmap waited
   // for the write's page locks holding the GIL the reader needed (0122)

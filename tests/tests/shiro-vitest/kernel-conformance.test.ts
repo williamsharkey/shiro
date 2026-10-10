@@ -10,6 +10,7 @@ import type { Process } from '@shiro/kernel/process';
 import * as A from '@shiro/kernel/abi';
 import { NetStack, installNet, encodeSockaddr } from '@shiro/kernel/net';
 import { JobControl, attachKernel } from '@shiro/kernel/signals';
+import { ProcFs } from '@shiro/kernel/procfs';
 
 describe('kernel syscalls found by LTP', () => {
   let fs: FileSystem;
@@ -1150,5 +1151,44 @@ describe('kernel syscalls found by LTP', () => {
     const text = await new Response(new Blob([gz.subarray(0, n)]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
     expect(text).toContain('CONFIG_EVENTFD=y');
     await call(A.SYS_close, [cfg]);
+  });
+
+  it('RLIMIT_CPU is the kernel\'s: prlimit64 sets and reads it, SIGXCPU at the soft limit, SIGKILL at the hard one, inherited by fork; a call blocked now is not CPU (LTP setrlimit06)', async () => {
+    const INF = 0xffffffffffffffffn;
+    const lim = new Uint8Array(16), dv = new DataView(lim.buffer);
+    const p = kernel.spawn({ path: 'cpulim', cwd: '/tmp/kc', fds: {}, run: () => new Promise<number>(() => {}) });
+    const set = (cur: bigint, max: bigint) => { dv.setBigUint64(0, cur, true); dv.setBigUint64(8, max, true); return kernel.syscall(p, A.SYS_prlimit64, [0, A.RLIMIT_CPU, 1], lim); };
+    expect(await kernel.syscall(p, A.SYS_prlimit64, [0, A.RLIMIT_CPU, 0], lim)).toBe(0);
+    expect([dv.getBigUint64(0, true), dv.getBigUint64(8, true)]).toEqual([INF, INF]);
+    expect(await set(3n, 2n)).toBe(-A.EINVAL);
+    expect(await set(1n, 2n)).toBe(0);
+    expect(await kernel.syscall(p, A.SYS_prlimit64, [0, A.RLIMIT_CPU, 0], lim)).toBe(0);
+    expect([dv.getBigUint64(0, true), dv.getBigUint64(8, true)]).toEqual([1n, 2n]);
+    expect(await set(1n, 5n)).toBe(-A.EPERM); // raising the hard limit takes root
+    expect(kernel.cpuLimit(kernel.vfork(p))).toEqual({ cur: 1, max: 2 });
+    // a blocked call (a pipe read) isn't CPU time while it waits
+    const pd = new Uint8Array(16);
+    expect(await kernel.syscall(p, A.SYS_pipe2, [0], pd)).toBe(0);
+    const rfd = new DataView(pd.buffer).getInt32(0, true);
+    p.syscalls = 1;
+    const sigs: number[] = [];
+    const deliver = kernel.deliver.bind(kernel);
+    kernel.deliver = ((q: typeof p, sig: number, ...rest: unknown[]) => { if (q === p) sigs.push(sig); return (deliver as any)(q, sig, ...rest); }) as typeof kernel.deliver;
+    void kernel.syscall(p, A.SYS_read, [rfd, 1], new Uint8Array(1));
+    await new Promise((r) => setTimeout(r, 300));
+    expect(ProcFs.cpuMs(p)).toBeLessThan(100);
+    expect(sigs).toEqual([]);
+    // computing (its time since start counts) past the soft limit, then the hard one
+    // (SIGXCPU blocked, as a handler would keep it running)
+    p.sigmask.add(A.SIGXCPU);
+    p.inSyscall = 0;
+    const st = p as { startTime: number };
+    st.startTime = Date.now() - 1200;
+    await new Promise((r) => setTimeout(r, 300));
+    expect(sigs).toEqual([A.SIGXCPU]);
+    st.startTime -= 1000;
+    await new Promise((r) => setTimeout(r, 300));
+    kernel.deliver = deliver;
+    expect(sigs).toEqual([A.SIGXCPU, A.SIGKILL]);
   });
 });

@@ -336,6 +336,9 @@ export const O_DSYNC = 0o10000;
 /** O_SYNC is __O_SYNC | O_DSYNC on Linux. */
 export const O_SYNC = 0o4010000;
 export const O_DIRECTORY = 0o200000;
+/** O_TMPFILE's own bit (O_TMPFILE = it | O_DIRECTORY): an unnamed file in the directory. */
+export const __O_TMPFILE = 0o20000000;
+export const O_TMPFILE = 0o20200000;
 export const O_NOFOLLOW = 0o400000;
 export const O_PATH = 0o10000000;
 export const O_CLOEXEC = 0o2000000;
@@ -346,6 +349,8 @@ export const AT_REMOVEDIR = 0x200;
 export const AT_SYMLINK_FOLLOW = 0x400;
 export const AT_EMPTY_PATH = 0x1000;
 export const RENAME_NOREPLACE = 1;
+export const RENAME_EXCHANGE = 2;
+export const RENAME_WHITEOUT = 4;
 
 /** access(2) modes */
 export const F_OK = 0;
@@ -451,6 +456,7 @@ export const SIGPIPE = 13;
 export const SIGALRM = 14;
 export const SIGVTALRM = 26;
 export const SIGPROF = 27;
+export const SIGXCPU = 24;
 export const SIGTERM = 15;
 export const SIGCHLD = 17;
 export const SIGCONT = 18;
@@ -689,6 +695,7 @@ export const OPEN_MAX = 1024;
 /** fs.nr_open: the most fds RLIMIT_NOFILE can allow (Linux's default) */
 export const NR_OPEN = 1048576;
 export const RLIMIT_NOFILE = 7;
+export const RLIMIT_CPU = 0;
 export const SYS_prlimit64 = 302;
 export const SYS_memfd_create = 319;
 /** POSIX message queues (src/kernel/mqueue.ts) */

@@ -85,6 +85,29 @@ export async function run(h) {
     }, Math.max(n, 10));
     h.sample('kernel.spawn_wait.builtin', r, 'ms', { notes: 'kernel.spawn of the `true` builtin → waitpid' });
   });
+  // The kernel's own spawn→exit→wait cost: no pipes, no output capture (runProcs'),
+  // fds on /dev/null, the median of 200 per sample (quieter than one spawn per sample)
+  await h.try('kernel.spawn_wait.builtin_raw', 'µs', async () => {
+    const r = await h.eval(async (n) => {
+      const B = window.__bench, k = window.__tabcomputer.kernel, out = [];
+      const nul = await B.devnull();
+      const one = async () => {
+        const t0 = performance.now();
+        const p = k.spawn({ path: 'true', argv: ['true'], parent: B.lab(), fds: { 0: nul, 1: nul, 2: nul } });
+        await k.waitpid(p.pid, 0, B.lab());
+        return performance.now() - t0;
+      };
+      for (let i = 0; i < 50; i++) await one();
+      for (let i = 0; i < n; i++) {
+        const xs = [];
+        for (let j = 0; j < 200; j++) xs.push(await one());
+        xs.sort((a, b) => a - b);
+        out.push(xs[100] * 1000);
+      }
+      return out;
+    }, Math.max(n, 5));
+    h.sample('kernel.spawn_wait.builtin_raw', r, 'µs', { notes: 'kernel.spawn of `true` (fds on /dev/null) → waitpid, median of 200' });
+  });
   await h.try('kernel.spawn_throughput', 'proc/s', async () => {
     const r = await h.eval(async ([n, kb]) => {
       const B = window.__bench, k = window.__tabcomputer.kernel, out = { builtin: [], wasm: [] };
