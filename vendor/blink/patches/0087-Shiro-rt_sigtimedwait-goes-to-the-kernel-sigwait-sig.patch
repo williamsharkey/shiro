@@ -1,7 +1,7 @@
-From 1b344ebf69c8fec664226b8ce1e0a577a2aef7c3 Mon Sep 17 00:00:00 2001
+From 8fa9fd768346e1fbaa877b511956fc67e39d639d Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 02:55:47 +0000
-Subject: [PATCH 86/87] Shiro: rt_sigtimedwait goes to the kernel (sigwait,
+Subject: [PATCH 87/88] Shiro: rt_sigtimedwait goes to the kernel (sigwait,
  sigwaitinfo, sigtimedwait)
 
 ---
@@ -9,10 +9,10 @@ Subject: [PATCH 86/87] Shiro: rt_sigtimedwait goes to the kernel (sigwait,
  1 file changed, 43 insertions(+)
 
 diff --git a/blink/shiro.inc b/blink/shiro.inc
-index b3ef185..8e84718 100644
+index fd0f231..606e36d 100644
 --- a/blink/shiro.inc
 +++ b/blink/shiro.inc
-@@ -2933,6 +2933,49 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+@@ -2978,6 +2978,49 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
        r = KS(m, 62, A12(m->system->pid, sig));                       // kill
        break;
      }

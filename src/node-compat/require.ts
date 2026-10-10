@@ -75,13 +75,24 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
     return moduleCache.get(path)?.exports ?? exp;
   }
 
+  /** Modules being evaluated → what runs when each has loaded (require.relink) */
+  const loading = new Map<string, ((exports: any) => void)[]>();
+  /** The next module this loads is evaluated again (it was asked for with a query) */
+  let freshNext = false;
   function requireModule(modPath: string, fromDir: string): any {
     // file: URLs name files (vite's bundled config imports its dependencies so)
     if (modPath.startsWith('file://')) modPath = decodeURIComponent(new URL(modPath).pathname);
+    // A file with a query or hash (`import('./page.mjs?time=…')`, Astro's cache
+    // busting) is that file; a query makes it a fresh instance, as in node
+    if (/^(?:\/|\.\.?\/)/.test(modPath) && /[?#]/.test(modPath)) {
+      if (modPath.includes('?')) freshNext = true;
+      modPath = modPath.replace(/[?#].*$/, '');
+    }
     // A package that runs as its browser build (browser-packages.ts)
     const browser = deps.browserModules?.get(modPath);
     if (browser) return browser;
-    const result = _requireModule(modPath, fromDir);
+    let result: any;
+    try { result = _requireModule(modPath, fromDir); } finally { freshNext = false; }
     // For Node.js builtins, wrap in auto-stub Proxy
     if (result && typeof result === 'object' && (modPath.startsWith('node:') || getBuiltinModule(modPath) !== null)) {
       return createAutoStub(modPath, result);
@@ -95,6 +106,17 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
     if (fileCache.has(base)) return base;
     for (const ext of ['.ts', '.tsx', '.js', '.jsx', '.json']) {
       if (fileCache.has(base + ext)) return base + ext;
+    }
+    // A directory with a package.json names its file in "main" (next/dist/compiled/zod: index.cjs)
+    const pj = fileCache.get(base + '/package.json');
+    if (pj) {
+      try {
+        const main = JSON.parse(pj).main;
+        if (typeof main === 'string' && main) {
+          const m = ctx.fs.resolvePath(main, base);
+          for (const c of [m, m + '.js', m + '.json', m + '/index.js']) if (fileCache.has(c)) return c;
+        }
+      } catch { /* not JSON */ }
     }
     for (const idx of ['/index.ts', '/index.tsx', '/index.js', '/index.jsx', '/index.json']) {
       if (fileCache.has(base + idx)) return base + idx;
@@ -391,6 +413,7 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
       err.code = 'MODULE_NOT_FOUND';
       throw err;
     }
+    if (freshNext) { freshNext = false; moduleCache.delete(resolved); }
     if (moduleCache.has(resolved)) { lastResolved = resolved; return moduleCache.get(resolved)!.exports; }
 
     const content = fileCache.get(resolved);
@@ -414,6 +437,9 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
 
     const mod: any = { exports: {} as any, id: resolved, filename: resolved, loaded: false, children: [] };
     moduleCache.set(resolved, mod);
+    // While it loads, a module that imports it back (a cycle) has its named imports re-read when it is done
+    loading.set(resolved, []);
+    const loaded = () => { const fns = loading.get(resolved) ?? []; loading.delete(resolved); for (const fn of fns) { try { fn(mod.exports); } catch { /* a const it can't reassign */ } } };
     const modDir = resolved.substring(0, resolved.lastIndexOf('/')) || ctx.cwd;
     const nestedRequire = makeRequire(modDir, mod);
 
@@ -454,6 +480,7 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
       try {
         const syncFn = new Function(...fnParams, wrapModuleBody(transformedContent, false));
         syncFn.apply(mod.exports, fnArgs);
+        loaded();
       } catch (syncErr: any) {
         // SyntaxError from top-level `await` -> fall back to AsyncFunction
         if (syncErr instanceof SyntaxError && /\bawait\b/.test(transformedContent)) {
@@ -461,7 +488,7 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
           const wrapped = compileAsyncModule(AsyncFn, fnParams, transformedContent);
           const execPromise = wrapped.apply(mod.exports, fnArgs);
           pendingEval.set(resolved, execPromise);
-          execPromise.then(() => pendingEval.delete(resolved), () => pendingEval.delete(resolved));
+          execPromise.then(() => { pendingEval.delete(resolved); loaded(); }, () => { pendingEval.delete(resolved); loading.delete(resolved); });
           pendingPromises.push(execPromise.catch((e: any) => {
             if (!(e instanceof ProcessExitError)) {
               console.error(`Error in module ${resolved}:`, e.message, e.stack?.slice(0, 300));
@@ -477,6 +504,7 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
 
     } catch (err) {
       moduleCache.delete(resolved);
+      loading.delete(resolved);
       // process.exit() while a module loads (tsc's lib/_tsc.js runs the compiler
       // from require) ends the script; it is not a load failure
       if (err instanceof ProcessExitError || (err as any)?._isProcessExit) throw err;
@@ -500,6 +528,13 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
    */
   function makeRequire(fromDir: string, mod?: any): any {
     const req: any = (p: string) => requireModule(p, fromDir);
+    // A named import of a module still loading: `fn` gets its exports once it has loaded
+    req.relink = (spec: string, fn: (exports: any) => void) => {
+      if (!loading.size) return;
+      let resolved: string;
+      try { resolved = req.resolve(spec); } catch { return; }
+      loading.get(resolved)?.push(fn);
+    };
     req.resolve = (request: string, opts?: { paths?: string[] }) => {
       const dirs = opts?.paths?.length ? opts.paths : [fromDir];
       let last: any;
@@ -526,6 +561,7 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
         ? { value: moduleCache.get(k), enumerable: true, configurable: true } : undefined,
     });
     req.main = mainModule;
+    req.extensions = extensions;
     if (mod) {
       mod.require = req;
       mod.paths ??= req.resolve.paths('x');
@@ -534,6 +570,17 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
   }
   let mainModule: any;
   (requireModule as any).makeRequire = makeRequire;
+  /**
+   * require.extensions / Module._extensions: what loads each kind of file, as
+   * node has them (Next's config loader reads `require.extensions['.js']` to
+   * chain its .ts hook). Loading goes through this module's own loader.
+   */
+  const extensions: Record<string, (mod: any, filename: string) => void> = {
+    '.js': (mod, filename) => { mod.exports = requireModule(filename, '/'); },
+    '.json': (mod, filename) => { mod.exports = requireModule(filename, '/'); },
+    '.node': (_mod, filename) => { throw Object.assign(new Error(`Cannot load native addon ${filename}`), { code: 'ERR_DLOPEN_FAILED' }); },
+  };
+  (requireModule as any).extensions = extensions;
   (requireModule as any).setMain = (m: any) => { mainModule = m; };
 
   return Object.assign(requireModule, { ready: requireReady });
@@ -577,7 +624,7 @@ export function wrapModuleBody(body: string, isAsync: boolean): string {
  * stack); require before import because the import entry is often an ESM
  * wrapper around the CommonJS one (commander).
  */
-export function exportTarget(v: unknown, nodeBuild = false): string | undefined {
+export function exportTarget(v: unknown, nodeBuild: boolean | 'esm' = false): string | undefined {
   if (typeof v === 'string') return v;
   if (Array.isArray(v)) {
     for (const x of v) { const t = exportTarget(x, nodeBuild); if (t) return t; }
@@ -585,7 +632,8 @@ export function exportTarget(v: unknown, nodeBuild = false): string | undefined 
   }
   if (!v || typeof v !== 'object') return undefined;
   const o = v as Record<string, unknown>;
-  for (const c of ['browser', 'require', 'node', 'default', 'import']) {
+  const order = nodeBuild === 'esm' ? ['import', 'node', 'default', 'require'] : ['browser', 'require', 'node', 'default', 'import'];
+  for (const c of order) {
     if (o[c] === undefined || (nodeBuild && c === 'browser')) continue;
     const t = exportTarget(o[c], nodeBuild);
     if (t) return t;
@@ -600,7 +648,16 @@ export function exportTarget(v: unknown, nodeBuild = false): string | undefined 
  * under Socket.IO, requires it).
  */
 export const NODE_BUILD_PACKAGES = new Set(['ws']);
-const nodeBuild = (pkg: { name?: unknown }) => typeof pkg?.name === 'string' && NODE_BUILD_PACKAGES.has(pkg.name);
+/**
+ * Packages that load as their node ES module build. Their CommonJS builds
+ * find their files through esbuild's import.meta.url shim, which takes the
+ * page's `document` for a browser and gives the page's URL (vite's
+ * package.json, @astrojs/compiler's astro.wasm); their browser builds want
+ * setup a node program doesn't do (@astrojs/compiler's initialize()).
+ */
+export const ESM_BUILD_PACKAGES = new Set(['vite', '@astrojs/compiler']);
+const nodeBuild = (pkg: { name?: unknown }): boolean | 'esm' =>
+  typeof pkg?.name !== 'string' ? false : ESM_BUILD_PACKAGES.has(pkg.name) ? 'esm' : NODE_BUILD_PACKAGES.has(pkg.name);
 
 /**
  * What import() of a module gives, from its CommonJS exports: a namespace

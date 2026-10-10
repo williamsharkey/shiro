@@ -82,6 +82,26 @@ echo end $?
     expect(r.out).toBe('err 1\nerr 1\nend 1\n');
   });
 
+  it('DEBUG runs before each command, keeps $?, not in functions without set -T; ERR in functions needs set -E', async () => {
+    let r = await bash(`f() { echo in-f; }
+trap 'echo "dbg $?"' DEBUG
+false; echo a && echo b || echo c
+f
+trap - DEBUG
+`);
+    expect(r.out).toBe('dbg 0\ndbg 1\na\ndbg 0\nb\ndbg 0\nin-f\ndbg 0\n');
+    r = await bash(`trap 'echo err' ERR
+g() { false; true; }
+g
+set -E
+g
+(false)
+echo "sub $BASH_SUBSHELL $(echo $BASH_SUBSHELL)"
+`);
+    // (set -E: inside the subshell, then for it in the parent)
+    expect(r.out).toBe('err\nerr\nerr\nsub 0 1\n');
+  });
+
   it('set -u: an unbound variable ends a script with status 1 (127 under -c)', async () => {
     expect((await bash('set -u\necho ${#undef}\necho no\n')).status).toBe(1);
     const { shell } = await createTestShell();
@@ -97,7 +117,7 @@ declare -l lo=ABC; echo $lo
 readonly ro=1; export ex=2; declare x
 declare -p n up ro ex x
 declare -ar arr=(a b); arr+=(c); echo "\${arr[@]} $?"
-declare -pr | grep -E 'ro|arr'
+declare -pr | grep -E ' (ro|arr)='
 `);
     expect(r.out).toBe([
       '9', 'ABCDEF', 'abc',
@@ -141,5 +161,129 @@ declare -n c1=c2; declare -n c2=c1; c1=z; echo "circular $?"
 y=val; declare -n p=y; declare +n p; echo $p
 `);
     expect(r.out).toBe('foo\ntwo\nTWO\nx\nq 3\n[]\ncircular 1\ny\n');
+  });
+});
+
+describe('builtins scripts lean on', () => {
+  it('mapfile keeps the delimiter unless -t; -d, -O, -s, -n, -C; < FILE and pipes', async () => {
+    const r = await bash(`printf 'a\\nb\\n' > /tmp/m.txt
+mapfile x < /tmp/m.txt; printf '[%s]' "\${x[@]}"; echo
+mapfile -t y < /tmp/m.txt; printf '[%s]' "\${y[@]}"; echo
+printf '1:2:3:' | { mapfile -t -d : z; echo "\${#z[@]} \${z[2]}"; }
+printf '%s\\0' p q | { mapfile -d '' n; printf '[%s]' "\${n[@]}"; echo; }
+w=(k l m); printf 'u\\nv\\n' | { mapfile -t -O 1 w; echo "\${w[*]}"; }
+seq 10 | { mapfile -t -s 2 -n 3 s; echo "\${s[*]}"; }
+cb() { echo "cb $1 $2"; }; printf '1\\n2\\n3\\n4\\n' | { readarray -t -C cb -c 2 c; echo "\${c[*]}"; }
+`);
+    expect(r.out).toBe('[a\n][b\n]\n[a][b]\n3 3\n[p][q]\nk u v\n3 4 5\ncb 1 2\ncb 3 4\n1 2 3 4\n');
+  });
+
+  it('brace ranges pad only for a leading zero, sign included', async () => {
+    const r = await bash('echo a{0..3} {08..10} {-05..-3} {3..-1}\n');
+    expect(r.out).toBe('a0 a1 a2 a3 08 09 10 -05 -04 -03 3 2 1 0 -1\n');
+  });
+
+  it('PIPESTATUS for builtins and subshells; >(cmd) after a group or exec; a group\'s 2> file', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.writeFile('/tmp/t.sh', `exit 55 | (exit 44); echo "ps \${PIPESTATUS[@]}"
+(exit 3); echo "ps \${PIPESTATUS[@]}"
+{ echo 1; echo 2; } > >(tac)
+{ echo out; echo err >&2; } 2>/tmp/e.txt; echo "e=$(cat /tmp/e.txt)"
+exec > >(tee /tmp/log.txt) 2>&1
+echo logged; echo oops >&2
+`);
+    let out = '';
+    await shell.execute('bash /tmp/t.sh', (x) => { out += x; }, (x) => { out += x; });
+    expect(out.replace(/\r\n/g, '\n')).toBe('ps 55 44\nps 3\n2\n1\nout\ne=err\nlogged\noops\n');
+    expect(await fs.readFile('/tmp/log.txt', 'utf8')).toBe('logged\noops\n');
+  });
+
+  it('SHELLOPTS and BASHOPTS follow set -o and shopt; they are readonly', async () => {
+    const r = await bash(`echo "$SHELLOPTS"; set -o pipefail; echo "$SHELLOPTS"; shopt -s extglob
+case :$BASHOPTS: in *:extglob:*) echo extglob;; esac
+SHELLOPTS=x; echo "rc=$?"
+`);
+    expect(r.out).toBe('braceexpand:hashall:interactive-comments\nbraceexpand:hashall:interactive-comments:pipefail\nextglob\nrc=1\n');
+  });
+
+  it('umask: octal and symbolic modes, -S and -p, and new files get 0666 less it', async () => {
+    const r = await bash(`umask; umask -S; umask 027; umask -p
+umask g+w,o=r; umask; umask 089; echo "rc=$?"; umask u+r+w; echo "rc=$?"
+umask 0002; echo x > /tmp/u1; umask 077; echo y > /tmp/u2
+ls -l /tmp/u1 /tmp/u2 | cut -c1-10
+`);
+    expect(r.out).toBe('0022\nu=rwx,g=rx,o=rx\numask 0027\n0003\nrc=1\nrc=1\n-rw-rw-r--\n-rw-------\n');
+  });
+
+  it('pushd / popd / dirs: ~ for $HOME, -v -p -l -c, +N rotation, usage errors', async () => {
+    const r = await bash(`mkdir -p /tmp/h/a /tmp/h/b; HOME=/tmp/h; cd /
+pushd /tmp/h/a; pushd /tmp/h/b >/dev/null; dirs -v; dirs -l -p
+pushd +2 >/dev/null; pwd
+popd >/dev/null; dirs
+popd zz; echo "rc=$?"; dirs -c; dirs
+`);
+    expect(r.out).toBe('~/a /\n 0  ~/b\n 1  ~/a\n 2  /\n/tmp/h/b\n/tmp/h/a\n/\n/\n~/b ~/a\nrc=2\n~/b\n');
+  });
+});
+
+/** What GNU hello's autoconf ./configure (and its config.status) needed */
+describe('autoconf configure idioms', () => {
+  it('word splitting, case in if bodies, multi-line backticks and quotes, case in subshells and pipelines', async () => {
+    const r = await bash(`IFS=' 	
+'
+x=' a  b '; set -- $x; echo "$#:$1:$2"
+nl='
+'
+y="\${nl}p\${nl}"; set -- x$y; echo "$#"
+if true; then
+  case a in
+  a) echo A ;;
+  *) echo other ;;
+  esac
+fi
+v=\`echo one
+echo two\`
+echo "$v"
+c=": 'a
+b'"; if eval "$c"; then echo evalok; fi
+( case x in *y*) echo nl ;; *) echo other ;; esac; )
+( echo q | case x in *) cat ;; esac | sort )
+`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('2:a:b\n2\nA\none\ntwo\nevalok\nother\nq\n');
+  });
+
+  it('an EXIT trap with #( comments; { } >&N, >&2, > /dev/stdout; exec 7<&0', async () => {
+    const r = await bash(`trap 'st=$?
+  # a comment
+  for v in a; do
+    case $v in #(
+    *z*) echo z ;; #(
+    *) echo "trap v=$v st=$st" ;;
+    esac
+  done
+' 0
+exec 5>&1
+{ echo to5; } >&5
+{ echo to2; } >&2
+if true; then echo fi-out; fi > /dev/stdout
+exec 7<&0 </dev/null
+exit 4
+`);
+    expect(r.out).toBe('to5\nfi-out\ntrap v=a st=4\n');
+    expect(r.err).toBe('to2\n');
+    expect(r.status).toBe(4);
+  });
+
+  it('sh SCRIPT keeps option-like arguments; source does not run the EXIT trap; xtrace ignores 2>&1', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.writeFile('/tmp/s.sh', 'echo "args: $*"\n');
+    await fs.writeFile('/tmp/lib.sh', 'trap "echo exit-trap" EXIT\necho in-lib\n');
+    await fs.writeFile('/tmp/t.sh', 'sh /tmp/s.sh -x -- a\n. /tmp/lib.sh\necho after-source\nset -x\nv=$(echo hi 2>&1)\nset +x\necho "v=$v"\n');
+    let out = '';
+    let err = '';
+    await shell.execute('bash /tmp/t.sh', (s) => { out += s; }, (s) => { err += s; });
+    expect(out.replace(/\r\n/g, '\n')).toBe('args: -x -- a\nin-lib\nafter-source\nv=hi\nexit-trap\n');
+    expect(err.replace(/\r\n/g, '\n')).toContain('+ v=hi\n');
   });
 });

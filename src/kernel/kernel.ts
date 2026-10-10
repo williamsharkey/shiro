@@ -31,6 +31,7 @@ import { SysvShm } from './sysvshm';
 import { SysvSem } from './sysvsem';
 import { SysvMsg } from './sysvmsg';
 import { MessageQueues, MqFile } from './mqueue';
+import { PosixTimers } from './posixtimers';
 import { SharedObjects, isShareablePath, type ShmObjMessage } from './shmobj';
 import { EpollFile, waitReady } from './epoll';
 import { SignalFile, notifySignalPending, pendingSignalListeners } from './signalfd';
@@ -171,6 +172,19 @@ function statFor(proc: Process, st: A.KStat): A.KStat {
   return st.uid === 1000 && proc.uid !== 1000 ? { ...st, uid: proc.uid, gid: proc.gid } : st;
 }
 
+/**
+ * open(2)'s permission check on an existing file, which is the caller's own
+ * (see statFor): its owner bits must allow the access mode, unless the
+ * caller is root (Open POSIX shm_open_32-1, 34-1: a 0 or 0400 file reopened
+ * O_RDWR is EACCES).
+ */
+function ownerDenies(proc: Process, mode: number | undefined, flags: number): boolean {
+  if (proc.uid === 0 || mode === undefined) return false;
+  const acc = flags & A.O_ACCMODE;
+  const need = (acc === A.O_WRONLY ? 0 : 4) | (acc === A.O_RDONLY && !(flags & A.O_TRUNC) ? 0 : 2);
+  return ((mode >> 6) & need) !== need;
+}
+
 export class Kernel {
   fs?: FileSystem;
   /** Paths of AF_UNIX socket files (net.ts bind); they stat as sockets. */
@@ -197,7 +211,9 @@ export class Kernel {
   /** SysV message queues (msgget, msgsnd, msgrcv, msgctl) */
   readonly msg = new SysvMsg();
   /** POSIX message queues (mq_open, mq_timedsend, ...) */
-  readonly mq = new MessageQueues((pid, sig) => { const p = this.procs.get(pid); if (p) this.deliver(p, sig); });
+  readonly mq = new MessageQueues((pid, sig, info) => { const p = this.procs.get(pid); if (p) this.deliver(p, sig, info); });
+  /** POSIX timers (timer_create, timer_settime, ...) */
+  readonly timers = new PosixTimers((proc, sig, info) => this.deliver(proc, sig, info), bootMs);
   /** Engine instances (a Blink worker each) and how to post to them: shared objects' messages */
   private engineInstances = new Map<number, (msg: ShmObjMessage) => void>();
   private nextEngineInstance = 1;
@@ -444,7 +460,7 @@ export class Kernel {
     // Shell builtins that are also programs (/bin/echo, /usr/bin/test, ...)
     if (inBin && SHELL_PROGRAMS.has(base)) return proc => this.runViaShell(proc, base);
     // Scripts and other executables the shell knows how to start
-    const found = path.includes('/') ? ((await this.fs?.exists(path)) ? path : null) : await shell.findExecutableInPath(path);
+    const found = path.includes('/') ? ((await this.fs?.exists(this.fs.resolvePath(path, _proc.cwd))) ? path : null) : await shell.findExecutableInPath(path);
     if (found) return proc => this.runViaShell(proc);
     return null;
   }
@@ -624,8 +640,18 @@ export class Kernel {
     proc.markExited(status);
     this.logTrap(proc, status);
     const parent = this.procs.get(proc.ppid);
-    if (parent && parent.pid !== 1) this.deliver(parent, A.SIGCHLD);
+    if (parent && parent.pid !== 1) {
+      const killed = A.WIFSIGNALED(status);
+      this.deliver(parent, A.SIGCHLD, {
+        signo: A.SIGCHLD, code: !killed ? A.CLD_EXITED : status & 0x80 ? A.CLD_DUMPED : A.CLD_KILLED,
+        pid: proc.pid, uid: proc.ruid ?? proc.uid, status: killed ? A.WTERMSIG(status) : A.WEXITSTATUS(status),
+      });
+    }
     if (proc.ppid === 1) this.scheduleInitReap(proc);
+    // A parent ignoring SIGCHLD or with SA_NOCLDWAIT leaves no zombie: the
+    // child is reaped now, and a wait for it ends in ECHILD (Linux)
+    else if (parent && (parent.dispositions.get(A.SIGCHLD) === 'ignore' ||
+             ((parent.sigactions.get(A.SIGCHLD)?.flags ?? 0) & A.SA_NOCLDWAIT))) this.procs.delete(proc.pid);
     this.notify();
   }
 
@@ -717,7 +743,8 @@ export class Kernel {
         this.stateWaiters.add(onState);
         signal?.addEventListener('abort', onAbort, { once: true });
       });
-      if (!woke) return { pid: -A.EINTR, status: 0 };
+      // (no children left, as when SA_NOCLDWAIT reaped the last: ECHILD before EINTR, as Linux's do_wait)
+      if (!woke) return { pid: this.children(caller, pid).length ? -A.EINTR : -A.ECHILD, status: 0 };
     }
   }
 
@@ -731,25 +758,53 @@ export class Kernel {
     else targets = [...this.procs.values()].filter(p => p.pgid === -pid);
     targets = targets.filter(p => p.state !== 'zombie' || pid > 0);
     if (targets.length === 0) return -A.ESRCH;
+    // the ones the sender may signal; none of several is EPERM as for one
+    targets = targets.filter(p => this.maySignal(sender, p, sig));
+    if (targets.length === 0) return -A.EPERM;
     if (sig === 0) return 0;
-    for (const p of targets) this.deliver(p, sig);
+    for (const p of targets) this.deliver(p, sig, { signo: sig, code: A.SI_USER, pid: sender.pid, uid: sender.uid });
     return 0;
   }
 
+  /**
+   * Linux's kill permission: root, or the sender's real or effective uid is the
+   * target's real or saved uid; SIGCONT within a session. init stands in for
+   * Linux's root-owned pid 1 (the kernel's own sends come from it).
+   */
+  maySignal(sender: Process, target: Process, sig: number): boolean {
+    if (sender === this.init || sender.uid === 0 || sender === target) return true;
+    if (target === this.init) return false;
+    if (sig === A.SIGCONT && sender.sid === target.sid) return true;
+    const senderIds = [sender.uid, sender.ruid ?? sender.uid];
+    return [target.ruid ?? target.uid, target.suid ?? target.uid].some((u) => senderIds.includes(u));
+  }
+
   /** Deliver one signal: the signal hook (signals.ts) first, then the disposition, then the default action. */
-  deliver(proc: Process, sig: number): void {
+  deliver(proc: Process, sig: number, info: A.SigInfo = { signo: sig, code: A.SI_KERNEL }): void {
     if (proc.state === 'zombie' || proc.exiting || proc.pid === 1) return;
     if (sig === A.SIGKILL) { void this.exit(proc, A.W_TERMSIG(A.SIGKILL)); return; }
-    if (sig === A.SIGSTOP) { proc.markStopped(sig); this.notify(); return; }
-    if (sig === A.SIGCONT) { proc.markContinued(); this.notify(); }
-    if (proc.signalHook?.(proc, sig)) return;
+    if (sig === A.SIGSTOP) { this.stopProcess(proc, sig); return; }
+    if (sig === A.SIGCONT && proc.state === 'stopped') {
+      proc.markContinued(); this.notify();
+      if (!proc.signalHook) this.notifyParentOfStop(proc, 0);
+    }
+    if (proc.signalHook) {
+      // (job control routes it: signals.ts queues what it carries when it goes pending)
+      proc.data.sigInFlight = info;
+      try { if (proc.signalHook(proc, sig)) return; } finally { delete proc.data.sigInFlight; }
+    }
     const disp = proc.dispositions.get(sig) ?? 'default';
     // A blocked signal stays pending even when ignored (signalfd reads it; setSigmask drops it if still ignored)
-    if (proc.sigmask.has(sig)) { proc.deferredSignals.add(sig); notifySignalPending(proc); return; }
+    if (proc.sigmask.has(sig)) {
+      // (a standard signal already pending coalesces; a real-time one queues)
+      if (proc.queueSiginfo(info) || !proc.deferredSignals.has(sig)) { proc.deferredSignals.add(sig); notifySignalPending(proc); }
+      return;
+    }
     if (disp === 'ignore') return;
     if (disp === 'default' && A.defaultSignalAction(sig) === 'ignore') return;
     if (typeof disp === 'number') {
       // A guest handler: flag it for the guest and interrupt blocking syscalls (EINTR)
+      if (!proc.queueSiginfo(info) && proc.pendingSignals.has(sig)) return;
       proc.pendingSignals.add(sig);
       proc.interruptSyscalls();
       (proc.data.onSignal as ((s: number) => void) | undefined)?.(sig);
@@ -757,9 +812,26 @@ export class Kernel {
     }
     switch (A.defaultSignalAction(sig)) {
       case 'term': void this.exit(proc, A.W_TERMSIG(sig)); break;
-      case 'stop': proc.markStopped(sig); this.notify(); break;
+      case 'stop': this.stopProcess(proc, sig); break;
       default: break;
     }
+  }
+
+  private stopProcess(proc: Process, sig: number): void {
+    const was = proc.state;
+    proc.markStopped(sig);
+    this.notify();
+    // (job control's targets have it say so: JobControl.noteStopped)
+    if (was === 'running' && !proc.signalHook) this.notifyParentOfStop(proc, sig);
+  }
+
+  /** SIGCHLD to the parent for a stop (sig) or a continue (0), unless it set SA_NOCLDSTOP */
+  private notifyParentOfStop(proc: Process, sig: number): void {
+    const parent = this.procs.get(proc.ppid);
+    if (!parent || parent.pid === 1 || ((parent.sigactions.get(A.SIGCHLD)?.flags ?? 0) & A.SA_NOCLDSTOP)) return;
+    this.deliver(parent, A.SIGCHLD, {
+      signo: A.SIGCHLD, code: sig ? A.CLD_STOPPED : A.CLD_CONTINUED, pid: proc.pid, uid: proc.ruid ?? proc.uid, status: sig || A.SIGCONT,
+    });
   }
 
   /**
@@ -771,7 +843,7 @@ export class Kernel {
   takeSignal(proc: Process): number {
     const sig = [...proc.pendingSignals].filter(s => !proc.sigmask.has(s)).sort((a, b) => a - b)[0];
     if (sig === undefined) return 0;
-    proc.pendingSignals.delete(sig);
+    proc.takeSiginfo(sig, proc.pendingSignals);
     const act = proc.sigactions.get(sig);
     proc.signalFrames.push(new Set(proc.sigmask));
     for (const s of act?.mask ?? []) if (s !== A.SIGKILL && s !== A.SIGSTOP) proc.sigmask.add(s);
@@ -801,7 +873,12 @@ export class Kernel {
     mask.delete(A.SIGSTOP);
     proc.sigmask = mask;
     for (const s of [...proc.deferredSignals]) {
-      if (!mask.has(s)) { proc.deferredSignals.delete(s); this.deliver(proc, s); }
+      if (mask.has(s)) continue;
+      // every queued instance, with what it carries
+      const q = proc.siginfo.get(s) ?? [{ signo: s, code: A.SI_KERNEL }];
+      proc.siginfo.delete(s);
+      proc.deferredSignals.delete(s);
+      for (const info of q) this.deliver(proc, s, info);
     }
     if ([...proc.pendingSignals].some(s => !mask.has(s))) (proc.data.onSignal as ((s: number) => void) | undefined)?.(0);
   }
@@ -917,6 +994,7 @@ export class Kernel {
           return new DirFile(fs, await fs.realpath(p), statusFlags);
         }
         if (mustBeDir) return -A.ENOTDIR;
+        if (ownerDenies(proc, st.mode, flags)) return -A.EACCES;
         if (st.isFIFO?.()) return await this.openFifo(proc, await fs.realpath(target), flags);
       }
       const real = await fs.realpath(target);
@@ -1027,6 +1105,7 @@ export class Kernel {
       if ((flags & A.O_CREAT) && (flags & A.O_EXCL)) return -A.EEXIST;
       if (own.node.type !== 'file' || own.node.lazy || own.node.special) return undefined;
       if (flags & A.O_DIRECTORY) return -A.ENOTDIR;
+      if (ownerDenies(proc, own.node.mode, flags)) return -A.EACCES;
       const file = new RegularFile(openInodeSync(fs, own.path, own.node), statusFlags);
       if ((flags & A.O_TRUNC) && canWrite(flags)) file.truncateSync(0);
       return file;
@@ -1805,6 +1884,34 @@ export class Kernel {
           return await this.sem.semop(proc, args[0], args[1], data, args[3] * 1000 + Math.floor(args[4] / 1e6), sig);
         }
         case A.SYS_semctl: return this.sem.semctl(proc, args[0], args[1], args[2], args[3], data);
+        case A.SYS_shiro_siginfo: { // signo → the siginfo of the one of that number last taken (a handler's, sigwait's)
+          const info = proc.lastSiginfo.get(args[0]);
+          if (!info) return -A.ENOENT;
+          A.encodeSiginfo(info, data);
+          return 0;
+        }
+        case A.SYS_rt_sigqueueinfo:
+        case A.SYS_rt_tgsigqueueinfo: { // (pid, sig) / (tgid, tid, sig); data = struct siginfo
+          const pid = args[0] | 0, signo = nr === A.SYS_rt_sigqueueinfo ? args[1] : args[2];
+          if (signo < 0 || signo > 64) return -A.EINVAL;
+          const info = A.decodeSiginfo(data);
+          const target = this.procs.get(pid);
+          if (!target || (target.state === 'zombie' && signo !== 0)) return -A.ESRCH;
+          // only the kernel may claim SI_USER, SI_TKILL or a kernel code for another process's signal
+          if ((info.code >= 0 || info.code === A.SI_TKILL) && target !== proc) return -A.EPERM;
+          if (!this.maySignal(proc, target, signo)) return -A.EPERM;
+          if (signo === 0) return 0;
+          this.deliver(target, signo, { signo, code: info.code, pid: info.pid, uid: info.uid, value: info.value });
+          return 0;
+        }
+        case A.SYS_timer_create:
+          return this.timers.create(proc, args[0] | 0, args[1] ? new DataView(data.buffer, data.byteOffset, 24) : null);
+        case A.SYS_timer_settime:
+          return this.timers.settime(proc, args[0] | 0, args[1], new DataView(data.buffer, data.byteOffset, 32));
+        case A.SYS_timer_gettime:
+          return this.timers.gettime(proc, args[0] | 0, new DataView(data.buffer, data.byteOffset, 32));
+        case A.SYS_timer_getoverrun: return this.timers.getoverrun(proc, args[0] | 0);
+        case A.SYS_timer_delete: return this.timers.delete(proc, args[0] | 0);
         case A.SYS_mq_open: {
           const name = str(0, args[0]);
           const attr = args[3] ? new DataView(data.buffer, data.byteOffset + args[0], 32) : null;
@@ -1817,7 +1924,7 @@ export class Kernel {
           if (!(f instanceof MqFile)) return -A.EBADF;
           const len = args[1] >>> 0;
           const ts = args[3] ? new DataView(data.buffer, data.byteOffset + len, 16) : null;
-          return await this.mq.send(f, data.subarray(0, len), args[2] >>> 0, ts, sig);
+          return await this.mq.send(proc, f, data.subarray(0, len), args[2] >>> 0, ts, sig);
         }
         case A.SYS_mq_timedreceive: {
           const f = file(args[0]);
@@ -2080,21 +2187,28 @@ export class Kernel {
           const ms = args[0] | 0;
           const end = ms >= 0 ? Date.now() + ms : Infinity;
           let got: number;
-          while (!(got = next())) {
-            const left = end - Date.now();
-            if (left <= 0) return -A.EAGAIN;
-            const wakes = new Set<() => void>();
-            const off = pendingSignalListeners(proc).add(() => { for (const w of [...wakes]) w(); });
-            const timer = end === Infinity ? undefined : setTimeout(() => { for (const w of [...wakes]) w(); }, left);
-            const ok = await abortableWait(wakes, sig);
-            off();
-            if (timer !== undefined) clearTimeout(timer);
-            if (!ok) return -A.EINTR;
+          // While it waits, the set's signals are the wait's even when not
+          // blocked (Linux's real_blocked): they're held, not handled. The
+          // caller's mask comes back after, delivering any others that came.
+          const unblocked = [...want].filter((s) => !proc.sigmask.has(s));
+          if (unblocked.length) for (const s of unblocked) proc.sigmask.add(s);
+          try {
+            while (!(got = next())) {
+              const left = end - Date.now();
+              if (left <= 0) return -A.EAGAIN;
+              const wakes = new Set<() => void>();
+              const off = pendingSignalListeners(proc).add(() => { for (const w of [...wakes]) w(); });
+              const timer = end === Infinity ? undefined : setTimeout(() => { for (const w of [...wakes]) w(); }, left);
+              const ok = await abortableWait(wakes, sig);
+              off();
+              if (timer !== undefined) clearTimeout(timer);
+              if (!ok) return -A.EINTR;
+            }
+            // one instance (a real-time signal may have more queued), with what it carries
+            A.encodeSiginfo(proc.takeSiginfo(got, proc.deferredSignals), data);
+          } finally {
+            if (unblocked.length) { const m = new Set(proc.sigmask); for (const s of unblocked) m.delete(s); this.setSigmask(proc, m); }
           }
-          proc.deferredSignals.delete(got);
-          for (let i = 0; i < A.SIGINFO_SIZE; i += 4) dv.setUint32(i, 0, true);
-          dv.setInt32(0, got, true); // si_signo (si_code 0: SI_USER)
-          dv.setUint32(20, proc.uid, true); // si_uid
           return got;
         }
         case A.SYS_rt_sigsuspend: {
@@ -2516,8 +2630,7 @@ export class Kernel {
       // Ignoring a signal discards it if pending
       const now = proc.dispositions.get(signum);
       if (now === 'ignore' || (now === undefined && A.defaultSignalAction(signum) === 'ignore')) {
-        proc.deferredSignals.delete(signum);
-        proc.pendingSignals.delete(signum);
+        proc.dropSignal(signum);
       }
     }
     if (hasOld) {
@@ -2830,13 +2943,14 @@ export class Kernel {
     // The point of no return: exec bookkeeping, as Linux does it
     await proc.fds.closeOnExec();
     this.shm.detachAll(proc); // exec drops SysV shm attachments
+    this.timers.clear(proc); // and POSIX timers
     proc.path = path;
     proc.argv = argv;
     proc.env = env;
     for (const [sig, d] of [...proc.dispositions]) {
       if (typeof d === 'number') { proc.dispositions.delete(sig); proc.sigactions.delete(sig); }
     }
-    proc.pendingSignals.clear();
+    for (const sig of [...proc.pendingSignals]) proc.dropSignal(sig);
     proc.signalFrames = [];
     this.notify();
     if (embryo) {

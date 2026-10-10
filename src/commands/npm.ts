@@ -17,7 +17,7 @@ import { buildTree, binDirOf, binEntries, WASM_ALTERNATES, type BuildResult, typ
  * Resolves dependency trees with semver
  *
  * Performance optimizations:
- *   - Package metadata cached in memory with 1-hour TTL
+ *   - Package metadata cached in memory (1-hour TTL; trimmed to the most recently used 16 MB between commands)
  *   - In-flight request deduplication prevents duplicate fetches
  */
 
@@ -25,7 +25,20 @@ import { buildTree, binDirOf, binEntries, WASM_ALTERNATES, type BuildResult, typ
 /** What `npm -v` says: the npm that node 20 ships with (tools parse a bare semver) */
 export const NPM_VERSION = '10.8.2';
 
-const metadataCache = new Map<string, { data: NpmPackageMetadata; timestamp: number }>();
+const metadataCache = new Map<string, { data: NpmPackageMetadata; timestamp: number; bytes: number }>();
+/** Metadata kept between npm commands (the most recently used, by response size) */
+const METADATA_KEEP_BYTES = 16 << 20;
+
+/** Trim the metadata cache to METADATA_KEEP_BYTES, least recently used first */
+function trimMetadataCache(): void {
+  let total = 0;
+  for (const e of metadataCache.values()) total += e.bytes;
+  for (const [name, e] of metadataCache) {
+    if (total <= METADATA_KEEP_BYTES) break;
+    metadataCache.delete(name);
+    total -= e.bytes;
+  }
+}
 const METADATA_CACHE_TTL = 60 * 60 * 1000; // 1 hour in milliseconds
 
 // In-flight request deduplication: maps package name -> pending promise
@@ -65,11 +78,27 @@ interface NpmPackageMetadata {
 }
 
 
+/** npm commands running: the metadata cache lives while any is */
+let activeCommands = 0;
+
 export const npmCmd: Command = {
   name: 'npm',
   description: 'Browser-native package manager for Node.js packages',
 
   async exec(ctx: CommandContext): Promise<number> {
+    activeCommands++;
+    try {
+      return await npmMain(ctx);
+    } finally {
+      // The abbreviated documents of a big tree (vite+react+eslint+typescript:
+      // ~300 packages) held ~45 MB for an hour after the install: keep the
+      // most recently used 16 MB (a small project's whole tree)
+      if (--activeCommands === 0) trimMetadataCache();
+    }
+  },
+};
+
+async function npmMain(ctx: CommandContext): Promise<number> {
     const subcommand = ctx.args[0];
 
     if (!subcommand || subcommand === '--help' || subcommand === '-h') {
@@ -137,6 +166,15 @@ export const npmCmd: Command = {
         return await npmUninstall(ctx);
       case 'cache':
         return await npmCache(ctx);
+      case 'config':
+      case 'c':
+        return await npmConfig(ctx);
+      case 'get':
+        ctx.args = ['config', 'get', ...ctx.args.slice(1)];
+        return await npmConfig(ctx);
+      case 'prefix':
+        ctx.stdout += (ctx.args.includes('-g') || ctx.args.includes('--global') ? '/usr/local' : ctx.cwd) + '\n';
+        return 0;
       case 'update':
       case 'up':
         ctx.stdout += 'up to date, audited 0 packages\n';
@@ -152,8 +190,7 @@ export const npmCmd: Command = {
         ctx.stderr += "Run 'npm --help' for usage.\n";
         return 1;
     }
-  },
-};
+}
 
 /**
  * npm create <initializer> [args]: npx create-<name> with the arguments
@@ -219,6 +256,9 @@ async function fetchPackageMetadata(packageName: string): Promise<NpmPackageMeta
   // Check in-memory cache first
   const cached = metadataCache.get(packageName);
   if (cached && (Date.now() - cached.timestamp) < METADATA_CACHE_TTL) {
+    // Most recently used last (trimMetadataCache drops from the front)
+    metadataCache.delete(packageName);
+    metadataCache.set(packageName, cached);
     return cached.data;
   }
 
@@ -247,10 +287,11 @@ async function fetchPackageMetadata(packageName: string): Promise<NpmPackageMeta
       throw new Error(`Failed to fetch package metadata: ${response.statusText}`);
     }
 
-    const data: NpmPackageMetadata = await response.json();
+    const text = await response.text();
+    const data: NpmPackageMetadata = JSON.parse(text);
 
     // Cache the result
-    metadataCache.set(packageName, { data, timestamp: Date.now() });
+    metadataCache.set(packageName, { data, timestamp: Date.now(), bytes: text.length });
 
     return data;
   })();
@@ -276,7 +317,7 @@ async function installTree(
   ctx: CommandContext,
   baseDir: string,
   tree: BuildResult,
-  opts: { globalBinDir?: string } = {},
+  opts: { globalBinDir?: string; ignoreScripts?: boolean } = {},
 ): Promise<{ added: number; failed: number }> {
   const base = baseDir.replace(/\/$/, '');
   const byDepth = new Map<number, TreeNode[]>();
@@ -286,6 +327,7 @@ async function installTree(
   }
   let added = 0;
   let failed = 0;
+  const fresh: TreeNode[] = [];
   for (const depth of [...byDepth.keys()].sort((x, y) => x - y)) {
     const queue = [...byDepth.get(depth)!];
     const worker = async () => {
@@ -306,6 +348,7 @@ async function installTree(
             mkdir: async (path: string) => { try { await ctx.fs.mkdir(path, { recursive: true }); } catch { /* exists */ } },
           };
           await extractTarGzToFS(tarballData, dir, fsWriter);
+          fresh.push(n);
           added++;
         } catch (e: any) {
           failed++;
@@ -331,7 +374,63 @@ async function installTree(
       }
     }
   }
+  if (!opts.ignoreScripts) await runInstallScripts(ctx, base, fresh);
   return { added, failed };
+}
+
+/** --ignore-scripts, or ignore-scripts=true in ~/.npmrc */
+async function ignoreScripts(ctx: CommandContext): Promise<boolean> {
+  if (ctx.args.includes('--ignore-scripts')) return true;
+  try {
+    const rc = await ctx.fs.readFile(`${ctx.env['HOME'] || '/home/user'}/.npmrc`, 'utf8') as string;
+    return /^\s*ignore-scripts\s*=\s*true\s*$/m.test(rc);
+  } catch { return false; }
+}
+
+/**
+ * The install scripts of the packages just installed (preinstall, install,
+ * postinstall), dependencies before the packages that need them, in each
+ * package's directory, as npm runs them: quiet unless one fails. A failure is
+ * a warning here, not the end of the install: a script that builds a native
+ * addon (node-gyp, prebuild-install) can't succeed in the tab, and the
+ * package's JavaScript often works without it.
+ */
+async function runInstallScripts(ctx: CommandContext, base: string, nodes: TreeNode[]): Promise<void> {
+  const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+  // Each package after what it depends on (hoisting leaves that at any depth)
+  const order: TreeNode[] = [];
+  const seen = new Set<TreeNode>();
+  const visit = (n: TreeNode) => {
+    if (seen.has(n)) return;
+    seen.add(n);
+    for (const d of n.resolved.values()) visit(d);
+    order.push(n);
+  };
+  nodes.forEach(visit);
+  const fresh = new Set(nodes);
+  for (const n of order.filter((n) => fresh.has(n))) {
+    const dir = `${base}/${n.dir}`;
+    let scripts: Record<string, string> = {};
+    try { scripts = JSON.parse(await ctx.fs.readFile(`${dir}/package.json`, 'utf8') as string).scripts ?? {}; } catch { continue; }
+    for (const event of ['preinstall', 'install', 'postinstall']) {
+      const script = scripts[event];
+      if (!script) continue;
+      const env = {
+        npm_lifecycle_event: event, npm_lifecycle_script: script, npm_package_name: n.name,
+        npm_package_version: n.version, INIT_CWD: ctx.cwd, npm_command: 'install',
+      };
+      let out = '';
+      const code = await ctx.shell.execute(
+        `(cd ${q(dir)} && export ${Object.entries(env).map(([k, v]) => `${k}=${q(v)}`).join(' ')} PATH=${q(`${dir}/node_modules/.bin:${base}/${binDirOf(n)}`)}:"$PATH" && ${script})`,
+        (s) => { out += s; }, (s) => { out += s; }, false, undefined, true,
+      );
+      if (code !== 0) {
+        ctx.stderr += `npm warn ${n.name}@${n.version} ${event}: \`${script}\` exited with ${code}\n`;
+        if (out.trim()) ctx.stderr += out.trimEnd().split('\n').slice(-10).map((l) => `npm warn   ${l}`).join('\n') + '\n';
+        break;
+      }
+    }
+  }
 }
 
 /** The tree for `wanted`, with what was left out reported */
@@ -425,7 +524,7 @@ async function npmInstall(ctx: CommandContext): Promise<number> {
 
   const t0 = Date.now();
   const tree = await resolveTree(ctx, Object.entries(depsToResolve).map(([name, range]) => ({ name, range })));
-  const { added, failed } = await installTree(ctx, ctx.cwd, tree);
+  const { added, failed } = await installTree(ctx, ctx.cwd, tree, { ignoreScripts: await ignoreScripts(ctx) });
   ctx.stdout += `\nadded ${added} package(s), ${tree.nodes.length} in the tree, in ${((Date.now() - t0) / 1000).toFixed(1)}s\n`;
   if (failed || (tree.warnings.length && tree.nodes.length === 0)) return 1;
   ctx.stdout += 'Packages installed successfully.\n';
@@ -482,7 +581,7 @@ async function npmInstallGlobal(
 
   ctx.stdout += 'Installing packages globally...\n';
   const tree = await resolveTree(ctx, Object.entries(depsToResolve).map(([name, range]) => ({ name, range })));
-  const { added, failed } = await installTree(ctx, '/usr/local/lib', tree, { globalBinDir });
+  const { added, failed } = await installTree(ctx, '/usr/local/lib', tree, { globalBinDir, ignoreScripts: await ignoreScripts(ctx) });
   ctx.stdout += `\nadded ${added} package(s)\n`;
   if (failed) return 1;
   ctx.stdout += 'Packages installed globally.\n';
@@ -745,6 +844,61 @@ async function npmCache(ctx: CommandContext): Promise<number> {
 
     default:
       ctx.stderr += `npm cache: unknown command '${action}'\n`;
+      return 1;
+  }
+}
+
+/**
+ * npm config get|set|delete|list: ~/.npmrc (key=value lines), with npm's
+ * defaults for what isn't set. Tools ask it things: Next.js downloads its
+ * SWC binary from `npm config get registry`.
+ */
+async function npmConfig(ctx: CommandContext): Promise<number> {
+  const home = ctx.env['HOME'] || '/home/user';
+  const rcPath = `${home}/.npmrc`;
+  const defaults: Record<string, string> = {
+    registry: 'https://registry.npmjs.org/',
+    prefix: '/usr/local',
+    cache: `${home}/.npm`,
+    'user-agent': `npm/${NPM_VERSION} node/v22.12.0 linux x64 workspaces/false`,
+  };
+  let text = '';
+  try { text = await ctx.fs.readFile(rcPath, 'utf8') as string; } catch { /* none */ }
+  const rc = new Map<string, string>();
+  for (const line of text.split('\n')) {
+    const m = /^\s*([^#;=\s][^=]*?)\s*=\s*(.*?)\s*$/.exec(line);
+    if (m) rc.set(m[1], m[2]);
+  }
+  const save = () => ctx.fs.writeFile(rcPath, [...rc].map(([k, v]) => `${k}=${v}`).join('\n') + (rc.size ? '\n' : ''));
+  const [, action = 'list', ...rest] = ctx.args.filter((a) => a !== '--global' && a !== '-g' && a !== '--location=user');
+  switch (action) {
+    case 'get': {
+      if (!rest.length) { for (const [k, v] of rc) ctx.stdout += `${k}=${v}\n`; return 0; }
+      for (const k of rest) ctx.stdout += `${rc.get(k) ?? defaults[k] ?? 'undefined'}\n`;
+      return 0;
+    }
+    case 'set': {
+      for (const kv of rest) {
+        const i = kv.indexOf('=');
+        if (i > 0) rc.set(kv.slice(0, i), kv.slice(i + 1));
+        else if (rest.length >= 2) { rc.set(rest[0], rest[1]); break; }
+      }
+      await save();
+      return 0;
+    }
+    case 'delete':
+    case 'rm':
+      for (const k of rest) rc.delete(k);
+      await save();
+      return 0;
+    case 'list':
+    case 'ls':
+      ctx.stdout += `; "user" config from ${rcPath}\n\n`;
+      for (const [k, v] of rc) ctx.stdout += `${k} = ${JSON.stringify(v)}\n`;
+      ctx.stdout += `\n; node bin location = /usr/local/bin/node\n; cwd = ${ctx.cwd}\n; HOME = ${home}\n`;
+      return 0;
+    default:
+      ctx.stderr += `npm config: unknown command '${action}'\n`;
       return 1;
   }
 }

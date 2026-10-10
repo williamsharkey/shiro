@@ -122,10 +122,15 @@ class IframeServerManager {
       });
     }
 
+    // Every HTTP/1.1 request names its host; a browser's fetch (a preview, the
+    // service worker's) can't set it. vite 6+ refuses requests whose Host it
+    // doesn't allow ("This host (undefined) is not allowed": Astro's dev server)
+    const headers: Record<string, string> = { ...(options?.headers || {}) };
+    if (!Object.keys(headers).some((k) => k.toLowerCase() === 'host')) headers.host = `localhost:${port}`;
     const request: VirtualRequest = {
       method: options?.method || 'GET',
       path: pathname,
-      headers: options?.headers || {},
+      headers,
       body: options?.body || null,
       query,
     };

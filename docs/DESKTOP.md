@@ -118,9 +118,13 @@ destroyed), and the next Terminal window adopts it again.
   were (localStorage `tabcomputer-desktop-session`). The main terminal gets its
   geometry at boot; the others reopen once the page is idle. Program windows
   (Vim, htop, X11 apps) are not reopened: that would run them again.
-- **First visit**: three short cards in the corner (what this is, real Linux
-  programs and `debian install`, where files live), shown once per browser
-  (localStorage `tabcomputer-desktop-tour`); Help → Welcome Tour shows them again.
+- **First visit**: a welcome card in the corner (`welcome.ts`, Drafting
+  style, not modal) with one-click demos that type their command into a
+  Terminal: a Debian package (`apt install cowsay`), a Vite + React app
+  (its Preview opens when the dev server is up), Python (`toolchain install
+  python`), Claude Code, a Linux GUI app (the Apps window) and Settings.
+  Dismissed once per browser (localStorage `tabcomputer-desktop-welcome`);
+  after that the module isn't loaded. Help → Welcome shows it again.
 - **About This Computer** lists measured status with the document that
   records each number (`STATUS` in `apps/about.ts`: keep it in step with
   DEBIAN_SCORE.md and CONFORMANCE.md), and what is real, emulated and absent.
@@ -130,11 +134,23 @@ destroyed), and the next Terminal window adopts it again.
   `tabcomputer-desktop-theme`. Terminals switch palettes with the theme.
 - **Motion**: every animation and transition turns off under
   `prefers-reduced-motion: reduce`.
-- **Phone width** (≤ 640 px): every window fills the work area. Menus collapse
+- **Phones** (≤ 640 px wide, or a phone on its side: the screen's short side
+  ≤ 500 px and the viewport ≤ 500 px tall; `compactViewport()` in `wm.ts`,
+  which reads the screen so the on-screen keyboard doesn't flip it): every
+  window fills the work area, Previews included. Menus collapse
   to the app name, the menu bar is solid (its color is the page's
   `theme-color`, set with the theme) and drops the clock. The network icon is
   a globe with a status dot: blue online, green signed in, amber sign-in
   needed, gray offline.
+- **Tablets and narrow windows** (641–1024 px): ordinary windows, sized to
+  fit the work area whatever size an app asks for; a Preview snaps beside
+  the Terminal. The welcome sits above the dock and the extra-keys bar
+  (`--sd-keybar-h`), in one column on phones, two on a phone on its side,
+  and scrolls when it doesn't fit. `tests/browser/small-screens.mjs` checks
+  phone, phone landscape, 600 px, iPad mini and iPad landscape: the page
+  never scrolls sideways, and the menu bar, dock, windows, menus, stacks,
+  notifications and the welcome stay inside the viewport
+  (screenshots: `docs/screenshots/small-*.png`).
 - **Touch devices** (`pointer: coarse`, `mobile.ts`, its own chunk): the
   desktop follows `visualViewport`, so when the on-screen keyboard opens the
   dock hides and windows shrink to the space above it, with the cursor line

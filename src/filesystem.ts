@@ -102,6 +102,14 @@ function pathIno(path: string): number {
   return ((a >>> 0) & 0xfffff) * 0x100000000 + (b >>> 0) || 3;
 }
 
+/**
+ * A pending delete of everything under a directory (rm -r), queued in
+ * FileSystem._dirty under this prefix + the directory's path. One IndexedDB
+ * range delete instead of one delete per key: 10,000 keys took 3.7 s one by
+ * one, 0.3 s as a range (in a large store, 38 s one by one after an npm install).
+ */
+const RANGE = '\0range:';
+
 /** A fresh random 52-bit inode number (unique enough; not a secret, so no crypto: one per created file) */
 function newIno(): number {
   return Math.floor(Math.random() * 0x10000000000000) || 3;
@@ -839,6 +847,36 @@ export class FileSystem {
   private _queue(path: string, node: FSNode | null): void {
     this._dirtyBytes += (node?.content?.byteLength ?? 0) - (this._dirty.get(path)?.content?.byteLength ?? 0);
     this._dirty.set(path, node);
+    this._scheduleFlush();
+  }
+
+  /** Directories whose contents have a pending range delete (RANGE entries in _dirty or _inflight). */
+  private _ranges: Set<string> = new Set();
+
+  /** Queue the deletion of everything under directory `dir` (not `dir` itself) as one range delete. */
+  private _queueRange(dir: string): void {
+    const prefix = dir + '/';
+    // Writes queued under it are superseded; later ones go after the range in the batch (Map order)
+    for (const [p, n] of this._dirty) {
+      if (p.startsWith(prefix) || (p.startsWith(RANGE) && p.slice(RANGE.length).startsWith(prefix))) {
+        this._dirtyBytes -= n?.content?.byteLength ?? 0;
+        this._dirty.delete(p);
+      }
+    }
+    const key = RANGE + dir;
+    this._dirty.delete(key);
+    this._dirty.set(key, null);
+    this._ranges.add(dir);
+    this._scheduleFlush();
+  }
+
+  /** `path` lies under a directory whose contents are being range-deleted (not yet in IndexedDB). */
+  private _underRange(path: string): boolean {
+    for (const d of this._ranges) if (path.startsWith(d + '/')) return true;
+    return false;
+  }
+
+  private _scheduleFlush(): void {
     if (this._full) {
       // Retry the failed batch once a burst of deletes has freed something,
       // not after every write (each retry clones the whole batch)
@@ -868,11 +906,15 @@ export class FileSystem {
         try {
           await this._commit(batch, durability);
           this._setFull(false);
+          if (this._ranges.size) {
+            for (const p of batch.keys()) if (p.startsWith(RANGE) && !this._dirty.has(p)) this._ranges.delete(p.slice(RANGE.length));
+          }
         } catch (e) {
           if (FileSystem._isQuotaError(e)) {
             // Requeue it under the writes made meanwhile (newer wins) and
             // stop: the next flush is a retry, after the user frees space
-            for (const [p, n] of this._dirty) batch.set(p, n);
+            // (re-inserted, so they stay after any older range delete of theirs)
+            for (const [p, n] of this._dirty) { batch.delete(p); batch.set(p, n); }
             this._dirty = batch;
             this._dirtyBytes = 0;
             for (const n of batch.values()) this._dirtyBytes += n?.content?.byteLength ?? 0;
@@ -910,7 +952,11 @@ export class FileSystem {
           const store = tx.objectStore(STORE_NAME);
           for (const [path, node] of batch) {
             if (node) store.put(storableNode(node));
-            else store.delete(path);
+            else if (path.startsWith(RANGE)) {
+              // Every key under the directory: from "dir/" up to "dir0" ('0' follows '/')
+              const dir = path.slice(RANGE.length);
+              store.delete(IDBKeyRange.bound(dir + '/', dir + '0', false, true));
+            } else store.delete(path);
           }
           tx.oncomplete = () => resolve();
           tx.onabort = () => reject(tx.error || new DOMException('Transaction aborted', 'AbortError'));
@@ -953,12 +999,15 @@ export class FileSystem {
     if (this.cache.has(path)) {
       return this.cache.get(path);
     }
+    // Under a pending range delete: gone, though IndexedDB still has it
+    if (this._ranges.size && this._underRange(path)) { this.cache.set(path, undefined); return undefined; }
     // The key index is complete once loaded: a path not in it doesn't exist
     // (creating a file then needs no IndexedDB read for the "existing" check)
     if (this._allKeys) {
       if (!this._allKeys.has(path)) { this.cache.set(path, undefined); return undefined; }
-    } else if (!this._keysLoading) {
-      void this._getAllKeys().catch(() => {});
+    } else if (!this._keysLoading && !this._keysWanted) {
+      this._keysWanted = true;
+      if (!this._keysHeld) void this._getAllKeys().catch(() => {});
     }
     const result = await this._request('readonly', store => store.get(path) as IDBRequest<FSNode | undefined>);
     // A write or delete made while the read was pending is newer than what it returned
@@ -1172,6 +1221,25 @@ export class FileSystem {
   /** Key changes made while _getAllKeys is reading the store. */
   private _keysJournal: Array<[string, boolean]> | null = null;
   private _keysLoading: Promise<Set<string>> | null = null;
+  /** A read asked for the key index to be loaded in the background (see _get). */
+  private _keysWanted = false;
+  private _keysHeld = false;
+
+  /**
+   * Don't load the key index in the background until releaseKeyIndex (or
+   * `ms`): with 100k files it takes ~250 ms to read and decode, which delayed
+   * the first prompt by as much. readdir still loads it at once if it needs it.
+   */
+  holdKeyIndex(ms = 5000): void {
+    this._keysHeld = true;
+    setTimeout(() => this.releaseKeyIndex(), ms);
+  }
+
+  releaseKeyIndex(): void {
+    if (!this._keysHeld) return;
+    this._keysHeld = false;
+    if (this._keysWanted && !this._allKeys && !this._keysLoading) void this._getAllKeys().catch(() => {});
+  }
 
   /** Child names by parent directory, built from _allKeys on first readdir and kept up to date with it. */
   private _children: Map<string, Set<string>> | null = null;
@@ -1222,9 +1290,11 @@ export class FileSystem {
         // won't see them. (An in-flight flush transaction was created before
         // this readonly one, so IndexedDB orders the read after it.)
         const queued = [...this._dirty];
+        const ranges = [...this._ranges];
         this._keysLoading = this._request('readonly', store => store.getAllKeys())
           .then((keys) => {
             const set = new Set(keys as string[]);
+            if (ranges.length) for (const k of set) if (ranges.some((d) => k.startsWith(d + '/'))) set.delete(k);
             for (const [p, n] of queued) { if (n) set.add(p); else set.delete(p); }
             for (const [p, present] of journal) { if (present) set.add(p); else set.delete(p); }
             this._allKeys = set;
@@ -1728,15 +1798,23 @@ export class FileSystem {
     const node = await this._get(path);
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, rm '${path}'`);
 
-    if (node.type === 'dir' && options?.recursive) {
+    if (node.type === 'dir' && options?.recursive && path !== '/') {
       const allKeys = await this._getAllKeys();
-      const prefix = path === '/' ? '/' : path + '/';
-      const toDelete = allKeys.filter(k => k === path || k.startsWith(prefix));
-      // Delete in reverse order (deepest first)
-      toDelete.sort().reverse();
-      for (const key of toDelete) {
-        await this._delete(key);
+      const prefix = path + '/';
+      // Gone from memory now; from IndexedDB in one range delete (_queueRange)
+      for (const key of allKeys.filter(k => k.startsWith(prefix))) {
+        this.cache.set(key, undefined);
+        this._noteKey(key, false);
       }
+      this._canonDirs.clear();
+      this._queueRange(path);
+      this._deleteNow(path);
+      this._emitChange('delete', path);
+    } else if (node.type === 'dir' && options?.recursive) {
+      const allKeys = await this._getAllKeys();
+      const toDelete = allKeys.filter(k => k.startsWith('/'));
+      toDelete.sort().reverse();
+      for (const key of toDelete) await this._delete(key);
       this._emitChange('delete', path);
     } else if (node.type === 'dir') {
       throw fsError('EISDIR', `EISDIR: is a directory, rm '${path}'`);

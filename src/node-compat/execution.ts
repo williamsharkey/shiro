@@ -4,6 +4,7 @@
  * Extracted from node-cmd.ts exec() body.
  */
 
+import { attachProcessIpc } from './ipc';
 import { createActivity } from './activity';
 import type { CommandContext } from '../commands/index';
 import { iframeServer } from '../iframe-server';
@@ -15,7 +16,7 @@ import { createFakeBuffer } from './buffer';
 import { createFakeConsole, formatLog } from './console';
 import { createFakeProcess } from './process';
 import { createFileCache } from './file-cache';
-import { preloadEnvironment } from './preload';
+import { claudeBootstrap, preloadEnvironment } from './preload';
 import { isClaudeCodeScript, patchClaudeCodeSource } from '../claude-code-version';
 import { createAutoStubFactory } from './auto-stub';
 import { createRequireFunction, compileAsyncModule, esmNamespace } from './require';
@@ -192,10 +193,13 @@ export async function executeNodeScript(
     // File cache, module cache, and sync watchdog
     // As a kernel guest (node-worker), files come from blocking syscalls as they're needed
     const guest = nodeGuestOf(ctx);
+    // A forked guest: its channel to the parent (process.send / 'message')
+    const ipcAlive = guest?.ipc ? attachProcessIpc(fakeProcess, guest.ipc, processEvents) : () => false;
     const { fileCache, fileMtimes, moduleCache, tickSyncOps } = createFileCache(guest?.readText, guest ? (p) => !!(ctx.fs as any).isDirCached?.(p) : undefined);
 
     // Pre-load environment (the page's: files into the cache, Claude's bootstrap)
     if (!guest) await preloadEnvironment(ctx, fileCache, fileMtimes, scriptPath);
+    else await claudeBootstrap(ctx, ctx.env['HOME'] || '/home/user', scriptPath);
     const homeDir = ctx.env['HOME'] || '/home/user';
 
     // Buffer shim
@@ -271,6 +275,16 @@ export async function executeNodeScript(
         case 'node:stream': return createStreamModule(getBuiltinModule('events'));
         case 'stream/promises':
         case 'node:stream/promises': return getBuiltinModule('stream').promises;
+        // The WHATWG streams node has as stream/web are the page's (Next's edge runtime)
+        case 'stream/web':
+        case 'node:stream/web': {
+          const g = globalThis as any;
+          const names = ['ReadableStream', 'ReadableStreamDefaultReader', 'ReadableStreamBYOBReader', 'ReadableStreamBYOBRequest',
+            'ReadableByteStreamController', 'ReadableStreamDefaultController', 'TransformStream', 'TransformStreamDefaultController',
+            'WritableStream', 'WritableStreamDefaultWriter', 'WritableStreamDefaultController', 'ByteLengthQueuingStrategy',
+            'CountQueuingStrategy', 'TextEncoderStream', 'TextDecoderStream', 'CompressionStream', 'DecompressionStream'];
+          return Object.fromEntries(names.filter((n) => g[n]).map((n) => [n, g[n]]));
+        }
         case 'stream/consumers':
         case 'node:stream/consumers': return getBuiltinModule('stream').consumers;
         case 'crypto':
@@ -388,7 +402,8 @@ export async function executeNodeScript(
 
     // A script that reads piped stdin synchronously (fs.readFileSync(0), '/dev/stdin',
     // fs.readSync(0)) can't wait for a live stream: load it before the script runs
-    if (!ctx.stdinStream && /readFileSync\(\s*(?:0\s*[,)]|['"]\/dev\/stdin['"])|readSync\(\s*0\s*,/.test(code)) {
+    // (a guest's stdin is one too; a spawned child in the page leaves its live one be)
+    if ((!ctx.stdinStream || (ctx as any).nodeGuest) && /readFileSync\(\s*(?:0\s*[,)]|['"]\/dev\/stdin['"])|readSync\(\s*0\s*,/.test(code)) {
       await fakeProcess.stdin?.__fd0?.fill();
     }
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
@@ -420,7 +435,7 @@ export async function executeNodeScript(
     const entryDirname = scriptPath ? scriptPath.substring(0, scriptPath.lastIndexOf('/')) : ctx.cwd;
     // Browser builds a package here runs as (rolldown → @rolldown/browser): loaded before the script needs them
     try {
-      for (const [spec, ns] of await loadBrowserPackages(ctx.fs, entryDirname, getBuiltinModule, fakeProcess, trackAsync)) browserModules.set(spec, ns);
+      for (const [spec, ns] of await loadBrowserPackages(ctx.fs, entryDirname, getBuiltinModule, fakeProcess, trackAsync, atExit)) browserModules.set(spec, ns);
     } catch (e: any) {
       console.warn('[node] browser build:', e);
       const err = e?.errors?.[0];
@@ -681,7 +696,7 @@ export async function executeNodeScript(
     const _intervalIds = new Set<any>();
     const _refdIntervals = new Set<any>(); // a guest's ref'd intervals: activity, as in node
     // (and its open sockets and servers)
-    const intervalsAlive = () => _refdIntervals.size > 0 || !!guest?.busy?.() || threadsAlive();
+    const intervalsAlive = () => _refdIntervals.size > 0 || !!guest?.busy?.() || threadsAlive() || ipcAlive();
     if (code.length <= 500000) {
       const settle = () => { if (_activeTimers <= 0 && _timersResolve) { _timersResolve(); _timersResolve = null; _timersDone = null; } };
       globalThis.setTimeout = _st.installedSetTimeout = function(fn: any, ms?: number, ...args: any[]) {
@@ -935,6 +950,7 @@ export async function executeNodeScript(
     }
     restoreGlobals(true);
     runExitHooks();
+    _st.restoreCwd?.();
 
     return _st.exitCode;
   } catch (e: any) {
@@ -947,6 +963,7 @@ export async function executeNodeScript(
     }
     restoreGlobals(true);
     runExitHooks();
+    _st.restoreCwd?.();
     const msg = e.message || String(e);
     console.error('[node] Script error:', e);
     ctx.stderr += `Error: ${msg}\n`;

@@ -83,9 +83,34 @@ function sys(nr, ...args) {
 // rt_sigreturn so the kernel unblocks it again.
 // (One that arrives before the guest is loaded is dropped.)
 let blinkModule = null;
+// The kernel's call 1030 gives the siginfo of a signal just handed over
+// (sender, si_code, sigqueue's value); Blink puts it in the handler's frame.
+const SYS_shiro_siginfo = 1030;
+let siginfoCall = true;
+function queueSignal(sig, info, pid) {
+  const m = blinkModule;
+  if (info && info[0] === sig && !pid && m?._blink_shiro_signal_info) {
+    m._blink_shiro_signal_info(sig, ...info);
+  } else if (info && info[0] === sig && pid && m?._blink_shiro_signal_pid_info) {
+    m._blink_shiro_signal_pid_info(pid, sig, ...info);
+  } else if (pid) {
+    m?._blink_shiro_signal_pid?.(pid, sig);
+  } else {
+    m?._blink_shiro_signal?.(sig);
+  }
+}
 function takeSignal(sig) {
   if (debug) console.error('[blink] signal', sig);
-  blinkModule?._blink_shiro_signal?.(sig);
+  let info = null;
+  if (siginfoCall && blinkModule?._blink_shiro_signal_info) {
+    // (the reply being taken is in `data`: 1030 writes there too)
+    const saved = data.slice();
+    const r = sys(SYS_shiro_siginfo, sig);
+    if (r === 0) info = Array.from(new Int32Array(data.buffer, data.byteOffset, 8));
+    else if (r === -38) siginfoCall = false;
+    data.set(saved);
+  }
+  queueSignal(sig, info, 0);
   sys(SYS.rt_sigreturn);
 }
 
@@ -609,15 +634,28 @@ async function run(msg) {
       ch.data.set(input);
       let res = await issue(ch, nr, args, as);
       const out = outCap ? ch.data.slice(0, Math.min(outCap, ch.data.length)) : null;
-      // A signal for the guest rode on the reply: queue it, then rt_sigreturn
-      while (res.sig) {
-        if (debug) console.error(`[blink] ${debugPid} signal ${res.sig}${as ? ' for ' + as : ''}`);
-        // a hosted child's signal goes to its own System (vfork children,
-        // which have none, run on ours)
-        if (as && hosted.has(as)) blinkModule?._blink_shiro_signal_pid?.(as, res.sig);
-        else blinkModule?._blink_shiro_signal?.(res.sig);
-        res = { ...res, sig: (await issue(ch, SYS.rt_sigreturn, [], as)).sig };
-      }
+      // A signal for the guest rode on the reply: queue it, with its siginfo,
+      // then rt_sigreturn (which may hand over the next)
+      const drain = async (sig) => {
+        while (sig) {
+          if (debug) console.error(`[blink] ${debugPid} signal ${sig}${as ? ' for ' + as : ''}`);
+          // a hosted child's signal goes to its own System (vfork children,
+          // which have none, run on ours)
+          const pid = as && hosted.has(as) ? as : 0;
+          let info = null;
+          if (siginfoCall && blinkModule?.[pid ? '_blink_shiro_signal_pid_info' : '_blink_shiro_signal_info']) {
+            const ri = await issue(ch, SYS_shiro_siginfo, [sig], as);
+            if (ri.r === 0) info = Array.from(new Int32Array(ch.data.buffer, ch.data.byteOffset, 8));
+            else if (ri.r === -38) siginfoCall = false;
+            queueSignal(sig, info, pid);
+            await drain(ri.sig); // (one that rode on that reply)
+          } else {
+            queueSignal(sig, info, pid);
+          }
+          sig = (await issue(ch, SYS.rt_sigreturn, [], as)).sig;
+        }
+      };
+      await drain(res.sig);
       return { r: res.r, hi: res.hi, out };
     } finally {
       release(ch);

@@ -86,7 +86,7 @@ the page (`apt-get update` ≈2m20s first).
 | `node -e` / `node script.js` (Debian's node) | pass | 22–26s per run | crashed in Blink until patch 0047 (`pop m64` addressed relative to the old `rsp`, overwriting V8's CEntry return address); JS, `require`, `os` and fs work, slowly (emulated V8) |
 | `sudo apt-get install -y golang-go` | installs | 5m05s–10m40s | go1.24.4 linux/amd64 |
 | `go run hello.go` | pass | apt + cold cache: compiling `fmt` and its std dependencies takes ~35 min under Blink. With `toolchain install go` (std precompiled into GOCACHE): 42s first, 17s warm | the link step works since Blink 0052 (`fallocate` → EOPNOTSUPP). The layer sets `CGO_ENABLED=0` in `~/.config/go/env`: with cgo on, `go` found tabcomputer's WASM-only `cc` on PATH and `net` failed to build (docs/DEBIAN.md "Toolchain layers") |
-| net/http server + client over loopback | pass | `go build` + run 74s (bench median; compiles only `main`), `go run` 84s; the binary itself runs in 0.7s | an earlier `go run` hung: the shipped std cache was trimmed by the first `go` command (fixed: entries dated 2100), and while recompiling std, one of the parallel `compile` children stayed a zombie that `go` never reaped. That kernel bug (a lost child-exit wakeup) is with perf-kernel; it can still show when `go` compiles many packages at once, e.g. after `go clean -cache` |
+| net/http server + client over loopback | pass | `go build` + run 74s (bench median; compiles only `main`), `go run` 84s; the binary itself runs in 0.7s | an earlier `go run` hung: the shipped std cache was trimmed by the first `go` command (fixed: entries dated 2100), and while recompiling std, one of the parallel `compile` children stayed a zombie that `go` never reaped. Cause: Blink's vfork emulation runs the child on the parent's thread and takes Go's preemption SIGURG there, so parallel forks can wedge `go` (with perf-blink). The layer sets `GOFLAGS=-p=1` (one build job; Blink runs one guest thread anyway), which makes it rare |
 | `sudo apt-get install -y cargo` | installs | 9m35s | cargo 1.85.1, rustc 1.85.1 |
 | `cargo new hello_rs && cargo build && cargo run` | pass (after fix) | `new` 2.3s, `build` 54s, `run` 1.9s | failed at first: Rust's `std::process::Command` makes an AF_UNIX `SOCK_SEQPACKET` socketpair for every spawn, which the kernel refused (EOPNOTSUPP), so cargo couldn't start rustc nor rustc its linker |
 | `sudo apt-get install -y ruby` | installs | 2m43s | ruby 3.3.8 (`ruby` is `/usr/bin/ruby`) |
@@ -203,7 +203,15 @@ Shell and platform fixes these needed (all with tests in the same file):
   memory, lightningcss's 16 MB module) and ArrayBuffers (file contents).
   Rolldown's shared memory used to start at 1 GB (16384 pages; the module
   needs 1001): it starts at 64 MB now and grows (−23 MB resident, and no
-  1 GB commit on a phone). What it took:
+  1 GB commit on a phone). Most of "after build" is the build's peak, which
+  V8 returns when idle: 20 s later the renderer is at 832 MB. Packages run as
+  browser builds are let go 30 s after the last process using them ends
+  (their Workers terminated, blob: URLs revoked; they run as a function, not
+  an import()ed module, which the page's module map would keep): with the dev
+  server stopped, rolldown's 8 workers go and the renderer is at 727 MB.
+  Still held then: rolldown's 112 MB SharedArrayBuffer (by the browser
+  itself, not by script), the page's own esbuild-wasm (80 MB of Go memory)
+  and the files npm installed. What it took:
   - Rolldown runs as its browser build. `npm install` puts `@rolldown/browser`
     where `rolldown` goes (same API and versions); a process that imports it
     gets it bundled from the VFS with the page's esbuild
@@ -266,9 +274,75 @@ Shell and platform fixes these needed (all with tests in the same file):
   - On the terminal, `\n` is `\r\n` in every write, escape sequences or
     not (libuv keeps ONLCR in raw mode): output with colours or cursor moves
     (clack's prompts in create-vite 7) stepped down the screen.
+- Astro 5 (a minimal site; `APP=astro` in the same script): `npm i` 8.8 s
+  (277 packages), `astro dev` to ready 12.4 s, the preview 2.0 s, an edit to
+  `src/pages/index.astro` shown 0.4 s later (Astro reloads pages), `astro
+  build` 10.7 s; renderer resident 828 MB with dev up, 1088 MB after the
+  build. `npm create astro` itself fails in the test container: create-astro
+  fetches its template from codeload.github.com, which the container's relay
+  can't reach (api.github.com works). What it took, all general:
+  - npm: empty files in a tarball are installed (a 0-byte `types.js` that
+    @astrojs/markdown-remark's index re-exports was left out).
+  - ES modules: `/*` inside a template or string isn't a comment
+    (tsconfck's `` `**/*` `` hid every export after it); a method named
+    `import` (`import(id) { … }`) and `.import(` calls, also across a line
+    break, aren't dynamic imports (the bundled-module path's `\bimport\(`
+    rewrote `runner.import(…)`); `import { default as x }` is the default
+    import; exported function declarations exist from the start (hoisted);
+    named imports of a module still loading (a cycle) are read again once it
+    has loaded (Astro's render-context → middleware → sequence cycle); named
+    exports ahead of `export default` stay (zod's index.js); `import('./x.mjs?t=1')`
+    loads x.mjs afresh.
+  - Packages that load as their ESM node build: vite (its CommonJS entry is
+    deprecated and finds its package.json through esbuild's import.meta.url
+    shim, which takes the page's `document` for a browser) and
+    @astrojs/compiler (its browser build wants `initialize()`; its CommonJS
+    build reads astro.wasm at the page's URL the same way).
+  - Globals: a global a script defines on the page (it reaches the page:
+    bare identifiers resolve there) stays writable and redefinable
+    (@astrojs/compiler defines a read-only `fs`); `fs` and `require` set on
+    globalThis stay the process's own (two esbuild services wrote each
+    other's stdout through a shared `globalThis.fs`: "Invalid packet").
+  - fs takes file: URL objects in every call (`fs.promises.readFile(new
+    URL(…))`).
+  - A spawned child's output reaches the parent on a microtask, not inside
+    the child's write (an error in the parent's reader came back to Go's
+    fs.write and panicked esbuild).
+  - Requests to in-tab servers carry `Host: localhost:PORT` when the browser
+    gave none (vite 6+ refuses an unknown host).
   Not yet: node output into a pipe or file comes when the process exits
   (only the terminal streams), so `npm run dev > log &` shows nothing while
   it runs.
+- Next.js 16 (in progress): `npx create-next-app` works in the page. `next
+  build` in the page stops where it compiles SWC's wasm (Chromium refuses a
+  synchronous `WebAssembly.Module` over 8 MB on the main thread), so Next
+  goes through worker mode (`TABCOMPUTER_NODE_WORKER=1`), where the module
+  compiles; `NEXT_TEST_WASM_DIR` pointing at an installed
+  `@next/swc-wasm-nodejs` avoids Next's own download (the test container's
+  relay can't fetch it). Remaining, on the worker side: jest-worker forks
+  children and talks over `child.send` (fork IPC; worked around with
+  `experimental: { webpackBuildWorker: false, workerThreads: false, cpus: 1 }`),
+  then "Maximum call stack size exceeded" in `resolve` during "Creating an
+  optimized production build". What Next's CommonJS needed in the page,
+  all general: `require.extensions` / `Module._extensions`, a directory
+  `require` using its package.json `main`, `stream/web`,
+  `process.prependOnceListener`, `fs.opendir` / `opendirSync` /
+  `promises.opendir`, a process-local `process.chdir` (the shell's cwd comes
+  back when the script exits), `npm config get/set/delete/list`, and
+  `__dirname` text inside template literals left alone.
+- npm: an optional platform package for linux-x64 (glibc) is installed when it
+  ships an executable, which Blink runs: `npm i -g @openai/codex` gets
+  `@openai/codex-linux-x64`, `opencode-ai` gets `opencode-linux-x64` (and
+  `-baseline`, as npm does). Node addons (`main: *.node`: @next/swc-*,
+  @rollup/rollup-*), musl builds, other platforms, and natives of a package
+  that also offers a WebAssembly build (sharp, @tailwindcss/oxide) are still
+  left out. Install scripts (preinstall, install, postinstall) run after
+  extraction, dependencies first, in the package's directory with npm's
+  `npm_lifecycle_event`/`npm_package_*` variables; `--ignore-scripts` and
+  `ignore-scripts=true` skip them. Unlike npm, a failing script is a warning
+  (its last lines are shown) and the install goes on: a script that builds a
+  native addon can't succeed in the tab, and the package usually works
+  without it.
 - Node: a script's timers and intervals end with it. An interval left by a
   script that called `process.exit()` kept firing in the page, and its
   `setTimeout`s became the next script's timers, so that script never went

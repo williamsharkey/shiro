@@ -1,4 +1,4 @@
-import git, { TREE, STAGE } from 'isomorphic-git';
+import git, { TREE, STAGE, withGitCache } from './git-cached';
 // @ts-ignore - isomorphic-git http module
 import http from 'isomorphic-git/http/web';
 import { Command, CommandContext } from './index';
@@ -21,7 +21,11 @@ import { GLOBAL_GITCONFIG, parseGitConfig, formatGitConfig } from './git-config'
 export const gitCmd: Command = {
   name: 'git',
   description: 'Version control system',
-  async exec(ctx: CommandContext) {
+  // one isomorphic-git cache per command (see git-cached.ts)
+  exec: (ctx: CommandContext) => withGitCache(() => gitMain(ctx)),
+};
+
+async function gitMain(ctx: CommandContext): Promise<number> {
     // Global options before the subcommand (git -C /path -c k=v --no-pager subcmd ...)
     const argv = ctx.args, cwd0 = ctx.cwd; // as given, for the real git
     let workDir = ctx.cwd;
@@ -1091,8 +1095,7 @@ export const gitCmd: Command = {
     }
 
     return 0;
-  },
-};
+}
 
 export { GLOBAL_GITCONFIG, parseGitConfig, formatGitConfig };
 

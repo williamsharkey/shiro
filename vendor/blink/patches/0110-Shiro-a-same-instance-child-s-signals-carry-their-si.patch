@@ -1,0 +1,41 @@
+From 4dd75ef9319cec4a6c7144c6c5dfbe03232dcd45 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 07:21:58 +0000
+Subject: [PATCH] Shiro: a same-instance child's signals carry their siginfo
+ too
+
+---
+ blink/shiro.inc | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index f72d481..c26a87c 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2398,6 +2398,23 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_sigmodes(void) { return 1; }
+ // 0097/0098: write-only pages readable; shared kernel-file maps written back before a new map and at exit
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_sharedmaps(void) { return 1; }
+ 
++// the same with the signal's siginfo (the kernel's call 1030, made as `pid`)
++EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid_info(int pid, int sig, int w0, int w1, int w2,
++                                                      int w3, int w4, int w5, int w6, int w7) {
++  const int w[8] = {w0, w1, w2, w3, w4, w5, w6, w7};
++  int i;
++  if (sig < 1 || sig > 64) return;
++  LOCK(&g_shiro_kids_lock);
++  for (i = 0; i < g_shiro_nkids; ++i) {
++    if (g_shiro_kids[i]->pid == pid) {
++      ShiroQueueSiginfo(g_shiro_kids[i], sig, w);
++      ShiroSignalSystem(g_shiro_kids[i], sig);
++      break;
++    }
++  }
++  UNLOCK(&g_shiro_kids_lock);
++}
++
+ // the kernel signalled hosted child `pid` (host.mjs routes by pid)
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid(int pid, int sig) {
+   int i;
+-- 
+2.43.0
+

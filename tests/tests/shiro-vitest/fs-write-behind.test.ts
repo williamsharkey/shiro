@@ -120,3 +120,76 @@ describe('FileSystem write-behind', () => {
     expect(await onDisk('/tmp/wb-sync.txt')).toBe('durable\n');
   });
 });
+
+// rm -r deletes a directory's contents from IndexedDB as one key range
+describe('FileSystem rm -r (range delete)', () => {
+  async function onDisk(path: string): Promise<string | null> {
+    const other = new FileSystem();
+    await other.init();
+    try { return await other.readFile(path, 'utf8') as string; } catch { return null; }
+  }
+
+  it('removes the tree at once, keeps what is created in it afterwards, and spares lookalike siblings', async () => {
+    const fs = new FileSystem();
+    await fs.init();
+    await fs.mkdir('/tmp/rr/nm/a/b', { recursive: true });
+    for (let i = 0; i < 50; i++) await fs.writeFile(`/tmp/rr/nm/a/b/f${i}`, `x${i}`);
+    await fs.mkdir('/tmp/rr/nm2', { recursive: true });
+    await fs.writeFile('/tmp/rr/nm2/keep', 'sibling');
+    await fs.writeFile('/tmp/rr/nm-x', 'lookalike');
+    await fs.sync();
+    await fs.writeFile('/tmp/rr/nm/a/pending', 'not yet stored'); // queued, superseded by the rm
+    await fs.rm('/tmp/rr/nm', { recursive: true });
+    expect(await fs.exists('/tmp/rr/nm')).toBe(false);
+    expect(await fs.exists('/tmp/rr/nm/a/b/f1')).toBe(false);
+    expect(await fs.readdir('/tmp/rr')).toEqual(expect.arrayContaining(['nm2', 'nm-x']));
+    expect(await fs.readdir('/tmp/rr')).not.toContain('nm');
+    // re-created before the range delete is committed: kept
+    await fs.mkdir('/tmp/rr/nm/a', { recursive: true });
+    await fs.writeFile('/tmp/rr/nm/a/new', 'new');
+    // a reload of the cache before the commit doesn't bring the old tree back
+    fs.clearCache();
+    expect(await fs.exists('/tmp/rr/nm/a/b/f1')).toBe(false);
+    expect(await fs.readFile('/tmp/rr/nm/a/new', 'utf8')).toBe('new');
+    await fs.sync();
+    expect(await onDisk('/tmp/rr/nm/a/b/f1')).toBeNull();
+    expect(await onDisk('/tmp/rr/nm/a/pending')).toBeNull();
+    expect(await onDisk('/tmp/rr/nm/a/new')).toBe('new');
+    expect(await onDisk('/tmp/rr/nm2/keep')).toBe('sibling');
+    expect(await onDisk('/tmp/rr/nm-x')).toBe('lookalike');
+    const other = new FileSystem();
+    await other.init();
+    expect((await other.readdir('/tmp/rr/nm/a')).sort()).toEqual(['new']);
+  });
+});
+
+describe('FileSystem key index at boot', () => {
+  it('a held key index loads after release, or at once for a readdir', async () => {
+    const seed = new FileSystem();
+    await seed.init();
+    await seed.writeFile('/home/user/held.txt', 'x');
+    await seed.sync();
+    const count = () => { let n = 0; const P = IDBObjectStore.prototype as any; const orig = P.getAllKeys; P.getAllKeys = function (...a: any[]) { n++; return orig.apply(this, a); }; return { get n() { return n; }, restore: () => { P.getAllKeys = orig; } }; };
+
+    const c = count();
+    try {
+      const fs = new FileSystem();
+      fs.holdKeyIndex(60_000);
+      await fs.init(); // reads a few paths: these would start the key index
+      expect(await fs.exists('/home/user/held.txt')).toBe(true);
+      expect(c.n).toBe(0);
+      fs.releaseKeyIndex();
+      expect(c.n).toBe(1);
+
+      const fs2 = new FileSystem();
+      fs2.holdKeyIndex(60_000);
+      await fs2.init();
+      expect(await fs2.readdir('/home/user')).toContain('held.txt');
+      expect(c.n).toBe(2);
+      fs2.releaseKeyIndex(); // already loaded: nothing more
+      expect(c.n).toBe(2);
+    } finally {
+      c.restore();
+    }
+  });
+});

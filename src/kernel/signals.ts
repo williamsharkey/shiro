@@ -19,6 +19,7 @@ import type { Kernel } from './kernel';
 import { Process } from './process';
 import { processTable } from '../process-table';
 import { notifySignalPending } from './signalfd';
+import { SI_USER, SIGRTMIN as KSIGRTMIN, CLD_STOPPED, CLD_CONTINUED, type SigInfo } from './abi';
 
 // ── Linux signal numbers ────────────────────────────────────────────────────
 export const SIGHUP = 1;
@@ -296,6 +297,10 @@ export interface SignalTarget {
   managed?: boolean;
   /** True once the process is gone from its owner's table (reaped); job control then forgets it */
   reaped?(): boolean;
+  /** The process's uid (SIGCHLD's si_uid) */
+  uid?: number;
+  /** Run `fn` (a send to this process) with the siginfo the signal carries */
+  carry?(info: SigInfo, fn: () => void): void;
 }
 
 export type JobEvent =
@@ -564,7 +569,7 @@ export class JobControl {
     this.reported.set(p.pid, 'stopped');
     this.lastStatus.set(p.pid, W_STOPCODE(sig));
     this.emit({ type: 'stopped', pid: p.pid, sig });
-    this.notifyParent(p, true);
+    this.notifyParent(p, true, sig);
   }
 
   /** Record a continue (SIGCONT, from either path). */
@@ -578,11 +583,14 @@ export class JobControl {
     this.notifyParent(p, true);
   }
 
-  private notifyParent(p: SignalTarget, stopOrCont: boolean): void {
+  /** SIGCHLD for a stop (with its signal) or a continue: si_code CLD_STOPPED or CLD_CONTINUED, the child's pid */
+  private notifyParent(p: SignalTarget, stopOrCont: boolean, stopSig?: number): void {
     const parent = this.procs.get(p.ppid);
     if (!parent || parent.runState === 'zombie') return;
     if (stopOrCont && (parent.signals.getAction(SIGCHLD).flags & SA_NOCLDSTOP)) return;
-    this.send(parent, SIGCHLD);
+    const info: SigInfo = { signo: SIGCHLD, code: stopSig ? CLD_STOPPED : CLD_CONTINUED, pid: p.pid, uid: p.uid ?? 0, status: stopSig ?? SIGCONT };
+    if (parent.carry) parent.carry(info, () => this.send(parent, SIGCHLD));
+    else this.send(parent, SIGCHLD);
   }
 
   /**
@@ -744,10 +752,17 @@ class ProcessSignalState extends SignalState {
     return m;
   }
   set pending(v: bigint) {
-    const before = this.proc.deferredSignals.size;
-    this.proc.deferredSignals = new Set();
-    for (let s = 1; s < NSIG; s++) if (sigset.has(v, s)) this.proc.deferredSignals.add(s);
-    if (this.proc.deferredSignals.size > before) notifySignalPending(this.proc);
+    const p = this.proc, before = p.deferredSignals.size, was = p.deferredSignals;
+    p.deferredSignals = new Set();
+    for (let s = 1; s < NSIG; s++) if (sigset.has(v, s)) p.deferredSignals.add(s);
+    // what the signal going pending carries (kernel.deliver's, while it routes it here)
+    const info = p.data.sigInFlight as SigInfo | undefined;
+    for (const s of p.deferredSignals) {
+      if (!was.has(s)) p.queueSiginfo(info?.signo === s ? info : { signo: s, code: SI_USER });
+      else if (info?.signo === s && s >= KSIGRTMIN) p.queueSiginfo(info); // another real-time instance
+    }
+    for (const s of was) if (!p.deferredSignals.has(s) && !p.pendingSignals.has(s)) p.siginfo.delete(s);
+    if (p.deferredSignals.size > before) notifySignalPending(p);
   }
 
   get mask(): bigint {
@@ -764,7 +779,8 @@ class ProcessSignalState extends SignalState {
     const local = this.actions.get(sig);
     if (local) return local;
     const d = this.proc.dispositions.get(sig);
-    return { handler: d === 'ignore' ? SIG_IGN : typeof d === 'number' ? d : SIG_DFL, flags: 0, mask: 0n };
+    // (the flags rt_sigaction gave the kernel: SA_NOCLDSTOP for SIGCHLD)
+    return { handler: d === 'ignore' ? SIG_IGN : typeof d === 'number' ? d : SIG_DFL, flags: this.proc.sigactions.get(sig)?.flags ?? 0, mask: 0n };
   }
 
   setAction(sig: number, act: SigAction): number {
@@ -797,6 +813,11 @@ function kernelTarget(kernel: Kernel, proc: Process, jc: JobControl): SignalTarg
     get runState(): RunState { return proc.state; },
     set runState(_v: RunState | undefined) { /* driven by the kernel's markStopped/markContinued/markExited */ },
     signals: new ProcessSignalState(proc),
+    get uid() { return proc.ruid ?? proc.uid; },
+    carry(info, fn) {
+      proc.data.sigInFlight = info;
+      try { fn(); } finally { delete proc.data.sigInFlight; }
+    },
     managed: true,
     reaped: () => kernel.procs.get(proc.pid) !== proc,
     terminate(sig, core) {
@@ -814,6 +835,8 @@ function kernelTarget(kernel: Kernel, proc: Process, jc: JobControl): SignalTarg
       // The kernel's queue owns guest-bound signals: the channel flags them one at a time
       const t = jc.get(proc.pid);
       if (t) t.signals.pending = sigset.del(t.signals.pending, sig);
+      const info = proc.data.sigInFlight as SigInfo | undefined;
+      proc.queueSiginfo(info?.signo === sig ? info : { signo: sig, code: SI_USER });
       proc.pendingSignals.add(sig);
       proc.interruptSyscalls();
       (proc.data.onSignal as ((s: number) => void) | undefined)?.(sig);
