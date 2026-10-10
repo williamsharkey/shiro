@@ -2647,7 +2647,7 @@ A/B dd5d335f → e8279027:
 - `workflows --only apt`, 3 rounds: 6 same, `workflow.apt.hello_run` −14%.
 - `workloads,workloads-slow,workflows --only npm`, 2 rounds: no regression over 10%.
   - Flagged, weak evidence (n=2, pooled p 0.33–0.67): `workflow.peak_rss.vite_npm_i` +6.9% (net of DevTools copies +5.0%) and `workload.claude_npm.first` +7.7%.
-  - The second may be real: the bench page runs for minutes, so files from earlier workloads that sat unused for over 30 s now come from IndexedDB again.
+  - Re-checked with 5 rounds (`--suites workloads --only claude_npm --rounds 5 --runs 2`): all 10 claude_npm metrics are the same, so the +7.7% was noise. That workload runs a few seconds after boot, so no file in it is idle for 30 s.
 - `workflow.vite.npm_i` −3.1%.
 
 The streaming write path (big files written in chunks without a

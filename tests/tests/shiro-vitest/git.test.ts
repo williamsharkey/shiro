@@ -487,7 +487,7 @@ describe('builtinCloneHandles', () => {
       expect(builtinCloneHandles(a.split(' '))).toBe(true);
     }
     for (const a of ['clone --bare https://h/r.git', 'clone --recurse-submodules https://h/r', 'clone git://h/r.git', 'clone ssh://h/r.git',
-      'clone /tmp/r', 'clone file:///tmp/r', 'clone --filter=blob:none https://h/r', 'clone https://h/r a b', 'clone --depth', 'status']) {
+      'clone /tmp/r', 'clone file:///tmp/r', 'clone --filter=blob:none https://h/r', 'clone https://h/r a b', 'clone --depth', 'status', 'clone https://user:tok@github.com/o/r.git']) {
       expect(builtinCloneHandles(a.split(' '))).toBe(false);
     }
     expect(lazyCommand('git', '', async () => { throw new Error('not loaded'); }, { keepOverPackage: builtinCloneHandles }).keepOverPackage).toBe(builtinCloneHandles);

@@ -18,5 +18,6 @@ export function builtinCloneHandles(args: string[]): boolean {
     if (a.startsWith('-')) return false;
     positional.push(a);
   }
-  return positional.length >= 1 && positional.length <= 2 && /^https?:\/\//.test(positional[0]);
+  // (credentials in the URL, user:token@host: the full git and its own handling of them)
+  return positional.length >= 1 && positional.length <= 2 && /^https?:\/\/[^/@]+(\/|$)/.test(positional[0]);
 }
