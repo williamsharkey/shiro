@@ -21,7 +21,7 @@ These record measurements. Each says how it was produced; rerun the tool to upda
 | Doc | Measures | Produced by |
 | --- | --- | --- |
 | [DEBIAN_SCORE.md](DEBIAN_SCORE.md) | Debian popcon top 500: install + smoke test | `npm run debian-score` |
-| [CONFORMANCE.md](CONFORMANCE.md) | Shell specs, busybox, LTP under Blink, wasi-testsuite | `npm run conformance` |
+| [CONFORMANCE.md](CONFORMANCE.md) | Shell specs, busybox, LTP and Open POSIX under Blink, wasi-testsuite | `npm run conformance` |
 | [COMPAT.md](COMPAT.md) | Popular tools, languages, agent CLIs, GUI apps, developer workflows | per-section smoke tests in `tests/` |
 | [GUI_SCORE.md](GUI_SCORE.md) | 29 Debian GUI apps: install, window, render, input, DOM text | `npm run gui-score` |
 | [WEB_SCORE.md](WEB_SCORE.md) | The Browser app against real sites | `tests/browser/web-score.mjs` |
