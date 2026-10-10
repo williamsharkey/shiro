@@ -12,7 +12,7 @@ conformance work started (fc0af54).
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **625/635 (98.4%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **280/322 (87.0%)** |
 | [Syscalls: wasi-testsuite (wasm32-wasip1)](#syscalls-wasi-testsuite-wasm32-wasip1) | — | **71/72 (98.6%)** |
-| [POSIX: Open POSIX Test Suite under Blink (x86-64)](#posix-open-posix-test-suite-under-blink-x86-64) | — | **1353/1448 (93.4%)** |
+| [POSIX: Open POSIX Test Suite under Blink (x86-64)](#posix-open-posix-test-suite-under-blink-x86-64) | — | **1379/1448 (95.2%)** |
 
 How each suite runs, and what is and isn't scored, is described in
 [tests/conformance/README.md](../tests/conformance/README.md).
@@ -485,7 +485,7 @@ WebAssembly/wasi-testsuite prebuilt wasip1 modules (C, Rust, AssemblyScript) run
 
 ## POSIX: Open POSIX Test Suite under Blink (x86-64)
 
-The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scripts/conformance/build-openposix.sh) run as static x86-64 kernel processes in the Blink engine: signals, pthreads, semaphores, message queues, timers, clocks, mmap, scheduling. A test passes when it exits 0; only tests that pass natively on the build host as uid 1000 are scored (openposix/native-baseline.json). First run: 1173/1448, with Blink 0080–0084 built locally (raise(SIGKILL) and sigqueue/AIO fixed from this suite); the gaps are POSIX message queues (mq_*), POSIX timers (timer_*), sigwait/sigtimedwait, sched_* policies and shm_open. → 1326/1448 (kernel POSIX message queues and timers, Blink 0086–0089 and 0093 built locally: mq_*, timer_*, sigtimedwait/sigwait, sched_*; sigqueue waits on siginfo in Blink's handler frames; fork_21-1 and pthread_attr_destroy_1-1 hit a Blink page-lock assertion, fixed in perf-blink's 0092). → 1353/1448 with perf-blink's Blink 0092 (fork keeps page lock counts) and 0095 (siginfo in SA_SIGINFO frames, real-time signals queue): sigqueue, sigwait/sigwaitinfo, fork_21-1, pthread_attr_destroy_1-1, lio_listio and aio_* now pass. Left: shm_open and mmap of shared objects, mlock*, pthread_cancel and cancellation points, process-shared pthread objects, pthread_kill interrupting another thread's call (mq_timedsend_12-1).
+The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scripts/conformance/build-openposix.sh) run as static x86-64 kernel processes in the Blink engine: signals, pthreads, semaphores, message queues, timers, clocks, mmap, scheduling. A test passes when it exits 0; only tests that pass natively on the build host as uid 1000 are scored (openposix/native-baseline.json). First run: 1173/1448, with Blink 0080–0084 built locally (raise(SIGKILL) and sigqueue/AIO fixed from this suite); the gaps are POSIX message queues (mq_*), POSIX timers (timer_*), sigwait/sigtimedwait, sched_* policies and shm_open. → 1326/1448 (kernel POSIX message queues and timers, Blink 0086–0089 and 0093 built locally: mq_*, timer_*, sigtimedwait/sigwait, sched_*; sigqueue waits on siginfo in Blink's handler frames; fork_21-1 and pthread_attr_destroy_1-1 hit a Blink page-lock assertion, fixed in perf-blink's 0092). → 1353/1448 with perf-blink's Blink 0092 (fork keeps page lock counts) and 0095 (siginfo in SA_SIGINFO frames, real-time signals queue): sigqueue, sigwait/sigwaitinfo, fork_21-1, pthread_attr_destroy_1-1, lio_listio and aio_* now pass. Left: shm_open and mmap of shared objects, mlock*, pthread_cancel and cancellation points, process-shared pthread objects, pthread_kill interrupting another thread's call (mq_timedsend_12-1). → 1379/1448 (kernel: kill/sigqueue permissions, SIGCHLD's CLD_* siginfo and SA_NOCLDSTOP/SA_NOCLDWAIT, sigtimedwait taking unblocked waited signals, timer overruns, open() owner bits; Blink 0096–0099 built locally: raise of a blocked real-time signal queues, sigprocmask/sigaltstack modes, write-only pages readable, shared kernel-file maps written back before a new map and at exit, mlock/mmap errors). Left: mmap of shared objects across instances and SIGBUS past EOF, pthread_cancel and cancellation points, process-shared pthread objects, fork cases, pthread_kill interrupting another thread's call (mq_timedsend_12-1); sigqueue_1-1 is fixed by perf-blink's 0110.
 
 | Area | Before | Now | Failing |
 |---|---|---|---|
@@ -514,9 +514,9 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 | lio_listio | — | 15/15 | 0 |
 | localtime | — | 1/1 | 0 |
 | mktime | — | 1/1 | 0 |
-| mlock | — | 2/3 | 1 |
-| mlockall | — | 2/5 | 3 |
-| mmap | — | 21/32 | 11 |
+| mlock | — | 3/3 | 0 |
+| mlockall | — | 3/5 | 2 |
+| mmap | — | 24/32 | 8 |
 | mq_close | — | 6/6 | 0 |
 | mq_getattr | — | 2/2 | 0 |
 | mq_notify | — | 6/6 | 0 |
@@ -526,7 +526,7 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 | mq_timedreceive | — | 1/1 | 0 |
 | mq_timedsend | — | 20/21 | 1 |
 | mq_unlink | — | 4/4 | 0 |
-| munlock | — | 2/3 | 1 |
+| munlock | — | 3/3 | 0 |
 | munlockall | — | 1/1 | 0 |
 | munmap | — | 7/7 | 0 |
 | nanosleep | — | 11/11 | 0 |
@@ -576,7 +576,7 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 | pthread_getcpuclockid | — | 1/1 | 0 |
 | pthread_getschedparam | — | 1/1 | 0 |
 | pthread_getspecific | — | 2/2 | 0 |
-| pthread_join | — | 5/8 | 3 |
+| pthread_join | — | 6/8 | 2 |
 | pthread_key_create | — | 4/4 | 0 |
 | pthread_key_delete | — | 3/3 | 0 |
 | pthread_kill | — | 3/6 | 3 |
@@ -617,7 +617,7 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 | pthread_setcanceltype | — | 2/3 | 1 |
 | pthread_setschedparam | — | 0/1 | 1 |
 | pthread_setspecific | — | 2/2 | 0 |
-| pthread_sigmask | — | 13/14 | 1 |
+| pthread_sigmask | — | 14/14 | 0 |
 | pthread_spin_destroy | — | 2/2 | 0 |
 | pthread_spin_init | — | 2/4 | 2 |
 | pthread_spin_lock | — | 2/4 | 2 |
@@ -636,16 +636,16 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 | sem_destroy | — | 2/2 | 0 |
 | sem_getvalue | — | 5/5 | 0 |
 | sem_init | — | 9/9 | 0 |
-| sem_open | — | 11/12 | 1 |
+| sem_open | — | 12/12 | 0 |
 | sem_post | — | 6/6 | 0 |
 | sem_timedwait | — | 11/11 | 0 |
 | sem_unlink | — | 9/9 | 0 |
 | sem_wait | — | 8/8 | 0 |
-| shm_open | — | 18/27 | 9 |
+| shm_open | — | 25/27 | 2 |
 | shm_unlink | — | 7/7 | 0 |
-| sigaction | — | 497/500 | 3 |
+| sigaction | — | 499/500 | 1 |
 | sigaddset | — | 5/5 | 0 |
-| sigaltstack | — | 9/11 | 2 |
+| sigaltstack | — | 11/11 | 0 |
 | sigdelset | — | 5/5 | 0 |
 | sigemptyset | — | 2/2 | 0 |
 | sigfillset | — | 2/2 | 0 |
@@ -655,14 +655,14 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 | signal | — | 6/6 | 0 |
 | sigpause | — | 5/5 | 0 |
 | sigpending | — | 4/4 | 0 |
-| sigprocmask | — | 11/12 | 1 |
-| sigqueue | — | 10/13 | 3 |
+| sigprocmask | — | 12/12 | 0 |
+| sigqueue | — | 12/13 | 1 |
 | sigrelse | — | 3/3 | 0 |
 | sigset | — | 10/10 | 0 |
 | sigsuspend | — | 4/4 | 0 |
 | sigtimedwait | — | 5/5 | 0 |
-| sigwait | — | 7/8 | 1 |
-| sigwaitinfo | — | 7/8 | 1 |
+| sigwait | — | 8/8 | 0 |
+| sigwaitinfo | — | 8/8 | 0 |
 | speculative | — | 17/17 | 0 |
 | strchr | — | 1/1 | 0 |
 | strcpy | — | 1/1 | 0 |
@@ -672,7 +672,7 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 | time | — | 1/1 | 0 |
 | timer_create | — | 8/8 | 0 |
 | timer_delete | — | 2/2 | 0 |
-| timer_getoverrun | — | 3/4 | 1 |
+| timer_getoverrun | — | 4/4 | 0 |
 | timer_gettime | — | 7/7 | 0 |
 | timer_settime | — | 14/14 | 0 |
 
@@ -684,11 +684,9 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 - **clock_gettime**: clock_gettime_8-2 — FAIL: At least one test FAILED -- see above
 - **fork**: fork_13-1 — FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/13-1.c FAILED: Child exited abnormally; fork_18-1 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/18-1.c unresolved: got 22 (Invalid argument) on line 87 (Failed to create a ti; fork_22-1 — FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/22-1.c FAILED: Child exited abnormally; fork_7-1 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/7-1.c unresolved: got 2 (No such file or directory) on line 121 (Could not ope; fork_8-1 (hang/timeout) — timeout: 
 - **fsync**: fsync_7-1 — FAIL: fsync/7-1.c Test Fail: Expect EINVAL, get: Success
-- **mlock**: mlock_8-1 — UNRESOLVED: Unexpected error: Success
-- **mlockall**: mlockall_13-1 — FAIL: mlockall() return 0 instead of -1.; mlockall_3-6 — FAIL: The shared memory pages of the process are not locked.; mlockall_3-7 — FAIL: The mapped files pages of the process are not locked.
-- **mmap**: mmap_10-1 (hang/timeout) — timeout: ; mmap_11-2 — FAIL: Test FAILED: SIGBUS not triggered, while Memory Protection is enabled; mmap_11-3 — FAIL: Test FAILED: SIGBUS not triggered, while Memory Protection is enabled; mmap_11-4 — UNTESTED: From mmap(2) manpage, skip known bug on tmpfs; mmap_14-1 — FAIL: Test FAILED: st_ctime and st_mtime were not updated properly; mmap_21-1 — FAIL: Test FAILED; mmap_23-1 — FAIL: Text FAILED: mmap() succeded; mmap_24-1 (hang/timeout) — timeout: ; mmap_24-2 — FAIL: Test Fail: Did not get ENOMEM as expected; mmap_3-1 — FAIL: Test Fail: The file is not mapped correctly; mmap_7-4 — FAIL: mmap with MAP_SHARED failed to propagate change into the child
+- **mlockall**: mlockall_3-6 — FAIL: The shared memory pages of the process are not locked.; mlockall_3-7 — FAIL: The mapped files pages of the process are not locked.
+- **mmap**: mmap_10-1 (hang/timeout) — timeout: ; mmap_11-2 — FAIL: Test FAILED: SIGBUS not triggered, while Memory Protection is enabled; mmap_11-3 — FAIL: Test FAILED: SIGBUS not triggered, while Memory Protection is enabled; mmap_11-4 — UNTESTED: From mmap(2) manpage, skip known bug on tmpfs; mmap_14-1 — FAIL: Test FAILED: st_ctime and st_mtime were not updated properly; mmap_24-1 (hang/timeout) — timeout: ; mmap_3-1 — FAIL: Test Fail: The file is not mapped correctly; mmap_7-4 — FAIL: mmap with MAP_SHARED failed to propagate change into the child
 - **mq_timedsend**: mq_timedsend_12-1 (hang/timeout) — timeout: 
-- **munlock**: munlock_10-1 — UNRESOLVED: Unexpected error: Success
 - **pthread_atfork**: pthread_atfork_3-3 (hang/timeout) — timeout: 
 - **pthread_barrierattr_getpshared**: pthread_barrierattr_getpshared_2-1 — FAIL: Test Fail: block on pthread_barrier_wait()
 - **pthread_cancel**: pthread_cancel_1-1 — FAIL: Test FAILED: Cancel request timed out; pthread_cancel_2-1 — FAIL: Test FAILED: Timed out while waiting for cancelation cleanup handlers to execute; pthread_cancel_2-2 — FAIL: unexpected error: pthread_cancel 2-2: Test FAIL: Destructor was not executed.; pthread_cancel_2-3 — FAIL: unexpected error: pthread_cancel 2-3: Test FAIL: Cleanup handler was not executed.; pthread_cancel_3-1 (hang/timeout) — timeout: Error: cancel never arrived
@@ -700,7 +698,7 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 - **pthread_cond_wait**: pthread_cond_wait_2-3 (hang/timeout) — timeout: ; pthread_cond_wait_4-1 (hang/timeout) — timeout: 
 - **pthread_create**: pthread_create_11-1 (hang/timeout) — timeout: 
 - **pthread_equal**: pthread_equal_2-1 (hang/timeout) — timeout: 
-- **pthread_join**: pthread_join_3-1 (hang/timeout) — timeout: ; pthread_join_4-1 (hang/timeout) — timeout: ; pthread_join_6-3 (hang/timeout) — timeout: 
+- **pthread_join**: pthread_join_3-1 (hang/timeout) — timeout: ; pthread_join_4-1 (hang/timeout) — timeout: 
 - **pthread_kill**: pthread_kill_2-1 — exit 139: ; pthread_kill_3-1 — exit 139: ; pthread_kill_8-1 (hang/timeout) — timeout: 
 - **pthread_mutex_init**: pthread_mutex_init_1-2 (hang/timeout) — timeout: ; pthread_mutex_init_3-2 (hang/timeout) — timeout: 
 - **pthread_mutex_trylock**: pthread_mutex_trylock_4-3 (hang/timeout) — timeout: 
@@ -709,19 +707,12 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 - **pthread_setcancelstate**: pthread_setcancelstate_1-1 — FAIL: Test FAILED: Thread of cancel type PTHREAD_CANCEL_ENABLE did not honor cancel request; pthread_setcancelstate_2-1 — FAIL: Test FAILED: Thread default cancel type is not PTHREAD_CANCEL_ENABLE, it did not honor cancel request
 - **pthread_setcanceltype**: pthread_setcanceltype_1-1 — FAIL: Test FAILED: Cancel request timed out
 - **pthread_setschedparam**: pthread_setschedparam_5-1 (hang/timeout) — timeout: 
-- **pthread_sigmask**: pthread_sigmask_10-1 — FAIL: Test FAILED
 - **pthread_spin_init**: pthread_spin_init_2-1 (hang/timeout) — timeout: ; pthread_spin_init_2-2 (hang/timeout) — timeout: 
 - **pthread_spin_lock**: pthread_spin_lock_1-1 (hang/timeout) — timeout: ; pthread_spin_lock_3-1 — exit 139: 
 - **sched_setparam**: sched_setparam_26-1 — FAIL: errno is not EPERM: Success
 - **sem_close**: sem_close_3-2 — FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/sem_close/3-2.c FAILED: The semaphore count has changed after sem_close
-- **sem_open**: sem_open_3-1 — UNRESOLVED: unexpected error: sem_open 3-1: sem_open: No such file or directory
-- **shm_open**: shm_open_1-1 — exit 139: ; shm_open_14-2 — exit 139: ; shm_open_15-1 (hang/timeout) — skipped: hangs tabcomputer; shm_open_23-1 (hang/timeout) — timeout: ; shm_open_28-1 — exit 139: ; shm_open_28-3 — exit 139: ; shm_open_32-1 — FAIL: shm_open success.; shm_open_34-1 — FAIL: shm_open success.; shm_open_5-1 — FAIL: Test FAILED
-- **sigaction**: sigaction_10-1 (hang/timeout) — timeout: ; sigaction_17-15 (hang/timeout) — skipped: hangs tabcomputer; sigaction_21-1 — FAIL: Test FAILED
-- **sigaltstack**: sigaltstack_11-1 — FAIL: Test FAILED: Expected return value of -1.; sigaltstack_2-1 — FAIL: Test FAILED: ss_sp of the handler's stack changed even though SS_DISABLE was set
-- **sigprocmask**: sigprocmask_10-1 — FAIL: FAIL: SIGKILL was added to the signal mask
-- **sigqueue**: sigqueue_1-1 (hang/timeout) — timeout: ; sigqueue_12-1 — FAIL: sigqueue() did not return -1; sigqueue_3-1 — FAIL: Test FAILED: sigqueue() succeeded even though this program's user id did not match the recieving process's user id
-- **sigwait**: sigwait_2-1 — FAIL: Test FAILED
-- **sigwaitinfo**: sigwaitinfo_3-1 — FAIL: Test FAILED
-- **timer_getoverrun**: timer_getoverrun_2-3 — FAIL: FAIL:  0 overruns sent; expected 499
+- **shm_open**: shm_open_15-1 (hang/timeout) — skipped: hangs tabcomputer; shm_open_23-1 (hang/timeout) — timeout: 
+- **sigaction**: sigaction_17-15 (hang/timeout) — skipped: hangs tabcomputer
+- **sigqueue**: sigqueue_1-1 (hang/timeout) — timeout: 
 
 </details>
