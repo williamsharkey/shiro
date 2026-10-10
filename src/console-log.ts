@@ -67,13 +67,16 @@ let inCapture = false;
 const pageStart = Date.now();
 
 // The previous page's log: read at boot (before this page's saves replace
-// it), parsed when queried. Safe mode neither reads nor replaces it.
+// it), parsed when queried. Safe mode doesn't touch it at boot and never
+// replaces it, so `console --prev` there shows the session that needed it.
 const safe = isSafeMode();
 let previousRaw: string | null = null;
-try { if (!safe && typeof localStorage !== 'undefined') previousRaw = localStorage.getItem(PERSIST_KEY); } catch { /* no storage */ }
+const readPrevious = () => { try { return typeof localStorage !== 'undefined' ? localStorage.getItem(PERSIST_KEY) : null; } catch { return null; } };
+if (!safe) previousRaw = readPrevious();
 let previousParsed: { pageStart: number; entries: ConsoleEntry[] } | null | undefined;
 function previousLog(): { pageStart: number; entries: ConsoleEntry[] } | null {
   if (previousParsed === undefined) {
+    if (safe) previousRaw = readPrevious();
     try { previousParsed = previousRaw ? JSON.parse(previousRaw) : null; } catch { previousParsed = null; }
     previousRaw = null;
   }

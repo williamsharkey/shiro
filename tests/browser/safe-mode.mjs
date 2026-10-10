@@ -86,6 +86,7 @@ check((await sh(page, 'test -e /tmp/profile-ran')).code !== 0, '~/.profile did n
 check(await page.evaluate(() => window.__tabcomputer.uiMode) === 'terminal', 'the terminal UI, not the desktop');
 const st = await sh(page, 'safe-mode');
 check(st.out.includes('Safe mode is on: asked for'), `safe-mode: ${st.out.split('\n')[0]}`);
+check((await sh(page, 'console --prev -g Starting')).out.includes('[tabcomputer] Starting'), "console --prev shows the earlier session's log");
 check((await sh(page, 'safe-mode disable-profile')).out.includes('Renamed ~/.profile to ~/.profile.disabled'), 'disable-profile renames ~/.profile');
 check((await sh(page, 'safe-mode reset-layout')).out.includes('tabcomputer-desktop-session'), 'reset-layout clears the saved windows');
 check((await sh(page, 'cat ~/.profile.disabled')).out.includes("js-eval"), 'the old ~/.profile is kept');
