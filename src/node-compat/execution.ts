@@ -242,7 +242,7 @@ export async function executeNodeScript(
         case 'https':
         case 'node:https': return createHttpsModule({ ctx, iframeServer, fakeConsole, getBuiltinModule, trackAsync });
         case 'net':
-        case 'node:net': return createNetModule({ Buffer: FakeBuffer });
+        case 'node:net': return createNetModule({ Buffer: FakeBuffer, ...(nodeGuestOf(ctx)?.netStack ? { stack: nodeGuestOf(ctx)!.netStack as any } : {}) });
         case 'tls':
         case 'node:tls': return createTlsModule({ getBuiltinModule });
         case 'http2':
@@ -609,7 +609,8 @@ export async function executeNodeScript(
     const _timerIds = new Set<any>();
     const _intervalIds = new Set<any>();
     const _refdIntervals = new Set<any>(); // a guest's ref'd intervals: activity, as in node
-    const intervalsAlive = () => _refdIntervals.size > 0;
+    // (and its open sockets and servers)
+    const intervalsAlive = () => _refdIntervals.size > 0 || !!guest?.busy?.();
     if (code.length <= 500000) {
       const settle = () => { if (_activeTimers <= 0 && _timersResolve) { _timersResolve(); _timersResolve = null; _timersDone = null; } };
       globalThis.setTimeout = _st.installedSetTimeout = function(fn: any, ms?: number, ...args: any[]) {
