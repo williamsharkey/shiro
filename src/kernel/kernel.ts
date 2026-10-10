@@ -1511,7 +1511,14 @@ export class Kernel {
     proc.syscalls++;
     // While in a syscall the process counts as sleeping (S in /proc/PID/stat)
     if (proc.inSyscall++ === 0) proc.syscallSince = t0;
-    const done = () => { proc.inSyscall--; proc.kernelMs += Date.now() - t0; };
+    const call = { nr, args };
+    proc.calls.push(call);
+    const done = () => {
+      proc.inSyscall--;
+      proc.kernelMs += Date.now() - t0;
+      const i = proc.calls.indexOf(call);
+      if (i >= 0) proc.calls.splice(i, 1);
+    };
     // The caller awaits the call itself: the bookkeeping adds no await hop to it
     const p = this.syscallImpl(proc, nr, args, data);
     p.then(done, done);

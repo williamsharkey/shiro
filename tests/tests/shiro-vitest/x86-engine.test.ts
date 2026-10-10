@@ -48,6 +48,8 @@ const haveGoV2 = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', goV2Bi
 const haveHttp = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', httpBin, 'nethttp.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const tcpBin = join(out, 'tcpecho');
 const haveTcp = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', tcpBin, 'tcpecho.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
+const gorunBin = join(out, 'gorun');
+const haveGorun = haveHttp && tryBuild(goExe, ['build', '-ldflags=-s', '-o', gorunBin, 'gorun.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const ttyBin = join(out, 'tty');
 const haveTty = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', ttyBin, 'tty.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const haveGlibc = tryBuild('gcc', ['-static', '-Os', '-o', glibcBin, 'hello.c']);
@@ -600,6 +602,31 @@ describe.skipIf(!haveTty)('Blink engine: interactive program on a kernel pty', (
     tty.pty.input('q');
     await until(/bye/);
     expect(await done).toEqual({ type: 'exited', status: 0 });
+  }, 120_000);
+
+  // `go run srv.go` with stdout on the terminal (toolchains bench): cmd/go
+  // runs the binary as a child sharing the tty; the child's net/http uses
+  // epoll on loopback sockets. With the terminal's description left
+  // non-blocking, Go's runtime puts stdout in its edge-triggered netpoller too.
+  it.skipIf(!haveGorun).each(['', 'nonblock'])('a go-run-like parent, its net/http child writing to the shared tty (%s)', async (mode) => {
+    const { fs } = await setup(readFileSync(gorunBin));
+    await fs.writeFile('/home/user/work/nethttp', readFileSync(httpBin), { mode: 0o755 });
+    const { Kernel } = await import('@shiro/kernel/kernel');
+    const { TtySession, attachKernelTty } = await import('@shiro/kernel/pty');
+    const { JobControl } = await import('@shiro/kernel/signals');
+    const { blinkRunner } = await import('@shiro/x86-engine/blink');
+    const kernel = new Kernel({ fs, registerWithProcessTable: false });
+    const jc = new JobControl();
+    attachKernelTty(kernel, jc);
+    const tty = new TtySession({ jc });
+    let screen = '';
+    tty.pty.onOutput((b: Uint8Array) => { screen += new TextDecoder().decode(b); });
+    const p = tty.spawnJob(kernel, {
+      path: '/home/user/work/prog', argv: ['prog', '/home/user/work/nethttp'], cwd: '/tmp',
+      env: mode ? { GORUN_NONBLOCK: '1' } : {}, run: blinkRunner('/home/user/work/prog'),
+    });
+    expect(await tty.foreground({ pgid: p.pgid })).toEqual({ type: 'exited', status: 0 });
+    expect(screen).toBe('pong /0\r\npong /1\r\npong /2\r\npong /3\r\n');
   }, 120_000);
 
   it('Ctrl-C ends a C program blocked reading the tty (no handler)', async () => {
