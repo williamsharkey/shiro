@@ -231,7 +231,7 @@ export class ProcFs {
       // What a hung process is blocked in: the oldest syscall in progress
       // (nr and six args in hex; sp and pc aren't known: 0), or "running"
       case 'syscall': return { type: 'file', text: () => syscallText(p) };
-      case 'wchan': return { type: 'file', text: () => (p.calls.length || p.engineSleeps ? 'do_syscall_64' : '0') };
+      case 'wchan': return { type: 'file', text: () => wchanText(p) };
       case 'io': return { type: 'file', text: () => 'rchar: 0\nwchar: 0\nsyscr: 0\nsyscw: 0\nread_bytes: 0\nwrite_bytes: 0\ncancelled_write_bytes: 0\n' };
       case 'mounts': return { type: 'file', text: () => 'rootfs / rootfs rw 0 0\nproc /proc proc rw 0 0\n' };
     }
@@ -420,7 +420,11 @@ const VMSTAT_KEYS = [
 
 const PID_ENTRIES = ['cmdline', 'comm', 'cwd', 'environ', 'exe', 'fd', 'io', 'mounts', 'root', 'stat', 'statm', 'status', 'syscall', 'task', 'wchan'];
 
-function syscallText(p: Process): string {
+export function wchanText(p: Process): string {
+  return p.calls.length || p.engineSleeps ? 'do_syscall_64' : '0';
+}
+
+export function syscallText(p: Process): string {
   if (p.state === 'zombie') return 'running\n';
   const c = p.calls[0];
   // A wait Blink does itself (futex, nanosleep) has no kernel call: say futex

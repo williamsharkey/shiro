@@ -505,6 +505,10 @@ describe('kernel processes', () => {
     await new Promise((r) => setTimeout(r, 5));
     expect(await cat(`/proc/${proc.pid}/syscall`)).toBe(`${A.SYS_read} 0x${prd.toString(16)} 0x10 0x0 0x0 0x0 0x0 0x0 0x0\n`);
     expect(await cat(`/proc/${proc.pid}/wchan`)).toBe('do_syscall_64');
+    // the same through the shell's /proc view (its builtin cat and ls read that one)
+    expect(await fs.readFile(`/proc/${proc.pid}/syscall`, 'utf8')).toBe(`${A.SYS_read} 0x${prd.toString(16)} 0x10 0x0 0x0 0x0 0x0 0x0 0x0\n`);
+    expect(await fs.readFile(`/proc/${proc.pid}/task/${proc.pid}/wchan`, 'utf8')).toBe('do_syscall_64');
+    expect(await fs.readdir(`/proc/${proc.pid}/task`)).toEqual([String(proc.pid)]);
     data.set([1], 0);
     expect(await kernel.syscall(proc, A.SYS_write, [pwr, 1], data)).toBe(1);
     expect(await blocked).toBe(1);
