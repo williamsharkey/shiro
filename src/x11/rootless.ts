@@ -6,7 +6,7 @@
  * (WM_DELETE_WINDOW), moves and resizes go back and forth like a window
  * manager would do them.
  */
-import { appIdAliases, pidAppIds } from './app-ids';
+import { appIdAliases, appIdOfPid } from './app-ids';
 import { TextLayer } from './dom-text';
 import type { XServer, XWindow, XCursor, TextRun } from './server';
 import type { CanvasWindow, GuiInputEvent, WindowHost } from '../gui/window-host';
@@ -195,7 +195,7 @@ export class Rootless {
   private appId(w: XWindow): string | undefined {
     const pid = this.server.prop(w, '_NET_WM_PID');
     if (pid && pid.data.length >= 4) {
-      const id = pidAppIds.get(new DataView(pid.data.buffer, pid.data.byteOffset, 4).getUint32(0, true));
+      const id = appIdOfPid(new DataView(pid.data.buffer, pid.data.byteOffset, 4).getUint32(0, true));
       if (id) return id;
     }
     return this.wmClass(w);

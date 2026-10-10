@@ -60,6 +60,12 @@ export interface SharedState {
    *  here the script unwinds by an exception, and what catch blocks on the
    *  way print is dropped */
   outputClosed?: boolean;
+  /**
+   * The script is past its top level, waiting on its async work: an exit now ends
+   * it, interactive or not (its output closes, so a catch around process.exit()
+   * that prints what it caught prints nothing: Gemini CLI's "critical error")
+   */
+  exitEnds?: boolean;
   /** Stdout goes to the terminal: there is one and stdout isn't piped or redirected */
   stdoutToTerminal: boolean;
   /** Something was written to the terminal on stdout / stderr (so it isn't returned in ctx too) */

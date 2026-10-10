@@ -93,12 +93,20 @@ export class TtyStdin {
     if (this.stop) this.applyMode();
   }
 
-  /** The script is over: stop, and the stand-in process exits */
+  /**
+   * The script is over: stop, and the stand-in process exits. Nothing waits
+   * for it (the shell waits for the script), so it is reaped here: a zombie
+   * left in the job table kept its handlers, and with them the ended script
+   * and all it loaded.
+   */
   close(): void {
     this.pause();
     void this.slave?.close();
     this.slave = null;
-    this.job?.finish(0);
+    if (this.job) {
+      this.job.finish(0);
+      this.session.jc.unregister(this.job.pid);
+    }
     this.job = null;
   }
 

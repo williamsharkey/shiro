@@ -19,8 +19,11 @@
  *   shiro_shmobj_map       1020 (fd | shmid, kind, lenLo, lenHi) → object id (> 0);
  *                               data = i32 1 when the mapping is remote (the
  *                               buffer comes by message before the reply), 0 fast.
- *                               kind 0: fd of a /dev/shm (or /run/shm) file,
- *                               1: a SysV shmid.
+ *                               kind 0: fd of a /dev/shm (or /run/shm) file
+ *                               or a memfd, 1: a SysV shmid; | 0x100: remote
+ *                               from the first map (no publish round). The
+ *                               buffer is the bytes rounded up to pages, then
+ *                               a page of control words (CONTROL_BYTES).
  *   shiro_shmobj_unmap     1021 (id)                             → 0
  *   shiro_shmobj_published 1022 (id)                             → 0
  */
@@ -44,7 +47,27 @@ interface SharedObject {
   hasSab: Set<number>;
   /** A file object's bytes go back here when the last mapping goes */
   writeBack?: (bytes: Uint8Array) => void | Promise<void>;
+  /** Told the buffer when the object turns remote (a memfd reads and writes through it from then on) */
+  onRemote?: (sab: SharedArrayBuffer) => void;
 }
+
+export interface MapOptions {
+  /**
+   * Remote from the first map (the kind | 0x100 flag): no publish round is
+   * ever needed, at the price of the slow path for a single instance too.
+   * (A holder parked in a blocking call can't publish until it returns.)
+   */
+  eager?: boolean;
+  onRemote?: SharedObject['onRemote'];
+}
+
+/**
+ * A buffer holds the object's bytes rounded up to whole pages, then one page
+ * of control words that Blink uses (word 0: the object's lock, 1: threads
+ * waiting for it; vendor/blink/shiro-kernel.js).
+ */
+export const CONTROL_BYTES = 4096;
+export const objectBytes = (size: number): number => Math.ceil(size / 4096) * 4096;
 
 /** Paths whose files are shareable objects (POSIX shm and named semaphores live there). */
 export function isShareablePath(path: string): boolean {
@@ -66,28 +89,31 @@ export class SharedObjects {
    * remote. Resolves with its id and whether the mapping is remote.
    */
   async map(instance: number, key: string, size: number, initial?: () => Uint8Array | Promise<Uint8Array>,
-    writeBack?: SharedObject['writeBack']): Promise<{ id: number; remote: boolean } | number> {
+    writeBack?: SharedObject['writeBack'], opts: MapOptions = {}): Promise<{ id: number; remote: boolean } | number> {
     if (size <= 0) return -22; // EINVAL
     let o = this.byKey.get(key);
     if (!o) {
-      o = { id: this.nextId++, key, size, sab: null, mappers: new Map(), publishing: new Map(), hasSab: new Set(), writeBack };
+      o = { id: this.nextId++, key, size, sab: null, mappers: new Map(), publishing: new Map(), hasSab: new Set(), writeBack, onRemote: opts.onRemote };
       this.byKey.set(key, o);
       this.byId.set(o.id, o);
     }
     if (size > o.size && !o.sab) o.size = size;
     const others = [...o.mappers.keys()].filter((i) => i !== instance);
-    if (!o.sab && others.length === 0) {
+    if (!o.sab && others.length === 0 && !opts.eager) {
       o.mappers.set(instance, (o.mappers.get(instance) ?? 0) + 1);
       return { id: o.id, remote: false };
     }
     if (!o.sab) {
-      // The second instance: one buffer, seeded from the file; the fast holders publish into it
-      const sab = new SharedArrayBuffer(o.size);
+      // The second instance (or an eager first map): one buffer, seeded from
+      // the file; the fast holders, if any, publish into it
+      // (then a page of control words: Blink's lock for the object)
+      const sab = new SharedArrayBuffer(objectBytes(o.size) + CONTROL_BYTES);
       if (initial) {
         const bytes = await initial();
         new Uint8Array(sab).set(bytes.subarray(0, o.size));
       }
       o.sab = sab;
+      o.onRemote?.(sab);
       const waits = others.map((holder) => new Promise<boolean>((resolve) => {
         const timer = setTimeout(() => { o!.publishing.delete(holder); resolve(false); }, this.publishTimeoutMs);
         o!.publishing.set(holder, () => { clearTimeout(timer); resolve(true); });
@@ -143,7 +169,7 @@ export class SharedObjects {
   private async drop(o: SharedObject): Promise<void> {
     this.byKey.delete(o.key);
     this.byId.delete(o.id);
-    if (o.sab && o.writeBack) await o.writeBack(new Uint8Array(o.sab).slice());
+    if (o.sab && o.writeBack) await o.writeBack(new Uint8Array(o.sab, 0, o.size).slice());
   }
 
   /** The live buffer of a remote object (read/write syscalls on its file go here), or null. */

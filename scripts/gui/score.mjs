@@ -108,7 +108,7 @@ const sample = (page, id) => page.evaluate((id) => {
 
 async function scoreApp(browser, base, id) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  await context.addInitScript(() => { try { localStorage.setItem('tabcomputer-desktop-tour', '1'); } catch { /* none */ } });
+  await context.addInitScript(() => { try { localStorage.setItem('tabcomputer-desktop-tour', '1'); localStorage.setItem('tabcomputer-desktop-welcome', '1'); } catch { /* none */ } });
   const app = manifest.apps[id];
   const r = { id, toolkit: app.toolkit, mb: +(app.size / 1e6).toFixed(1), packages: app.packages.length, version: version(id), when: new Date().toISOString() };
   const page = await context.newPage();
@@ -208,9 +208,9 @@ async function scoreApp(browser, base, id) {
 // ── Report ───────────────────────────────────────────────────────────────
 /** Known causes, shown with a row's own note (see "Failures and fixes" in the report) */
 const KNOWN = {
-  blender: 'past OpenCV\'s CPU check (engine fix); now glibc aborts on PI-mutex futex ops (EINVAL in the x86 engine, reported)',
-  'libreoffice-writer': 'loads now (ELF .bin, libcups); an uncaught UNO RuntimeException at startup, then it hangs (not diagnosed)',
-  'firefox-esr': 'past the getaddrinfo abort (fixed): a blank window after minutes, gone seconds later; content processes crash (SIGSEGV)',
+  blender: 'past the CPU check and PI futexes (engine fixes); needs OpenGL 3.3 over GLX, which Xshiro doesn\'t provide',
+  'libreoffice-writer': 'runs (via oosplash): its first window is the splash, the start center follows (~2 min)',
+  'firefox-esr': 'runs (~4.5 min to its window): content processes get the font list by message (an overlay pref) until shared mappings work across processes; its text isn\'t reported',
   audacity: 'its first window is the first-run plugin scan; the main window follows (~70 s); wxWidgets text isn\'t reported',
   eog: 'input: a viewer with nothing open: typing changes nothing',
   ristretto: 'input: a viewer with nothing open: typing changes nothing',

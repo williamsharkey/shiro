@@ -857,6 +857,60 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    makes call 1030 as the child, and blink_shiro_signal_pid_info queues it
    on the child's System. Open POSIX sigqueue_1-1 (the child's handler
    checks si_value) passes. Test: fixtures/x86/siginfochild.c.
+111. memfd_create goes to the kernel's (Blink answered ENOSYS): Firefox's
+   shared memory, Mesa, Wayland and PulseAudio make their buffers with
+   it. Test: fixtures/x86/memfd.c. (Another process mapping the same
+   memfd afresh doesn't see its writes yet; 0112 fixes that.)
+112. Objects shared with other Blink instances (shmobj, the Blink half of
+   docs/research/SHARED_MAPPINGS.md). A MAP_SHARED mapping of a /dev/shm
+   file or a memfd asks the kernel for a shared object (call 1020, kind
+   0x100: remote from the first mapper, so nobody has to publish). Its
+   bytes live in the kernel's SharedArrayBuffer, which the instance's
+   host.mjs thread holds.
+   - Blink maps shadow pages marked PAGE_REMOTE (bit 48). No TLB caches
+     them, the JIT's included: compiled code leaves the instruction to the
+     interpreter. Every access comes through LookupAddress2.
+   - An instruction locks the object (a control word after its bytes) and
+     copies the page in, in one call to the host thread. The thread keeps
+     the lock and the page for the next instructions, a lease of at most
+     0.5 ms, released before any system call or GIL hand-off. Then it
+     writes the pages back and unlocks. Lock-prefixed instructions are
+     atomic across instances. A thread waiting for the lock sleeps on a
+     wake from the host thread (Atomics.waitAsync), and newcomers let
+     waiters go first.
+   - A system call may block, so it locks only around its copies. It
+     writes back what it changed, diffed against what it read.
+   - FUTEX_WAIT/WAKE on a remote word wait and wake on the buffer itself,
+     so a wake crosses instances.
+   - munmap, exit and same-instance fork keep the kernel's mapping counts.
+   - BLINK_SHMOBJ=0 maps such files as private copies, as before.
+
+   Tests:
+   - fixtures/x86/psem.c: sem_open, with an exec'd process posting (was
+     it.fails).
+   - fixtures/x86/shmobj.c: a memfd mapped again by an exec'd process,
+     2×2000 lock xadds plus a PROCESS_SHARED mutex, and 50 semaphore
+     ping-pongs. Counts exact with and without the JIT, 0.8 s for the
+     whole program. The first version, a call per access and no lease,
+     took 24 s.
+   - shmobj.test.ts: the kernel side of kind 0x100, memfd keys and the
+     control page.
+
+   Costs and gaps:
+   - A cross-instance semaphore round trip is ~6 ms (native: 0.08 ms).
+   - read()/write() on a memfd go through the buffer while it's remote
+     (perf-kernel's side). A /dev/shm file's don't yet.
+   - SysV shm between instances still uses a copy per instance.
+0500. unix/conformance's mlock/munlock/mlockall and mmap argument errors
+   (Open POSIX mlock_8-1, munlock_10-1, mlockall_13-1, mmap_21-1, 23-1,
+   24-2). Numbered from 0500 so the two branches never renumber each
+   other.
+0501. unix/conformance's: a thread's tkill/tgkill reaches its handler as
+   SI_TKILL from its own process (glibc's SIGCANCEL handler checks that),
+   and the signal frame is in Linux's rt_sigframe order (ret, uc, si), as
+   libgcc's fallback unwinder expects. pthread_cancel works.
+0502. unix/conformance's: a CPU clock id that names no process or thread
+   of ours is EINVAL.
 
    fork+exit+wait with 16 MiB of dirty heap went from 30 to 7.5 ms, and
    with 64 MiB from 104 to 12 ms (native: 3.1 ms). Test:
@@ -930,6 +984,16 @@ Honest estimate for a ~200 MB static Go CLI that talks TLS to Google APIs:
    estimate from gh, not measured), and hot CPU-bound code at 2–5x native
    instead of ~120x (Go loop 50M: 253 ms vs 107 ms native; mul/div loop
    4–5x).
+   Since then (Blink patches 0085–0111): compiled blocks chain without
+   leaving the JIT, SSE2/SSSE3 integer code, rotates and hint nops are
+   compiled (SHA-1 5 → 25 MB/s), and fork is copy-on-write (64 MiB parent:
+   104 → 12 ms). From before the JIT to now, the x86 suite reads go_cpuloop
+   2282 → 246 ms and Go/glibc peak RSS −50–94% (BENCHMARKS.md, perf-blink
+   13). A larger data point: Claude's native ~200 MB single-file binary
+   (a JavaScript runtime plus its bundle) starts in ~48 s, 87% of it in
+   compiled code. That is far more init code than a Go CLI, so it bounds
+   agy from above rather than replacing the estimate: still 10–15 s first
+   run, 5–8 s later, unmeasured.
    Next levers: the interpreter for cold code (≈1.1 s of `gh`'s 3.3 s in
    Node: Blink's per-instruction dispatch and memory helpers), keeping
    compiled regions across page loads (V8 already reuses them within one
