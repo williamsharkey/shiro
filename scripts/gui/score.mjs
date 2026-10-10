@@ -213,6 +213,7 @@ const KNOWN = {
   qpdfview: 'input: probably nothing open to type into (not investigated)',
   audacity: 'SysV shared memory (shmget) is ENOSYS in the x86 engine',
   thunar: 'input not detected (not investigated)',
+  krita: 'input: passed in one of two runs (start screen, nothing open)',
   dillo: 'FLTK draws its text as pixels',
 };
 

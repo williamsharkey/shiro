@@ -4,7 +4,7 @@ Debian 12 GUI apps installed from the streaming manifest (`public/gui/apps.json`
 
 Columns: **installs**; **window**: a desktop window appears, with the time from launch (installed) to it; **renders**: its largest window isn't one flat colour after 8 s; **input**: focusing it and typing `abc 123` changes its pixels (or, if not, clicking into its middle and typing does, or Ctrl+O opens a window or changes them); **text**: the DOM text layer has spans for it (GTK via libshiro-text-hook.so, core X text; Qt and others draw pixels only).
 
-**29/29 install, 24/29 open a window, 23/29 render, 19/29 react to input, 14/29 have DOM text.**
+**29/29 install, 24/29 open a window, 23/29 render, 18/29 react to input, 14/29 have DOM text.**
 
 
 ### Editors & viewers
@@ -25,7 +25,7 @@ Columns: **installs**; **window**: a desktop window appears, with the time from 
 |---|---|---:|---:|:-:|---:|:-:|:-:|:-:|---|
 | gimp | gtk2 | 66.1 MB | 7.0 s | ✓ | 24 s | ✓ | ✓ | ✓ (2) |  |
 | inkscape | gtk3 | 83 MB | 9.9 s | ✓ | 38 s | ✓ | ✓ | ✓ (18) |  |
-| krita | qt5 | 118.3 MB | 15 s | ✓ | 13 s | ✓ | ✓ | ✗ | input: probably nothing open to type into (not investigated) |
+| krita | qt5 | 118.3 MB | 8.3 s | ✓ | 13 s | ✓ | ✗ | ✗ | input: passed in one of two runs (start screen, nothing open) |
 | blender | gl | 231.5 MB | 14 s | ✗ | – | – | – | – | exited (status 134) before a window; OpenCV aborts: "SSE/SSE2 not available" (the x86 engine reports CPU family 0) |
 
 ### Desktop
@@ -53,7 +53,7 @@ Columns: **installs**; **window**: a desktop window appears, with the time from 
 | netsurf | gtk3 | 56.6 MB | 5.8 s | ✓ | 9.1 s | ✓ | ✓ | ✓ (41) |  |
 | dillo | fltk | 11.4 MB | 1.2 s | ✓ | 3.3 s | ✓ | ✓ | ✗ | FLTK draws its text as pixels |
 | vlc | qt5 | 36.1 MB | 3.5 s | ✓ | 5.0 s | ✗ | – | ✗ | its window opens, then the Qt interface exits (status 0) |
-| audacity | gtk3 | 64.3 MB | 8.1 s | ✗ | – | – | – | – | error window: “Audacity Startup Failure”; wxWidgets: input and text not detected (not investigated) |
+| audacity | gtk3 | 64.3 MB | 7.1 s | ✗ | – | – | – | – | error window: “Audacity Startup Failure”; SysV shared memory (shmget) is ENOSYS in the x86 engine |
 
 ### Qt
 
@@ -89,7 +89,7 @@ Fixed while building the scoreboard (scores above are after these):
   ![GIMP with its toolbox icons](screenshots/gui-gimp-icons.png)
   Cost: the SVG loader adds librsvg and its dependencies, about 12.7 MB per GTK
   app (l3afpad 33.1 → 45.8 MB, GIMP 53.2 → 66.1 MB) — cached once, shared by all.
-- **Krita and Audacity didn't start** (missing libraries): the library closure
+- **Krita and Audacity were missing libraries** (Audacity then stops at SysV IPC, below): the library closure
   now follows each ELF's RUNPATH/RPATH (PulseAudio's private `libpulsecommon`
   pulls `libsndfile` from there) and Audacity gained `libsoxr0`.
 - **Krita opened a "Fatal error" window**: its resources live in an SQLite
