@@ -183,7 +183,13 @@ async function smoke(m, pkg) {
       if (r.code === 0 && r.out.trim()) return { ok: true, how: `${bin} ${flagArg}${who(bin)}`, ms: r.ms, sample: r.out.trim().split('\n')[0].slice(0, 100) };
       // Tools without --version print their usage and exit 1 or 2: it ran, which is what we check
       const broken = /error while loading shared libraries|Exec format error|cannot execute|not found|Can't locate|No such file/i.test(r.out);
-      if (r.code > 0 && r.code < 126 && !broken && /usage|version|options|--help/i.test(r.out)) return { ok: true, how: `${bin} ${flagArg} (usage, exit ${r.code})${who(bin)}`, ms: r.ms, sample: r.out.trim().split('\n')[0].slice(0, 100) };
+      // (some return their own negative error: JxrDecApp's -105 is exit 151, not a signal)
+      const crashSig = /terminating due to SIG|Segmentation fault|Illegal instruction|Bus error|core dumped|blink: aborted|SCORE-TIMEOUT/.test(r.out);
+      if (r.code > 0 && r.code !== 124 && r.code !== 126 && r.code !== 127 && !crashSig && !broken && /usage|version|options|--help/i.test(r.out)) return { ok: true, how: `${bin} ${flagArg} (usage, exit ${r.code})${who(bin)}`, ms: r.ms, sample: r.out.trim().split('\n')[0].slice(0, 100) };
+      // A client of a system daemon (udisksctl: udisksd on the system bus) runs but has
+      // nothing to talk to, as in a Debian container without it
+      const daemon = /Error connecting to the \S+ daemon|Failed to connect to (?:the )?bus|Could not connect to (?:D-Bus|the system bus)|Cannot connect to the \S+ daemon/.exec(r.out);
+      if (daemon && !crashed) return { ok: true, how: `${bin} ${flagArg} (ran; needs its daemon: "${daemon[0]}")${who(bin)}`, ms: r.ms };
       if (crashed) return { ok: false, how: `${bin} ${flagArg}`, category: r.code === 124 ? 'timeout' : 'engine-crash', error: firstError(r.out) || `exit ${r.code}` };
       const mod = /Can't locate (\S+\.pm) in @INC/.exec(r.out)?.[1];
       if (mod && !undeclared && !(await m.run(`dpkg -S '*/${mod}' 2>/dev/null`)).out.trim()) undeclared = { bin, mod };
