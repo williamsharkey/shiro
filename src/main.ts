@@ -891,6 +891,14 @@ async function main() {
     }
   }
 
+  // Prebuilt packages installed at a build the index marks broken are
+  // upgraded in the background (pkg-manager.ts upgradeBrokenPackages)
+  setTimeout(() => {
+    void import('./pkg-manager').then((m) => m.upgradeBrokenPackages(fs, { env: shell.env, log: (l) => console.log(`[pkg] ${l}`) }))
+      .then((names) => { if (names?.length) console.log(`[pkg] upgraded known-broken packages: ${names.join(', ')}`); })
+      .catch((e) => console.warn('[pkg] upgrade of known-broken packages failed:', e?.message || e));
+  }, 2000);
+
   // Have Claude Code ready before anyone types `claude` (the profile's preinstall
   // list). Waits a few seconds so the 18 MB tarball download doesn't compete with boot.
   if (profile.preinstall.includes('claude-code')) setTimeout(() => {
