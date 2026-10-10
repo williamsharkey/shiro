@@ -19,6 +19,8 @@
 if (!(Symbol as any).dispose) Object.defineProperty(Symbol, 'dispose', { value: Symbol.for('Symbol.dispose') });
 if (!(Symbol as any).asyncDispose) Object.defineProperty(Symbol, 'asyncDispose', { value: Symbol.for('Symbol.asyncDispose') });
 
+import { isSafeMode } from './safe-mode';
+
 export type ConsoleLevel ='error' | 'warn' | 'log' | 'info' | 'debug';
 
 export interface ConsoleEntry {
@@ -64,13 +66,19 @@ let dirty = false;
 let inCapture = false;
 const pageStart = Date.now();
 
-function loadPrevious(): { pageStart: number; entries: ConsoleEntry[] } | null {
-  try {
-    const raw = localStorage.getItem(PERSIST_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch { return null; }
+// The previous page's log: read at boot (before this page's saves replace
+// it), parsed when queried. Safe mode neither reads nor replaces it.
+const safe = isSafeMode();
+let previousRaw: string | null = null;
+try { if (!safe && typeof localStorage !== 'undefined') previousRaw = localStorage.getItem(PERSIST_KEY); } catch { /* no storage */ }
+let previousParsed: { pageStart: number; entries: ConsoleEntry[] } | null | undefined;
+function previousLog(): { pageStart: number; entries: ConsoleEntry[] } | null {
+  if (previousParsed === undefined) {
+    try { previousParsed = previousRaw ? JSON.parse(previousRaw) : null; } catch { previousParsed = null; }
+    previousRaw = null;
+  }
+  return previousParsed ?? null;
 }
-const previous = typeof localStorage !== 'undefined' ? loadPrevious() : null;
 
 function stringify(arg: unknown): string {
   if (typeof arg === 'string') return arg;
@@ -139,11 +147,14 @@ function install(): void {
     }
     try { localStorage.setItem(PERSIST_KEY, JSON.stringify({ pageStart, entries: tail })); } catch { /* quota */ }
   };
+  // Safe mode keeps the log of the session that needed it
+  if (safe) return;
   setInterval(persist, PERSIST_EVERY_MS);
   window.addEventListener('pagehide', persist);
 }
 
 export function queryConsole(q: ConsoleQuery = {}): ConsoleQueryResult {
+  const previous = q.previous ? previousLog() : null;
   const source = q.previous ? (previous?.entries || []) : entries;
   const levels = q.level ? new Set(q.level.split(',').map((s) => s.trim().toLowerCase())) : null;
   let re: RegExp | null = null;

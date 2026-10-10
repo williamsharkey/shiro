@@ -11,6 +11,7 @@ import { spawnInWindow } from './commands/spawn';
 import { TtySession } from './kernel/pty';
 import { activeProfile } from './profile';
 import { pinTerminalTimers } from './node-compat/page-globals';
+import { safeMode, safeModeBanner, bootStep } from './safe-mode';
 
 /**
  * HUD (Heads-Up Display) state for dynamic banner updates.
@@ -449,14 +450,20 @@ export class ShiroTerminal {
 
   async start() {
     this.drawBanner();
-    // Source ~/.profile if it exists (env vars, aliases, etc. — persisted in IndexedDB)
-    try {
-      const profile = await this.shell.fs.readFile('/home/user/.profile');
-      const text = typeof profile === 'string' ? profile : new TextDecoder().decode(profile);
-      if (text.trim()) {
-        await this.shell.execute(text, () => {}, () => {});
-      }
-    } catch {}
+    const safe = safeMode();
+    if (safe) {
+      for (const line of safeModeBanner(safe, location.href)) this.term.writeln(line);
+      this.term.writeln('');
+    } else {
+      // Source ~/.profile if it exists (env vars, aliases, etc. — persisted in IndexedDB).
+      // Boot goes on after 15 s: a ~/.profile that runs something long can't hold it up
+      await bootStep('~/.profile', async () => {
+        const profile = await this.shell.fs.readFile('/home/user/.profile').catch(() => null);
+        if (profile === null) return;
+        const text = typeof profile === 'string' ? profile : new TextDecoder().decode(profile);
+        if (text.trim()) await this.shell.execute(text, () => {}, () => {});
+      });
+    }
     // ~/.profile may have started a command through injectInput (e.g. an autostart
     // that launches Claude); that command prints the prompt when it finishes, and a
     // prompt now would land on top of its screen.
