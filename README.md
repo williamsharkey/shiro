@@ -95,7 +95,8 @@ prebuilt build ([how they coexist](#how-prebuilt-debian-and-built-in-commands-co
 Real:
 
 - **The kernel.** Processes, fork/exec, file descriptors, pipes, ptys, signals, job control,
-  sockets, `/proc`, and System V shared memory, semaphores and message queues (`ipcs`, `ipcrm`),
+  sockets, `/proc`, System V shared memory, semaphores and message queues (`ipcs`, `ipcrm`), and POSIX message
+  queues (`mq_open` and friends),
   written in TypeScript for the page ([docs/KERNEL_ABI.md](docs/KERNEL_ABI.md),
   [docs/UNIX_COMPAT.md](docs/UNIX_COMPAT.md)).
 - **The programs.** WebAssembly (WASI/WASIX) builds, and unmodified x86-64 Linux ELF
@@ -131,7 +132,7 @@ Not here: hardware devices, kernel modules, and any access to your own machine.
   ([docs/research/OPPORTUNITIES.md](docs/research/OPPORTUNITIES.md)).
 - **Prebuilt packages.** 72 programs built for the page, WebAssembly or static x86-64, that
   install in about a second ([above](#tabcomputers-prebuilt-packages), [docs/PACKAGES.md](docs/PACKAGES.md)).
-- **Conformance.** LTP syscall tests under Blink pass 272/322; the Open POSIX Test Suite 1173/1448; the busybox testsuite
+- **Conformance.** LTP syscall tests under Blink pass 280/322; the Open POSIX Test Suite 1173/1448; the busybox testsuite
   625/635; the oils shell spec tests 1413/1567 ([docs/CONFORMANCE.md](docs/CONFORMANCE.md)).
 - **GUI apps.** `gui` lists Debian X11 apps (xterm, GTK and Qt editors and viewers, GIMP,
   Inkscape, Krita, VLC, NetSurf). They open as desktop windows. Of the 29 in the scoreboard,
