@@ -195,12 +195,12 @@ and are part of the recipe. `go` uses this to run `go build std` with
 `HOME=/home/user` and `CGO_ENABLED=0`, so the layer carries the standard
 library already compiled in the tab user's default build cache
 (`~/.cache/go-build`, unowned files). The tab's `go` has the same GOROOT
-and compiler. The layer also sets `CGO_ENABLED=0` in `~/.config/go/env`,
+and compiler. The layer also sets `CGO_ENABLED=0` and `GOFLAGS=-p=1` in `~/.config/go/env`,
 the file `go env -w` writes; it is merged key by key, so a user's own
 setting wins. Without that, `go` would find tabcomputer's `cc` (a WASM-only
 compiler) on PATH, turn cgo on for `net` and fail. With it, `go build`
 and `go run` hit the cache and compile only the user's packages.
-`go env -u CGO_ENABLED` turns cgo back on, for example with the `c` set
+One build job at a time costs nothing under Blink, which runs one guest thread at a time. It also avoids a Blink bug: its vfork emulation can take Go's preemption signal (SIGURG) during parallel forks and wedge `go`, leaving its other children as zombies (with perf-blink). `go env -u CGO_ENABLED` turns cgo back on, for example with the `c` set
 installed; the cgo packages then compile once.
 
 Go deletes cache entries whose mtime is more than 5 days old (once a day,
