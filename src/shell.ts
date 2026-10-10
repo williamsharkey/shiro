@@ -2772,7 +2772,8 @@ export class Shell {
         // Handle /usr/bin/env CMD ARGS → execute CMD ARGS
         if (cmdName === '/usr/bin/env' || cmdName === '/bin/env') {
           if (cmdArgs.length > 0) {
-            const envCmd = quoteArgsForShell(cmdArgs);
+            // (through the env builtin: -i, -u, NAME=value and the rest apply)
+            const envCmd = quoteArgsForShell(['env', ...cmdArgs]);
             this.injectedStdin = nestedStdin;
             exitCode = await this.execute(envCmd, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
           } else {
