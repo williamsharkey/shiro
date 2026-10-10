@@ -1,4 +1,4 @@
-export function createUrlModule(): any {
+export function createUrlModule(cwd: () => string = () => '/'): any {
   return {
     URL: globalThis.URL,
     URLSearchParams: globalThis.URLSearchParams,
@@ -39,6 +39,15 @@ export function createUrlModule(): any {
       if (u.startsWith('file://')) return decodeURIComponent(u.slice(7));
       return u;
     },
-    pathToFileURL: (path: string) => new URL('file://' + encodeURI(path)),
+    // As node: a relative path is resolved against the cwd, and the path is a
+    // URL pathname (rolldown's ids like "\0rolldown/runtime.js" made file://%00...,
+    // an invalid URL)
+    pathToFileURL: (path: string) => {
+      let p = String(path);
+      if (!p.startsWith('/')) p = (cwd().replace(/\/$/, '') || '') + '/' + p;
+      const u = new URL('file://');
+      u.pathname = p.replace(/%/g, '%25').replace(/\\/g, '%5C').replace(/\n/g, '%0A').replace(/\r/g, '%0D').replace(/\t/g, '%09');
+      return u;
+    },
   };
 }

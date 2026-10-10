@@ -159,13 +159,7 @@ Shell and platform fixes these needed (all with tests in the same file):
   live-reload loop (edit a file in the shell → `fs.watch` → a `ws` push → the
   preview re-renders). `ws` takes its node build (its browser build only
   throws); `Buffer.indexOf` finds strings and Buffers; `Buffer[Symbol.species]`
-  is `Buffer`. Not yet: the vite dev server. Its native esbuild and Rollup
-  aren't installed (optional platform packages), and with their WebAssembly
-  builds swapped in, esbuild's Go runtime runs as a child node in the page's
-  realm and takes over page globals (`performance`, `TextEncoder`, `crypto`:
-  assignment to `crypto` is now ignored, but esbuild redefines it), and
-  `import('vite')` picks its CJS build, which looks for `package.json` at the
-  page's URL.
+  is `Buffer`. vite's HMR socket: see the vite 8 item below.
 - npm: `npm install` lays out node_modules as npm does (each package as high
   as it goes, a conflicting version nested under the package that needs it,
   without hiding a version another package uses), follows
@@ -174,7 +168,7 @@ Shell and platform fixes these needed (all with tests in the same file):
   to overwrite each other in a flat node_modules). Native platform builds are
   left out (`os`/`cpu`); WebAssembly ones are taken: `cpu: ["wasm32"]`
   bindings, esbuild as `esbuild-wasm`, rollup as `@rollup/wasm-node`, and
-  rolldown with `@rolldown/binding-wasm32-wasi`. `npm create <name>` (and
+  rolldown as `@rolldown/browser`. `npm create <name>` (and
   `npm init <name>`) runs `create-<name>`; `npm exec`/`npm x` is npx; npx
   installs into `~/.npm/_npx` instead of the project. Measured in Chromium:
   `npm create vite@latest app -- --template react` 0.6 s (npx cache warm),
@@ -188,11 +182,47 @@ Shell and platform fixes these needed (all with tests in the same file):
   unless a process 'unhandledRejection' listener takes it. The ES module
   transform reads minified imports (`import{a as b}from"x"`) and leaves
   import text in strings and templates alone.
-- Not yet: `npm run dev` of that vite 8 app. Rolldown's WebAssembly binding
-  for node needs `node:wasi` and real threads (`worker_threads`); the way in
-  is its browser build (`@rolldown/browser`: Web Workers, a fetched .wasm),
-  which needs a `Worker` from a module file and its WASI file system on the
-  project's files.
+- vite 8 (React template) end to end, typed into the terminal from a fresh
+  profile (`tests/browser/vite-react.mjs`, Chromium): `npm create vite@latest
+  app -- --template react` 2.3 s, `cd app && npm i` 1.9–2.7 s,
+  `npm run dev` to "ready" 7.9–8.7 s (vite reports ready in ~0.9 s; the rest
+  is loading rolldown), `serve open 5173` until the app renders 1.7–2.1 s, an
+  edit to `src/App.jsx` shown by HMR (no reload) 0.1 s; 15 s in all. JS heap
+  ≈245 MB with the dev server up, 260–300 MB with the preview (boot: 8 MB).
+  Six runs on 2026-10-10: five passed; one had `/@vite/client` answer 500
+  after vite cleared the screen (not yet explained). What it took:
+  - Rolldown runs as its browser build. `npm install` puts `@rolldown/browser`
+    where `rolldown` goes (same API and versions); a process that imports it
+    gets it bundled from the VFS with the page's esbuild
+    (`src/node-compat/vfs-bundle.ts`, `browser-packages.ts`) and run as page
+    code, so its Web Workers, fetched .wasm and top-level await work. Its WASI
+    file system is the process's `fs` (workers proxy theirs to the main
+    thread), its `process` the requiring process's, and its async calls count
+    as the process's activity.
+  - The preview is a real document: `serve open` loads
+    `/__preview/<tab>/<port>/` in the iframe and a service worker
+    (`public/preview-sw.js`, scope `/__preview/`) hands every request that
+    document makes to the in-tab server through the page
+    (`src/preview-sw-host.ts`), so the browser's module loader follows
+    `/@vite/client`, `/node_modules/.vite/deps/…` and HMR's
+    `import('/src/App.jsx?t=…')`. WebSocket and EventSource go through the
+    page as in a srcdoc preview, with the document's own origin meaning the
+    server. Where service workers aren't available the srcdoc preview stays.
+  - `Buffer#write(string, [offset, [length]], encoding)` honours the encoding
+    (es-module-lexer writes source as `utf16le` into WebAssembly memory;
+    import analysis found no imports and left `import "react"` bare).
+  - Piped stdin is read only when something reads it (a 'data' or 'readable'
+    listener, `resume()`): vite's `process.stdin.on('end')` (exit when the
+    parent goes) fired at once and closed the server.
+  - `net` listens on IPv6 literals in long form
+    (`0000:0000:0000:0000:0000:0000:0000:0000`, one of vite's port probes).
+  - ES module export names that are strings (`export { x as "module.exports" }`),
+    `x as default` among other exports, `url.pathToFileURL` of relative and
+    `\0`-prefixed ids, `crypto.getRandomValues` in node:crypto.
+  Not yet: `vite build` stops at CSS minification (lightningcss is a native
+  addon; its WebAssembly build has an async init); node output into a pipe
+  or file comes when the process exits (only the terminal streams), so
+  `npm run dev > log &` shows nothing while it runs.
 - Node: a script's timers and intervals end with it. An interval left by a
   script that called `process.exit()` kept firing in the page, and its
   `setTimeout`s became the next script's timers, so that script never went
