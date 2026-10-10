@@ -10,9 +10,9 @@ conformance work started (fc0af54).
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1412/1567 (90.1%)** |
 | [Shell: smoosh POSIX tests](#shell-smoosh-posix-tests) | 111/162 (68.5%) | **159/162 (98.1%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **625/635 (98.4%)** |
-| [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **272/322 (84.5%)** |
+| [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **280/322 (87.0%)** |
 | [Syscalls: wasi-testsuite (wasm32-wasip1)](#syscalls-wasi-testsuite-wasm32-wasip1) | — | **71/72 (98.6%)** |
-| [POSIX: Open POSIX Test Suite under Blink (x86-64)](#posix-open-posix-test-suite-under-blink-x86-64) | — | **1173/1448 (81.0%)** |
+| [POSIX: Open POSIX Test Suite under Blink (x86-64)](#posix-open-posix-test-suite-under-blink-x86-64) | — | **1326/1448 (91.6%)** |
 
 How each suite runs, and what is and isn't scored, is described in
 [tests/conformance/README.md](../tests/conformance/README.md).
@@ -369,7 +369,7 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in ta
 
 ## Syscalls: LTP under Blink (x86-64)
 
-Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel processes in the Blink engine; only tests that pass natively on the build host as an unprivileged user (uid 1000, like tabcomputer) are scored. Blink forks within one instance by default (patch 0048), so the child shares MAP_SHARED pages, where LTP keeps its result counts and checkpoints; with BLINK_SAME_INSTANCE_FORK=0 (snapshot fork) they are not shared, so when the Summary reads all zeros the TPASS/TFAIL/TBROK lines are counted instead (tests/conformance/lib/ltp.mjs). Trend: 146 (first run) → 172 → 148 (TBROK/TFAIL lines counted, snapshot fork) → 197 (same-instance fork opt-in, A/B against 155 without it) → 222 (same-instance fork the default, Blink 0034–0048, kernel O_PATH/locks/pipe sizes/epoll/errno fixes) → 229 (AF_UNIX DGRAM/SEQPACKET sockets, timeouts that never end early, unlinkat/wait4 errnos; bind04 now reaches its abstract-name cases, which Blink truncates) → 237 (Blink 0050–0054: same-instance children no longer stall each other, sleeps show S and end on signals, abstract AF_UNIX names keep their length) → 240/322 (Blink 0058–0070 and signalfd01/02 added to the scored set: nanosleep04 and signalfd pass; UDP over loopback, AF_UNIX datagram backpressure and socket errnos fix bind05, sendfile07, connect03, accept03 and epoll_wait05; ppoll01 and waitpid08/10 newly fail, both Blink regressions reported to perf-blink) → 272/322 (Blink 0080/0081, built locally until perf-blink folds them into its build: record locks, pipe sizes and RLIMIT_NOFILE are the kernel's, read-only output buffers are EFAULT, LTP errnos for clocks, rlimits, iovs, waitid, sendfile, O_PATH fds, personality; waitpid13 fails like waitpid08/10).
+Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel processes in the Blink engine; only tests that pass natively on the build host as an unprivileged user (uid 1000, like tabcomputer) are scored. Blink forks within one instance by default (patch 0048), so the child shares MAP_SHARED pages, where LTP keeps its result counts and checkpoints; with BLINK_SAME_INSTANCE_FORK=0 (snapshot fork) they are not shared, so when the Summary reads all zeros the TPASS/TFAIL/TBROK lines are counted instead (tests/conformance/lib/ltp.mjs). Trend: 146 (first run) → 172 → 148 (TBROK/TFAIL lines counted, snapshot fork) → 197 (same-instance fork opt-in, A/B against 155 without it) → 222 (same-instance fork the default, Blink 0034–0048, kernel O_PATH/locks/pipe sizes/epoll/errno fixes) → 229 (AF_UNIX DGRAM/SEQPACKET sockets, timeouts that never end early, unlinkat/wait4 errnos; bind04 now reaches its abstract-name cases, which Blink truncates) → 237 (Blink 0050–0054: same-instance children no longer stall each other, sleeps show S and end on signals, abstract AF_UNIX names keep their length) → 240/322 (Blink 0058–0070 and signalfd01/02 added to the scored set: nanosleep04 and signalfd pass; UDP over loopback, AF_UNIX datagram backpressure and socket errnos fix bind05, sendfile07, connect03, accept03 and epoll_wait05; ppoll01 and waitpid08/10 newly fail, both Blink regressions reported to perf-blink) → 272/322 (Blink 0080/0081, built locally until perf-blink folds them into its build: record locks, pipe sizes and RLIMIT_NOFILE are the kernel's, read-only output buffers are EFAULT, LTP errnos for clocks, rlimits, iovs, waitid, sendfile, O_PATH fds, personality; waitpid13 fails like waitpid08/10) → 280/322 (measured on integration a8bf453, perf-blink's build with 0080–0082 and its 0075–0077: ppoll takes its sigmask, a futex wake is no longer counted twice (waitpid08/10/13), /proc/self/maps is a memfd, pipes are writable by the page, nanosleep writes rem before the signal frame; futex_cmp_requeue01 now crashes the test worker).
 
 | Area | Before | Now | Failing |
 |---|---|---|---|
@@ -378,8 +378,8 @@ Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel
 | bind | — | 4/4 | 0 |
 | chdir | — | 2/2 | 0 |
 | chmod | — | 2/2 | 0 |
-| clock_gettime | — | 0/1 | 1 |
-| clock_nanosleep | — | 2/3 | 1 |
+| clock_gettime | — | 1/1 | 0 |
+| clock_nanosleep | — | 3/3 | 0 |
 | clone | — | 7/8 | 1 |
 | close | — | 2/2 | 0 |
 | connect | — | 2/2 | 0 |
@@ -389,8 +389,8 @@ Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel
 | dup3 | — | 2/2 | 0 |
 | epoll_create | — | 3/3 | 0 |
 | epoll_create1 | — | 2/2 | 0 |
-| epoll_ctl | — | 6/7 | 1 |
-| epoll_wait | — | 13/15 | 2 |
+| epoll_ctl | — | 7/7 | 0 |
+| epoll_wait | — | 14/15 | 1 |
 | execve | — | 0/2 | 2 |
 | faccessat | — | 2/2 | 0 |
 | fchdir | — | 2/2 | 0 |
@@ -416,7 +416,7 @@ Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel
 | pipe | — | 11/12 | 1 |
 | pipe2 | — | 2/2 | 0 |
 | poll | — | 3/4 | 1 |
-| ppoll | — | 0/1 | 1 |
+| ppoll | — | 1/1 | 0 |
 | pread | — | 4/4 | 0 |
 | pselect | — | 4/6 | 2 |
 | pwrite | — | 7/8 | 1 |
@@ -441,33 +441,29 @@ Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel
 | vfork | — | 2/2 | 0 |
 | wait4 | — | 3/3 | 0 |
 | waitid | — | 11/11 | 0 |
-| waitpid | — | 5/11 | 6 |
+| waitpid | — | 8/11 | 3 |
 | write | — | 6/6 | 0 |
 | writev | — | 2/2 | 0 |
 
 <details><summary>Failing cases</summary>
 
 - **accept**: accept02 — accept02.c:116: TBROK: ioctl(3,SIOCGIFINDEX,...) failed: ENOTTY (25)
-- **clock_gettime**: clock_gettime04 — clock_gettime04.c:169: TFAIL: CLOCK_BOOTTIME(vDSO or syscall with libc spec): Difference between successive readings greater than 6 ms (0): 11
-- **clock_nanosleep**: clock_nanosleep01 — clock_nanosleep01.c:212: TFAIL: returned -1, expected -1, expected errno: EFAULT (14): EINTR (4)
 - **clone**: clone08 — clone08.c:85: TBROK: CLONE_PARENT_SETTID clone() failed: EINVAL (22)
-- **epoll_ctl**: epoll_ctl06 — epoll_ctl06.c:69: TFAIL: epoll_ctl() on /proc/self/maps succeeded
-- **epoll_wait**: epoll_wait02 — tst_timer_test.c:314: TFAIL: epoll_wait() slept for too long; epoll_wait06 — epoll_wait06.c:89: TFAIL: SAFE_EPOLL_WAIT(epfd, &evt_receive, 1, 0) (1) != 0 (0)
+- **epoll_wait**: epoll_wait02 — tst_timer_test.c:314: TFAIL: epoll_wait() slept for too long
 - **execve**: execve01 — tst_test.c:211: TBROK: Invalid shared memory region (bad magic); execve06 — tst_test.c:211: TBROK: Invalid shared memory region (bad magic)
 - **fcntl**: fcntl14 (hang/timeout) — no summary; fcntl14_64 (hang/timeout) — no summary; fcntl27 — fcntl27.c:37: TFAIL: fcntl(fd, F_SETLEASE, F_RDLCK) expected EAGAIN/EWOULDBLOCK: EINVAL (22); fcntl27_64 — fcntl27.c:37: TFAIL: fcntl(fd, F_SETLEASE, F_RDLCK) expected EAGAIN/EWOULDBLOCK: EINVAL (22); fcntl38 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl38_64 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl39 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl39_64 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl40 (hang/timeout) — skipped: hangs tabcomputer; fcntl40_64 — passed 0 failed 0 broken 0
 - **fork**: fork14 (hang/timeout) — no summary
-- **futex**: futex_cmp_requeue01 — futex_cmp_requeue01.c:163: TFAIL: requeued 0 waiters, expected range: (7, 7); futex_cmp_requeue02 — futex_cmp_requeue02.c:60: TFAIL: futex_cmp_requeue() failed unexpectedly, expected EAGAIN/EWOULDBLOCK: EINVAL (22); futex_cmp_requeue03 — futex_cmp_requeue03.c:71: TFAIL: uaddr unmapped expected EFAULT: EINVAL (22); futex_wait05 (hang/timeout) — skipped: hangs tabcomputer; futex_waitv01 — passed 0 failed 0 broken 0; futex_waitv02 — passed 0 failed 0 broken 0; futex_waitv03 — passed 0 failed 0 broken 0; futex_wake02 — futex_wake02.c:79: TFAIL: futex_wake() woken up 1 threads, expected 10: SUCCESS (0); futex_wake03 (hang/timeout) — skipped: hangs tabcomputer; futex_wake05 — futex_wake05.c:67: TFAIL: uaddr file truncated succeeded
+- **futex**: futex_cmp_requeue01 (hang/timeout) — skipped: hangs tabcomputer; futex_cmp_requeue02 — futex_cmp_requeue02.c:60: TFAIL: futex_cmp_requeue() failed unexpectedly, expected EAGAIN/EWOULDBLOCK: EINVAL (22); futex_cmp_requeue03 — futex_cmp_requeue03.c:71: TFAIL: uaddr unmapped expected EFAULT: EINVAL (22); futex_wait05 (hang/timeout) — skipped: hangs tabcomputer; futex_waitv01 — passed 0 failed 0 broken 0; futex_waitv02 — passed 0 failed 0 broken 0; futex_waitv03 — passed 0 failed 0 broken 0; futex_wake02 — futex_wake02.c:79: TFAIL: futex_wake() woken up 3 threads, expected 10: SUCCESS (0); futex_wake03 (hang/timeout) — skipped: hangs tabcomputer; futex_wake05 — futex_wake05.c:67: TFAIL: uaddr file truncated succeeded
 - **lseek**: lseek11 — passed 0 failed 0 broken 0
 - **lstat**: lstat02 — lstat02.c:66: TFAIL: lstat() returned 0, expected -1: SUCCESS (0); lstat02_64 — lstat02.c:66: TFAIL: lstat() returned 0, expected -1: SUCCESS (0)
 - **pipe**: pipe13 — tst_test.c:1969: TBROK: Test killed! (timeout?)
 - **poll**: poll02 — tst_timer_test.c:314: TFAIL: poll() slept for too long
-- **ppoll**: ppoll01 — ppoll01.c:288: TFAIL: ret: 0, exp: -1, ret_errno: SUCCESS (0), exp_errno: EINTR (4)
 - **pselect**: pselect01 — tst_timer_test.c:314: TFAIL: pselect() slept for too long; pselect01_64 — tst_timer_test.c:314: TFAIL: pselect() slept for too long
 - **pwrite**: pwrite04 (hang/timeout) — skipped: hangs tabcomputer
 - **select**: select02 — tst_timer_test.c:314: TFAIL: select() slept for too long
 - **sendfile**: sendfile02_64 (hang/timeout) — skipped: hangs tabcomputer; sendfile09 — passed 0 failed 0 broken 0; sendfile09_64 — passed 0 failed 0 broken 0
 - **setrlimit**: setrlimit06 — setrlimit06.c:117: TFAIL: Got no signal after reaching both limit
-- **waitpid**: waitpid01 (hang/timeout) — no summary; waitpid06 (hang/timeout) — skipped: hangs tabcomputer; waitpid07 (hang/timeout) — skipped: hangs tabcomputer; waitpid08 — waitpid_common.h:57: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); waitpid10 — waitpid10.c:57: TBROK: tst_checkpoint_wake(0, 8, 10000) failed: ETIMEDOUT (110); waitpid13 — waitpid_common.h:57: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)
+- **waitpid**: waitpid01 (hang/timeout) — no summary; waitpid06 (hang/timeout) — skipped: hangs tabcomputer; waitpid07 (hang/timeout) — skipped: hangs tabcomputer
 
 </details>
 
@@ -489,7 +485,7 @@ WebAssembly/wasi-testsuite prebuilt wasip1 modules (C, Rust, AssemblyScript) run
 
 ## POSIX: Open POSIX Test Suite under Blink (x86-64)
 
-The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scripts/conformance/build-openposix.sh) run as static x86-64 kernel processes in the Blink engine: signals, pthreads, semaphores, message queues, timers, clocks, mmap, scheduling. A test passes when it exits 0; only tests that pass natively on the build host as uid 1000 are scored (openposix/native-baseline.json). First run: 1173/1448, with Blink 0080–0084 built locally (raise(SIGKILL) and sigqueue/AIO fixed from this suite); the gaps are POSIX message queues (mq_*), POSIX timers (timer_*), sigwait/sigtimedwait, sched_* policies and shm_open.
+The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scripts/conformance/build-openposix.sh) run as static x86-64 kernel processes in the Blink engine: signals, pthreads, semaphores, message queues, timers, clocks, mmap, scheduling. A test passes when it exits 0; only tests that pass natively on the build host as uid 1000 are scored (openposix/native-baseline.json). First run: 1173/1448, with Blink 0080–0084 built locally (raise(SIGKILL) and sigqueue/AIO fixed from this suite); the gaps are POSIX message queues (mq_*), POSIX timers (timer_*), sigwait/sigtimedwait, sched_* policies and shm_open. → 1326/1448 (kernel POSIX message queues and timers, Blink 0086–0092 built locally: mq_*, timer_*, sigtimedwait/sigwait, sched_*; sigqueue waits on siginfo in Blink's handler frames; fork_21-1 and pthread_attr_destroy_1-1 hit a Blink page-lock assertion).
 
 | Area | Before | Now | Failing |
 |---|---|---|---|
@@ -513,7 +509,7 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 | fsync | — | 2/3 | 1 |
 | getpid | — | 1/1 | 0 |
 | gmtime | — | 2/2 | 0 |
-| kill | — | 2/3 | 1 |
+| kill | — | 3/3 | 0 |
 | killpg | — | 7/7 | 0 |
 | lio_listio | — | 8/15 | 7 |
 | localtime | — | 1/1 | 0 |
@@ -521,21 +517,21 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 | mlock | — | 2/3 | 1 |
 | mlockall | — | 2/5 | 3 |
 | mmap | — | 21/32 | 11 |
-| mq_close | — | 2/6 | 4 |
-| mq_getattr | — | 0/2 | 2 |
-| mq_notify | — | 0/6 | 6 |
-| mq_open | — | 2/16 | 14 |
-| mq_send | — | 0/17 | 17 |
-| mq_setattr | — | 0/4 | 4 |
-| mq_timedreceive | — | 0/1 | 1 |
-| mq_timedsend | — | 0/21 | 21 |
-| mq_unlink | — | 0/4 | 4 |
+| mq_close | — | 6/6 | 0 |
+| mq_getattr | — | 2/2 | 0 |
+| mq_notify | — | 6/6 | 0 |
+| mq_open | — | 16/16 | 0 |
+| mq_send | — | 17/17 | 0 |
+| mq_setattr | — | 4/4 | 0 |
+| mq_timedreceive | — | 1/1 | 0 |
+| mq_timedsend | — | 20/21 | 1 |
+| mq_unlink | — | 4/4 | 0 |
 | munlock | — | 2/3 | 1 |
 | munlockall | — | 1/1 | 0 |
 | munmap | — | 7/7 | 0 |
 | nanosleep | — | 11/11 | 0 |
 | pthread_atfork | — | 6/7 | 1 |
-| pthread_attr_destroy | — | 3/3 | 0 |
+| pthread_attr_destroy | — | 2/3 | 1 |
 | pthread_attr_getdetachstate | — | 2/2 | 0 |
 | pthread_attr_getinheritsched | — | 1/1 | 0 |
 | pthread_attr_getschedparam | — | 1/1 | 0 |
@@ -573,9 +569,9 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 | pthread_condattr_init | — | 2/2 | 0 |
 | pthread_condattr_setclock | — | 4/4 | 0 |
 | pthread_condattr_setpshared | — | 3/3 | 0 |
-| pthread_create | — | 12/14 | 2 |
+| pthread_create | — | 11/14 | 3 |
 | pthread_detach | — | 7/7 | 0 |
-| pthread_equal | — | 1/3 | 2 |
+| pthread_equal | — | 2/3 | 1 |
 | pthread_exit | — | 10/10 | 0 |
 | pthread_getcpuclockid | — | 1/1 | 0 |
 | pthread_getschedparam | — | 1/1 | 0 |
@@ -629,12 +625,12 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 | pthread_spin_unlock | — | 3/3 | 0 |
 | pthread_testcancel | — | 2/2 | 0 |
 | raise | — | 7/7 | 0 |
-| sched_get_priority_max | — | 3/4 | 1 |
-| sched_get_priority_min | — | 3/4 | 1 |
-| sched_getparam | — | 0/4 | 4 |
-| sched_getscheduler | — | 3/4 | 1 |
-| sched_setparam | — | 2/8 | 6 |
-| sched_setscheduler | — | 0/8 | 8 |
+| sched_get_priority_max | — | 4/4 | 0 |
+| sched_get_priority_min | — | 4/4 | 0 |
+| sched_getparam | — | 4/4 | 0 |
+| sched_getscheduler | — | 4/4 | 0 |
+| sched_setparam | — | 7/8 | 1 |
+| sched_setscheduler | — | 8/8 | 0 |
 | sched_yield | — | 1/1 | 0 |
 | sem_close | — | 3/4 | 1 |
 | sem_destroy | — | 2/2 | 0 |
@@ -645,9 +641,9 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 | sem_timedwait | — | 11/11 | 0 |
 | sem_unlink | — | 9/9 | 0 |
 | sem_wait | — | 8/8 | 0 |
-| shm_open | — | 16/27 | 11 |
+| shm_open | — | 18/27 | 9 |
 | shm_unlink | — | 7/7 | 0 |
-| sigaction | — | 495/500 | 5 |
+| sigaction | — | 496/500 | 4 |
 | sigaddset | — | 5/5 | 0 |
 | sigaltstack | — | 9/11 | 2 |
 | sigdelset | — | 5/5 | 0 |
@@ -664,46 +660,38 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 | sigrelse | — | 3/3 | 0 |
 | sigset | — | 10/10 | 0 |
 | sigsuspend | — | 4/4 | 0 |
-| sigtimedwait | — | 2/5 | 3 |
-| sigwait | — | 0/8 | 8 |
-| sigwaitinfo | — | 0/8 | 8 |
-| speculative | — | 7/17 | 10 |
+| sigtimedwait | — | 5/5 | 0 |
+| sigwait | — | 6/8 | 2 |
+| sigwaitinfo | — | 5/8 | 3 |
+| speculative | — | 17/17 | 0 |
 | strchr | — | 1/1 | 0 |
 | strcpy | — | 1/1 | 0 |
 | strftime | — | 3/3 | 0 |
 | strlen | — | 1/1 | 0 |
 | strncpy | — | 2/2 | 0 |
 | time | — | 1/1 | 0 |
-| timer_create | — | 0/8 | 8 |
-| timer_delete | — | 0/2 | 2 |
-| timer_getoverrun | — | 0/4 | 4 |
-| timer_gettime | — | 0/7 | 7 |
-| timer_settime | — | 0/14 | 14 |
+| timer_create | — | 8/8 | 0 |
+| timer_delete | — | 2/2 | 0 |
+| timer_getoverrun | — | 3/4 | 1 |
+| timer_gettime | — | 7/7 | 0 |
+| timer_settime | — | 14/14 | 0 |
 
 <details><summary>Failing cases</summary>
 
 - **aio_cancel**: aio_cancel_3-1 — exit 131: ; aio_cancel_5-1 (hang/timeout) — timeout: ; aio_cancel_6-1 (hang/timeout) — timeout: ; aio_cancel_7-1 (hang/timeout) — timeout: 
-- **aio_suspend**: aio_suspend_1-1 — exit 131: ; aio_suspend_4-1 — exit 131: ; aio_suspend_9-1 — exit 131: 
+- **aio_suspend**: aio_suspend_1-1 — UNRESOLVED: aio_suspend/1-1.c Error at write(): No such file or directory; aio_suspend_4-1 — exit 131: ; aio_suspend_9-1 — exit 131: 
 - **clock_getres**: clock_getres_6-2 — FAIL: At least one test FAILED -- see above
 - **clock_gettime**: clock_gettime_8-2 — FAIL: At least one test FAILED -- see above
-- **fork**: fork_13-1 — FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/13-1.c FAILED: Child exited abnormally; fork_18-1 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/18-1.c unresolved: got 38 (Function not implemented) on line 87 (Failed to cre; fork_19-1 — UNRESOLVED: Failed to create the message queue descriptor: Function not implemented; fork_22-1 — FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/22-1.c FAILED: Child exited abnormally; fork_7-1 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/7-1.c unresolved: got 2 (No such file or directory) on line 121 (Could not ope; fork_8-1 (hang/timeout) — timeout: 
+- **fork**: fork_13-1 — FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/13-1.c FAILED: Child exited abnormally; fork_18-1 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/18-1.c unresolved: got 22 (Invalid argument) on line 87 (Failed to create a ti; fork_21-1 — exit 134: 	<blink backtrace unavailable>; fork_22-1 — FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/22-1.c FAILED: Child exited abnormally; fork_7-1 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/7-1.c unresolved: got 2 (No such file or directory) on line 121 (Could not ope; fork_8-1 (hang/timeout) — timeout: 
 - **fsync**: fsync_7-1 — FAIL: fsync/7-1.c Test Fail: Expect EINVAL, get: Success
-- **kill**: kill_1-2 — FAIL: Test FAILED
 - **lio_listio**: lio_listio_10-1 — exit 131: ; lio_listio_14-1 — exit 131: ; lio_listio_15-1 — exit 131: ; lio_listio_2-1 — exit 132: ; lio_listio_3-1 — exit 131: ; lio_listio_4-1 — exit 132: ; lio_listio_7-1 — exit 131: 
 - **mlock**: mlock_8-1 — UNRESOLVED: Unexpected error: Success
 - **mlockall**: mlockall_13-1 — FAIL: mlockall() return 0 instead of -1.; mlockall_3-6 — FAIL: The shared memory pages of the process are not locked.; mlockall_3-7 — FAIL: The mapped files pages of the process are not locked.
 - **mmap**: mmap_10-1 (hang/timeout) — timeout: ; mmap_11-2 — FAIL: Test FAILED: SIGBUS not triggered, while Memory Protection is enabled; mmap_11-3 — FAIL: Test FAILED: SIGBUS not triggered, while Memory Protection is enabled; mmap_11-4 — UNTESTED: From mmap(2) manpage, skip known bug on tmpfs; mmap_14-1 — FAIL: Test FAILED: st_ctime and st_mtime were not updated properly; mmap_21-1 — FAIL: Test FAILED; mmap_23-1 — FAIL: Text FAILED: mmap() succeded; mmap_24-1 (hang/timeout) — timeout: ; mmap_24-2 — FAIL: Test Fail: Did not get ENOMEM as expected; mmap_3-1 — FAIL: Test Fail: The file is not mapped correctly; mmap_7-4 — FAIL: mmap with MAP_SHARED failed to propagate change into the child
-- **mq_close**: mq_close_1-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_close_2-1 — UNRESOLVED: unexpected error: mq_close 2-1: read: EOF; mq_close_3-1 — UNRESOLVED: unexpected error: mq_close 3-1: mq_open: Function not implemented; mq_close_4-1 — UNRESOLVED: unexpected error: mq_close 4-1: mq_open: Function not implemented
-- **mq_getattr**: mq_getattr_2-1 — UNRESOLVED: unexpected error: mq_getattr 2-1: mq_open(): Function not implemented; mq_getattr_2-2 — UNRESOLVED: unexpected error: mq_getattr 2-2: mq_open(): Function not implemented
-- **mq_notify**: mq_notify_1-1 — UNRESOLVED: unexpected error: mq_notify 1-1: mq_open: Function not implemented; mq_notify_2-1 — UNRESOLVED: unexpected error: mq_notify 2-1: mq_open: Function not implemented; mq_notify_3-1 — UNRESOLVED: unexpected error: mq_notify 3-1: mq_open: Function not implemented; mq_notify_4-1 — UNRESOLVED: unexpected error: mq_notify 4-1: mq_open: Function not implemented; mq_notify_8-1 — FAIL: Test FAILED (errno != EBADF); mq_notify_9-1 — UNRESOLVED: unexpected error: mq_notify 9-1: mq_open: Function not implemented
-- **mq_open**: mq_open_1-1 — FAIL: Test FAILED; mq_open_11-1 — FAIL: Test FAILED; mq_open_12-1 — FAIL: Test FAILED; mq_open_13-1 — FAIL: Test FAILED; mq_open_15-1 — UNRESOLVED: Test UNRESOLVED; mq_open_16-1 — FAIL: Test FAILED - mq_open() never succeeded; mq_open_18-1 — FAIL: Test FAILED; mq_open_20-1 — FAIL: Test FAILED; mq_open_23-1 — UNRESOLVED: Test UNRESOLVED; mq_open_25-2 — FAIL: Test FAILED; mq_open_27-1 — FAIL: Test FAILED; mq_open_27-2 — FAIL: Test FAILED; mq_open_29-1 — FAIL: Test FAILED; mq_open_7-3 — FAIL: Test FAILED
-- **mq_send**: mq_send_1-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_10-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_11-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_11-2 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_12-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_13-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_2-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_3-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_3-2 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_4-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_4-2 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_4-3 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_5-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_5-2 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_7-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_8-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_9-1 — UNRESOLVED: mq_open() did not return success: Function not implemented
-- **mq_setattr**: mq_setattr_1-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_setattr_1-2 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_setattr_2-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_setattr_5-1 — UNRESOLVED: unexpected error: mq_setattr 5-1: mq_open(): Function not implemented
-- **mq_timedreceive**: mq_timedreceive_5-3 — FAIL: Test FAILED
-- **mq_timedsend**: mq_timedsend_1-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_10-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_11-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_11-2 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_12-1 — UNRESOLVED: mq_open: Function not implemented; mq_timedsend_13-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_15-1 — UNRESOLVED: Test UNRESOLVED; mq_timedsend_16-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_18-1 — UNRESOLVED: Test UNRESOLVED; mq_timedsend_19-1 — UNRESOLVED: Test UNRESOLVED; mq_timedsend_2-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_20-1 — UNRESOLVED: Test UNRESOLVED; mq_timedsend_3-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_4-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_4-2 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_4-3 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_5-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_5-2 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_5-3 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_7-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_8-1 — UNRESOLVED: mq_open() did not return success: Function not implemented
-- **mq_unlink**: mq_unlink_1-1 — UNRESOLVED: unexpected error: mq_unlink 1-1: mq_open: Function not implemented; mq_unlink_2-1 — UNRESOLVED: unexpected error: mq_unlink 2-1: read: EOF; mq_unlink_2-2 — UNRESOLVED: unexpected error: mq_unlink 2-2: read: EOF; mq_unlink_7-1 — FAIL: Test FAILED
+- **mq_timedsend**: mq_timedsend_12-1 (hang/timeout) — timeout: 
 - **munlock**: munlock_10-1 — UNRESOLVED: Unexpected error: Success
 - **pthread_atfork**: pthread_atfork_3-3 (hang/timeout) — timeout: 
+- **pthread_attr_destroy**: pthread_attr_destroy_1-1 — exit 134: 
 - **pthread_barrierattr_getpshared**: pthread_barrierattr_getpshared_2-1 — FAIL: Test Fail: block on pthread_barrier_wait()
 - **pthread_cancel**: pthread_cancel_1-1 — FAIL: Test FAILED: Cancel request timed out; pthread_cancel_2-1 — FAIL: Test FAILED: Timed out while waiting for cancelation cleanup handlers to execute; pthread_cancel_2-2 — FAIL: unexpected error: pthread_cancel 2-2: Test FAIL: Destructor was not executed.; pthread_cancel_2-3 — FAIL: unexpected error: pthread_cancel 2-3: Test FAIL: Cleanup handler was not executed.; pthread_cancel_3-1 (hang/timeout) — timeout: Error: cancel never arrived
 - **pthread_cleanup_push**: pthread_cleanup_push_1-2 — UNRESOLVED: Error: cancellation not correctly handled
@@ -712,15 +700,15 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 - **pthread_cond_signal**: pthread_cond_signal_1-2 (hang/timeout) — timeout: ; pthread_cond_signal_4-2 (hang/timeout) — timeout: 
 - **pthread_cond_timedwait**: pthread_cond_timedwait_2-5 (hang/timeout) — timeout: ; pthread_cond_timedwait_2-6 (hang/timeout) — timeout: ; pthread_cond_timedwait_4-2 (hang/timeout) — timeout:  MF  : 200809; pthread_cond_timedwait_4-3 (hang/timeout) — timeout: 
 - **pthread_cond_wait**: pthread_cond_wait_2-3 (hang/timeout) — timeout: ; pthread_cond_wait_4-1 (hang/timeout) — timeout: 
-- **pthread_create**: pthread_create_11-1 (hang/timeout) — timeout: ; pthread_create_3-2 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/pthread_create/3-2.c unresolved: got 22 (Invalid argument) on line 649 (Failed to s
-- **pthread_equal**: pthread_equal_1-2 — exit 134: Test PASSED; pthread_equal_2-1 (hang/timeout) — timeout: 
-- **pthread_join**: pthread_join_1-2 — FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/pthread_join/1-2.c FAILED: pthread_join returned before child terminated; pthread_join_3-1 (hang/timeout) — timeout: ; pthread_join_4-1 (hang/timeout) — timeout: ; pthread_join_6-3 (hang/timeout) — timeout: 
+- **pthread_create**: pthread_create_1-3 (hang/timeout) — timeout: Test FAILED: Alarm fired while waiting for cancelation; pthread_create_11-1 (hang/timeout) — timeout: ; pthread_create_3-2 — UNRESOLVED: )
+- **pthread_equal**: pthread_equal_2-1 (hang/timeout) — timeout: 
+- **pthread_join**: pthread_join_1-2 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/pthread_join/1-2.c unresolved: got 3 (No such process) on line 98 (Failed to create; pthread_join_3-1 (hang/timeout) — timeout: ; pthread_join_4-1 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/pthread_join/4-1.c unresolved: got 3 (No such process) on line 114 (Failed to creat; pthread_join_6-3 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/pthread_join/6-3.c unresolved: got 3 (No such process) on line 142 (Failed to creat
 - **pthread_kill**: pthread_kill_2-1 — exit 139: ; pthread_kill_3-1 — exit 139: ; pthread_kill_8-1 — exit 139: 
 - **pthread_mutex_getprioceiling**: pthread_mutex_getprioceiling_3-3 — exit 134: The futex facility returned an unexpected error code.
 - **pthread_mutex_init**: pthread_mutex_init_1-2 (hang/timeout) — timeout: ; pthread_mutex_init_3-2 (hang/timeout) — timeout: 
 - **pthread_mutex_trylock**: pthread_mutex_trylock_4-3 (hang/timeout) — timeout: 
 - **pthread_once**: pthread_once_3-1 (hang/timeout) — timeout: : Interrupted system call; pthread_once_6-1 (hang/timeout) — timeout: 
-- **pthread_rwlock_timedwrlock**: pthread_rwlock_timedwrlock_6-1 — FAIL: Test FAILED: Timeout was for 5 seconds, but waited for 4.999894 seconds instead
+- **pthread_rwlock_timedwrlock**: pthread_rwlock_timedwrlock_6-1 — FAIL: Test FAILED: Timeout was for 5 seconds, but waited for 4.999750 seconds instead
 - **pthread_rwlockattr_getpshared**: pthread_rwlockattr_getpshared_2-1 (hang/timeout) — timeout: Test FAILED: Child expects EBUSY
 - **pthread_setcancelstate**: pthread_setcancelstate_1-1 — FAIL: Test FAILED: Thread of cancel type PTHREAD_CANCEL_ENABLE did not honor cancel request; pthread_setcancelstate_2-1 — FAIL: Test FAILED: Thread default cancel type is not PTHREAD_CANCEL_ENABLE, it did not honor cancel request
 - **pthread_setcanceltype**: pthread_setcanceltype_1-1 — FAIL: Test FAILED: Cancel request timed out
@@ -728,27 +716,16 @@ The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scri
 - **pthread_sigmask**: pthread_sigmask_10-1 — FAIL: Test FAILED
 - **pthread_spin_init**: pthread_spin_init_2-1 (hang/timeout) — timeout: ; pthread_spin_init_2-2 (hang/timeout) — timeout: 
 - **pthread_spin_lock**: pthread_spin_lock_1-1 (hang/timeout) — timeout: ; pthread_spin_lock_3-1 — exit 139: 
-- **sched_get_priority_max**: sched_get_priority_max_2-1 — FAIL: did no returned -1.
-- **sched_get_priority_min**: sched_get_priority_min_2-1 — FAIL: did not returned -1.
-- **sched_getparam**: sched_getparam_1-1 — exit 134: *** stack smashing detected ***: terminated; sched_getparam_2-1 — exit 134: *** stack smashing detected ***: terminated; sched_getparam_3-1 — exit 134: *** stack smashing detected ***: terminated; sched_getparam_4-1 — FAIL: returned code is not -1.
-- **sched_getscheduler**: sched_getscheduler_5-1 — FAIL: ESRCH is not returned: Success
-- **sched_setparam**: sched_setparam_22-1 — exit 134: *** stack smashing detected ***: terminated; sched_setparam_23-1 — exit 134: *** stack smashing detected ***: terminated; sched_setparam_25-1 — FAIL: The returned code is not -1.; sched_setparam_26-1 — exit 134: *** stack smashing detected ***: terminated; sched_setparam_27-1 — FAIL: The returned code is not -1.; sched_setparam_5-1 — exit 134: *** stack smashing detected ***: terminated
-- **sched_setscheduler**: sched_setscheduler_17-1 — exit 134: *** stack smashing detected ***: terminated; sched_setscheduler_17-5 — exit 134: *** stack smashing detected ***: terminated; sched_setscheduler_17-6 — exit 134: *** stack smashing detected ***: terminated; sched_setscheduler_17-7 — exit 134: *** stack smashing detected ***: terminated; sched_setscheduler_19-1 — FAIL:   The returned code is not -1.; sched_setscheduler_19-5 — UNRESOLVED: No error occurs, could -27367 be a valid value for the scheduling policy ???; sched_setscheduler_20-1 — FAIL: errno is not EPERM: Success; sched_setscheduler_21-1 — FAIL: The returned code is not -1.
+- **sched_setparam**: sched_setparam_26-1 — FAIL: errno is not EPERM: Success
 - **sem_close**: sem_close_3-2 — FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/sem_close/3-2.c FAILED: The semaphore count has changed after sem_close
 - **sem_open**: sem_open_3-1 — UNRESOLVED: unexpected error: sem_open 3-1: sem_open: No such file or directory
-- **shm_open**: shm_open_1-1 (hang/timeout) — timeout: ; shm_open_11-1 (hang/timeout) — timeout: ; shm_open_13-1 (hang/timeout) — timeout: ; shm_open_14-2 (hang/timeout) — timeout: ; shm_open_15-1 (hang/timeout) — skipped: hangs tabcomputer; shm_open_23-1 (hang/timeout) — timeout: ; shm_open_28-1 — exit 139: ; shm_open_28-3 — exit 139: ; shm_open_32-1 — FAIL: shm_open success.; shm_open_34-1 — FAIL: shm_open success.; shm_open_5-1 — FAIL: Test FAILED
-- **sigaction**: sigaction_10-1 (hang/timeout) — timeout: ; sigaction_12-16 (hang/timeout) — timeout: ; sigaction_17-15 (hang/timeout) — skipped: hangs tabcomputer; sigaction_21-1 — FAIL: Test FAILED; sigaction_29-1 — exit 160: 
+- **shm_open**: shm_open_1-1 — exit 139: ; shm_open_14-2 — exit 139: ; shm_open_15-1 (hang/timeout) — skipped: hangs tabcomputer; shm_open_23-1 (hang/timeout) — timeout: ; shm_open_28-1 — exit 139: ; shm_open_28-3 — exit 139: ; shm_open_32-1 — FAIL: shm_open success.; shm_open_34-1 — FAIL: shm_open success.; shm_open_5-1 — FAIL: Test FAILED
+- **sigaction**: sigaction_10-1 (hang/timeout) — timeout: ; sigaction_17-15 (hang/timeout) — skipped: hangs tabcomputer; sigaction_21-1 — FAIL: Test FAILED; sigaction_29-1 — exit 160: 
 - **sigaltstack**: sigaltstack_11-1 — FAIL: Test FAILED: Expected return value of -1.; sigaltstack_2-1 — FAIL: Test FAILED: ss_sp of the handler's stack changed even though SS_DISABLE was set
 - **sigprocmask**: sigprocmask_10-1 — FAIL: FAIL: SIGKILL was added to the signal mask
 - **sigqueue**: sigqueue_1-1 — FAIL: Test FAILED; sigqueue_12-1 — FAIL: sigqueue() did not return -1; sigqueue_3-1 — FAIL: Test FAILED: sigqueue() succeeded even though this program's user id did not match the recieving process's user id; sigqueue_4-1 — exit 130: ; sigqueue_5-1 — exit 130: ; sigqueue_6-1 — exit 130: ; sigqueue_7-1 — exit 160: ; sigqueue_8-1 — exit 130: 
-- **sigtimedwait**: sigtimedwait_1-1 — FAIL: time_elapsed: 0.000470; sigtimedwait_4-1 — FAIL: : Function not implemented; sigtimedwait_6-1 — FAIL: Test FAILED: sigtimedwait() did set errno to EAGAIN
-- **sigwait**: sigwait_1-1 — FAIL: Error in sigwait(); sigwait_2-1 — FAIL: Error in sigwait; sigwait_3-1 — UNRESOLVED: Error in sigwait; sigwait_4-1 — UNRESOLVED: Error in sigwait(); sigwait_6-1 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/sigwait/6-1.c unresolved: got 38 (Function not implemented) on line 99 (failed to w; sigwait_6-2 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/sigwait/6-2.c unresolved: got 38 (Function not implemented) on line 99 (failed to w; sigwait_7-1 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/sigwait/7-1.c unresolved: got 38 (Function not implemented) on line 153 (Failed to ; sigwait_8-1 — FAIL: Test FAILED
-- **sigwaitinfo**: sigwaitinfo_1-1 — UNRESOLVED: : Function not implemented; sigwaitinfo_2-1 — FAIL: Test FAILED: sigwaitinfo() did not return the lowest of the multiple pending signals between SIGRTMIN and SIGRTMAX; sigwaitinfo_3-1 — FAIL: Test FAILED; sigwaitinfo_5-1 — UNRESOLVED: : Function not implemented; sigwaitinfo_6-1 — UNRESOLVED: : Function not implemented; sigwaitinfo_7-1 — UNRESOLVED: : Function not implemented; sigwaitinfo_8-1 — UNRESOLVED: : Function not implemented; sigwaitinfo_9-1 — FAIL: : Function not implemented
-- **speculative**: speculative_12-2 — UNRESOLVED: : Function not implemented; speculative_12-3 — UNRESOLVED: : Function not implemented; speculative_18-2 — UNRESOLVED: Test UNRESOLVED; speculative_2-1 — UNRESOLVED: : Function not implemented; speculative_26-1 — FAIL: Test FAILED; speculative_5-1 — FAIL: Test FAILED; speculative_5-2 — UNRESOLVED: : Function not implemented; speculative_6-2 — UNRESOLVED: : Function not implemented; speculative_6-3 — UNRESOLVED: : Function not implemented; speculative_7-2 — FAIL: Test FAILED, error is Function not implemented
-- **timer_create**: timer_create_1-1 — FAIL: : Function not implemented; timer_create_10-1 — UNRESOLVED: timer_create did not return success: Function not implemented; timer_create_11-1 — UNRESOLVED: timer_create did not return success: Function not implemented; timer_create_16-1 — FAIL: Test FAILED; timer_create_3-1 — FAIL: : Function not implemented; timer_create_7-1 — UNRESOLVED: : Function not implemented; timer_create_8-1 — UNRESOLVED: : Function not implemented; timer_create_9-1 — UNRESOLVED: : Function not implemented
-- **timer_delete**: timer_delete_1-1 — UNRESOLVED: : Function not implemented; timer_delete_1-2 — UNRESOLVED: : Function not implemented
-- **timer_getoverrun**: timer_getoverrun_1-1 — UNRESOLVED: : Function not implemented; timer_getoverrun_2-1 — UNRESOLVED: : Function not implemented; timer_getoverrun_2-2 — UNRESOLVED: : Function not implemented; timer_getoverrun_2-3 — UNRESOLVED: : Function not implemented
-- **timer_gettime**: timer_gettime_1-1 — UNRESOLVED: : Function not implemented; timer_gettime_1-2 — UNRESOLVED: : Function not implemented; timer_gettime_1-3 — UNRESOLVED: timer_create(): Function not implemented; timer_gettime_1-4 — UNRESOLVED: : Function not implemented; timer_gettime_2-1 — UNRESOLVED: : Function not implemented; timer_gettime_2-2 — UNRESOLVED: : Function not implemented; timer_gettime_3-1 — UNRESOLVED: : Function not implemented
-- **timer_settime**: timer_settime_1-1 — UNRESOLVED: : Function not implemented; timer_settime_13-1 — UNRESOLVED: : Function not implemented; timer_settime_3-1 — UNRESOLVED: : Function not implemented; timer_settime_3-2 — UNRESOLVED: : Function not implemented; timer_settime_3-3 — UNRESOLVED: : Function not implemented; timer_settime_5-1 — UNRESOLVED: : Function not implemented; timer_settime_5-2 — UNRESOLVED: : Function not implemented; timer_settime_6-1 — UNRESOLVED: : Function not implemented; timer_settime_8-1 — UNRESOLVED: : Function not implemented; timer_settime_8-2 — UNRESOLVED: : Function not implemented; timer_settime_8-3 — UNRESOLVED: : Function not implemented; timer_settime_8-4 — UNRESOLVED: : Function not implemented; timer_settime_9-1 — UNRESOLVED: : Function not implemented; timer_settime_9-2 — UNRESOLVED: : Function not implemented
+- **sigwait**: sigwait_2-1 — FAIL: Test FAILED; sigwait_6-2 — FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/sigwait/6-2.c FAILED: Unexpected number of threads awaken
+- **sigwaitinfo**: sigwaitinfo_3-1 — FAIL: Test FAILED; sigwaitinfo_7-1 — FAIL: Test FAILED: The queued value 0 was dequeued before the queued value 5 even though 5 was queued first.; sigwaitinfo_8-1 (hang/timeout) — timeout: 
+- **timer_getoverrun**: timer_getoverrun_2-3 — FAIL: FAIL:  0 overruns sent; expected 499
 
 </details>

@@ -708,6 +708,49 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
      EFAULT for read-only output buffers; fd checks;
    - /proc/self/maps as a kernel memfd; nanosleep's rem written before the
      signal frame.
+85. From one compiled block straight to the next: after a block, WjExecute
+   runs the next one directly when it has code (an indirect jmp's target, a
+   block cut at its length). It does up to 64 blocks before going back
+   through Actor's loop, and stops for signals, a JIT epoch change, or
+   another thread wanting the GIL. A computed-goto bytecode loop, one block
+   per op like JSC's LLInt, went from 131 to 92 ns per op (2 ns native, 660
+   ns interpreted). The x86 suite A/B is unchanged ("same" everywhere).
+83–84. unix/conformance's: raise(SIGKILL)/raise(SIGSTOP) and
+   rt_sigqueueinfo/rt_tgsigqueueinfo go to the kernel (as kill).
+86. unix/conformance's: POSIX message queues go to the kernel
+   (mq_open … mq_getsetattr).
+87. rt_sigtimedwait (sigwait, sigwaitinfo, sigtimedwait) goes to the kernel's
+   new call 128. It takes the lowest pending signal of the set that the
+   process blocked, without running a handler. Blink first takes one sent to
+   this thread (pthread_kill), and waits in the kernel in slices of at most
+   50 ms so it sees those too. It returns EAGAIN at the timeout and EINTR
+   for a signal let through. VLC's main thread sigwaits and quit at once on
+   ENOSYS. Test: fixtures/x86/sigwait.c, identical to native output.
+88. SHIRO_BLINK_PROFILE samples its timing. 1 in SHIRO_BLINK_PROFILE_EVERY
+   (default 64) compiled entries is timed, with any compile left out. 1 in N
+   interpreted instructions goes in the address and opcode tables. Both are
+   scaled by N. Timing every entry slowed native Claude's startup by 55%
+   and inflated its "in compiled code" share. After 0085, "blocks run"
+   counts entries, each running up to 65 blocks.
+89. unix/conformance's: POSIX timers go to the kernel; sched_* answers as
+   Linux's (sched_getparam wrote 8 bytes into the 4-byte struct).
+90. FUTEX_REQUEUE and FUTEX_CMP_REQUEUE (they were EINVAL). Up to `val`
+   waiters are woken, and up to `val2` more move to uaddr2. The moved ones
+   count at uaddr2 at once, so a wake there right after finds them. Each
+   steps over when it next looks, keeping its timeout. A waiter that leaves
+   (timeout, signal) while a move is meant for it steps over and leaves from
+   there, so the counts stay right. LTP futex_cmp_requeue02/03 pass.
+   futex_cmp_requeue01 passes its 10- and 100-waiter cases, but 1000 forked
+   waiters don't fit its 30 s. Test: fixtures/x86/futexrequeue.c, identical
+   to native output.
+91. A thread running a vfork child takes no signals until the child execs
+   or exits, as on Linux, where the parent sleeps in vfork. Before, Go's
+   SIGURG (sysmon preemption) for the forking thread was delivered to the
+   child with the parent's handlers. Go's runtime threw "signal received
+   during fork" and the parent wedged with unreaped children (toolchains'
+   `go run` hang). perf-kernel's gowait stress (60 rounds of 8 parallel
+   os/exec children, BLINK_FORK_STRESS=1) failed before; it passed 3 of 3
+   runs after.
 
 The page compiles blink.wasm once and gives the `WebAssembly.Module` to every
 Blink worker (src/x86-engine/blink.ts `blinkWasmModule`, host.mjs
