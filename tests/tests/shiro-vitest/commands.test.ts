@@ -296,6 +296,48 @@ describe('Commands', () => {
       const { exitCode } = await run(shell, 'js-eval throw new Error("fail")');
       expect(exitCode).toBe(1);
     });
+
+    it('runs statements, with return for a value (tabcomputer#17)', async () => {
+      const { output, exitCode } = await run(shell, "js-eval 'const a = 1; return a + 1'");
+      expect(exitCode).toBe(0);
+      expect(output.replace(/\r/g, '').trim()).toBe('2');
+    });
+
+    it('treats a trailing semicolon as an expression', async () => {
+      const { output } = await run(shell, "js-eval '6 * 7;'");
+      expect(output.replace(/\r/g, '').trim()).toBe('42');
+    });
+
+    it('runs a throwing expression once and prints its error (tabcomputer#17)', async () => {
+      (globalThis as any).__jsEvalRuns = 0;
+      const { output, exitCode } = await run(shell,
+        "js-eval '(() => { globalThis.__jsEvalRuns++; throw new TypeError(\"boom\") })()'");
+      expect(exitCode).toBe(1);
+      expect((globalThis as any).__jsEvalRuns).toBe(1);
+      expect(output).toContain('js-eval: TypeError: boom');
+      delete (globalThis as any).__jsEvalRuns;
+    });
+
+    it('runs throwing statements once', async () => {
+      (globalThis as any).__jsEvalRuns = 0;
+      const { output, exitCode } = await run(shell,
+        "js-eval 'globalThis.__jsEvalRuns++; throw new Error(\"stmt\")'");
+      expect(exitCode).toBe(1);
+      expect((globalThis as any).__jsEvalRuns).toBe(1);
+      expect(output).toContain('js-eval: Error: stmt');
+      delete (globalThis as any).__jsEvalRuns;
+    });
+
+    it('reports a syntax error in neither form', async () => {
+      const { output, exitCode } = await run(shell, "js-eval 'const = ;'");
+      expect(exitCode).toBe(1);
+      expect(output).toContain('SyntaxError');
+    });
+
+    it('awaits at the top level', async () => {
+      const { output } = await run(shell, "js-eval 'await Promise.resolve(5)'");
+      expect(output.replace(/\r/g, '').trim()).toBe('5');
+    });
   });
 
   describe('node', () => {

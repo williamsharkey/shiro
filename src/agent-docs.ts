@@ -207,11 +207,10 @@ ${bootSection(ctx, name)}
 - A command that hangs: press Ctrl-C at the terminal. Linux and WASM programs are
   kernel processes: \`ps\` lists them, \`kill PID\` (or \`kill -9 PID\`) stops
   them. Builtins (including \`node\` and the Pyodide
-  \`python3\`) run inside the page, not as kernel processes, and \`ps\` doesn't
-  list them. One started in the background has a \`/proc/$!\` while it runs;
-  \`jobs -l\` (in the shell that started it) or \`ls /proc\` shows its PID, and
-  \`kill PID\` stops it from any shell. A foreground one only Ctrl-C or a
-  reload stops.
+  \`python3\`) run inside the page, not as kernel processes. Started in the
+  background, one still has a PID (\`$!\`, \`jobs -l\`): \`ps\` lists it, it has a
+  \`/proc/PID\`, and \`kill PID\` stops it from any shell. A builtin in the
+  foreground has none: Ctrl-C it, or reload.
 - \`console -g PATTERN\` searches the page's console log (\`--prev\` includes the
   load before the last reload).
 - Report bugs at ${source}/issues (\`gh issue create\` works here): the command,
