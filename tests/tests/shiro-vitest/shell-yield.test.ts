@@ -30,13 +30,14 @@ describe('the shell yields to the page', () => {
   }, 60_000);
 
   it('runaway function recursion can be stopped (timeout)', async () => {
-    const r = await timed('timeout 1 sh -c "g() { g; }; g"; echo st=$?');
+    // (FUNCNEST raised so the nesting limit doesn't end it first: the timeout must)
+    const r = await timed('timeout 1 sh -c "FUNCNEST=100000000; g() { g; }; g"; echo st=$?');
     expect(r.out).toBe('st=124\n');
   }, 30_000);
 
-  it('a file sourcing itself can be stopped (timeout)', async () => {
-    const r = await timed('timeout 1 sh -c "source /tmp/self-src.sh"; echo st=$?',
+  it('a file sourcing itself ends (the nesting limit) without freezing the page', async () => {
+    const r = await timed('timeout 5 sh -c "source /tmp/self-src.sh"; echo st=$?',
       (fs) => fs.writeFile('/tmp/self-src.sh', 'source /tmp/self-src.sh\n'));
-    expect(r.out).toBe('st=124\n');
+    expect(r.out).toBe('source: /tmp/self-src.sh: maximum nesting level exceeded (100)\nst=1\n');
   }, 30_000);
 });
