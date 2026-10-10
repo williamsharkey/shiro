@@ -4284,7 +4284,8 @@ export class Shell {
         let pkgShadowed = !_builtinDisabled && this.pkgShadowBypass !== effectiveCmdName &&
           !SHELL_BUILTIN_NAMES.has(effectiveCmdName) &&
           !!this.commands.get(effectiveCmdName) &&
-          packageShadows(this.fs).has(effectiveCmdName);
+          packageShadows(this.fs).has(effectiveCmdName) &&
+          !this.commands.get(effectiveCmdName)!.keepOverPackage?.(cmdArgs);
         // A Debian program that is gone (apt remove) no longer shadows the builtin
         if (pkgShadowed && !pkgOwnShadows(this.fs).has(effectiveCmdName) && !(await this.findExecutableInPath(effectiveCmdName))) pkgShadowed = false;
         // /bin/NAME, /usr/bin/NAME, …: Shiro's NAME when no such file exists (the kernel stats them the same way)
@@ -8106,10 +8107,10 @@ export class Shell {
     const { mayBeKernelProgram, resolveKernelProgram, builtinStage, runKernelPipeline } = _shellKernel ?? await loadShellKernel();
     const progress = (m: string) => writeStderr(`  ${m}\r\n`);
     const stageFor = async (n: string, a: string[]) =>
-      builtinStage(this, n, a) ?? (mayBeKernelProgram(this, n) ? await resolveKernelProgram(this, n, a, progress) : null);
+      builtinStage(this, n, a) ?? (mayBeKernelProgram(this, n, a) ? await resolveKernelProgram(this, n, a, progress) : null);
     // Cheap exit for the common case: neither a filter builtin nor something to look up on PATH
     const firstIsFilter = !!builtinStage(this, name, args);
-    if (!firstIsFilter && !mayBeKernelProgram(this, name)) return null;
+    if (!firstIsFilter && !mayBeKernelProgram(this, name, args)) return null;
     if (firstIsFilter && i === pipeline.length - 1) return null;
     const first = await stageFor(name, args);
     if (!first) return null;
@@ -8215,7 +8216,7 @@ export class Shell {
       const parsed = this.parseSegment(t);
       if (parsed.redirects.length || parsed.hereString !== undefined || parsed.args.length === 0) return false;
       const words = await this.expandGlobs(parsed.args);
-      if (!words || !mayBeKernelProgram(this, words[0])) return false;
+      if (!words || !mayBeKernelProgram(this, words[0], words.slice(1))) return false;
       const prog = await resolveKernelProgram(this, words[0], words.slice(1));
       if (!prog) return false;
       programs.push(prog);

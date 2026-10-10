@@ -3,7 +3,9 @@
 // Needs a bare clone at bench/.cache/gitsrv/axios.git:
 //   git clone --bare https://github.com/axios/axios bench/.cache/gitsrv/axios.git
 // ONLY=builtin|full picks one side; HANDOFF=1 clones with the built-in git and
-// runs the full git (status, fsck, commit) on the result.
+// runs the full git (status, fsck, commit) on the result; ROUTE=1 installs the
+// full git first and clones over http (the built-in's route), then status, log,
+// fetch and fsck with the full git.
 import { join, resolve } from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
@@ -20,7 +22,8 @@ const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers
 const hs = http.createServer((req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
   const u = new URL(req.url, 'http://x');
-  const path = u.pathname.replace(/^\/[^/]+/, '');
+  // through the built-in's CORS proxy setting: /<host>/<repo>/...; the full git asks for /<repo>/... itself
+  const path = /^\/[^/]+\/[^/]+\.git\//.test(u.pathname) ? u.pathname.replace(/^\/[^/]+/, '') : u.pathname;
   const cgi = spawn('git', ['http-backend'], { env: { ...process.env, GIT_PROJECT_ROOT: root, GIT_HTTP_EXPORT_ALL: '1', PATH_INFO: path, REQUEST_METHOD: req.method, QUERY_STRING: u.search.slice(1), CONTENT_TYPE: req.headers['content-type'] || '', HTTP_CONTENT_ENCODING: req.headers['content-encoding'] || '', REMOTE_ADDR: '127.0.0.1', GIT_PROTOCOL: req.headers['git-protocol'] || '' } });
   req.pipe(cgi.stdin);
   let head = Buffer.alloc(0), sent = false;
@@ -64,6 +67,15 @@ if (process.env.HANDOFF) {
     await step(`full git fsck on ${d}`, `cd /tmp/${d} && git fsck 2>&1 | tail -2 | tr '\\n' ' '; git log --oneline | wc -l; git rev-parse --is-shallow-repository`);
     await step(`full git commit on ${d}`, `cd /tmp/${d} && echo x >> README.md && git -c user.name=a -c user.email=a@b commit -qam t && git log --oneline -1`);
   }
+}
+if (process.env.ROUTE) {
+  console.log((await h.eval(() => window.__bench.shLimit('pkg install git > /tmp/pkg.out 2>&1; echo exit=$?', 600000))).out.trim());
+  await step('git clone http (routed, full git installed)', `cd /tmp && ${PROXY} git clone http://${hostAddr}:${hp}/axios.git r 2>&1 | tail -2 | tr '\\n' ' '`);
+  await step('full git status (1st)', `cd /tmp/r && git status --short | wc -l`);
+  await step('full git status (2nd)', `cd /tmp/r && git status --short | wc -l`);
+  await step('full git log', `cd /tmp/r && git log --oneline | wc -l; git branch -r | wc -l; git tag | wc -l`);
+  await step('full git fetch', `cd /tmp/r && git fetch origin 2>&1 | tail -2 | tr '\\n' ' '; git remote -v | head -1`);
+  await step('full git fsck', `cd /tmp/r && git fsck 2>&1 | tail -2 | tr '\\n' ' '`);
 }
 const only = (process.env.ONLY || 'builtin,full').split(',');
 if (only.includes('builtin')) {

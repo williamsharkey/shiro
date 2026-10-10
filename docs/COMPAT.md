@@ -668,6 +668,19 @@ exit 1) instead of ignoring it. Combined short options (`-qb NAME`,
 `-qam MSG`) are split first. tig and lazygit only use what the built-in
 has (their tests check that nothing went to the full git).
 
+With the full git installed, `git clone` of an http(s) URL is still the
+built-in's (axios, 2,222 commits: 12 s, against 96 s for the full git in
+Blink; `builtinCloneHandles` in git.ts), with the full git's defaults: all
+history unless `--depth`, all branches as `origin/*` with `origin/HEAD`,
+tags, and the checked-out branch tracking its remote. Only with the options
+it has (`--depth`, `-b`/`--branch`, `--single-branch`, `--no-tags`, `-q`,
+`-o`/`--origin`, a directory); `--bare`, `--mirror`, `--recurse-submodules`,
+`--filter`, ssh://, git://, file:// and local paths are the full git's, and
+so is a clone the built-in fails at (other than for credentials). The full
+git then works on the repository as usual. Credentials for a private
+http(s) clone come from `GITHUB_TOKEN` or the GitHub sign-in (`gh auth
+login`), not git's credential helpers.
+
 | Command | Supported |
 | --- | --- |
 | global options | `-C DIR`, `-c k=v`, `--no-pager`/`-P`, `--no-optional-locks`, `--literal-pathspecs`, `--git-dir=`, `--work-tree=`; from a subdirectory (the nearest `.git` up) |

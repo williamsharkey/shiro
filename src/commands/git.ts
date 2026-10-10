@@ -13,6 +13,7 @@ import {
 import { getShiroOrigin } from '../utils/shiro-origin';
 import { activeProfile } from '../profile';
 import { gitPlumbing } from './git-plumbing';
+import { packageShadows } from '../pkg-manager';
 import { splitShortOptions, unknownOption, realGit, PREFER_REAL } from './git-route';
 import { GLOBAL_GITCONFIG, parseGitConfig, formatGitConfig } from './git-config';
 
@@ -23,7 +24,29 @@ export const gitCmd: Command = {
   description: 'Version control system',
   // one isomorphic-git cache per command (see git-cached.ts)
   exec: (ctx: CommandContext) => withGitCache(() => gitMain(ctx)),
+  keepOverPackage: builtinCloneHandles,
 };
+
+/**
+ * With the full git installed, `git clone` of an http(s) URL is still done by
+ * the built-in git (axios: 12 s, against 96 s for the full git in Blink),
+ * with the full git's defaults (all history, branches and tags), and the full
+ * git takes the repository from there: the format on disk is the same. Only
+ * for options the built-in clone has; anything else is the full git's.
+ */
+export function builtinCloneHandles(args: string[]): boolean {
+  if (args[0] !== 'clone') return false;
+  const positional: string[] = [];
+  for (let i = 1; i < args.length; i++) {
+    const a = args[i];
+    if (['-q', '--quiet', '--single-branch', '--no-single-branch', '--no-tags'].includes(a)) continue;
+    if (['--depth', '-b', '--branch', '-o', '--origin'].includes(a)) { if (++i >= args.length) return false; continue; }
+    if (/^--(depth|branch|origin)=./.test(a)) continue;
+    if (a.startsWith('-')) return false;
+    positional.push(a);
+  }
+  return positional.length >= 1 && positional.length <= 2 && /^https?:\/\//.test(positional[0]);
+}
 
 async function gitMain(ctx: CommandContext): Promise<number> {
     // Global options before the subcommand (git -C /path -c k=v --no-pager subcmd ...)
@@ -637,15 +660,26 @@ async function gitMain(ctx: CommandContext): Promise<number> {
           const cloneArgs = ctx.args.slice(1);
           let url = '';
           let cloneTarget = '';
-          let cloneDepth = 1;
+          // The full git installed (this is builtinCloneHandles' case): its defaults,
+          // all history, branches and tags; the built-in alone: a shallow clone
+          const asFullGit = packageShadows(ctx.fs).has('git');
+          let cloneDepth: number | undefined = asFullGit ? undefined : 1;
           let cloneBranch: string | undefined;
+          let singleBranch: boolean | undefined;
+          let noTags = false;
+          let remoteName = 'origin';
           for (let i = 0; i < cloneArgs.length; i++) {
             const a = cloneArgs[i];
             if (a === '--depth' && i + 1 < cloneArgs.length) { cloneDepth = parseInt(cloneArgs[++i], 10) || 1; continue; }
             if (a.startsWith('--depth=')) { cloneDepth = parseInt(a.slice(8), 10) || 1; continue; }
             if (a === '--branch' || a === '-b') { cloneBranch = cloneArgs[++i]; continue; }
             if (a.startsWith('--branch=')) { cloneBranch = a.slice(9); continue; }
-            if (a === '--single-branch' || a === '--no-tags' || a === '--quiet' || a === '-q') continue;
+            if (a === '--origin' || a === '-o') { remoteName = cloneArgs[++i] || 'origin'; continue; }
+            if (a.startsWith('--origin=')) { remoteName = a.slice(9) || 'origin'; continue; }
+            if (a === '--single-branch') { singleBranch = true; continue; }
+            if (a === '--no-single-branch') { singleBranch = false; continue; }
+            if (a === '--no-tags') { noTags = true; continue; }
+            if (a === '--quiet' || a === '-q') continue;
             if (a.startsWith('-')) continue;
             if (!url) { url = a; } else if (!cloneTarget) { cloneTarget = a; }
           }
@@ -678,8 +712,11 @@ async function gitMain(ctx: CommandContext): Promise<number> {
               git.clone({
                 fs, http, dir: targetDir, url,
                 corsProxy,
-                singleBranch: true,
-                depth: cloneDepth,
+                remote: remoteName,
+                // as git: --depth implies --single-branch
+                singleBranch: singleBranch ?? (asFullGit ? cloneDepth !== undefined : true),
+                noTags,
+                ...(cloneDepth !== undefined ? { depth: cloneDepth } : {}),
                 ...(cloneBranch ? { ref: cloneBranch } : {}),
                 onProgress: async () => {
                   await new Promise(resolve => setTimeout(resolve, 0));
@@ -692,8 +729,14 @@ async function gitMain(ctx: CommandContext): Promise<number> {
             ]);
           } catch (cloneErr: any) {
             await undo();
-            ctx.stderr += `fatal: ${cloneErr.message || cloneErr}\n`;
             const httpStatus = cloneErr?.data?.statusCode;
+            // The full git is there: it gets a clone the built-in couldn't do (not one refused for credentials)
+            if (asFullGit && httpStatus !== 401 && httpStatus !== 403) {
+              ctx.stderr = `(git: the built-in clone failed (${cloneErr.message || cloneErr}); the full git does it)\n`;
+              const code = await realGit(ctx, argv, cwd0);
+              if (code !== null) return code;
+            }
+            ctx.stderr += `fatal: ${cloneErr.message || cloneErr}\n`;
             if ((httpStatus === 401 || httpStatus === 403 || httpStatus === 404) && /github\.com/.test(url)) {
               ctx.stderr += token
                 ? 'hint: the repository may not exist, or your GitHub sign-in lacks access to it.\n'
@@ -706,6 +749,9 @@ async function gitMain(ctx: CommandContext): Promise<number> {
             await new Promise(resolve => setTimeout(resolve, 0));
             const branch = await git.currentBranch({ fs, dir: targetDir }) || 'main';
             await git.checkout({ fs, dir: targetDir, ref: branch, force: true });
+            // The checked-out branch tracks the remote's, as git clone sets it up
+            await git.setConfig({ fs, dir: targetDir, path: `branch.${branch}.remote`, value: remoteName });
+            await git.setConfig({ fs, dir: targetDir, path: `branch.${branch}.merge`, value: `refs/heads/${branch}` });
           } catch { /* checkout best-effort */ }
 
           ctx.stderr += `done.\n`;
