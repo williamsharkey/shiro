@@ -1,9 +1,11 @@
 # OpenGL for X11 apps: design note
 
-Status: proposal, nothing built. Blender is the trigger: it now starts in Blink
-(the CPUID and PI-futex fixes) and then stops with "A graphics card and driver
-with support for OpenGL 3.3 or higher is required": Xshiro (`src/x11`) has no
-GLX extension, so no X11 app can make a GL context.
+Status: **decided: option B**, GL forwarded to WebGL2 (approved by the user).
+Option A, Mesa's llvmpipe/softpipe in the guest, stays as the slow fallback
+for pages without WebGL2. Stage 2 is built: glxinfo and glxgears run in the
+page (see the addendum). Blender was the trigger: it starts in Blink and then
+stops with "A graphics card and driver with support for OpenGL 3.3 or higher
+is required", because Xshiro (`src/x11`) had no GLX.
 
 ## What GL apps need
 
@@ -133,26 +135,24 @@ back five pixels and compares them with the same shader evaluated on the CPU.
   ~1.3 s, 3.5× faster than softpipe's 512² frame, and under the ~2 s bar.
   The first run's warm 512² frames took 2.6–2.8 s; what made them 6× faster
   isn't pinned down (0114 and the engine changes merged with it).
-- So llvmpipe is the driver for option A: a slow first frame, then usable
-  redraws for UI-style apps.
+- So llvmpipe is the driver for option A, the fallback: a slow first
+  frame, then usable redraws for UI-style apps.
 
-## Recommendation
+## Decision
 
-1. **Measure before building**: Debian's `libosmesa6` renders with llvmpipe
-   into memory with no X server or GLX at all. A one-hour probe (gears or a
-   Blender-like shader into an OSMesa buffer, timed in Blink) tells whether
-   LLVM's JIT runs under Blink and what a frame costs. That decides A.
-2. The probe is acceptable (llvmpipe correct since 0114, ~1.3 s per warm
-   720p frame): **do A**: the GLX extension in Xshiro plus
-   Mesa packaging, about a week. It unlocks every GL app at once, correctly,
-   just slowly, and stays useful as the fallback for anything B can't do.
-3. **B later**, as the speed path for the apps people actually use with GL.
-   It's a separate, larger project whose GL-feature coverage grows per app.
+- **B is the GL path**: the user approved forwarding GL to WebGL2, because
+  many programs need GL at interactive speed (Blender, KiCad 3D, FreeCAD,
+  OpenSCAD, games, mpv, Qt Quick, GTK4 GL). Its design and state are in the
+  addendum below.
+- **A is the fallback**: llvmpipe is correct since 0114 but takes 26–29 s
+  for a first frame and about a second per warm 720p frame, so it serves
+  pages without WebGL2 and whatever B can't draw yet. Xshiro installs its GLX for B only when the page has WebGL2
+  (`src/gl/setup.ts`); otherwise GL apps find Mesa as usual.
 
 ## Addendum: option B design (unix/gl, 2026-10-10)
 
-Status: proposal, sent to the coordinator before building. Owner: unix/gl.
-Xshiro's GLX side and app scoring: unix/gui.
+Status: approved; stage 2 (glxinfo, glxgears in the page) built and tested. Owner: unix/gl.
+Xshiro's GLX (`src/gl/glx-ext.ts`) is unix/gl's too; the GL window surface and app scoring: unix/gui.
 
 ```
  guest (Blink worker)                         page
@@ -241,10 +241,12 @@ Xshiro's GLX side and app scoring: unix/gui.
 
 ### Page side
 
-- `glshiro` (`src/gl/server.ts`) accepts connections and forwards batches
-  (transferred ArrayBuffers) to one Worker per connection
-  (`src/gl/worker.ts`) that owns a WebGL2 context on an OffscreenCanvas.
-  Without OffscreenCanvas WebGL2 the same executor runs on the main thread.
+- `glshiro` (`src/gl/server.ts`) accepts connections and reassembles each
+  connection's batches for its executor (`src/gl/exec.ts`), which owns one
+  WebGL2 context. **Now** the executor runs on the main thread
+  (`src/gl/present.ts`). **Planned**: one Worker per connection
+  (`src/gl/worker.ts`) with the context on an OffscreenCanvas, batches
+  transferred as ArrayBuffers; the main thread stays the fallback.
 - One WebGL2 context per connection holds every GL context of that
   process. Share groups are name maps; each GL context's state is shadowed
   and re-applied on a context switch. This makes `glXCreateContext` with
@@ -256,8 +258,15 @@ Xshiro's GLX side and app scoring: unix/gui.
   no readback, no copy through Xshiro's pixmaps. Front-buffer drawing, and
   `glReadPixels` from either buffer, work because both are FBOs. The FBO
   follows the window's size at the next swap or MakeCurrent, as DRI does.
+  **Now** frames take the fallback below; the bitmap path waits for gui's
+  `glSurface`.
 - Fallback present (and `XGetImage` on a GL window): read the front FBO
   back into the window's pixmap, so Xshiro composes it like any drawing.
+- Frame pacing: the page acks a frame (`MSG_FRAME`) on the next animation
+  frame (`pacedSend` in `present.ts`), and the vendor library blocks in
+  `glXSwapBuffers` while it is more than two frames ahead. Apps run at the
+  display's rate, and a hidden tab (no animation frames) stops them at their
+  next swap instead of rendering frames nobody sees.
 - Fixed function (GL 1.x/2.1 compat: glxgears, OpenSCAD, FreeCAD/Coin3D,
   KiCad): matrices, lighting (8 lights, materials, color material), texture
   environment, fog, alpha test, clip planes, point size, flat shading, are
@@ -268,6 +277,13 @@ Xshiro's GLX side and app scoring: unix/gui.
 
 ### Shader translation: our own GLSL front end in TypeScript
 
+- **Now** (`src/gl/glsl/translate.ts`) it rewrites tokens: versions and
+  qualifiers, renamed built-in functions, fragment outputs, and the
+  compatibility built-ins mapped to `_tc_` attributes and uniforms. Every
+  shader of the corpus in `tests/tests/shiro-vitest/fixtures/glsl` (Mesa
+  demos, glmark2, SuperTuxKart, OpenSCAD) compiles and links after it.
+  There is no type checker yet, so desktop-only implicit conversions are
+  still compile errors. The full front end below is the plan:
 - Desktop GLSL 110–330 to GLSL ES 3.00, in `src/gl/glsl/`: preprocessor,
   parser, a type checker for the built-in function set, and a printer.
   The checker is there for what ES forbids and desktop GLSL ≥ 1.20 allows:
@@ -308,29 +324,64 @@ it covers it), a core context `3.3`, GLSL `1.20`/`3.30`; renderer
 
 ### What gui provides (Xshiro)
 
-1. `GLX` in QueryExtension, with QueryVersion (1.4). Other GLX requests
-   can answer `BadRequest` for now; our vendor sends none.
+1. Done in `src/gl/glx-ext.ts`, installed by `src/gl/setup.ts` when the page
+   has WebGL2: `GLX` in QueryExtension, QueryVersion (1.4), and what libglvnd
+   asks the server: QueryServerString with `GLX_EXT_libglvnd` among the
+   extensions and `tabcomputer` as GLX_VENDOR_NAMES_EXT (without the former
+   glvnd falls back to `libGLX_indirect`), and GetDrawableAttributes for a
+   drawable's screen. Other GLX requests answer `BadRequest`; our vendor
+   sends none.
 2. An in-page API for a GL window, roughly
    `server.glSurface(xid) → { canvas, width, height, onChange(cb), onDestroy(cb), release() }`:
    a `bitmaprenderer` canvas at the window's position in its toplevel,
    clipped and stacked like the window (child windows included: KiCad's 3D
    canvas, wxGLCanvas), kept in place across moves, resizes, map and unmap.
    Until it lands, `src/gl/present.ts` uses the readback fallback.
-3. The app environment: `__GLX_VENDOR_LIBRARY_NAME=tabcomputer` and
-   `libGLX_tabcomputer.so.0` installed for apps that pull libglvnd.
+3. The vendor library: `src/gl/setup.ts` writes
+   `public/gui/lib/libGLX_tabcomputer.so.0` (built by `scripts/gl/build.sh`)
+   to `/usr/lib/x86_64-linux-gnu/` before Xshiro serves its first client,
+   like the text hooks `src/gui/apps.ts` ships. No environment variable is
+   needed: glvnd takes the vendor from the server.
 
 ### Tests and measurement
 
-- vitest: wire format round trips, the generated encoder in sync, the
-  GLSL translator (a corpus of shaders from glxgears to Blender's, each
-  checked by its output compiling in ANGLE's ES 3.00 validator: Chromium in
-  the browser tests), fixed-function shader keys.
-- Blink under Node: the vendor library with a recording `glshiro`
-  (`tests/tests/shiro-vitest/gl-guest.test.ts`): glxinfo's strings and
-  glxgears' command stream.
-- Browser (`tests/browser/gl.mjs`): glxgears' pixels compared against a
-  reference, FPS for glxgears and the stage-3 app; A/B through
-  `bench/ab.mjs`.
+- vitest (`tests/tests/shiro-vitest/`):
+  - `gl-wire.test.ts`: the wire format, every argument code, long headers,
+    broken streams; `gl-encode.ts` is a TS encoder of the same bytes.
+  - `gl-exec.test.ts`: the executor on a recording WebGL2 stand-in
+    (contexts, drawables, immediate mode, display lists, shaders, replies,
+    frame pacing).
+  - `gl-webgl.test.ts`: real WebGL2 in headless Chromium (skipped without
+    it): the shader corpus compiled and linked, every kind of
+    fixed-function program, and the executor's pixels (clear, immediate
+    mode, display lists, textures, lighting, a legacy GLSL program).
+  - `gl-server.test.ts`: the socket server (batches split anywhere, one
+    backend per connection, broken streams) and `setup.ts`.
+  - `x11.test.ts`: the GLX requests glvnd sends.
+  - `gl-guest.test.ts`: glxinfo, glxgears and glbench in Blink against a
+    recording glshiro, with no vendor forced. Needs `GL_PROBE_ROOT`.
+- Browser: `tests/browser/gl-glxgears.mjs` runs glxgears in the page,
+  checks the window's pixels and that frames stop without animation
+  frames, and prints FPS. Needs `GL_PROBE_ROOT` too.
+- `GL_PROBE_ROOT` is an x86-64 rootfs with mesa-utils and libglvnd but not
+  Mesa's vendor library: Debian's (`scripts/gui/debfetch.py`, `SKIP=libglx-mesa0,libgl1-mesa-dri`)
+  or Ubuntu's (`apt-get download` of mesa-utils, libgl1, libglx0,
+  libglvnd0 and their libraries, unpacked with `dpkg -x`).
+
+### Measurements (2026-10-10, unix/gl, 4-core container, Chromium's SwiftShader)
+
+| | |
+|---|---|
+| glxgears in the page (Blink → glshiro → WebGL2 → Xshiro window, readback present) | 46–47 frames/s, about 1,000 commands/s |
+| glxgears in Blink under Node, recording backend (guest and transport only) | 200–229 FPS |
+| glxinfo in Blink under Node | 0.7 s |
+| Round trip (glFinish) through the socket, Blink under Node | 2,964/s (337 µs) |
+| Bulk upload (glBufferSubData) | 210 MB/s |
+| Small calls (glVertex3f) | 0.43 M/s |
+| Frames rendered in 3 s without animation frames (a hidden tab) | 0 |
+
+The page numbers are SwiftShader's (a CPU renderer); a GPU only makes the
+WebGL2 side cheaper.
 
 ### Stages (as agreed)
 

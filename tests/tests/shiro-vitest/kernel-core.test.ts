@@ -591,9 +591,10 @@ describe('kernel processes', () => {
     expect(kernel.startForkChild(other, child.pid, run)).toBe(false); // only the process that forked it
     expect(kernel.startForkChild(parent, child.pid, run)).toBe(true);
     expect(kernel.startForkChild(parent, child.pid, run)).toBe(false); // once
-    const r = await kernel.waitpid(child.pid, 0, kernel.init);
+    await child.wait();
     expect(ran).toBe(true);
-    expect(r.pid).toBe(child.pid);
+    // an orphan: init reaps it at once (tabcomputer#14)
+    expect(kernel.procs.has(child.pid)).toBe(false);
     kernel.kill(other.pid, A.SIGKILL);
   });
 
