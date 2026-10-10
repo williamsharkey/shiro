@@ -18,7 +18,8 @@ import { deflateSync } from 'node:zlib';
 import { createInterface } from 'node:readline';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { XServer, XError, type XWindow } from '../../src/x11/server';
+import { XServer, type XWindow } from '../../src/x11/server';
+import { installGLX } from '../../src/gl/glx-ext';
 import { composeTop } from '../../src/x11/compose';
 import { installRender } from '../../src/x11/render';
 import { drawIntoWindow } from '../../src/gl/present';
@@ -33,23 +34,7 @@ for (const p of [xPath, glPath]) { try { unlinkSync(p); } catch { /* none */ } }
 const server = new XServer({ width: 1280, height: 800 });
 installRender(server);
 server.log = (s) => console.error(s);
-// GLX as glvnd needs it from the server: present, version 1.4 (gui's Xshiro will own this)
-if (!server.extensions.has('GLX')) {
-  server.addExtension('GLX', 17, 13, (c, minor, r) => {
-    const reply = (server as unknown as { reply(c: unknown, d: number, w: unknown): void }).reply.bind(server);
-    if (minor === 7) { reply(c, 0, c.writer().u32(1).u32(4).zero(16)); return; } // QueryVersion
-    if (minor === 19) { // QueryServerString: GLX_VENDOR_NAMES_EXT picks glvnd's vendor library
-      r.u32(); const name = r.u32();
-      const s = name === 0x20f6 || name === 1 ? 'tabcomputer' : name === 2 ? '1.4' : '';
-      const b = new TextEncoder().encode(s + '\0');
-      const w = c.writer().u32(0).u32(b.length).zero(16);
-      for (const x of b) w.u8(x);
-      while ((b.length & 3) && (w as unknown as { length: number }).length % 4) w.u8(0);
-      reply(c, 0, w); return;
-    }
-    throw new XError(1 /* BadRequest */);
-  });
-}
+installGLX(server);
 const tops = new Set<XWindow>();
 server.hooks = {
   topMapped: (w) => { tops.add(w); console.error(`map 0x${w.id.toString(16)} ${w.width}x${w.height}`); },
