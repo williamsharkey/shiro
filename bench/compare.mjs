@@ -63,7 +63,8 @@ for (const r of next.results) {
   const worse = higher ? -pct : pct;
   const reliable = (b.n ?? 0) >= 3 && (r.n ?? 0) >= 3;
   // Ignore sub-noise absolute changes on tiny values (0 → 0.1 MiB etc.)
-  const tiny = Math.abs(r.median - b.median) < (r.unit === 'ms' ? 0.5 : r.unit === 'count' ? 1 : 0.05);
+  // MiB: RSS peaks are sampled every 25 ms and sub-MiB swings are noise
+  const tiny = Math.abs(r.median - b.median) < (r.unit === 'ms' ? 0.5 : r.unit === 'count' ? 1 : r.unit === 'MiB' ? 1 : 0.05);
   let status = 'same';
   if (worse > threshold && !tiny) status = reliable ? 'candidate' : 'worse?';
   else if (worse < -threshold && !tiny) status = 'improved';

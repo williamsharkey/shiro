@@ -1005,8 +1005,9 @@ export class FileSystem {
     // (creating a file then needs no IndexedDB read for the "existing" check)
     if (this._allKeys) {
       if (!this._allKeys.has(path)) { this.cache.set(path, undefined); return undefined; }
-    } else if (!this._keysLoading) {
-      void this._getAllKeys().catch(() => {});
+    } else if (!this._keysLoading && !this._keysWanted) {
+      this._keysWanted = true;
+      if (!this._keysHeld) void this._getAllKeys().catch(() => {});
     }
     const result = await this._request('readonly', store => store.get(path) as IDBRequest<FSNode | undefined>);
     // A write or delete made while the read was pending is newer than what it returned
@@ -1220,6 +1221,25 @@ export class FileSystem {
   /** Key changes made while _getAllKeys is reading the store. */
   private _keysJournal: Array<[string, boolean]> | null = null;
   private _keysLoading: Promise<Set<string>> | null = null;
+  /** A read asked for the key index to be loaded in the background (see _get). */
+  private _keysWanted = false;
+  private _keysHeld = false;
+
+  /**
+   * Don't load the key index in the background until releaseKeyIndex (or
+   * `ms`): with 100k files it takes ~250 ms to read and decode, which delayed
+   * the first prompt by as much. readdir still loads it at once if it needs it.
+   */
+  holdKeyIndex(ms = 5000): void {
+    this._keysHeld = true;
+    setTimeout(() => this.releaseKeyIndex(), ms);
+  }
+
+  releaseKeyIndex(): void {
+    if (!this._keysHeld) return;
+    this._keysHeld = false;
+    if (this._keysWanted && !this._allKeys && !this._keysLoading) void this._getAllKeys().catch(() => {});
+  }
 
   /** Child names by parent directory, built from _allKeys on first readdir and kept up to date with it. */
   private _children: Map<string, Set<string>> | null = null;

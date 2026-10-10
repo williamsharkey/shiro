@@ -4,11 +4,15 @@
  * needs it. Dependencies, optionalDependencies and (as npm 7+) peer
  * dependencies are followed; `npm:` aliases resolve to the named package.
  *
- * Native packages can't run here, so:
- *  - an optional dependency that names a platform (`os`/`cpu`, like
- *    @esbuild/linux-x64 or @rollup/rollup-linux-x64-gnu) is left out, as npm
- *    leaves out other platforms' builds, except a WebAssembly one
- *    (`cpu: ["wasm32"]`, napi-rs's -wasm32-wasi: @rolldown/binding-wasm32-wasi);
+ * Native code runs here only as x86-64 Linux executables (in Blink), so:
+ *  - an optional dependency that names a platform (`os`/`cpu`/`libc`) is left
+ *    out unless it's a linux-x64 glibc build, as npm on Linux leaves out other
+ *    platforms' builds; a WebAssembly one (`cpu: ["wasm32"]`, napi-rs's
+ *    -wasm32-wasi: @rolldown/binding-wasm32-wasi) is always taken;
+ *  - a linux-x64 build is left out too when it is a Node addon (`main` is a
+ *    `.node` file: @rollup/rollup-linux-x64-gnu, @next/swc-linux-x64-gnu) or
+ *    its package also offers a WebAssembly build. A build that ships an
+ *    executable (@openai/codex-linux-x64, opencode-linux-x64) is installed;
  *  - a package with a WebAssembly build of the same API and versions
  *    (WASM_ALTERNATES) gets that build under its own name: esbuild is
  *    esbuild-wasm, rollup is @rollup/wasm-node.
@@ -25,6 +29,10 @@ export interface VersionData {
   bin?: string | Record<string, string>;
   os?: string[];
   cpu?: string[];
+  libc?: string[];
+  main?: string;
+  exports?: unknown;
+  scripts?: Record<string, string>;
   deprecated?: string;
   dist: { tarball: string; shasum?: string; integrity?: string };
 }
@@ -70,7 +78,18 @@ export interface TreeNode {
 
 export interface Wanted { name: string; range: string; optional?: boolean }
 
-const PLATFORM = { os: 'linux', cpu: 'x64' };
+const PLATFORM = { os: 'linux', cpu: 'x64', libc: 'glibc' };
+
+/**
+ * Can this platform's native build of an optional dependency be used? Not a
+ * Node addon (Blink runs executables, node here can't load a `.node`), and
+ * not when the package that wants it can use a WebAssembly build instead.
+ */
+function nativeRunsHere(data: VersionData, from: TreeNode): boolean {
+  if (/\.node$/.test(data.main ?? '') || /\.node"/.test(JSON.stringify(data.exports ?? null))) return false;
+  if (Object.values(WASM_ALTERNATES).includes(from.source)) return false;
+  return !Object.keys(from.data?.optionalDependencies ?? {}).some((n) => /wasm/.test(n));
+}
 
 /** Does a package's os/cpu list allow this platform? (`!x` excludes x) */
 function allows(list: string[] | undefined, value: string): boolean {
@@ -170,8 +189,9 @@ export async function buildTree(wanted: Wanted[], fetchMeta: (name: string) => P
       }
       // A WebAssembly build (napi-rs's -wasm32-wasi bindings: rolldown, oxc) runs here
       const wasm = !!data.cpu?.includes('wasm32');
-      if (!wasm && (!allows(data.os, PLATFORM.os) || !allows(data.cpu, PLATFORM.cpu) || (want.optional && (data.os?.length || data.cpu?.length)))) {
-        // A native build for some platform: these can't run in the tab
+      const platform = allows(data.os, PLATFORM.os) && allows(data.cpu, PLATFORM.cpu) && allows(data.libc, PLATFORM.libc);
+      if (!wasm && (!platform || (want.optional && (data.os?.length || data.cpu?.length) && !nativeRunsHere(data, from)))) {
+        // A native build for another platform, or one that can't run in the tab
         skipped.push(`${name}@${version}`);
         continue;
       }

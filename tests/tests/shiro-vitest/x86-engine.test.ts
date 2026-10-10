@@ -122,6 +122,18 @@ const sigwaitBin = join(out, 'sigwait');
 const haveSigwait = 'SYS_rt_sigtimedwait' in Abi && tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', sigwaitBin, 'sigwait.c']);
 const futexrequeueBin = join(out, 'futexrequeue');
 const haveFutexrequeue = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', futexrequeueBin, 'futexrequeue.c']);
+const futexpiBin = join(out, 'futexpi');
+const haveFutexpi = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', futexpiBin, 'futexpi.c']);
+const siginfoBin = join(out, 'siginfo');
+const haveSiginfo = tryBuild('gcc', ['-static', '-O1', '-o', siginfoBin, 'siginfo.c']);
+const hugetlbBin = join(out, 'hugetlb');
+const haveHugetlb = tryBuild('gcc', ['-static', '-O1', '-o', hugetlbBin, 'hugetlb.c']);
+const rotatesBin = join(out, 'rotates');
+const haveRotates = tryBuild('gcc', ['-static', '-O1', '-o', rotatesBin, 'rotates.c']);
+const sseiBin = join(out, 'ssei');
+const haveSsei = tryBuild('gcc', ['-static', '-O1', '-mssse3', '-o', sseiBin, 'ssei.c']);
+const ssefloatBin = join(out, 'ssefloat');
+const haveSsefloat = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', ssefloatBin, 'ssefloat.c', '-lm']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -182,6 +194,10 @@ const haveMqueue = blinkHasMqueue && tryBuild('gcc', ['-static', '-O1', '-w', '-
 const timersBin = join(out, 'timers');
 const blinkHasTimers = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_timers');
 const haveTimers = blinkHasTimers && tryBuild('gcc', ['-static', '-O1', '-w', '-o', timersBin, 'timers.c', '-lrt']);
+// Blink 0096: a blocked real-time raise queues in the kernel; sigprocmask and sigaltstack modes as Linux
+const sigmodesBin = join(out, 'sigmodes');
+const blinkHasSigmodes = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_sigmodes');
+const haveSigmodes = blinkHasSigmodes && tryBuild('gcc', ['-static', '-O1', '-w', '-o', sigmodesBin, 'sigmodes.c']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -694,6 +710,12 @@ it.skipIf(!haveTimers)('POSIX timers signal into sigtimedwait; sched_* answers a
   expect(r.output.replace(/\r\n/g, '\n')).toBe('timer 1 overruns 1 timeout 1 sched 1 1 1 1\n');
 }, 60_000);
 
+it.skipIf(!haveSigmodes)('raise of a blocked real-time signal queues each instance; SIGKILL/SIGSTOP stay unblocked; sigaltstack modes (Open POSIX)', async () => {
+  const { shell } = await setup(readFileSync(sigmodesBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('rt 1 1 pending 1 signo 1 third -1 EAGAIN\nmask 0 kill 0 stop 0 usr1 1\nboth -1 EINVAL\ndisable 0 sp 1 size 0 flags 2\n');
+}, 60_000);
+
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
 // (busybox picks its applet by it; Debian's redis-server -> redis-check-rdb)
 describe('argv[0] through a symlink', () => {
@@ -979,6 +1001,52 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const { shell } = await setup(readFileSync(sysvmsgBin));
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe("msgget ok\nsend 0 0\nqnum 2\nrcv type 2: 6 2 world\nrcv any: 6 1 hello\nrcv empty nowait: -1 No message of desired type\nchild got 5 7 late\nrmid 0\nsend after rmid -1 Invalid argument\n");
+  }, 60_000);
+
+  // scalar SSE double ops over NaN/inf/zeros/denormals/limits; comisd/ucomisd clear AF (Blink left it)
+  it.skipIf(!haveSsefloat)('scalar SSE double ops on special values: results, comisd/ucomisd flags, conversions as native', async () => {
+    const { shell } = await setup(readFileSync(ssefloatBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('arith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\narith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\narith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\n');
+  }, 60_000);
+
+  // compiled rol/ror by constants (SHA-1, hashes): values and flags as native (OF masked where undefined)
+  it.skipIf(!haveRotates)('rol/ror by constants in compiled code: values and CF/OF/ZF/SF as native', async () => {
+    const { shell } = await setup(readFileSync(rotatesBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('264f883ef48b6082 8b442bf2ddfdc970 14896776f64e11fa a59f6813927c4b87 8f67ccf91bd7d2c7\n28812440d3ea14ea 6374e9275901902a 987e01781fe71d73 52f8b67ac299aa7f\n7e64dbe8e066cf2a 54783cbf17eb4ce7 5dace5e6b81b1638 e2e5855b7ecb3df6\nmem 74cca3ae32bd6133\n');
+  }, 60_000);
+
+  // SSE2/SSSE3 integer ops compiled to wasm SIMD (OpenSSL SHA-1, glibc string functions), misaligned movdqa is #GP
+  it.skipIf(!haveSsei)('SSE2/SSSE3 integer ops in compiled code (wasm SIMD) match native, aligned forms fault when misaligned', async () => {
+    const { shell } = await setup(readFileSync(sseiBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('misaligned faults 200\nmoves 5022a87e047adf0a\n00 7ee345218afcb239\n01 a391afcb2fab11d7\n02 96a4eae743305de5\n03 4f1fdbab20276a60\n04 2dd5c5e6b7d3e4c1\n05 1ea1f24828c932b8\n06 7252ee31cd46eac9\n07 a7d2613e2dbb0e13\n08 a8113f5bdd1f72c3\n09 07148d3151ffb9b6\n10 524e60ed9625a69b\n11 cf7ff38f3eef12f3\n12 7e7f27c94b126a65\n13 cb3818cf16c8e140\n14 cb3818cf16c8e140\n15 8e0e6be8bc8c6a2d\n16 4bcc7f190e24bd97\n17 1203fb1b726bbd12\n18 ab189b3fd9f24c9e\n19 950527b9d4f0dabc\n20 78c257c240f6f10d\n21 cf1ade267c265c1d\n22 c973936bed53b154\n23 aea16f40d5405a05\n24 eaf4afc255a34129\n25 17685060ffef0b34\n26 65d590d7ead5f7cf\n27 fd54d777ca69c642\n28 c00277b74ad06d8a\n29 5641aadecea618a1\n30 e3c2aed0e370a373\n31 2b57dc7aff029b1d\n32 d0aadbb892e4986b\n33 ec7115c07c008552\n34 3cb357330446786f\n35 92d70ae93be3a4a1\n36 0000000000000000\n37 1e890edd978855e7\n38 c7a0d592de6396ef\n39 f6cb7bac6e55409e\n40 0000000000000000\n41 9ce8b41d4b876de3\n42 25b1756106f5daf1\n43 8000000000000000\n44 0000000000000000\n45 e572344fc39ee05a\n46 c598c655170411b1\n47 c01044d0040f6876\n48 0000000000000000\n49 0000000000000000\n50 014a2157c3be93e2\nstrings 52edaac7a097348e\nall 6691258bf5fa7cfc\n');
+  }, 60_000);
+
+  // PostgreSQL's huge_pages=try maps MAP_HUGETLB first and falls back on ENOMEM
+  it.skipIf(!haveHugetlb)('MAP_HUGETLB is ENOMEM (no huge pages reserved), an ordinary map works', async () => {
+    const { shell } = await setup(readFileSync(hugetlbBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('hugetlb failed 12\nplain mapped\n');
+  }, 60_000);
+
+  // Open POSIX sigqueue 4-1..8-1: real-time signals were delivered as SIGINT (1ul << 33 in wasm32)
+  it.skipIf(!haveSiginfo)('SA_SIGINFO handlers get sigqueue values, si_code and the sender; queued real-time signals all arrive, in order', async () => {
+    const { shell } = await setup(readFileSync(siginfoBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'sigqueue: n 1 value 42 code -1 pid 1\nkill: n 1 code 0 pid 1\nblocked: n 0\n' +
+      'unblocked: n 5 values 100 101 102 103 104 codes -1\n');
+  }, 60_000);
+
+  // Blender (TBB, OpenEXR) locks PTHREAD_PRIO_INHERIT mutexes: glibc aborted on EINVAL
+  it.skipIf(!haveFutexpi)('PI futexes (LOCK_PI, TRYLOCK_PI, UNLOCK_PI, a contended PI mutex, a timed lock) and FUTEX_WAKE_OP', async () => {
+    const { shell } = await setup(readFileSync(futexpiBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'WAKE_OP 0 0\nu2 5\nLOCK_PI 0 0\nowner is me 1\nLOCK_PI again -1 35\nUNLOCK_PI 0 0\nword 0\n' +
+      'UNLOCK_PI unowned -1 1\nTRYLOCK_PI 0 0\nUNLOCK_PI 0 0\ncounter 8000\ntimedlock 110\n');
   }, 60_000);
 
   // LTP futex_cmp_requeue01-03: requeued waiters are found at the target at once

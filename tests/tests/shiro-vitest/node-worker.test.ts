@@ -342,6 +342,29 @@ w.terminate();
     expect(r.out).toBe('fast0,fast1,fast2,fast3,fast4\n');
   }, 60_000);
 
+  it('a worker whose guest ended cleanly runs the next node (warm); a killed one is not reused', async () => {
+    // the realm carries over, as the page's does for in-page node
+    let r = await sh(`node -e 'globalThis.__poolProbe = (globalThis.__poolProbe || 0) + 1; console.log(globalThis.__poolProbe)' < /dev/null; node -e 'console.log(globalThis.__poolProbe)' < /dev/null`);
+    expect(r.out).toBe('1\n1\n'); // the second run saw the first's global: the same worker
+    // a guest killed mid-run: its worker is gone, the next node starts fresh
+    r = await sh(`node -e 'globalThis.__poolKilled = 1; setInterval(() => {}, 1000)' < /dev/null & sleep 0.5; kill -9 %1; wait; node -e 'console.log(String(globalThis.__poolKilled))' < /dev/null`);
+    expect(r.out.trim().split('\n').pop()).toBe('undefined');
+  }, 60_000);
+
+  it("pbcopy from a guest reaches the page's clipboard", async () => {
+    let copied: string | null = null;
+    const nav: any = globalThis.navigator;
+    const had = Object.getOwnPropertyDescriptor(nav, 'clipboard');
+    Object.defineProperty(nav, 'clipboard', { value: { writeText: async (t: string) => { copied = t; } }, configurable: true });
+    try {
+      await sh(`node -e 'const c = require("child_process").spawn("pbcopy"); c.stdin.write("from the guest"); c.stdin.end()' < /dev/null`);
+      for (let i = 0; i < 100 && copied === null; i++) await new Promise((r) => setTimeout(r, 10));
+      expect(copied).toBe('from the guest');
+    } finally {
+      if (had) Object.defineProperty(nav, 'clipboard', had); else delete nav.clipboard;
+    }
+  }, 60_000);
+
   it('stdin from a pipe; async exec', async () => {
     const r = await sh(`printf 'a\\nb\\n' | node -e '
       let t = ""; process.stdin.on("data", (d) => t += d).on("end", () => {
@@ -349,5 +372,68 @@ w.terminate();
       });
     '`);
     expect(r.out).toBe('"a\\nb\\n" async\n');
+  }, 60_000);
+
+  it('fork(): an IPC channel both ways (jest-worker); the child sees disconnect; the env keeps no channel', async () => {
+    const r = await sh('cd /tmp/nf && node parent.js', async (fs) => {
+      await fs.mkdir('/tmp/nf', { recursive: true });
+      await fs.writeFile('/tmp/nf/child.js', `
+process.on('message', (m) => {
+  if (m.cmd === 'square') process.send({ n: m.n, sq: m.n * m.n, connected: process.connected, env: process.env.NODE_CHANNEL_FD === undefined });
+  if (m.cmd === 'bye') process.disconnect();
+});
+process.on('disconnect', () => require('fs').writeFileSync('/tmp/nf/child-disconnected', 'yes'));
+process.send({ ready: process.argv.slice(2) });`);
+      await fs.writeFile('/tmp/nf/parent.js', `
+const { fork } = require('child_process');
+const c = fork('child.js', ['a1'], { silent: true });
+const got = [];
+c.on('message', (m) => {
+  got.push(m);
+  if (m.ready) for (const n of [2, 3]) c.send({ cmd: 'square', n });
+  if (m.sq === 9) c.send({ cmd: 'bye' });
+});
+c.on('disconnect', () => got.push('disconnect'));
+c.on('exit', (code) => console.log(JSON.stringify(got), code, c.connected));`);
+    });
+    expect(r.err).toBe('');
+    expect(r.out).toBe('[{"ready":["a1"]},{"n":2,"sq":4,"connected":true,"env":true},{"n":3,"sq":9,"connected":true,"env":true},"disconnect"] 0 false\n');
+    expect(await r.fs.readFile('/tmp/nf/child-disconnected', 'utf8')).toBe('yes');
+  }, 60_000);
+
+  it("fork(): the child's output is the parent's unless silent; the parent's disconnect() ends a child that only listens", async () => {
+    const r = await sh('cd /tmp/nf2 && node parent.js', async (fs) => {
+      await fs.mkdir('/tmp/nf2', { recursive: true });
+      await fs.writeFile('/tmp/nf2/child.js', `console.log('child says hi'); process.on('message', () => {});`);
+      await fs.writeFile('/tmp/nf2/parent.js', `
+const c = require('child_process').fork('./child.js');
+setTimeout(() => c.disconnect(), 300);
+c.on('exit', (code) => console.log('exit', code, c.stdout === null));`);
+    });
+    expect(r.out).toBe('child says hi\nexit 0 true\n');
+  }, 60_000);
+
+  it('jest-worker in child_process mode: tasks go to forked workers over IPC, each its own process', async () => {
+    const r = await sh(`mkdir -p /home/user/jw && cd /home/user/jw && npm init -y > /dev/null && npm install jest-worker@29.7.0 > /dev/null 2>&1 && node main.js`, async (fs) => {
+      await fs.mkdir('/home/user/jw', { recursive: true });
+      await fs.writeFile('/home/user/jw/task.js', `exports.square = (n) => ({ sq: n * n, pid: process.pid, ppid: process.ppid, id: process.env.JEST_WORKER_ID });`);
+      await fs.writeFile('/home/user/jw/main.js', `const { Worker } = require('jest-worker');
+const w = new Worker(require.resolve('./task.js'), { numWorkers: 2, enableWorkerThreads: false });
+Promise.all([1, 2, 3, 4].map((n) => w.square(n))).then(async (r) => {
+  const pids = new Set(r.map((x) => x.pid));
+  console.log(JSON.stringify(r.map((x) => x.sq)), !pids.has(process.pid), r.every((x) => x.ppid === process.pid && /^[12]$/.test(x.id)));
+  await w.end();
+  console.log('ended');
+}, (e) => { console.log('ERR', e.stack); process.exit(1); });`);
+    });
+    expect(r.out).toBe('[1,4,9,16] true true\nended\n');
+  }, 240_000);
+
+  it("Claude Code as a guest starts onboarded: ~/.claude.json is seeded before it runs, as in the page", async () => {
+    const r = await sh('rm -f ~/.claude.json; node /tmp/nc/claude-code/cli.js', async (fs) => {
+      await fs.mkdir('/tmp/nc/claude-code', { recursive: true });
+      await fs.writeFile('/tmp/nc/claude-code/cli.js', `const c = JSON.parse(require('fs').readFileSync(require('os').homedir() + '/.claude.json', 'utf8')); console.log(c.hasCompletedOnboarding, typeof c.theme);`);
+    });
+    expect(r.out).toBe('true string\n');
   }, 60_000);
 });

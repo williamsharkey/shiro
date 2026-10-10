@@ -173,7 +173,8 @@ export async function untar(tarData: Uint8Array): Promise<TarEntry[]> {
     }
 
     // Read file data if present
-    let data: Uint8Array | undefined;
+    // (an empty file is a file too: @astrojs/markdown-remark ships a 0-byte types.js it imports)
+    let data: Uint8Array | undefined = type === 'file' ? new Uint8Array(0) : undefined;
     if (header.size > 0 && type === 'file') {
       if (offset + header.size > tarData.length) {
         throw new Error(`Incomplete tar file: expected ${header.size} bytes at offset ${offset}`);

@@ -30,6 +30,8 @@ const DELAYTIMER_MAX = 0x7fffffff;
 const CLOCKS = new Set([0, 1, 2, 3, 5, 6, 7]);
 
 interface Timer {
+  id: number;
+  value: bigint; // sigev_value
   clock: number;
   signo: number; // 0: SIGEV_NONE
   deadline: number; // ms on the timer's clock (performance-based), 0 = disarmed
@@ -43,7 +45,7 @@ interface Timer {
 const now = () => performance.now();
 
 export class PosixTimers {
-  constructor(private deliver: (proc: Process, sig: number) => void, private bootMs: number) {}
+  constructor(private deliver: (proc: Process, sig: number, info: A.SigInfo) => void, private bootMs: number) {}
 
   private table(proc: Process): Map<number, Timer> {
     let t = proc.data.posixTimers as Map<number, Timer> | undefined;
@@ -67,7 +69,9 @@ export class PosixTimers {
     // (a negative id is a process's or thread's CPU clock, clock_getcpuclockid's: wall time here too)
     if (!CLOCKS.has(clock) && clock >= 0) return clock === 8 || clock === 9 ? -A.EPERM : -A.EINVAL; // the alarm clocks take CAP_WAKE_ALARM
     let signo = A.SIGALRM;
+    let value: bigint | undefined;
     if (sev) {
+      value = sev.getBigInt64(0, true);
       const how = sev.getInt32(12, true);
       signo = sev.getInt32(8, true);
       if (how === SIGEV_NONE) signo = 0;
@@ -82,7 +86,8 @@ export class PosixTimers {
     const t = this.table(proc);
     let id = 0;
     while (t.has(id)) id++;
-    t.set(id, { clock, signo, deadline: 0, interval: 0, queued: false, cur: 0, last: 0 });
+    // (with no sigevent, the value is the timer's id, as on Linux)
+    t.set(id, { id, value: value ?? BigInt(id), clock, signo, deadline: 0, interval: 0, queued: false, cur: 0, last: 0 });
     return id;
   }
 
@@ -99,13 +104,26 @@ export class PosixTimers {
     }
   }
 
+  /** Would `sig` be discarded on arrival (unblocked, and ignored by disposition or default)? */
+  private static discarded(proc: Process, sig: number): boolean {
+    if (proc.sigmask.has(sig)) return false;
+    const d = proc.dispositions.get(sig);
+    if (d === 'ignore') return true;
+    if (d !== undefined) return false;
+    const a = A.defaultSignalAction(sig);
+    return a === 'ignore' || (a === 'cont' && proc.state !== 'stopped');
+  }
+
   private fire(proc: Process, tm: Timer): void {
     if (tm.signo) {
       this.settle(proc, tm);
-      if (tm.queued) tm.cur = Math.min(DELAYTIMER_MAX, tm.cur + 1);
+      // A signal that would only be discarded isn't generated, and the last
+      // signal's overruns stay the reported ones (Linux 6.13's ignored timers)
+      if (!tm.queued && PosixTimers.discarded(proc, tm.signo)) tm.cur = 0;
+      else if (tm.queued) tm.cur = Math.min(DELAYTIMER_MAX, tm.cur + 1);
       else {
         tm.queued = true;
-        this.deliver(proc, tm.signo);
+        this.deliver(proc, tm.signo, { signo: tm.signo, code: A.SI_TIMER, timerid: tm.id, overrun: 0, value: tm.value });
       }
     }
     if (tm.interval > 0) {

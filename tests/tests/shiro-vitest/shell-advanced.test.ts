@@ -637,6 +637,14 @@ describe('Shell Advanced', () => {
   //  pipefail
   // ═══════════════════════════════════════════════════════════════════
 
+  describe('case inside if', () => {
+    it('keeps every item (;; was collapsed to ;, so the case ran nothing)', async () => {
+      expect((await run(shell, 'if true; then case x in a) echo A ;; *) echo hi ;; esac; fi')).output.trim()).toBe('hi');
+      expect((await run(shell, 'y=b\nif true; then\n  case "$y" in\n    a|b)\n      ;;\n    *)\n      echo other\n      ;;\n  esac\n  echo after\nfi')).output.trim()).toBe('after');
+      expect((await run(shell, 'if false; then :\nelse\n  case z in\n    a) echo A ;;\n    *) echo star ;;\n  esac\nfi')).output.trim()).toBe('star');
+    });
+  });
+
   describe('set -o pipefail', () => {
     it('without pipefail, pipe exit is last command', async () => {
       const { exitCode } = await run(shell, 'false | true');
@@ -653,6 +661,14 @@ describe('Shell Advanced', () => {
       await run(shell, 'set -o pipefail');
       const { exitCode } = await run(shell, 'echo hello | cat');
       expect(exitCode).toBe(0);
+    });
+
+    it('set -euo pipefail: o takes the next word (install scripts start with it)', async () => {
+      const r = await run(shell, 'set -euo pipefail; echo "n=$#"; false | true; echo "status=$?"; set +euo pipefail');
+      expect(r.output).toContain('n=0');
+      expect(r.exitCode).not.toBe(0); // errexit + pipefail: the pipeline fails the script
+      const kept = await run(shell, 'set -- a b; set -eo pipefail; echo "$# $1"; set +eo pipefail');
+      expect(kept.output.trim()).toBe('2 a');
     });
 
     it('pipefail can be disabled with set +o pipefail', async () => {

@@ -1,4 +1,9 @@
+/** A node guest's (a Worker: no document): the page's, from its start message */
+let fromPage: string | null = null;
+export function setShiroOrigin(origin: string | null): void { fromPage = origin; }
+
 export function getShiroOrigin(): string {
+  if (fromPage) return fromPage;
   if (typeof document !== 'undefined') {
     const baseHref =
       document.querySelector('base[href]')?.getAttribute('href') ||

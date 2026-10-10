@@ -18,8 +18,10 @@ export const nodeCmd: Command = {
   name: 'node',
   description: 'Execute JavaScript files (browser JS VM)',
   async exec(ctx: CommandContext): Promise<number> {
-    // TABCOMPUTER_NODE_WORKER=1: as a kernel guest in a Worker (src/node-worker), unless this is that guest
-    if (ctx.env.TABCOMPUTER_NODE_WORKER === '1' && !(ctx as any).nodeGuest) {
+    // TABCOMPUTER_NODE_WORKER=1: as a kernel guest in a Worker (src/node-worker), unless this is that guest.
+    // A terminal without a pty (no keys for a guest to read) keeps it in the page, as boot.ts's nodeKernelProgram does.
+    const terminal = ctx.terminal as { tty?: unknown } | undefined;
+    if (ctx.env.TABCOMPUTER_NODE_WORKER === '1' && !(ctx as any).nodeGuest && !(terminal && !terminal.tty)) {
       const host = await import('../../node-worker/host');
       if (host.nodeWorkerMode(ctx.env)) return host.runNodeInWorker(ctx);
     }

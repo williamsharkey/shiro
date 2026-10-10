@@ -36,7 +36,7 @@
    ]
   },
   "word-split": {
-   "pass": 48,
+   "pass": 51,
    "total": 53,
    "failures": [
     {
@@ -44,20 +44,8 @@
      "name": "IFS and joining arrays by assignments"
     },
     {
-     "i": 41,
-     "name": "Bug #628 split on : with : in literal word"
-    },
-    {
-     "i": 47,
-     "name": "4 x 3 table - with for loop"
-    },
-    {
      "i": 49,
      "name": "IFS=x and '' and $@ (#2)"
-    },
-    {
-     "i": 51,
-     "name": "\"\"$A\"\" - empty string on both sides - derived from spec/toysh-posix #15"
     }
    ]
   },
@@ -99,8 +87,8 @@
    ]
   },
   "var-op-test": {
-   "pass": 28,
-   "total": 35,
+   "pass": 30,
+   "total": 37,
    "failures": [
     {
      "i": 0,
@@ -151,26 +139,13 @@
    ]
   },
   "var-op-len": {
-   "pass": 4,
-   "total": 7,
-   "failures": [
-    {
-     "i": 2,
-     "name": "Unicode string length (spec/testdata/utf8-chars.txt)"
-    },
-    {
-     "i": 3,
-     "name": "String length with incomplete utf-8"
-    },
-    {
-     "i": 4,
-     "name": "String length with invalid utf-8 continuation bytes"
-    }
-   ]
+   "pass": 8,
+   "total": 8,
+   "failures": []
   },
   "var-op-patsub": {
-   "pass": 22,
-   "total": 27,
+   "pass": 23,
+   "total": 28,
    "failures": [
     {
      "i": 11,
@@ -195,8 +170,8 @@
    ]
   },
   "var-op-slice": {
-   "pass": 18,
-   "total": 21,
+   "pass": 19,
+   "total": 22,
    "failures": [
     {
      "i": 16,
@@ -248,8 +223,8 @@
    ]
   },
   "arith": {
-   "pass": 71,
-   "total": 71,
+   "pass": 74,
+   "total": 74,
    "failures": []
   },
   "command-sub": {
@@ -285,7 +260,7 @@
    ]
   },
   "redirect": {
-   "pass": 35,
+   "pass": 36,
    "total": 39,
    "failures": [
     {
@@ -298,11 +273,8 @@
     },
     {
      "i": 29,
-     "name": "<> for read/write named pipes"
-    },
-    {
-     "i": 40,
-     "name": "xtrace not affected by redirects"
+     "name": "<> for read/write named pipes",
+     "timeout": true
     }
    ]
   },
@@ -312,16 +284,16 @@
    "failures": []
   },
   "loop": {
-   "pass": 26,
-   "total": 28,
+   "pass": 27,
+   "total": 29,
    "failures": [
-    {
-     "i": 11,
-     "name": "while in pipe with subshell"
-    },
     {
      "i": 16,
      "name": "bad arg to break"
+    },
+    {
+     "i": 17,
+     "name": "too many args to continue"
     }
    ]
   },
@@ -336,8 +308,8 @@
    ]
   },
   "sh-func": {
-   "pass": 11,
-   "total": 11,
+   "pass": 12,
+   "total": 12,
    "failures": []
   },
   "func-parsing": {
@@ -418,16 +390,12 @@
    ]
   },
   "builtin-getopts": {
-   "pass": 26,
-   "total": 30,
+   "pass": 28,
+   "total": 31,
    "failures": [
     {
      "i": 6,
      "name": "getopts with invalid variable name"
-    },
-    {
-     "i": 12,
-     "name": "OPTIND"
     },
     {
      "i": 13,
@@ -454,16 +422,12 @@
    ]
   },
   "builtin-bracket": {
-   "pass": 46,
+   "pass": 47,
    "total": 50,
    "failures": [
     {
      "i": 27,
      "name": "-k for sticky bit"
-    },
-    {
-     "i": 35,
-     "name": "test -p named pipe"
     },
     {
      "i": 41,
@@ -490,26 +454,9 @@
    ]
   },
   "builtin-special": {
-   "pass": 8,
+   "pass": 12,
    "total": 12,
-   "failures": [
-    {
-     "i": 2,
-     "name": "Prefix assignments persist after readonly, but NOT exported (set -o posix)"
-    },
-    {
-     "i": 3,
-     "name": "Prefix binding for exec is a special case (versus e.g. readonly)"
-    },
-    {
-     "i": 10,
-     "name": "bash 'type' gets confused - says 'function', but runs builtin"
-    },
-    {
-     "i": 11,
-     "name": "command, builtin - both can be redefined, not special (regression)"
-    }
-   ]
+   "failures": []
   },
   "builtin-type": {
    "pass": 4,
@@ -526,25 +473,9 @@
    ]
   },
   "builtin-vars": {
-   "pass": 33,
-   "total": 38,
+   "pass": 38,
+   "total": 39,
    "failures": [
-    {
-     "i": 1,
-     "name": "Export sets a global variable that persists after export -n"
-    },
-    {
-     "i": 7,
-     "name": "Export a local that shadows a global"
-    },
-    {
-     "i": 9,
-     "name": "Unset exported variable, then define it again.  It's NOT still exported."
-    },
-    {
-     "i": 10,
-     "name": "Exporting a parent func variable (dynamic scope)"
-    },
     {
      "i": 38,
      "name": "local after readonly"
@@ -584,8 +515,8 @@
    ]
   },
   "assign": {
-   "pass": 39,
-   "total": 43,
+   "pass": 41,
+   "total": 45,
    "failures": [
     {
      "i": 10,
@@ -630,16 +561,12 @@
    ]
   },
   "array-assoc": {
-   "pass": 35,
+   "pass": 36,
    "total": 38,
    "failures": [
     {
      "i": 30,
      "name": "unset -v and assoc array"
-    },
-    {
-     "i": 31,
-     "name": "nameref and assoc array"
     },
     {
      "i": 34,
@@ -710,13 +637,9 @@
    ]
   },
   "pipeline": {
-   "pass": 20,
-   "total": 25,
+   "pass": 22,
+   "total": 26,
    "failures": [
-    {
-     "i": 8,
-     "name": "PIPESTATUS is set on simple commands"
-    },
     {
      "i": 10,
      "name": "|&"
@@ -905,13 +828,9 @@
    ]
   },
   "process-sub": {
-   "pass": 6,
+   "pass": 7,
    "total": 8,
    "failures": [
-    {
-     "i": 2,
-     "name": "Process sub from shell to stdin"
-    },
     {
      "i": 3,
      "name": "Non-linear pipeline with >()"
@@ -938,7 +857,7 @@
    "failures": []
   },
   "background": {
-   "pass": 23,
+   "pass": 24,
    "total": 27,
    "failures": [
     {
@@ -950,22 +869,30 @@
      "name": "wait with invalid arg"
     },
     {
-     "i": 13,
-     "name": "Wait for job and PIPESTATUS - cat"
-    },
-    {
      "i": 26,
      "name": "Signal message for killed background job"
     }
    ]
   },
   "sh-options": {
-   "pass": 31,
-   "total": 32,
+   "pass": 33,
+   "total": 37,
    "failures": [
     {
      "i": 20,
      "name": "noclobber on <>"
+    },
+    {
+     "i": 24,
+     "name": "set without args lists variables"
+    },
+    {
+     "i": 25,
+     "name": "set without args and array variables"
+    },
+    {
+     "i": 26,
+     "name": "set without args and assoc array variables (not in OSH)"
     }
    ]
   },
@@ -973,6 +900,1317 @@
    "pass": 2,
    "total": 2,
    "failures": []
+  },
+  "var-op-bash": {
+   "pass": 25,
+   "total": 26,
+   "failures": [
+    {
+     "i": 24,
+     "name": "Array expansion with nullary var op @Q"
+    }
+   ]
+  },
+  "nameref": {
+   "pass": 28,
+   "total": 32,
+   "failures": [
+    {
+     "i": 16,
+     "name": "exported nameref"
+    },
+    {
+     "i": 26,
+     "name": "a[expr] in nameref"
+    },
+    {
+     "i": 27,
+     "name": "a[@] in nameref"
+    },
+    {
+     "i": 29,
+     "name": "bad mutation through nameref: ref[0]= where ref is array[0]"
+    }
+   ]
+  },
+  "assign-extended": {
+   "pass": 28,
+   "total": 34,
+   "failures": [
+    {
+     "i": 5,
+     "name": "declare -F with shopt -s extdebug and main file"
+    },
+    {
+     "i": 28,
+     "name": "Env bindings shouldn't contain array assignments"
+    },
+    {
+     "i": 29,
+     "name": "syntax error in array assignment"
+    },
+    {
+     "i": 30,
+     "name": "declare -g (bash-specific; bash-completion uses it)"
+    },
+    {
+     "i": 32,
+     "name": "dynamic array parsing is not allowed"
+    },
+    {
+     "i": 37,
+     "name": "invalid var name"
+    }
+   ]
+  },
+  "array-literal": {
+   "pass": 7,
+   "total": 19,
+   "failures": [
+    {
+     "i": 0,
+     "name": "Tilde expansions in RHS of [k]=v (BashArray)"
+    },
+    {
+     "i": 1,
+     "name": "Tilde expansions in RHS of [k]=v (BashAssoc)"
+    },
+    {
+     "i": 5,
+     "name": "append to element (BashArray)"
+    },
+    {
+     "i": 6,
+     "name": "append to element (BashAssoc)"
+    },
+    {
+     "i": 7,
+     "name": "non-index forms of element (BashAssoc)"
+    },
+    {
+     "i": 9,
+     "name": "Evaluation order (2)"
+    },
+    {
+     "i": 10,
+     "name": "Evaluation order (3)"
+    },
+    {
+     "i": 11,
+     "name": "[k1]=v1 (BashArray)"
+    },
+    {
+     "i": 14,
+     "name": "[k1]=v1 looking like brace expansions (BashArray)"
+    },
+    {
+     "i": 15,
+     "name": "BashArray cannot be changed to BashAssoc and vice versa"
+    },
+    {
+     "i": 17,
+     "name": "(strict_array) declare -A s+=()"
+    },
+    {
+     "i": 18,
+     "name": "(strict_array) assoc=(key value ...) is not allowed"
+    }
+   ]
+  },
+  "array-sparse": {
+   "pass": 37,
+   "total": 39,
+   "failures": [
+    {
+     "i": 6,
+     "name": "a[i]=v with BigInt"
+    },
+    {
+     "i": 31,
+     "name": "compgen -F _set_COMPREPLY"
+    }
+   ]
+  },
+  "array-assign": {
+   "pass": 4,
+   "total": 11,
+   "failures": [
+    {
+     "i": 3,
+     "name": "Multiple LHS array words"
+    },
+    {
+     "i": 4,
+     "name": "LHS array is protected with shopt -s eval_unsafe_arith, e.g. 'a[$(echo 2)]'"
+    },
+    {
+     "i": 5,
+     "name": "file named a[ is  not executed"
+    },
+    {
+     "i": 7,
+     "name": "Are quotes allowed?"
+    },
+    {
+     "i": 8,
+     "name": "Tricky parsing - a[ a[0]=1 ]=X  a[ a[0]+=1 ]+=X"
+    },
+    {
+     "i": 9,
+     "name": "argv.py a[1 + 2]="
+    },
+    {
+     "i": 10,
+     "name": "declare builtin doesn't allow spaces"
+    }
+   ]
+  },
+  "array-compat": {
+   "pass": 9,
+   "total": 12,
+   "failures": [
+    {
+     "i": 0,
+     "name": "Assignment Causes Array Decay"
+    },
+    {
+     "i": 1,
+     "name": "Array Decay with IFS"
+    },
+    {
+     "i": 2,
+     "name": "User arrays decay"
+    }
+   ]
+  },
+  "builtin-trap-bash": {
+   "pass": 8,
+   "total": 14,
+   "failures": [
+    {
+     "i": 9,
+     "name": "trap DEBUG and command sub / subshell"
+    },
+    {
+     "i": 14,
+     "name": "trap DEBUG case"
+    },
+    {
+     "i": 16,
+     "name": "trap DEBUG for expr"
+    },
+    {
+     "i": 17,
+     "name": "trap DEBUG if while"
+    },
+    {
+     "i": 18,
+     "name": "trap RETURN"
+    },
+    {
+     "i": 21,
+     "name": "Combine ERR trap and USR1 trap"
+    }
+   ]
+  },
+  "builtin-trap-err": {
+   "pass": 8,
+   "total": 12,
+   "failures": [
+    {
+     "i": 6,
+     "name": "trap ERR pipelines without simple commands"
+    },
+    {
+     "i": 7,
+     "name": "Pipeline group quirk"
+    },
+    {
+     "i": 10,
+     "name": "set -o errtrace: trap ERR runs in subprograms"
+    },
+    {
+     "i": 12,
+     "name": "set -o errtrace: trap ERR with &"
+    }
+   ]
+  },
+  "builtin-set": {
+   "pass": 18,
+   "total": 24,
+   "failures": [
+    {
+     "i": 6,
+     "name": "set -u with undefined var in interactive shell does NOT exit the interpreter"
+    },
+    {
+     "i": 12,
+     "name": "'set' and 'eval' round trip"
+    },
+    {
+     "i": 14,
+     "name": "set - leading single dash is ignored, turns off xtrace verbose (#2364)"
+    },
+    {
+     "i": 15,
+     "name": "set - stops option processing like set --"
+    },
+    {
+     "i": 16,
+     "name": "A single + is an ignored flag; not an argument"
+    },
+    {
+     "i": 17,
+     "name": "set - + and + -"
+    }
+   ]
+  },
+  "builtin-bash": {
+   "pass": 12,
+   "total": 13,
+   "failures": [
+    {
+     "i": 1,
+     "name": "bad help topic"
+    }
+   ]
+  },
+  "builtin-type-bash": {
+   "pass": 20,
+   "total": 24,
+   "failures": [
+    {
+     "i": 8,
+     "name": "type -p and -P builtin -> file"
+    },
+    {
+     "i": 16,
+     "name": "type -f builtin -> function and file exists"
+    },
+    {
+     "i": 23,
+     "name": "type -a -> keyword"
+    },
+    {
+     "i": 30,
+     "name": "type -P does not find directories (regression)"
+    }
+   ]
+  },
+  "builtin-process": {
+   "pass": 10,
+   "total": 23,
+   "failures": [
+    {
+     "i": 4,
+     "name": "exec -- 2>&1"
+    },
+    {
+     "i": 5,
+     "name": "exec -a sets argv[0]"
+    },
+    {
+     "i": 8,
+     "name": "Exit builtin with too many args"
+    },
+    {
+     "i": 12,
+     "name": "ulimit negative flag"
+    },
+    {
+     "i": 13,
+     "name": "ulimit negative arg"
+    },
+    {
+     "i": 17,
+     "name": "ulimit accepts 'unlimited'"
+    },
+    {
+     "i": 18,
+     "name": "ulimit of 2**32, 2**31 (int overflow)"
+    },
+    {
+     "i": 19,
+     "name": "ulimit that is 64 bits"
+    },
+    {
+     "i": 20,
+     "name": "arg that would overflow 64 bits is detected"
+    },
+    {
+     "i": 21,
+     "name": "ulimit -f 1 prevents files larger 512 bytes"
+    },
+    {
+     "i": 23,
+     "name": "ulimit -S for soft limit (default), -H for hard limit"
+    },
+    {
+     "i": 24,
+     "name": "Changing resource limit is denied"
+    },
+    {
+     "i": 25,
+     "name": "ulimit -n limits file descriptors"
+    }
+   ]
+  },
+  "builtin-kill": {
+   "pass": 17,
+   "total": 20,
+   "failures": [
+    {
+     "i": 9,
+     "name": "kill -L checks for invalid input"
+    },
+    {
+     "i": 12,
+     "name": "kill -l 0 returns EXIT"
+    },
+    {
+     "i": 13,
+     "name": "kill -l 0 INT lists both signals"
+    }
+   ]
+  },
+  "builtin-meta": {
+   "pass": 10,
+   "total": 18,
+   "failures": [
+    {
+     "i": 1,
+     "name": "command -v executable, builtin"
+    },
+    {
+     "i": 3,
+     "name": "command -v doesn't find non-executable file"
+    },
+    {
+     "i": 4,
+     "name": "command -v doesn't find executable dir"
+    },
+    {
+     "i": 5,
+     "name": "command -V"
+    },
+    {
+     "i": 10,
+     "name": "command -p (override existing program)"
+    },
+    {
+     "i": 11,
+     "name": "command -p (hide tool in custom path)"
+    },
+    {
+     "i": 15,
+     "name": "builtin ls not found"
+    },
+    {
+     "i": 16,
+     "name": "builtin usage"
+    }
+   ]
+  },
+  "builtin-meta-assign": {
+   "pass": 10,
+   "total": 11,
+   "failures": [
+    {
+     "i": 0,
+     "name": "builtin declare a=(x y) is allowed"
+    }
+   ]
+  },
+  "builtin-misc": {
+   "pass": 5,
+   "total": 7,
+   "failures": [
+    {
+     "i": 0,
+     "name": "history builtin usage"
+    },
+    {
+     "i": 1,
+     "name": "Print shell strings with weird chars: set and printf %q and ${x@Q}"
+    }
+   ]
+  },
+  "builtin-umask": {
+   "pass": 24,
+   "total": 24,
+   "failures": []
+  },
+  "builtin-dirs": {
+   "pass": 18,
+   "total": 18,
+   "failures": []
+  },
+  "extglob-match": {
+   "pass": 26,
+   "total": 29,
+   "failures": [
+    {
+     "i": 2,
+     "name": "extglob in variable"
+    },
+    {
+     "i": 4,
+     "name": "nested @()"
+    },
+    {
+     "i": 21,
+     "name": "Turning extglob on changes the meaning of [[ !(str) ]] in bash"
+    }
+   ]
+  },
+  "extglob-files": {
+   "pass": 15,
+   "total": 23,
+   "failures": [
+    {
+     "i": 5,
+     "name": "Two adjacent alternations"
+    },
+    {
+     "i": 7,
+     "name": "Extended glob patterns with spaces"
+    },
+    {
+     "i": 10,
+     "name": "Glob other punctuation chars (lexer mode)"
+    },
+    {
+     "i": 11,
+     "name": "More glob escaping"
+    },
+    {
+     "i": 12,
+     "name": "Escaping of pipe (glibc bug, see demo/glibc_fnmatch.c)"
+    },
+    {
+     "i": 14,
+     "name": "Extended glob in assignment builtin"
+    },
+    {
+     "i": 17,
+     "name": "In Array Literal and for loop"
+    },
+    {
+     "i": 18,
+     "name": "No extended glob with simple_word_eval (YSH evaluation)"
+    }
+   ]
+  },
+  "globstar": {
+   "pass": 5,
+   "total": 5,
+   "failures": []
+  },
+  "glob-bash": {
+   "pass": 4,
+   "total": 8,
+   "failures": [
+    {
+     "i": 2,
+     "name": "shopt -s failglob in loop context"
+    },
+    {
+     "i": 3,
+     "name": "shopt -s failglob in array literal context"
+    },
+    {
+     "i": 5,
+     "name": "shopt -s failglob exits properly in loop context with set -e"
+    },
+    {
+     "i": 6,
+     "name": "shopt -s failglob behavior on single line with semicolon"
+    }
+   ]
+  },
+  "globignore": {
+   "pass": 2,
+   "total": 18,
+   "failures": [
+    {
+     "i": 1,
+     "name": "Ignore *.txt"
+    },
+    {
+     "i": 2,
+     "name": "Ignore ?.txt"
+    },
+    {
+     "i": 3,
+     "name": "Ignore *.o:*.h"
+    },
+    {
+     "i": 4,
+     "name": "Ignore single file src/__main__.py"
+    },
+    {
+     "i": 5,
+     "name": "Ignore dirs dist/*:node_modules/*"
+    },
+    {
+     "i": 6,
+     "name": "find files in subdirectory but not the ignored pattern"
+    },
+    {
+     "i": 7,
+     "name": "Ignore globs with char patterns like [!ab]"
+    },
+    {
+     "i": 8,
+     "name": "Ignore globs with char classes like [[:alnum:]]"
+    },
+    {
+     "i": 9,
+     "name": "Ignore *"
+    },
+    {
+     "i": 10,
+     "name": "treat escaped patterns literally"
+    },
+    {
+     "i": 11,
+     "name": "resetting globignore reverts to default behaviour"
+    },
+    {
+     "i": 12,
+     "name": "Ignore .:.."
+    },
+    {
+     "i": 13,
+     "name": "Quoting GLOBIGNORE"
+    },
+    {
+     "i": 14,
+     "name": ". and .. always filtered when GLOBIGNORE is set"
+    },
+    {
+     "i": 15,
+     "name": "When GLOBIGNORE is set, glob may become empty (nullglob too)"
+    },
+    {
+     "i": 17,
+     "name": "Extended glob expansion combined with GLOBIGNORE"
+    }
+   ]
+  },
+  "introspect": {
+   "pass": 4,
+   "total": 7,
+   "failures": [
+    {
+     "i": 10,
+     "name": "Locations with temp frame"
+    },
+    {
+     "i": 11,
+     "name": "Locations when sourcing"
+    },
+    {
+     "i": 12,
+     "name": "Sourcing inside function grows the debug stack"
+    }
+   ]
+  },
+  "var-ref": {
+   "pass": 23,
+   "total": 30,
+   "failures": [
+    {
+     "i": 4,
+     "name": "${!a[@]-'default'} is legal but fails with more than one element"
+    },
+    {
+     "i": 19,
+     "name": "var ref TO array with arbitrary subscripts"
+    },
+    {
+     "i": 26,
+     "name": "Var Ref Code Injection $(tee PWNED)"
+    },
+    {
+     "i": 27,
+     "name": "${!array_ref:-set} and ${!array_ref:=assign}"
+    },
+    {
+     "i": 28,
+     "name": "Array indirect expansion with suffix operators"
+    },
+    {
+     "i": 29,
+     "name": "Array indirect expansion with replacements"
+    },
+    {
+     "i": 30,
+     "name": "Array indirect expansion with @? conversion"
+    }
+   ]
+  },
+  "xtrace": {
+   "pass": 18,
+   "total": 19,
+   "failures": [
+    {
+     "i": 2,
+     "name": "xtrace with unprintable chars"
+    }
+   ]
+  },
+  "sh-options-bash": {
+   "pass": 6,
+   "total": 9,
+   "failures": [
+    {
+     "i": 4,
+     "name": "export SHELLOPTS does cross-process tracing"
+    },
+    {
+     "i": 5,
+     "name": "export SHELLOPTS does cross-process tracing with bash"
+    },
+    {
+     "i": 6,
+     "name": "OSH calling bash with SHELLOPTS does not change braceexpand"
+    }
+   ]
+  },
+  "redirect-command": {
+   "pass": 17,
+   "total": 23,
+   "failures": [
+    {
+     "i": 2,
+     "name": "`< $file` behaves like $(< file)"
+    },
+    {
+     "i": 8,
+     "name": "Redirect in the middle of two assignments"
+    },
+    {
+     "i": 10,
+     "name": "Redirect in function body"
+    },
+    {
+     "i": 11,
+     "name": "Redirect in function body is evaluated multiple times"
+    },
+    {
+     "i": 18,
+     "name": "redirect subshell"
+    },
+    {
+     "i": 19,
+     "name": "Prefix redirect for loop -- not allowed"
+    }
+   ]
+  },
+  "redirect-multi": {
+   "pass": 5,
+   "total": 13,
+   "failures": [
+    {
+     "i": 0,
+     "name": "File redirects with glob args (bash and zsh only)"
+    },
+    {
+     "i": 3,
+     "name": "File redirect without matching any file, with failglob"
+    },
+    {
+     "i": 6,
+     "name": "File redirect to $var with glob char"
+    },
+    {
+     "i": 7,
+     "name": "File redirect that globs to more than one file (bash and zsh only)"
+    },
+    {
+     "i": 8,
+     "name": "File redirect with extended glob"
+    },
+    {
+     "i": 9,
+     "name": "Extended glob that doesn't match anything"
+    },
+    {
+     "i": 11,
+     "name": "Redirect with brace expansion isn't allowed"
+    },
+    {
+     "i": 12,
+     "name": "File redirects have word splitting too!"
+    }
+   ]
+  },
+  "redir-order": {
+   "pass": 1,
+   "total": 5,
+   "failures": [
+    {
+     "i": 1,
+     "name": "subshell + redirect order"
+    },
+    {
+     "i": 2,
+     "name": "for word + redirect order"
+    },
+    {
+     "i": 3,
+     "name": "case word + redirect order"
+    },
+    {
+     "i": 4,
+     "name": "[[ + redirect order"
+    }
+   ]
+  },
+  "arith-context": {
+   "pass": 12,
+   "total": 16,
+   "failures": [
+    {
+     "i": 9,
+     "name": "$[ is a synonym for $(("
+    },
+    {
+     "i": 10,
+     "name": "$[$var is a synonym for $(($var (#2426)"
+    },
+    {
+     "i": 11,
+     "name": "$[$undefined] is a synonym for $(($undefined (#2566)"
+    },
+    {
+     "i": 15,
+     "name": "Empty expression a[]"
+    }
+   ]
+  },
+  "arith-dynamic": {
+   "pass": 2,
+   "total": 4,
+   "failures": [
+    {
+     "i": 0,
+     "name": "Double quotes"
+    },
+    {
+     "i": 2,
+     "name": "Substitutions"
+    }
+   ]
+  },
+  "for-expr": {
+   "pass": 7,
+   "total": 8,
+   "failures": [
+    {
+     "i": 2,
+     "name": "Accepts { } syntax too"
+    }
+   ]
+  },
+  "bugs": {
+   "pass": 21,
+   "total": 29,
+   "failures": [
+    {
+     "i": 3,
+     "name": "assign readonly -- one line"
+    },
+    {
+     "i": 8,
+     "name": "First word like foo$x() and foo$[1+2] (regression)"
+    },
+    {
+     "i": 9,
+     "name": "Function names"
+    },
+    {
+     "i": 10,
+     "name": "file with NUL byte"
+    },
+    {
+     "i": 17,
+     "name": "autoconf word split (#1449)"
+    },
+    {
+     "i": 19,
+     "name": "command execution $(echo 42 | tee PWNED) not allowed"
+    },
+    {
+     "i": 21,
+     "name": "unset doesn't allow command execution"
+    },
+    {
+     "i": 27,
+     "name": "Crash after changing $[] to be alias of $(( ))"
+    }
+   ]
+  },
+  "toysh-posix": {
+   "pass": 15,
+   "total": 23,
+   "failures": [
+    {
+     "i": 5,
+     "name": "Function def in pipeline"
+    },
+    {
+     "i": 8,
+     "name": "IFS"
+    },
+    {
+     "i": 11,
+     "name": "IFS - http://landley.net/notes.html#05-03-2020"
+    },
+    {
+     "i": 12,
+     "name": "IFS=x and '' and unquoted $@ - reduction of case above - copied into spec/word-split"
+    },
+    {
+     "i": 13,
+     "name": "for loop parsing - http://landley.net/notes.html#04-03-2020"
+    },
+    {
+     "i": 18,
+     "name": "IFS 4"
+    },
+    {
+     "i": 20,
+     "name": "Can't parse extra }"
+    },
+    {
+     "i": 21,
+     "name": "Command Sub Syntax Error"
+    }
+   ]
+  },
+  "toysh": {
+   "pass": 4,
+   "total": 8,
+   "failures": [
+    {
+     "i": 3,
+     "name": "char class / extglob"
+    },
+    {
+     "i": 4,
+     "name": "patsub of $* - http://landley.net/notes.html#23-04-2020"
+    },
+    {
+     "i": 5,
+     "name": "Brace Expansion"
+    },
+    {
+     "i": 6,
+     "name": "{abc}<<< - http://landley.net/notes-2019.html#09-12-2019"
+    }
+   ]
+  },
+  "blog1": {
+   "pass": 4,
+   "total": 9,
+   "failures": [
+    {
+     "i": 0,
+     "name": "${##}"
+    },
+    {
+     "i": 1,
+     "name": "${###}"
+    },
+    {
+     "i": 2,
+     "name": "${####}"
+    },
+    {
+     "i": 3,
+     "name": "${##2}"
+    },
+    {
+     "i": 4,
+     "name": "${###2}"
+    }
+   ]
+  },
+  "blog2": {
+   "pass": 4,
+   "total": 8,
+   "failures": [
+    {
+     "i": 3,
+     "name": "-a -a -a -a"
+    },
+    {
+     "i": 4,
+     "name": "-a -a -a -a -a"
+    },
+    {
+     "i": 6,
+     "name": "-a -a -a -a -a -a -a"
+    },
+    {
+     "i": 7,
+     "name": "-a -a -a -a -a -a -a -a"
+    }
+   ]
+  },
+  "blog-other1": {
+   "pass": 3,
+   "total": 4,
+   "failures": [
+    {
+     "i": 5,
+     "name": "` on its own line"
+    }
+   ]
+  },
+  "nix-idioms": {
+   "pass": 4,
+   "total": 6,
+   "failures": [
+    {
+     "i": 3,
+     "name": "${!ref} to undefined string var is fatal, INCONSISTENT with array"
+    },
+    {
+     "i": 4,
+     "name": "export with dynamic var name +="
+    }
+   ]
+  },
+  "ble-idioms": {
+   "pass": 23,
+   "total": 26,
+   "failures": [
+    {
+     "i": 13,
+     "name": "shopt -u expand_aliases and eval"
+    },
+    {
+     "i": 19,
+     "name": "Issue #1069 [53] BUG: a[1 + 1]=2, etc. fails"
+    },
+    {
+     "i": 25,
+     "name": "Issue #1069 [59] - Assigning Str to BashArray/BashAssoc should not remove BashArray/BashAssoc"
+    }
+   ]
+  },
+  "ble-features": {
+   "pass": 4,
+   "total": 4,
+   "failures": []
+  },
+  "ble-unset": {
+   "pass": 0,
+   "total": 2,
+   "failures": [
+    {
+     "i": 3,
+     "name": "[bash_unset] dynamic-unset for nested tempenvs"
+    },
+    {
+     "i": 4,
+     "name": "[bash_unset] local-unset for nested tempenvs"
+    }
+   ]
+  },
+  "nocasematch-match": {
+   "pass": 3,
+   "total": 6,
+   "failures": [
+    {
+     "i": 0,
+     "name": "[[ equality matching"
+    },
+    {
+     "i": 1,
+     "name": "[[ regex matching"
+    },
+    {
+     "i": 3,
+     "name": "case matching"
+    }
+   ]
+  },
+  "command-sub-ksh": {
+   "pass": 0,
+   "total": 0,
+   "failures": []
+  },
+  "paren-ambiguity": {
+   "pass": 7,
+   "total": 9,
+   "failures": [
+    {
+     "i": 0,
+     "name": "(( closed with ) ) after multiple lines is command - #2337"
+    },
+    {
+     "i": 1,
+     "name": "$(( closed with ) ) after multiple lines is command - #2337"
+    }
+   ]
+  },
+  "parse-errors": {
+   "pass": 8,
+   "total": 25,
+   "failures": [
+    {
+     "i": 5,
+     "name": "Incomplete while"
+    },
+    {
+     "i": 6,
+     "name": "Incomplete for"
+    },
+    {
+     "i": 7,
+     "name": "Incomplete if"
+    },
+    {
+     "i": 9,
+     "name": "} is a parse error"
+    },
+    {
+     "i": 10,
+     "name": "{ is its own word, needs a space"
+    },
+    {
+     "i": 13,
+     "name": "bad var name globally isn't parsed like an assignment"
+    },
+    {
+     "i": 14,
+     "name": "bad var name in export"
+    },
+    {
+     "i": 15,
+     "name": "bad var name in local"
+    },
+    {
+     "i": 16,
+     "name": "misplaced parentheses are not a subshell"
+    },
+    {
+     "i": 17,
+     "name": "incomplete command sub"
+    },
+    {
+     "i": 18,
+     "name": "incomplete backticks"
+    },
+    {
+     "i": 19,
+     "name": "misplaced ;;"
+    },
+    {
+     "i": 21,
+     "name": "interactive parse error (regression)"
+    },
+    {
+     "i": 22,
+     "name": "array literal inside array is a parse error"
+    },
+    {
+     "i": 23,
+     "name": "array literal inside loop is a parse error"
+    },
+    {
+     "i": 24,
+     "name": "array literal in case"
+    },
+    {
+     "i": 25,
+     "name": "%foo=() is parse error (regression)"
+    }
+   ]
+  },
+  "unicode": {
+   "pass": 0,
+   "total": 2,
+   "failures": [
+    {
+     "i": 0,
+     "name": "OSH source code doesn't have to be valid Unicode (like other shells)"
+    },
+    {
+     "i": 1,
+     "name": "Unicode escapes \\u03bc \\U000003bc in $'', echo -e, printf"
+    }
+   ]
+  },
+  "nul-bytes": {
+   "pass": 2,
+   "total": 16,
+   "failures": [
+    {
+     "i": 1,
+     "name": "printf - literal NUL in format string"
+    },
+    {
+     "i": 3,
+     "name": "printf - NUL byte in value (OSH and zsh agree)"
+    },
+    {
+     "i": 4,
+     "name": "NUL bytes with echo $'\\0' (OSH and zsh agree)"
+    },
+    {
+     "i": 5,
+     "name": "NUL bytes and IFS splitting"
+    },
+    {
+     "i": 6,
+     "name": "NUL bytes with test -n"
+    },
+    {
+     "i": 7,
+     "name": "NUL bytes with test -f"
+    },
+    {
+     "i": 8,
+     "name": "NUL bytes with ${#s} (OSH and zsh agree)"
+    },
+    {
+     "i": 9,
+     "name": "Compare \\x00 byte versus \\x01 byte - command sub"
+    },
+    {
+     "i": 10,
+     "name": "Compare \\x00 byte versus \\x01 byte - read builtin"
+    },
+    {
+     "i": 11,
+     "name": "Compare \\x00 byte versus \\x01 byte - read -n"
+    },
+    {
+     "i": 12,
+     "name": "Compare \\x00 byte versus \\x01 byte - mapfile builtin"
+    },
+    {
+     "i": 13,
+     "name": "Strip ops # ## % %% with NUL bytes"
+    },
+    {
+     "i": 14,
+     "name": "Issue 2269 Reduction"
+    },
+    {
+     "i": 15,
+     "name": "Issue 2269 - Do NUL bytes match ? in ${a#?}"
+    }
+   ]
+  },
+  "assign-deferred": {
+   "pass": 6,
+   "total": 9,
+   "failures": [
+    {
+     "i": 4,
+     "name": "export a[7]=8"
+    },
+    {
+     "i": 7,
+     "name": "is 'builtin' prefix and array allowed?  OSH is smarter"
+    },
+    {
+     "i": 8,
+     "name": "is 'command' prefix and array allowed?  OSH is smarter"
+    }
+   ]
+  },
+  "vars-bash": {
+   "pass": 0,
+   "total": 1,
+   "failures": [
+    {
+     "i": 0,
+     "name": "$SHELL is set to what is in /etc/passwd"
+    }
+   ]
+  },
+  "bool-parse": {
+   "pass": 5,
+   "total": 8,
+   "failures": [
+    {
+     "i": 1,
+     "name": "test builtin: ( = ) is confusing: equality test or non-empty string test"
+    },
+    {
+     "i": 2,
+     "name": "test builtin: ( == ) is confusing: equality test or non-empty string test"
+    },
+    {
+     "i": 7,
+     "name": "[[ -f -f ]] and [[ -f == ]]"
+    }
+   ]
+  },
+  "serialize": {
+   "pass": 5,
+   "total": 10,
+   "failures": [
+    {
+     "i": 3,
+     "name": "printf %q unprintable"
+    },
+    {
+     "i": 4,
+     "name": "printf %q unicode"
+    },
+    {
+     "i": 5,
+     "name": "printf %q invalid unicode"
+    },
+    {
+     "i": 6,
+     "name": "set"
+    },
+    {
+     "i": 7,
+     "name": "declare"
+    }
+   ]
+  },
+  "sh-usage": {
+   "pass": 21,
+   "total": 24,
+   "failures": [
+    {
+     "i": 15,
+     "name": "Set LC_ALL LC_CTYPE LC_COLLATE LANG - affects glob ?"
+    },
+    {
+     "i": 16,
+     "name": "LC_CTYPE=invalid"
+    },
+    {
+     "i": 21,
+     "name": "weird flag parsing -oo errexit noglob"
+    }
+   ]
+  },
+  "arg-parse": {
+   "pass": 1,
+   "total": 3,
+   "failures": [
+    {
+     "i": 1,
+     "name": "shift 1 extra"
+    },
+    {
+     "i": 2,
+     "name": "continue 1 extra, break, etc."
+    }
+   ]
   }
  }
 }

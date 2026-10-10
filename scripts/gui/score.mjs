@@ -86,19 +86,24 @@ const windowsOf = (page, id) => page.evaluate((id) => window.__tabcomputer.deskt
   return { title: w.title, x: r.x, y: r.y, width: r.width, height: r.height, bw: c.width, bh: c.height, spans: layer ? layer.children.length : 0 };
 }).sort((a, b) => b.width * b.height - a.width * a.height), id);
 
-/** Distinct colours on a coarse grid of the app's largest window, and a hash of them */
+/** Distinct colours on a coarse grid of the app's windows (the most any one has), and a hash of all of them */
 const sample = (page, id) => page.evaluate((id) => {
-  const w = window.__tabcomputer.desktop.windows().filter((w) => w.appId === id && w.surface).sort((a, b) => b.surface.canvas.width * b.surface.canvas.height - a.surface.canvas.width * a.surface.canvas.height)[0];
-  if (!w) return null;
-  const c = w.surface.canvas, d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
-  const colors = new Set();
-  let hash = 0;
-  for (let y = 0; y < c.height; y += 3) for (let x = 0; x < c.width; x += 3) {
-    const i = (y * c.width + x) * 4, v = (d[i] << 16) | (d[i + 1] << 8) | d[i + 2];
-    colors.add(v);
-    hash = (Math.imul(hash, 31) + v) | 0;
+  const ws = window.__tabcomputer.desktop.windows().filter((w) => w.appId === id && w.surface);
+  if (!ws.length) return null;
+  let colors = 0, hash = 0;
+  for (const w of ws) {
+    const c = w.surface.canvas;
+    if (!c.width || !c.height) continue;
+    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    const seen = new Set();
+    for (let y = 0; y < c.height; y += 3) for (let x = 0; x < c.width; x += 3) {
+      const i = (y * c.width + x) * 4, v = (d[i] << 16) | (d[i + 1] << 8) | d[i + 2];
+      seen.add(v);
+      hash = (Math.imul(hash, 31) + v) | 0;
+    }
+    colors = Math.max(colors, seen.size);
   }
-  return { colors: colors.size, hash };
+  return { colors, hash };
 }, id);
 
 async function scoreApp(browser, base, id) {
@@ -203,17 +208,15 @@ async function scoreApp(browser, base, id) {
 // ── Report ───────────────────────────────────────────────────────────────
 /** Known causes, shown with a row's own note (see "Failures and fixes" in the report) */
 const KNOWN = {
-  blender: 'OpenCV aborts: "SSE/SSE2 not available" (the x86 engine reports CPU family 0)',
-  'libreoffice-writer': 'soffice.bin is loaded as a flat binary (".bin" name; x86 engine)',
-  'firefox-esr': 'crashes itself (MOZ_CRASH) ~20 s into startup',
-  vlc: 'its window opens, then the Qt interface exits (status 0)',
-  'lximage-qt': 'single-instance check needs a D-Bus session bus',
-  eog: 'input: probably nothing open to type into (not investigated)',
-  gpicview: 'input: probably nothing open to type into (not investigated)',
-  qpdfview: 'input: probably nothing open to type into (not investigated)',
-  audacity: 'SysV shared memory (shmget) is ENOSYS in the x86 engine',
-  thunar: 'input not detected (not investigated)',
-  krita: 'input: passed in one of two runs (start screen, nothing open)',
+  blender: 'past OpenCV\'s CPU check (engine fix); now glibc aborts on PI-mutex futex ops (EINVAL in the x86 engine, reported)',
+  'libreoffice-writer': 'loads now (ELF .bin, libcups); an uncaught UNO RuntimeException at startup, then it hangs (not diagnosed)',
+  'firefox-esr': 'past the getaddrinfo abort (fixed): a blank window after minutes, gone seconds later; content processes crash (SIGSEGV)',
+  audacity: 'its first window is the first-run plugin scan; the main window follows (~70 s); wxWidgets text isn\'t reported',
+  eog: 'input: a viewer with nothing open: typing changes nothing',
+  ristretto: 'input: a viewer with nothing open: typing changes nothing',
+  gpicview: 'input: a viewer with nothing open: typing changes nothing',
+  'lximage-qt': 'input: a viewer with nothing open: typing changes nothing',
+  krita: 'input: its start screen has nothing to type into (passed in one run of three)',
   dillo: 'FLTK draws its text as pixels',
 };
 
