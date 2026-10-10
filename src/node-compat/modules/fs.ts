@@ -1,3 +1,4 @@
+import { nodeGuestOf } from '../../node-worker/hooks';
 import type { CommandContext } from '../../commands/index';
 import { decodeUtf8Strict } from '../preload';
 import { PAGE_SET_TIMEOUT } from '../page-globals';
@@ -409,7 +410,17 @@ export function createFsModule(deps: FsDeps): any {
   };
   const writeChains = writeState.chains;
   const inflight = { push: writeState.push };
+  // A kernel guest's filesystem calls are blocking syscalls: do the write now, so a
+  // child process started right after (a really blocking execSync) sees it
+  const writeNowToo = !!nodeGuestOf(ctx);
   const queueWrite = (path: string, op: () => Promise<unknown>): Promise<void> => {
+    if (writeNowToo) {
+      let r: Promise<unknown>;
+      try { r = op(); } catch (e) { r = Promise.reject(e); }
+      const done = Promise.resolve(r).then(() => {}, () => {});
+      inflight.push(done);
+      return done;
+    }
     const next = (writeChains.get(path) ?? Promise.resolve()).then(op).then(() => {}, () => {});
     writeChains.set(path, next);
     inflight.push(next);
