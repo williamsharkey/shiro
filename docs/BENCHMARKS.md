@@ -650,6 +650,11 @@ composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts,
 a few MiB each. The terminal UI's +19 KiB is /dom, the sign-in hook and the
 other integration changes since db9f698, not desktop code.
 
+### unix/shell-stdio 9 — autoconf configure: case in subshells, trap comments, compound dups
+
+`node bench/ab.mjs HEAD~1 HEAD --suites shell,kernel --quick` (7c7f147 →
+dfac542): all 24 unchanged.
+
 ### unix/shell-stdio 8 — mapfile, pushd/popd, umask, trap DEBUG, PIPESTATUS
 
 `node bench/ab.mjs HEAD~1 HEAD --suites shell,kernel --quick` (b0bc12b →
