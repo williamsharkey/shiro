@@ -25,12 +25,18 @@ export interface StreamHost {
   connect(port: number): ByteChannel;
 }
 
-/** The page side, as a <script> to put after the resource interceptor (PORT: the server the page came from) */
-export function previewStreamsScript(port: number): string {
+/**
+ * The page side, as a <script> to put after the resource interceptor (PORT:
+ * the server the page came from). `prefix`: the page is a service-worker
+ * preview at that path (preview-sw-host.ts), so its own origin is the server
+ * too (vite's client opens ws://<its host>/), paths under the prefix without it.
+ */
+export function previewStreamsScript(port: number, prefix?: string): string {
   return `
 <script>
 (function() {
   var PORT = ${port};
+  var PREFIX = ${prefix ? JSON.stringify(prefix) : 'null'};
   var P = 'p' + Math.random().toString(36).slice(2) + '_';
   var seq = 0, streams = {}, sockets = {};
   var parentWin = window.parent;
@@ -38,6 +44,16 @@ export function previewStreamsScript(port: number): string {
   // {port, path} for a URL the in-tab servers answer, else null
   function local(u) {
     u = String(u);
+    if (PREFIX !== null) {
+      var abs;
+      try { abs = new URL(u, location.href); } catch (x) { return null; }
+      if (abs.host === location.host && abs.protocol.replace(/^ws/, 'http') === location.protocol) {
+        var p = abs.pathname;
+        if (p === PREFIX || p.indexOf(PREFIX + '/') === 0) p = p.slice(PREFIX.length) || '/';
+        return { port: PORT, path: p + abs.search };
+      }
+      u = abs.href;
+    }
     if (/^(\\/(?!\\/)|\\.\\.?\\/)/.test(u)) return { port: PORT, path: u };
     var m = /^(https?|wss?):\\/\\/([^\\/?#]*)(.*)$/i.exec(u);
     if (!m) return null;

@@ -361,24 +361,30 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
   let stdinEncoding: string | null = null;
   let stdinDataTaken = false; // piped input already went to 'data' listeners
   const stdinReadBuffer: string[] = [];
+  /** Deliver piped input (once): 'data', 'readable', then 'end' and 'close' */
+  const flow = () => {
+    if (ctx.terminal || stdinEnded) return;
+    stdinEnded = true;
+    queueMicrotask(() => {
+      if (ctx.stdin) {
+        stdinReadBuffer.push(ctx.stdin);
+        if (stdinEvents['data']?.length) stdinDataTaken = true;
+        (stdinEvents['data'] || []).forEach(f => f(ctx.stdin));
+        (stdinEvents['readable'] || []).forEach(f => f());
+      }
+      (stdinEvents['end'] || []).forEach(f => f());
+      (stdinEvents['close'] || []).forEach(f => f());
+    });
+  };
   const stdinObj: any = {
     isTTY: !!ctx.terminal,
     fd: 0,
     on: (event: string, fn: Function) => {
       (stdinEvents[event] ??= []).push(fn);
-      if (!ctx.terminal && event === 'end' && !stdinEnded) {
-        stdinEnded = true;
-        queueMicrotask(() => {
-          if (ctx.stdin) {
-            stdinReadBuffer.push(ctx.stdin);
-            if (stdinEvents['data']?.length) stdinDataTaken = true;
-            (stdinEvents['data'] || []).forEach(f => f(ctx.stdin));
-            (stdinEvents['readable'] || []).forEach(f => f());
-          }
-          (stdinEvents['end'] || []).forEach(f => f());
-          (stdinEvents['close'] || []).forEach(f => f());
-        });
-      }
+      // Piped input flows (and then ends) once something reads it, as in
+      // node: a 'data' or 'readable' listener, resume(). An 'end' listener
+      // alone reads nothing (vite exits on stdin 'end', its parent's exit)
+      if (!ctx.terminal && (event === 'data' || event === 'readable')) flow();
       return stdinObj;
     },
     once: (event: string, fn: Function) => {
@@ -399,6 +405,7 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
     },
     emit: (event: string, ...args: any[]) => { (stdinEvents[event] || []).forEach(f => f(...args)); return false; },
     resume: () => {
+      flow();
       if (ctx.terminal && !stdinEnded) {
         const forceExit = () => {
           if (!_st.exitCalled) { _st.exitCode = 130; _st.exitCalled = true; }

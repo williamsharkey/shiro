@@ -31,6 +31,7 @@ import { createChildProcessModule } from './modules/child-process';
 import { createStreamModule } from './modules/stream';
 import { createCryptoModule } from './modules/crypto';
 import { createProcessGlobal, createProcessFunction } from './process-global';
+import { loadBrowserPackages } from './browser-packages';
 import { createHttpModule, createHttpsModule, createHttp2Module } from './modules/http';
 import { createNetModule, createTlsModule } from './modules/net-tls';
 import { createMiscModule } from './modules/misc';
@@ -173,8 +174,10 @@ export async function executeNodeScript(
     // Buffer shim
     const FakeBuffer = createFakeBuffer();
     // The process's own globalThis (its writes stay its own; globalThis.process is its process)
-    const processGlobal = createProcessGlobal({ process: fakeProcess, Buffer: FakeBuffer });
+    const processGlobal = createProcessGlobal({ process: fakeProcess, Buffer: FakeBuffer, console: fakeConsole });
     const processFunction = createProcessFunction(processGlobal, fakeProcess, FakeBuffer);
+    /** Packages this script reaches that run as their browser builds (rolldown): filled before it starts */
+    const browserModules = new Map<string, any>();
 
     // Built-in module registry with caching
     const _builtinCache = new Map<string, any>();
@@ -206,7 +209,7 @@ export async function executeNodeScript(
         case 'events':
         case 'node:events': return createEventsModule();
         case 'url':
-        case 'node:url': return createUrlModule();
+        case 'node:url': return createUrlModule(() => fakeProcess.cwd());
         case 'stream':
         case 'node:stream': return createStreamModule(getBuiltinModule('events'));
         case 'stream/promises':
@@ -242,7 +245,7 @@ export async function executeNodeScript(
     // Require function (module resolver + loader)
     const requireModule = createRequireFunction({
       ctx, fileCache, fileMtimes, moduleCache, pendingPromises, processEvents,
-      getBuiltinModule, fakeConsole, fakeProcess, FakeBuffer, processGlobal, processFunction,
+      getBuiltinModule, fakeConsole, fakeProcess, FakeBuffer, processGlobal, processFunction, browserModules,
       createExpressShim: expressFactory,
       createSqliteShim: () => createSqliteShim({ ctx }),
       createAutoStub,
@@ -318,6 +321,15 @@ export async function executeNodeScript(
     // Fake import.meta for ES modules
     const entryFilename = scriptPath || ctx.cwd + '/repl.js';
     const entryDirname = scriptPath ? scriptPath.substring(0, scriptPath.lastIndexOf('/')) : ctx.cwd;
+    // Browser builds a package here runs as (rolldown → @rolldown/browser): loaded before the script needs them
+    try {
+      for (const [spec, ns] of await loadBrowserPackages(ctx.fs, entryDirname, getBuiltinModule, fakeProcess, trackAsync)) browserModules.set(spec, ns);
+    } catch (e: any) {
+      console.warn('[node] browser build:', e);
+      const err = e?.errors?.[0];
+      const at = err?.location ? ` (${err.location.file}:${err.location.line}: ${String(err.location.lineText).trim().slice(0, 160)})` : '';
+      stderrBuf.push(`node: loading a browser build failed: ${err?.text ?? e?.message ?? e}${at}\n`);
+    }
     const fakeImportMeta = {
       url: `file://${entryFilename}`,
       dirname: entryDirname,
