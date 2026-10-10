@@ -357,7 +357,7 @@ function createStderr(ctx: CommandContext, stderrBuf: string[], _st: SharedState
 function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Record<string, Function[]>, pendingPromises: Promise<any>[]): any {
   const stdinEvents: Record<string, Function[]> = {};
   // Whether stdin is the terminal (a kernel guest knows it apart from stdout's: `echo x | node` on a terminal)
-  const stdinTTY: boolean = (ctx as any).stdinIsTTY ?? !!ctx.terminal;
+  const stdinTTY: boolean = ctx.stdinIsTTY ?? !!ctx.terminal;
   // A live stdin (ctx.readStdin) is read only once the program listens for it;
   // until then the program may finish without it (williamsharkey/tabcomputer#2)
   let loaded: Promise<void> | null = ctx.readStdin ? null : Promise.resolve();
