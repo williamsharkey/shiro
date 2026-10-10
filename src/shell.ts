@@ -7152,8 +7152,10 @@ export class Shell {
   private async execIf(
     input: string, writeStdout: (s: string) => void, writeStderr: (s: string) => void
   ): Promise<number> {
-    // Normalize to semicolons for easier parsing
-    const joined = input.replace(/\r?\n/g, '; ').replace(/;\s*;/g, ';');
+    // Normalize to semicolons for easier parsing: a newline separates commands,
+    // except after a case item's terminator (;; ;& ;;&), which must survive
+    // whole (collapsing `;;` to `;` broke every case with two items in an if)
+    const joined = input.replace(/(;;&?|;&)?[ \t]*\r?\n/g, (_m, term) => (term ? `${term} ` : '; ')).replace(/;\s+;/g, ';');
 
     // Parse if/elif/else/fi with depth tracking for nested if blocks
     interface IfBranch { condition: string; body: string; }
