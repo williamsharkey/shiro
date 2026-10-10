@@ -708,6 +708,13 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
      EFAULT for read-only output buffers; fd checks;
    - /proc/self/maps as a kernel memfd; nanosleep's rem written before the
      signal frame.
+85. From one compiled block straight to the next: after a block, WjExecute
+   runs the next one directly when it has code (an indirect jmp's target, a
+   block cut at its length). It does up to 64 blocks before going back
+   through Actor's loop, and stops for signals, a JIT epoch change, or
+   another thread wanting the GIL. A computed-goto bytecode loop, one block
+   per op like JSC's LLInt, went from 131 to 92 ns per op (2 ns native, 660
+   ns interpreted). The x86 suite A/B is unchanged ("same" everywhere).
 
 The page compiles blink.wasm once and gives the `WebAssembly.Module` to every
 Blink worker (src/x86-engine/blink.ts `blinkWasmModule`, host.mjs
