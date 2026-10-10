@@ -161,6 +161,11 @@ export function createServerFactory(deps: ServerDeps) {
       } else if (headers) for (const k of Object.keys(headers)) this.setHeader(k, headers[k]);
       return this;
     }
+    // What middleware calls or reads as node's ServerResponse has them
+    // (compression: _implicitHeader() before it wraps the body; on-headers, express: _header)
+    _implicitHeader() { this.writeHead(this.statusCode); }
+    get _header(): string | null { return this.headersSent ? `HTTP/1.1 ${this.statusCode} ${this.statusMessage || STATUS_CODES[this.statusCode] || ''}\r\n` : null; }
+    get _headerSent(): boolean { return this.headersSent; }
     writeContinue() {}
     writeProcessing() {}
     addTrailers() {}
