@@ -2619,7 +2619,9 @@ export class Kernel {
           const name = str(0, args[0]);
           if (name.length > 249) return -A.EINVAL;
           if (args[1] & ~(A.MFD_CLOEXEC | A.MFD_ALLOW_SEALING)) return -A.EINVAL;
-          return fds.alloc(new MemFile(`/memfd:${name} (deleted)`), 0, (args[1] & A.MFD_CLOEXEC) !== 0);
+          const file = new MemFile(`/memfd:${name} (deleted)`);
+          if (args[1] & A.MFD_ALLOW_SEALING) file.seals = 0;
+          return fds.alloc(file, 0, (args[1] & A.MFD_CLOEXEC) !== 0);
         }
         case A.SYS_prlimit64: { // pid, resource, set → data: old {cur, max} (u64s); a new one first when set
           // RLIMIT_NOFILE only (the fd table's): engines keep the other limits
@@ -2790,6 +2792,18 @@ export class Kernel {
         if (size < 0) return -A.EINVAL;
         if (size > A.PIPE_MAX_SIZE) return -A.EPERM;
         return f.pipe.resize(size);
+      }
+      case A.F_ADD_SEALS:
+      case A.F_GET_SEALS: {
+        // memfds only (Linux: shmem files; anything else is EINVAL)
+        if (!(f instanceof MemFile)) return -A.EINVAL;
+        if (cmd === A.F_GET_SEALS) return f.seals;
+        const known = A.F_SEAL_SEAL | A.F_SEAL_SHRINK | A.F_SEAL_GROW | A.F_SEAL_WRITE | A.F_SEAL_FUTURE_WRITE;
+        if (arg & ~known) return -A.EINVAL;
+        if ((f.flags & A.O_ACCMODE) === A.O_RDONLY) return -A.EPERM;
+        if (f.seals & A.F_SEAL_SEAL) return -A.EPERM;
+        f.seals |= arg;
+        return 0;
       }
       default: return -A.EINVAL;
     }

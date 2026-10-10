@@ -106,15 +106,35 @@ back five pixels and compares them with the same shader evaluated on the CPU.
 | `LP_NUM_THREADS=0` | no change (no parallel gain in Blink) | – |
 
 - LLVM's JIT works under Blink: llvmpipe initialises, compiles and draws.
-  But its generated code computes some fragments wrongly (e.g. (181, 85, 0)
-  where the shader gives (224, 1, 3)). That's an x86-engine bug in the SSE
-  code LLVM emits, reported with this probe as the repro. It's possibly
-  related to librsvg's gradients, which fail in the same engine.
+  On the first run its generated code computed some fragments wrongly (e.g.
+  (181, 85, 0) where the shader gives (224, 1, 3)): an x86-engine bug in the
+  SSE code LLVM emits, reported with this probe as the repro.
 - softpipe is correct, and faster than llvmpipe on small frames (no
   per-draw JIT compiles), but slower per pixel.
-- A realistic window costs seconds to tens of seconds per full redraw with
-  either driver. Blender's UI shaders are cheaper than this probe's, so its
+- On that run, a realistic window cost seconds to tens of seconds per full
+  redraw with either driver. Blender's UI shaders are cheaper than this probe's, so its
   frames would land somewhat lower, but nowhere near the ~2 s bar.
+
+### Re-run on Blink 0114 (unpckhpd fix)
+
+| | llvmpipe | softpipe |
+|---|---|---|
+| dlopen / context | 2.1 s / 1.0 s | – |
+| shader compile + link | 1.0–2.0 s | – |
+| 128×128: first frame, then | 26 s, then 0.27 s | – |
+| 512×512: first frame, then | 3.9 s, then 0.44 s | 5.6 s, then 4.7 s |
+| 1280×720: first frame, then | 29 s, then 1.3–1.4 s | – |
+| pixels | **all 5 match softpipe** | (reference) |
+
+- Engine fix 0114 (`unpckhpd` took its low half from the wrong lane) made
+  llvmpipe's pixels exact.
+- The first frame of a run pays for LLVM compiling the draw's shaders and
+  fragment pipelines (~25 s); later frames reuse them. A warm 720p frame is
+  ~1.3 s, 3.5× faster than softpipe's 512² frame, and under the ~2 s bar.
+  The first run's warm 512² frames took 2.6–2.8 s; what made them 6× faster
+  isn't pinned down (0114 and the engine changes merged with it).
+- So llvmpipe is the driver for option A: a slow first frame, then usable
+  redraws for UI-style apps.
 
 ## Recommendation
 
@@ -122,7 +142,8 @@ back five pixels and compares them with the same shader evaluated on the CPU.
    into memory with no X server or GLX at all. A one-hour probe (gears or a
    Blender-like shader into an OSMesa buffer, timed in Blink) tells whether
    LLVM's JIT runs under Blink and what a frame costs. That decides A.
-2. If the probe is acceptable, **do A**: the GLX extension in Xshiro plus
+2. The probe is acceptable (llvmpipe correct since 0114, ~1.3 s per warm
+   720p frame): **do A**: the GLX extension in Xshiro plus
    Mesa packaging, about a week. It unlocks every GL app at once, correctly,
    just slowly, and stays useful as the fallback for anything B can't do.
 3. **B later**, as the speed path for the apps people actually use with GL.

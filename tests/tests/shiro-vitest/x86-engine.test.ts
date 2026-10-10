@@ -142,6 +142,8 @@ const rotatesBin = join(out, 'rotates');
 const haveRotates = tryBuild('gcc', ['-static', '-O1', '-o', rotatesBin, 'rotates.c']);
 const sseiBin = join(out, 'ssei');
 const haveSsei = tryBuild('gcc', ['-static', '-O1', '-mssse3', '-o', sseiBin, 'ssei.c']);
+const fpjitBin = join(out, 'fpjit');
+const haveFpjit = tryBuild('gcc', ['-static', '-O2', '-msse2', '-o', fpjitBin, 'fpjit.c', '-lm']);
 const sse41bBin = join(out, 'sse41b');
 const haveSse41b = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', sse41bBin, 'sse41b.c']);
 const ssefloatBin = join(out, 'ssefloat');
@@ -1226,6 +1228,14 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const native = "pblendvb   40000000 bf800000 c0490fdb 00000000\nblendvps   40000000 bf800000 c0490fdb 00000000\nptest0 zf=1 cf=1 a=0\nptest1 zf=1 cf=1 a=0\nptest2 zf=0 cf=1 a=0\nptest3 zf=0 cf=0 a=1\nptest4 zf=0 cf=1 a=0\nptest5 zf=0 cf=0 a=1\npinsrd     3f800000 00000021 40490fdb 00000042\nextractps  3f000000 c0490fdb 80000000 00000000\ncvtsi2ss   c0e00000 bf800000 40490fdb 00000000\ncvtsi2ssq  51e5f4c9 bf800000 40490fdb 00000000\ncvtsi2ssm  42040000 bf800000 40490fdb 00000000\nmovshdup   bf800000 bf800000 00000000 00000000\nmovshdupm  3f000000 3f000000 80000000 80000000\nmovsldup   40000000 40000000 c0490fdb c0490fdb\npminud     3f800000 3f000000 40490fdb 00000000\npmaxud     40000000 bf800000 c0490fdb 80000000\npminsd     3f800000 bf800000 c0490fdb 80000000\npmulld     00000000 00000000 0be16559 00000000\ncmpps0     00000000 00000000 00000000 ffffffff\ncmpps1     ffffffff ffffffff 00000000 00000000\ncmpps2     ffffffff ffffffff 00000000 ffffffff\ncmpps3     00000000 00000000 00000000 00000000\ncmpps4     ffffffff ffffffff ffffffff 00000000\ncmpps5     00000000 00000000 ffffffff ffffffff\ncmpps6     00000000 00000000 ffffffff 00000000\ncmpps7     ffffffff ffffffff ffffffff ffffffff\ncmpnlepsm  00000000 00000000 ffffffff 00000000\nunpckhpd   40490fdb 00000000 c0490fdb 80000000\nunpcklpd   3f800000 bf800000 40000000 3f000000\npunpckhqdq 40490fdb 00000000 c0490fdb 80000000\npextrd     c0490fdb 80000000 00000000 00000000\ninsertps   00000000 c0490fdb 00000000 00000000\ninsertpsm  3f800000 bf800000 00000016 00000000\npacks      ff000000 2c21160b ff000000 2c21160b\n";
     expect(r.output.replace(/\r\n/g, '\n')).toBe(native + native);
   }, 60_000);
+
+  // compiled float arithmetic (ss/sd/ps/pd), ucomis/comis, movd/movq, leave (0116): special values
+  // through loops long enough to compile, against native's hash (NaN results counted as one value)
+  it.skipIf(!haveFpjit)('SSE float ops, ucomis/comis, movd/movq and leave in compiled code match native', async () => {
+    const { shell } = await setup(readFileSync(fpjitBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('hash 5b92588104fd1863 acc 19814400\n');
+  }, 120_000);
 
   // PostgreSQL's huge_pages=try maps MAP_HUGETLB first and falls back on ENOMEM
   it.skipIf(!haveHugetlb)('MAP_HUGETLB is ENOMEM (no huge pages reserved), an ordinary map works', async () => {

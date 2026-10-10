@@ -122,6 +122,18 @@ describe('exec -a', () => {
   }, 60_000);
 });
 
+describe('eval with a stdin redirect', () => {
+  it("the wrapper's eval … < /dev/null is EOF for cat, not the open pipe", async () => {
+    const r = await agentSh(claudeWrap('cat; echo "rc=$?"'), {}, 5000);
+    expect(r).toMatchObject({ out: 'rc=0\n', status: 0 });
+  });
+
+  it("eval … < file reads the file; a function's redirect still works", async () => {
+    const r = await agentSh("eval 'head -1' < /tmp/f.txt; f() { cat; }; f < /dev/null; echo \"rc=$?\"", {}, 5000);
+    expect(r).toMatchObject({ out: ' 1 one\nrc=0\n', status: 0 });
+  });
+});
+
 describe('which, timeout, kill and Ctrl-C', () => {
   it('which prints a line per name found and exits 1 if any is missing', async () => {
     const r = await agentSh('which ls nonesuch-cmd cat 2>&1; echo "rc=$?"');
