@@ -513,6 +513,7 @@ export const SOL_SOCKET = 1;
 export const IPPROTO_IP = 0;
 export const IPPROTO_TCP = 6;
 export const IPPROTO_UDP = 17;
+export const IPPROTO_UDPLITE = 136;
 export const IPPROTO_IPV6 = 41;
 export const SO_DEBUG = 1;
 export const SO_REUSEADDR = 2;

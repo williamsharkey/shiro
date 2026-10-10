@@ -30,7 +30,7 @@ import {
   EINPROGRESS, O_NONBLOCK, POLLIN, POLLPRI, POLLOUT, POLLERR, POLLHUP, POLLNVAL, POLLRDHUP, S_IFSOCK,
   AF_UNIX, AF_INET, AF_INET6, SOCK_STREAM, SOCK_DGRAM, SOCK_SEQPACKET, SOCK_NONBLOCK, SOCK_CLOEXEC, SHUT_RD, SHUT_WR,
   SHUT_RDWR, MSG_PEEK, MSG_WAITALL, MSG_DONTWAIT, MSG_NOSIGNAL, SOL_SOCKET, IPPROTO_IP, IPPROTO_TCP,
-  IPPROTO_UDP, IPPROTO_IPV6, SO_REUSEADDR, SO_TYPE, SO_ERROR, SO_BROADCAST, SO_SNDBUF, SO_RCVBUF,
+  IPPROTO_UDP, IPPROTO_UDPLITE, IPPROTO_IPV6, SO_REUSEADDR, SO_TYPE, SO_ERROR, SO_BROADCAST, SO_SNDBUF, SO_RCVBUF,
   SO_KEEPALIVE, SO_LINGER, SO_REUSEPORT, SO_RCVTIMEO, SO_SNDTIMEO, SO_ACCEPTCONN, SO_PROTOCOL, SO_DOMAIN,
   TCP_NODELAY, TCP_KEEPIDLE, TCP_KEEPINTVL, TCP_KEEPCNT, IPV6_V6ONLY, FIONREAD, FIONBIO, SYS_socket,
   SYS_connect, SYS_accept, SYS_sendto, SYS_recvfrom, SYS_shutdown, SYS_bind, SYS_listen, SYS_getsockname,
@@ -313,6 +313,13 @@ class LoopbackPeer implements StreamPeer {
   buffered() { return this.other._rxBytes(); }
 }
 
+/**
+ * What each queued AF_UNIX datagram costs against the send buffer besides its
+ * bytes (Linux charges an skb's truesize): a socket of tiny messages fills
+ * after a few hundred, as on Linux, not after SO_SNDBUF of them.
+ */
+const MSG_OVERHEAD = 768;
+
 /** A connected AF_UNIX SOCK_DGRAM socket's default destination: a bound datagram socket */
 class DgramPeer implements StreamPeer {
   constructor(private target: KSocket, private self: KSocket) {}
@@ -457,7 +464,7 @@ export class KSocket implements OpenFile {
   /** @internal */ _error(errno: number) { this.soError = errno; this.q.notify(); }
   /** @internal */ _peerGone() { this.wrShut = true; this.q.notify(); }
   /** @internal */ _wake() { this.q.notify(); }
-  /** @internal */ _rxBytes() { return this.rxLen; }
+  /** @internal */ _rxBytes() { return this.rxLen + (this.messages ? this.rx.length * MSG_OVERHEAD : 0); }
   /** @internal */ _attach(peer: StreamPeer, local: SockAddr, remote: SockAddr) {
     this.peer = peer; this.local = local; this.remote = remote;
     this.state = 'connected'; this.everConnected = true; this.q.notify();
@@ -567,7 +574,7 @@ export class KSocket implements OpenFile {
       if (buf.length === 0) return 0;
       if (this.messages && buf.length > this.stack.config.sndbuf) return -EMSGSIZE;
       const room = this.stack.config.sndbuf - this.peer.buffered();
-      if (room <= 0 || (this.messages && room < buf.length)) {
+      if (room <= 0 || (this.messages && room < buf.length + MSG_OVERHEAD)) {
         if (dontwait) return -EAGAIN;
         if (signal?.aborted) return -EINTR;
         await this.q.wait(50, signal);
@@ -593,8 +600,8 @@ export class KSocket implements OpenFile {
         break;
       case 'connected':
         if (this.rxLen > 0 || this.rxEof || this.rdShut) r |= POLLIN;
-        if (this.rxEof) r |= POLLRDHUP;
-        if (!this.wrShut && this.peer && this.peer.buffered() < this.stack.config.sndbuf) r |= POLLOUT;
+        if (this.rxEof || this.rdShut) r |= POLLRDHUP; // the peer's FIN, or our own shutdown(SHUT_RD)
+        if (!this.wrShut && this.peer && this.peer.buffered() + (this.messages ? MSG_OVERHEAD : 0) < this.stack.config.sndbuf) r |= POLLOUT;
         if (this.rxEof && this.wrShut) r |= POLLHUP;
         break;
       case 'closed':
@@ -842,11 +849,12 @@ export class KDatagramSocket implements OpenFile {
   readonly ino: number;
   private q = new WaitQueue();
   private rx: { data: Uint8Array; from: SockAddr }[] = [];
+  private rxBytes = 0;
   private closed = false;
   private soError = 0;
   private opts = new Map<string, number>();
 
-  constructor(private stack: NetStack, readonly domain: number, flags = 0) {
+  constructor(private stack: NetStack, readonly domain: number, flags = 0, readonly protocol = IPPROTO_UDP) {
     this.flags = flags;
     this.ino = stack.nextIno++;
   }
@@ -856,17 +864,42 @@ export class KDatagramSocket implements OpenFile {
     return this.remote ? this.sendto(buf, 0, this.remote) : Promise.resolve(-EDESTADDRREQ);
   }
 
+  get v6only(): boolean { return this.domain === AF_INET6 && (this.opts.get(`${IPPROTO_IPV6}:${IPV6_V6ONLY}`) ?? 0) !== 0; }
+  /** SO_REUSEADDR or SO_REUSEPORT: may share its port with another socket that has it too */
+  get reusable(): boolean { return !!(this.opts.get(`${SOL_SOCKET}:${SO_REUSEADDR}`) || this.opts.get(`${SOL_SOCKET}:${SO_REUSEPORT}`)); }
+  /** @internal What this socket's port binding covers */
+  portUse(): PortUse {
+    return { family: this.local?.family ?? this.domain, address: this.local?.address ?? (this.domain === AF_INET6 ? '::' : '0.0.0.0'), v6only: this.v6only };
+  }
+
+  /** Take an ephemeral port (connect, or a send from an unbound socket) */
+  private autobind(address: string): void {
+    for (let i = 0; i < 64; i++) {
+      this.local = { family: this.domain, address, port: this.stack.ephemeral() };
+      if (this.stack.claimUdp(this.local.port, this)) return;
+    }
+  }
+
   connect(addr: SockAddr): number {
     this.remote = { ...addr };
+    this.soError = 0;
     // A connected datagram socket has a source address (getsockname)
-    if (!this.local || this.local.address === '::' || this.local.address === '0.0.0.0') {
-      this.local = { family: this.domain, address: localAddressFor({ ...addr, family: this.domain }), port: this.local?.port || this.stack.ephemeral() };
-    }
+    const src = localAddressFor({ ...addr, family: this.domain });
+    if (!this.local) this.autobind(src);
+    else if (this.local.address === '::' || this.local.address === '0.0.0.0') this.local = { ...this.local, address: src };
     return 0;
   }
   bind(addr: SockAddr): number {
     if (this.local) return -EINVAL;
-    this.local = { ...addr, port: addr.port || this.stack.ephemeral() };
+    const want = { ...addr, port: addr.port };
+    this.local = want;
+    if (want.port === 0) {
+      this.local = null;
+      this.autobind(addr.address);
+    } else if (!this.stack.claimUdp(want.port, this)) {
+      this.local = null;
+      return -EADDRINUSE;
+    }
     this.boundAddr = addr.address !== '::' && addr.address !== '0.0.0.0';
     this.boundPort = addr.port !== 0;
     return 0;
@@ -883,28 +916,62 @@ export class KDatagramSocket implements OpenFile {
    */
   disconnect(): number {
     this.remote = null;
-    if (this.local && !this.boundAddr && !this.boundPort) this.local = null;
+    if (this.local && !this.boundAddr && !this.boundPort) { this.stack.releaseUdp(this.local.port, this); this.local = null; }
     else if (this.local && !this.boundAddr) this.local = { ...this.local, address: this.domain === AF_INET6 ? '::' : '0.0.0.0' };
     return 0;
   }
 
+  /** @internal A datagram from another socket here (loopback): dropped when the receive buffer is full, like UDP */
+  _deliver(data: Uint8Array, from: SockAddr): void {
+    if (this.closed) return;
+    const rcvbuf = this.opts.get(`${SOL_SOCKET}:${SO_RCVBUF}`) || 212992;
+    if (this.rxBytes + data.length > rcvbuf) return;
+    this.rx.push({ data, from }); this.rxBytes += data.length;
+    this.q.notify();
+  }
+
+  /** The sender's address as the receiver (of `family`) sees it: v4 senders appear v4-mapped to IPv6 sockets */
+  private static seenAs(from: SockAddr, family: number): SockAddr {
+    if (family === AF_INET6 && from.family === AF_INET) return { family, address: `::ffff:${from.address}`, port: from.port };
+    if (family === AF_INET && /^::ffff:/i.test(from.address)) return { family, address: from.address.slice(7), port: from.port };
+    return { ...from, family };
+  }
+
+  private takeError(): number { const e = this.soError; this.soError = 0; return e; }
+
   async sendto(buf: Uint8Array, _flags: number, to: SockAddr | null): Promise<number> {
     const dest = to ?? this.remote;
     if (this.closed) return -EBADF;
+    if (this.soError && !to) return -this.takeError();
     if (!dest) return -EDESTADDRREQ;
-    if (dest.port !== 53) return -ENETUNREACH;
     if (buf.length > 65507) return -EMSGSIZE;
-    if (!this.local) this.local = { family: this.domain, address: this.domain === AF_INET6 ? '::' : '0.0.0.0', port: this.stack.ephemeral() };
+    const host = dest.address;
+    const local = host === '0.0.0.0' || host === '::' || isLoopback(host) || /^(::ffff:)?10\.0\.2\.15$/i.test(host) || host.toLowerCase() === 'fd00::15';
+    if (!local && dest.port !== 53) return -ENETUNREACH;
+    const src = localAddressFor({ ...dest, family: this.domain });
+    if (!this.local) this.autobind(this.domain === AF_INET6 ? '::' : '0.0.0.0');
+    if (local) {
+      // Loopback: straight to the socket bound to that port; a connected sender learns of nobody there (ICMP port unreachable)
+      const addr = this.local!.address === '::' || this.local!.address === '0.0.0.0' ? src : this.local!.address;
+      const from: SockAddr = { family: this.domain, address: addr, port: this.local!.port };
+      const target = this.stack.udpReceiver(dest.port, host === '0.0.0.0' ? '127.0.0.1' : host === '::' ? '::1' : host, from);
+      if (target) { target._deliver(buf.slice(), KDatagramSocket.seenAs(from, target.domain)); return buf.length; }
+      // (nobody serves DNS here: a resolver on 127.0.0.53 or ::1 answers over DoH, as before)
+      if (dest.port !== 53) {
+        if (this.remote) { this.soError = ECONNREFUSED; this.q.notify(); }
+        return buf.length;
+      }
+    }
     const query = buf.slice();
     this.stack.dohQuery(query).then(
-      (answer) => { if (!this.closed) { this.rx.push({ data: answer, from: { ...dest } }); this.q.notify(); } },
+      (answer) => { if (!this.closed) { this.rx.push({ data: answer, from: { ...dest } }); this.rxBytes += answer.length; this.q.notify(); } },
       () => {
         // Answer SERVFAIL so the resolver fails fast instead of timing out
         if (this.closed || query.length < 12) return;
         const fail = query.slice(0, 12);
         fail[2] = 0x80 | (query[2] & 0x01); fail[3] = 0x02; // QR, RD copied; RCODE=2
         fail.fill(0, 4, 12);
-        this.rx.push({ data: fail, from: { ...dest } }); this.q.notify();
+        this.rx.push({ data: fail, from: { ...dest } }); this.rxBytes += fail.length; this.q.notify();
       },
     );
     return buf.length;
@@ -916,11 +983,13 @@ export class KDatagramSocket implements OpenFile {
       if (this.closed) return -EBADF;
       const d = this.rx[0];
       if (d) {
-        if (!(flags & MSG_PEEK)) this.rx.shift();
+        if (!(flags & MSG_PEEK)) { this.rx.shift(); this.rxBytes -= d.data.length; }
         const n = Math.min(buf.length, d.data.length); // datagram truncation, like UDP
         buf.set(d.data.subarray(0, n));
         return { n, from: d.from };
       }
+      // nobody listened where a connected socket sent (ICMP port unreachable)
+      if (this.soError) return -this.takeError();
       if ((this.flags & O_NONBLOCK) || (flags & MSG_DONTWAIT)) return -EAGAIN;
       if (signal?.aborted) return -EINTR;
       const t0 = Date.now();
@@ -949,7 +1018,7 @@ export class KDatagramSocket implements OpenFile {
     if (level === SOL_SOCKET && name === SO_TYPE) return SOCK_DGRAM;
     if (level === SOL_SOCKET && name === SO_ERROR) { const e = this.soError; this.soError = 0; return e; }
     if (level === SOL_SOCKET && name === SO_DOMAIN) return this.domain;
-    if (level === SOL_SOCKET && name === SO_PROTOCOL) return IPPROTO_UDP;
+    if (level === SOL_SOCKET && name === SO_PROTOCOL) return this.protocol;
     return this.opts.get(`${level}:${name}`) ?? 0;
   }
   setsockopt(level: number, name: number, value: number): number { this.opts.set(`${level}:${name}`, value); return 0; }
@@ -963,7 +1032,10 @@ export class KDatagramSocket implements OpenFile {
     return -ENOTTY;
   }
   async stat(): Promise<KStat> { return sockStat(this.ino); }
-  async close(): Promise<void> { this.closed = true; this.rx = []; this.q.notify(); }
+  async close(): Promise<void> {
+    this.closed = true; this.rx = []; this.rxBytes = 0; this.q.notify();
+    if (this.local) this.stack.releaseUdp(this.local.port, this);
+  }
 }
 
 // ── HTTP bridge for listeners published on the virtual-server port table ──
@@ -1088,6 +1160,8 @@ export class NetStack {
   /** AF_UNIX: resolved paths of socket files made by bind() (they stat as sockets) */
   readonly unixPaths = new Set<string>();
   private bound = new Map<number, { s: KSocket; use: PortUse }[]>();
+  /** UDP port → the datagram sockets bound to it (loopback delivery, EADDRINUSE) */
+  private udp = new Map<number, KDatagramSocket[]>();
   private nextEphemeral = 32768;
   nextIno = 1;
   private token: { token: string; expires: number } | null = null;
@@ -1116,8 +1190,8 @@ export class NetStack {
       return new KSocket(this, domain, protocol, flags);
     }
     if (base === SOCK_DGRAM) {
-      if (protocol !== 0 && protocol !== IPPROTO_UDP) return -EPROTONOSUPPORT;
-      return new KDatagramSocket(this, domain, flags);
+      if (protocol !== 0 && protocol !== IPPROTO_UDP && protocol !== IPPROTO_UDPLITE) return -EPROTONOSUPPORT;
+      return new KDatagramSocket(this, domain, flags, protocol || IPPROTO_UDP);
     }
     return -EPROTONOSUPPORT;
   }
@@ -1174,7 +1248,8 @@ export class NetStack {
     const p = ops.resolve(addr.address);
     if (typeof p === 'number') return p;
     if (!(await ops.exists(p))) return -ENOENT;
-    return p;
+    const w = (await ops.mayWrite?.(p)) ?? 0;
+    return w < 0 ? w : p;
   }
 
   /** sendto(2) of an AF_UNIX datagram to a bound datagram socket */
@@ -1208,6 +1283,8 @@ export class NetStack {
       const p = ops.resolve(key);
       if (typeof p === 'number') return p;
       if (!(await ops.exists(p))) return -ENOENT;
+      const w = (await ops.mayWrite?.(p)) ?? 0;
+      if (w < 0) return w;
       key = p;
     }
     const listener = this.unixListeners.get(key);
@@ -1235,7 +1312,7 @@ export class NetStack {
     for (let i = 0; i < 28232; i++) {
       const p = this.nextEphemeral;
       this.nextEphemeral = p >= 60999 ? 32768 : p + 1;
-      if (!this.bound.has(p) && !this.listeners.has(p)) return p;
+      if (!this.bound.has(p) && !this.listeners.has(p) && !this.udp.has(p)) return p;
     }
     return 0;
   }
@@ -1259,6 +1336,29 @@ export class NetStack {
   /** @internal */ releasePort(port: number, s: KSocket): void {
     const rest = (this.bound.get(port) ?? []).filter((h) => h.s !== s);
     if (rest.length) this.bound.set(port, rest); else this.bound.delete(port);
+  }
+
+  /** @internal Bind UDP socket `s` to `port`: false when an overlapping binding holds it (unless both share it with SO_REUSEADDR/SO_REUSEPORT) */
+  claimUdp(port: number, s: KDatagramSocket): boolean {
+    const holders = (this.udp.get(port) ?? []).filter((h) => h !== s);
+    if (holders.some((h) => portsOverlap(h.portUse(), s.portUse()) && !(h.reusable && s.reusable))) return false;
+    this.udp.set(port, [...holders, s]);
+    return true;
+  }
+
+  /** @internal */ releaseUdp(port: number, s: KDatagramSocket): void {
+    const rest = (this.udp.get(port) ?? []).filter((h) => h !== s);
+    if (rest.length) this.udp.set(port, rest); else this.udp.delete(port);
+  }
+
+  /** @internal The UDP socket a datagram to `host`:`port` from `from` reaches here (a connected one only from its peer) */
+  udpReceiver(port: number, host: string, from: SockAddr): KDatagramSocket | undefined {
+    const to: PortUse = { family: host.includes(':') ? AF_INET6 : AF_INET, address: host, v6only: false };
+    const v4 = (a: string) => a.replace(/^::ffff:/i, '');
+    const fromPeer = (h: KDatagramSocket) => !h.remote || (h.remote.port === from.port && v4(h.remote.address) === v4(from.address));
+    const hs = (this.udp.get(port) ?? []).filter((h) => fromPeer(h) && portsOverlap(h.portUse(), to));
+    // the most specific binding wins (an address over the wildcard), as Linux scores them
+    return hs.find((h) => !/^(0\.0\.0\.0|::)$/.test(h.portUse().address)) ?? hs[0];
   }
 
   /** @internal The listener on `port` that takes a connection to `host` (one of the port's, if none binds that address) */
@@ -1515,6 +1615,8 @@ export interface UnixOps {
   exists(path: string): Promise<boolean>;
   /** Make the socket file; 0 or -errno. */
   create(path: string): Promise<number>;
+  /** connect/sendto need write permission on the socket file: 0 or -EACCES */
+  mayWrite?(path: string): Promise<number>;
 }
 
 // ── Channel syscalls (docs/NETWORKING.md "Kernel syscalls") ──
@@ -1805,6 +1907,12 @@ function unixOpsFor(k: Kernel, proc: Parameters<Kernel['resolvePath']>[0]): Unix
   return {
     resolve: (path) => k.resolvePath(proc, path),
     exists: async (path) => !!k.fs && (await k.fs.exists(path)),
+    mayWrite: async (path) => {
+      if (!k.fs || proc.uid === 0) return 0;
+      const st = await k.fs.stat(path).catch(() => null);
+      // (files have no owner of their own: they stat as the caller's, so the owner bits apply)
+      return !st || st.mode & 0o200 ? 0 : -EACCES;
+    },
     create: async (path) => {
       if (!k.fs) return -EOPNOTSUPP;
       try {
