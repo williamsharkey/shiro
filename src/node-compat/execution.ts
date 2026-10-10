@@ -162,19 +162,26 @@ export async function executeNodeScript(
     // Deferred exit: resolves when process.exit is called from async code
     const deferredExitPromise = new Promise<number>((resolve) => { _st.deferredExitResolve = resolve; });
 
-    // A kernel guest without a terminal: output goes to fds 1 and 2 as it is produced
-    // (a pipe's reader, like an agent running an npm script, sees it now, not at exit)
+    // Without a terminal, output goes on as it is produced where something takes it
+    // (a pipe's reader, like an agent running an npm script, sees it now, not at exit):
+    // a spawned child's pipes (ctx.stdoutBytes), the shell's fds as a kernel process
+    // (ctx.streamStdout), or a kernel guest's fds 1 and 2
     const writeOut = nodeGuestOf(ctx)?.writeOut;
-    if (writeOut && !ctx.terminal) {
-      const stream = (buf: string[], fd: 1 | 2, mark: () => void) => {
+    if (!ctx.terminal) {
+      const enc = new TextEncoder();
+      const writerFor = (bytes: ((b: Uint8Array) => void) | undefined, text: ((s: string) => void) | undefined, fd: 1 | 2) =>
+        bytes ? (s: string) => bytes(enc.encode(s)) : text ?? (writeOut ? (s: string) => writeOut(fd, s) : undefined);
+      const stream = (buf: string[], write: ((s: string) => void) | undefined, keep: boolean, mark: () => void) => {
+        if (!write) return;
         buf.push = (...items: string[]) => {
           mark();
-          for (const it of items) writeOut(fd, it);
-          return Array.prototype.push.apply(buf, items);
+          for (const it of items) write(it);
+          // (a child's pipe keeps nothing: esbuild's service writes for as long as it runs)
+          return keep ? Array.prototype.push.apply(buf, items) : buf.length;
         };
       };
-      stream(stdoutBuf, 1, () => { _st.streamedToTerminal = true; });
-      stream(stderrBuf, 2, () => { _st.streamedStderr = true; });
+      stream(stdoutBuf, writerFor(ctx.stdoutBytes, ctx.streamStdout, 1), !ctx.stdoutBytes, () => { _st.streamedToTerminal = true; });
+      stream(stderrBuf, writerFor(ctx.stderrBytes, ctx.streamStderr, 2), !ctx.stderrBytes, () => { _st.streamedStderr = true; });
     }
 
     // Console and process
@@ -214,7 +221,7 @@ export async function executeNodeScript(
         case 'node:path': return createPathModule(ctx);
         case 'fs':
         case 'node:fs': {
-          const fsMod = createFsModule({ ctx, fileCache, fileMtimes, pendingPromises, tickSyncOps, FakeBuffer, getBuiltinModule, homeDir, trackAsync, atExit });
+          const fsMod = createFsModule({ ctx, fileCache, fileMtimes, pendingPromises, tickSyncOps, FakeBuffer, getBuiltinModule, homeDir, trackAsync, atExit, getProcess: () => fakeProcess });
           fsMod.promises = trackModule(fsMod.promises);
           return fsMod;
         }
@@ -324,6 +331,11 @@ export async function executeNodeScript(
       });
     }
 
+    // A script that reads piped stdin synchronously (fs.readFileSync(0), '/dev/stdin',
+    // fs.readSync(0)) can't wait for a live stream: load it before the script runs
+    if (!ctx.stdinStream && /readFileSync\(\s*(?:0\s*[,)]|['"]\/dev\/stdin['"])|readSync\(\s*0\s*,/.test(code)) {
+      await fakeProcess.stdin?.__fd0?.fill();
+    }
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
     // Transform TypeScript/JSX/ESM syntax for execution
     let transformedCode = isClaudeCodeScript(scriptPath) ? patchClaudeCodeSource(code) : patchPackageSource(scriptPath, code);
