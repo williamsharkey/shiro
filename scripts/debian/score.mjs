@@ -179,7 +179,9 @@ async function smoke(m, pkg) {
   }
   for (const bin of bins.slice(0, 3)) {
     for (const flagArg of ['--version', '--help', '-V', '-h']) {
-      const r = await m.run(`timeout 120 ${bin} ${flagArg} </dev/null 2>&1`, 180);
+      // Without a display, as a headless check: a GUI program says it can't open one and exits,
+      // rather than opening a window and waiting in its event loop (ptked, orca) until the timeout
+      const r = await m.run(`env -u DISPLAY -u WAYLAND_DISPLAY timeout 120 ${bin} ${flagArg} </dev/null 2>&1`, 180);
       const crashed = /terminating due to SIG|Segmentation fault|Illegal instruction|SCORE-TIMEOUT/.test(r.out) || (r.code >= 128 && r.code < 255) || r.code === 124; // 255: exit(-1), an ordinary error (ip --version)
       tried.push(`${bin} ${flagArg}: exit ${r.code}`);
       lastOut = r.out;
@@ -191,8 +193,8 @@ async function smoke(m, pkg) {
       if (r.code > 0 && r.code !== 124 && r.code !== 126 && r.code !== 127 && !crashSig && !broken && /usage|version|options|--help/i.test(r.out)) return { ok: true, how: `${bin} ${flagArg} (usage, exit ${r.code})${who(bin)}`, ms: r.ms, sample: r.out.trim().split('\n')[0].slice(0, 100) };
       // A client of a system daemon (udisksctl: udisksd on the system bus) or of hardware's
       // X extension (vmwarectrl: VMWARE_CTRL) runs but has nothing to talk to, as in a
-      // Debian container or on other hardware
-      const absent = /Error connecting to the \S+ daemon|Failed to connect to (?:the )?bus|Could not connect to (?:D-Bus|the system bus)|Cannot connect to the \S+ daemon|extension "\S+" missing on display/.exec(r.out);
+      // Debian container or on other hardware; a GUI program without the display it needs
+      const absent = /Error connecting to the \S+ daemon|Failed to connect to (?:the )?bus|Could not connect to (?:D-Bus|the system bus)|Cannot connect to the \S+ daemon|extension "\S+" missing on display|X Server does not support \S+|(?:cannot|can't|could not|unable to|couldn't) (?:open|connect to) (?:the )?(?:default )?(?:X )?(?:display|X server)|Gtk-WARNING \*\*: [^\n]*cannot open display|Could not connect to any X display/i.exec(r.out);
       if (absent && !crashed) return { ok: true, how: `${bin} ${flagArg} (ran; "${absent[0]}")${who(bin)}`, ms: r.ms };
       if (crashed) return { ok: false, how: `${bin} ${flagArg}`, category: r.code === 124 ? 'timeout' : 'engine-crash', error: firstError(r.out) || `exit ${r.code}` };
       const mod = /Can't locate (\S+\.pm) in @INC/.exec(r.out)?.[1];
