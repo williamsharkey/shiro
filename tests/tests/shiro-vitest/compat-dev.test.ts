@@ -15,7 +15,7 @@ import type { Shell } from '@shiro/shell';
 import type { FileSystem } from '@shiro/filesystem';
 import type { GuestWorker } from '@shiro/kernel/worker-host';
 import { setGuestWorkerFactory, forceWasmProcessMode } from '@shiro/wasi/host';
-import { nodeWorkerFactory } from '@shiro/node-worker/boot';
+import { nodeWorkerFactory, nodeWorkerMode } from '@shiro/node-worker/boot';
 import { readTarball } from '@shiro/utils/tar';
 import { createPathShims } from '@shiro/path-shims';
 import { simpleCommandWords } from '@shiro/kernel/kernel';
@@ -1585,13 +1585,15 @@ describe('in-tab servers: streamed responses and WebSocket upgrades (what a prev
   }, 300_000);
 
   /**
-   * Start a server script in the background and wait for its port (node keeps
-   * running while it listens, as on Linux, when it runs as a kernel guest; in
-   * the page the server lives on in the page). Its output goes to a file.
+   * Start a server script and wait for its port; its output goes to a file. A
+   * guest keeps running while it listens, as node does on Linux, so it starts in
+   * the background. The page's node returns once idle and its server lives on in
+   * the page; started in the background, timers its handlers set don't run (an
+   * SSE stream never starts), so there it starts in the foreground.
    */
   const serve = async (script: string, port: number) => {
     const out = `/tmp/live-${port}.out`;
-    await sh(shell, `cd /home/user/live && node ${script} > ${out} 2>&1 &`);
+    await sh(shell, `cd /home/user/live && node ${script} > ${out} 2>&1${nodeWorkerMode(shell.env) ? ' &' : ''}`);
     const t0 = Date.now();
     while (!iframeServer.isPortInUse(port)) {
       if (Date.now() - t0 > 30_000) throw new Error(`nothing listens on ${port}: ${await fs.readFile(out, 'utf8').catch(() => '')}`);
