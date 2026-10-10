@@ -168,6 +168,8 @@ describe('kernel syscalls found by LTP', () => {
     expect(await call(A.SYS_socketpair, [A.AF_INET, 2, 17])).toBe(-A.EOPNOTSUPP); // UDP
     const s = await call(A.SYS_socket, [A.AF_INET, A.SOCK_STREAM, 0]);
     expect(s).toBeGreaterThanOrEqual(0);
+    // sendfile07: a socket is O_RDWR to F_GETFL (Blink checks sendfile's out fd by it)
+    expect((await call(A.SYS_fcntl, [s, A.F_GETFL])) & A.O_ACCMODE).toBe(A.O_RDWR);
     const sun = new Uint8Array(110);
     sun[0] = A.AF_UNIX;
     sun.set(enc.encode('.'), 2);
