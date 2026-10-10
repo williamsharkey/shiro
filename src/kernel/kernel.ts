@@ -32,7 +32,7 @@ import { SysvSem } from './sysvsem';
 import { SysvMsg } from './sysvmsg';
 import { MessageQueues, MqFile } from './mqueue';
 import { PosixTimers } from './posixtimers';
-import { SharedObjects, isShareablePath, type ShmObjMessage } from './shmobj';
+import { CONTROL_BYTES, SharedObjects, isShareablePath, type ShmObjMessage } from './shmobj';
 import { EpollFile, waitReady } from './epoll';
 import { SignalFile, notifySignalPending, pendingSignalListeners } from './signalfd';
 import { EventFile, MemFile, TimerFile } from './fd';
@@ -1969,7 +1969,7 @@ export class Kernel {
             key = mf.shareKey;
             size = Math.max(len, mf.statSync().size);
             initial = () => mf.bytes();
-            onRemote = (sab) => mf.attachShared(sab);
+            onRemote = (sab) => mf.attachShared(sab, sab.byteLength - CONTROL_BYTES); // (not the control page)
             writeBack = (b) => mf.detachShared(b);
           } else if (kind === 0) {
             if (!f) return -A.EBADF;
@@ -1977,7 +1977,15 @@ export class Kernel {
             if (f.kind !== 'file' || !path || !isShareablePath(path) || !this.fs) return -A.EINVAL;
             const fs = this.fs;
             key = `file:${inodeNumber(fs, path)}`;
-            initial = async () => { const b = await fs.readFile(path); return typeof b === 'string' ? new TextEncoder().encode(b) : b; };
+            // (through the fd: writes it holds may not have reached the filesystem yet)
+            initial = async () => {
+              if (f.pread) {
+                const b = new Uint8Array((await f.stat()).size);
+                return b.subarray(0, Math.max(0, await f.pread(b, 0)));
+              }
+              const b = await fs.readFile(path);
+              return typeof b === 'string' ? new TextEncoder().encode(b) : b;
+            };
             writeBack = async (b) => { if (await fs.exists(path)) await fs.writeFile(path, b); };
           } else if (kind === 1) {
             const seg = this.shm.list().find((x) => x.id === args[0]);

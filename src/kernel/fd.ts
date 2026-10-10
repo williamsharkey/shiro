@@ -1098,9 +1098,9 @@ export class MemFile implements OpenFile {
    * Growing past the buffer (ftruncate while mapped) leaves it, as the
    * mappings can't grow either.
    */
-  attachShared(sab: SharedArrayBuffer): void {
-    if (sab.byteLength < this.len) return;
-    const view = new Uint8Array(sab);
+  attachShared(sab: SharedArrayBuffer, length = sab.byteLength): void {
+    if (length < this.len) return;
+    const view = new Uint8Array(sab, 0, length);
     view.set(this.data.subarray(0, this.len));
     this.data = view;
   }
