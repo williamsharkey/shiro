@@ -30,9 +30,10 @@ import { Process } from './process';
 import { SysvShm } from './sysvshm';
 import { SysvSem } from './sysvsem';
 import { SysvMsg } from './sysvmsg';
+import { MessageQueues, MqFile } from './mqueue';
 import { SharedObjects, isShareablePath, type ShmObjMessage } from './shmobj';
 import { EpollFile, waitReady } from './epoll';
-import { SignalFile, notifySignalPending } from './signalfd';
+import { SignalFile, notifySignalPending, pendingSignalListeners } from './signalfd';
 import { EventFile, MemFile, TimerFile } from './fd';
 import { activeProfile, unameRelease, UNAME_VERSION } from '../profile';
 import { memoryInfo } from '../utils/sysinfo';
@@ -195,6 +196,8 @@ export class Kernel {
   readonly sem = new SysvSem();
   /** SysV message queues (msgget, msgsnd, msgrcv, msgctl) */
   readonly msg = new SysvMsg();
+  /** POSIX message queues (mq_open, mq_timedsend, ...) */
+  readonly mq = new MessageQueues((pid, sig) => { const p = this.procs.get(pid); if (p) this.deliver(p, sig); });
   /** Engine instances (a Blink worker each) and how to post to them: shared objects' messages */
   private engineInstances = new Map<number, (msg: ShmObjMessage) => void>();
   private nextEngineInstance = 1;
@@ -1802,6 +1805,41 @@ export class Kernel {
           return await this.sem.semop(proc, args[0], args[1], data, args[3] * 1000 + Math.floor(args[4] / 1e6), sig);
         }
         case A.SYS_semctl: return this.sem.semctl(proc, args[0], args[1], args[2], args[3], data);
+        case A.SYS_mq_open: {
+          const name = str(0, args[0]);
+          const attr = args[3] ? new DataView(data.buffer, data.byteOffset + args[0], 32) : null;
+          const f = this.mq.open(proc, name, args[1], args[2], attr);
+          return typeof f === 'number' ? f : fds.alloc(f, 0, (args[1] & A.O_CLOEXEC) !== 0);
+        }
+        case A.SYS_mq_unlink: return this.mq.unlink(proc, str(0, args[0]));
+        case A.SYS_mq_timedsend: {
+          const f = file(args[0]);
+          if (!(f instanceof MqFile)) return -A.EBADF;
+          const len = args[1] >>> 0;
+          const ts = args[3] ? new DataView(data.buffer, data.byteOffset + len, 16) : null;
+          return await this.mq.send(f, data.subarray(0, len), args[2] >>> 0, ts, sig);
+        }
+        case A.SYS_mq_timedreceive: {
+          const f = file(args[0]);
+          if (!(f instanceof MqFile)) return -A.EBADF;
+          const len = args[1] >>> 0;
+          const ts = args[2] ? new DataView(data.buffer.slice(data.byteOffset, data.byteOffset + 16)) : null;
+          const r = await this.mq.receive(f, data.subarray(8, 8 + len), ts, sig);
+          if (typeof r === 'number') return r;
+          new DataView(data.buffer, data.byteOffset, 8).setUint32(0, r.prio, true);
+          return r.n;
+        }
+        case A.SYS_mq_notify: {
+          const f = file(args[0]);
+          if (!(f instanceof MqFile)) return -A.EBADF;
+          return this.mq.notify(proc, f, args[1] ? new DataView(data.buffer, data.byteOffset, 16) : null);
+        }
+        case A.SYS_mq_getsetattr: {
+          const f = file(args[0]);
+          if (!(f instanceof MqFile)) return -A.EBADF;
+          const next = args[1] ? new DataView(data.buffer.slice(data.byteOffset, data.byteOffset + 32)) : null;
+          return this.mq.getsetattr(f, next, new DataView(data.buffer, data.byteOffset, 32));
+        }
         case A.SYS_msgget: return this.msg.msgget(proc, args[0], args[1]);
         case A.SYS_msgsnd: return await this.msg.msgsnd(proc, args[0], args[1], args[2], data, sig);
         case A.SYS_msgrcv: return await this.msg.msgrcv(proc, args[0], args[1], i64(args[2], args[3]), args[4], data, sig);
@@ -2028,6 +2066,36 @@ export class Kernel {
           dv.setUint32(0, lo, true);
           dv.setUint32(4, hi, true);
           return 0;
+        }
+        case A.SYS_rt_sigtimedwait: {
+          // args: timeout ms (-1: none); data: the set in, siginfo out. Takes the
+          // lowest pending blocked signal in the set without running a handler
+          // (sigwait, sigwaitinfo, sigtimedwait); EAGAIN at the timeout, EINTR
+          // when a signal the caller lets through arrives
+          const dv = new DataView(data.buffer, data.byteOffset, A.SIGINFO_SIZE);
+          const want = A.sigsetFromWords(dv.getUint32(0, true), dv.getUint32(4, true));
+          want.delete(A.SIGKILL);
+          want.delete(A.SIGSTOP);
+          const next = () => { let b = 0; for (const s of proc.deferredSignals) if (want.has(s) && (!b || s < b)) b = s; return b; };
+          const ms = args[0] | 0;
+          const end = ms >= 0 ? Date.now() + ms : Infinity;
+          let got: number;
+          while (!(got = next())) {
+            const left = end - Date.now();
+            if (left <= 0) return -A.EAGAIN;
+            const wakes = new Set<() => void>();
+            const off = pendingSignalListeners(proc).add(() => { for (const w of [...wakes]) w(); });
+            const timer = end === Infinity ? undefined : setTimeout(() => { for (const w of [...wakes]) w(); }, left);
+            const ok = await abortableWait(wakes, sig);
+            off();
+            if (timer !== undefined) clearTimeout(timer);
+            if (!ok) return -A.EINTR;
+          }
+          proc.deferredSignals.delete(got);
+          for (let i = 0; i < A.SIGINFO_SIZE; i += 4) dv.setUint32(i, 0, true);
+          dv.setInt32(0, got, true); // si_signo (si_code 0: SI_USER)
+          dv.setUint32(20, proc.uid, true); // si_uid
+          return got;
         }
         case A.SYS_rt_sigsuspend: {
           const dv = new DataView(data.buffer, data.byteOffset, 8);

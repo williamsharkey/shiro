@@ -99,7 +99,7 @@ describe.skipIf(!existsSync(BIN))('Open POSIX Test Suite under Blink', () => {
     writeFileSync(join(RESULTS, name), JSON.stringify({
       suite: 'Open POSIX Test Suite',
       title: 'POSIX: Open POSIX Test Suite under Blink (x86-64)',
-      note: 'The Open POSIX Test Suite\'s conformance tests (open_posix_testsuite in LTP, scripts/conformance/build-openposix.sh) run as static x86-64 kernel processes in the Blink engine: signals, pthreads, semaphores, message queues, timers, clocks, mmap, scheduling. A test passes when it exits 0; only tests that pass natively on the build host as uid 1000 are scored (openposix/native-baseline.json).',
+      note: 'The Open POSIX Test Suite\'s conformance tests (open_posix_testsuite in LTP, scripts/conformance/build-openposix.sh) run as static x86-64 kernel processes in the Blink engine: signals, pthreads, semaphores, message queues, timers, clocks, mmap, scheduling. A test passes when it exits 0; only tests that pass natively on the build host as uid 1000 are scored (openposix/native-baseline.json). First run: 1173/1448, with Blink 0080–0084 built locally (raise(SIGKILL) and sigqueue/AIO fixed from this suite); the gaps are POSIX message queues (mq_*), POSIX timers (timer_*), sigwait/sigtimedwait, sched_* policies and shm_open.',
       files: sorted,
     }, null, 1) + '\n');
   }, 14_400_000);

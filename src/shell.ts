@@ -5,6 +5,7 @@ import { printfFormat } from './utils/printf';
 import { evalArith, ArithError, type ArithEnv } from './utils/arith';
 import { readRecord, recordText, splitRecord } from './shell-read';
 import { parseDoubleBracket, doubleBracketEnd, DbSyntaxError, decodeAnsiC, ansiCEnd, type DbNode } from './shell-dbracket';
+import { parseUmask, formatUmask, symbolicUmask } from './shell-umask';
 import { TestEval } from './commands/posix-test';
 import { posixRegExp, RegexSyntaxError } from './utils/posix-regex';
 import { arrayValues, arrayTop, copyArray, splitRawWords as splitAssignWords, parseAssignWord, splitListWords, type AssignWord } from './shell-arrays';
@@ -658,7 +659,15 @@ export class Shell {
   aliases: Map<string, string> = new Map();
   /** Namerefs: name → target variable name */
   namerefs: Map<string, string> = new Map();
-  /** Directory stack for pushd/popd */
+  private ownUmask = 0o022;
+  /** The file creation mask: the kernel process's when the shell runs as one */
+  get umask(): number { return this.kernelStdio?.proc.umask ?? this.ownUmask; }
+  set umask(v: number) {
+    this.ownUmask = v;
+    if (this.kernelStdio) this.kernelStdio.proc.umask = v;
+  }
+
+  /** The directory stack after the current directory (pushd/popd/dirs, shell-builtins.ts) */
   dirStack: string[] = [];
   /** Local variable frames for function scoping — stack of {varName → savedValue|undefined} */
   private localVarStack: Map<string, LocalSave>[] = [];
@@ -985,6 +994,7 @@ export class Shell {
    * isn't one); a target like a[2] gives the subscript too. Null for a circular chain.
    */
   derefName(name: string): { name: string; sub?: string } | null {
+    if (!this.namerefs.has(name)) return { name };
     const seen = new Set<string>();
     let n = name;
     for (;;) {
@@ -1001,7 +1011,7 @@ export class Shell {
 
   /** The variable NAME names, namerefs followed (NAME on a circular chain) */
   refTarget(name: string): string {
-    return this.derefName(name)?.name ?? name;
+    return this.namerefs.has(name) ? this.derefName(name)?.name ?? name : name;
   }
 
   /** NAME+=VALUE: appended, or added for an integer (declare -i) */
@@ -1054,6 +1064,8 @@ export class Shell {
     this.sourceFile = '';
     this.env['OPTIND'] = '1';
     this.localVars.add('OPTIND');
+    this.env['BASH_SUBSHELL'] = '0';
+    this.localVars.add('BASH_SUBSHELL');
     for (const n of ['FUNCNAME', 'BASH_SOURCE', 'BASH_LINENO']) this.arrays.delete(n);
   }
 
@@ -1205,10 +1217,18 @@ export class Shell {
     child.arrays = new Map(Array.from(this.arrays.entries()).map(([k, v]) => [k, copyArray(v)]));
     child.assocArrays = new Map(Array.from(this.assocArrays.entries()).map(([k, v]) => [k, new Map(v)]));
     // A subshell starts with the traps reset, except ignored ones (trap '' SIG)
-    child.traps = new Map([...this.traps].filter(([, v]) => v === ''));
+    // A subshell keeps ignored signals; ERR (set -E) and DEBUG (set -T) only with those options
+    child.traps = new Map([...this.traps].filter(([k, v]) => v === '' ||
+      (k === 'ERR' && this.options.has('errtrace')) || (k === 'DEBUG' && this.options.has('functrace'))));
     child.parentTraps = this.trapsModified || !this.parentTraps ? new Map(this.traps) : this.parentTraps;
     child.aliases = new Map(this.aliases);
     child.namerefs = new Map(this.namerefs);
+    if (this.varAttrs.size) child.varAttrs = new Map([...this.varAttrs].map(([k, v]) => [k, new Set(v)]));
+    if (this.declaredNames.size) child.declaredNames = new Set(this.declaredNames);
+    child.ownUmask = this.umask;
+    // (a new process sets it back to 0: startProcess)
+    child.env['BASH_SUBSHELL'] = String((parseInt(this.env['BASH_SUBSHELL'] ?? '0', 10) || 0) + 1);
+    child.localVars.add('BASH_SUBSHELL');
     child.sourceFile = this.sourceFile;
     child.dirStack = [...this.dirStack];
     child.history = this.history; // share history array reference
@@ -1650,6 +1670,40 @@ export class Shell {
 
   /** The ERR trap is running */
   private inErrTrap = false;
+  /** The DEBUG trap is running */
+  private inTrapDebug = false;
+
+  /**
+   * The ERR trap after a failed simple command, (( )), [[ ]] or subshell:
+   * where set -e would act, not inside itself, and in functions only with set -E
+   */
+  private async errTrap(code: number, writeStdout: (s: string) => void, writeStderr: (s: string) => void): Promise<void> {
+    if (code === 0 || !this.traps.has('ERR') || this.inErrTrap || this.errexitSuppressed !== 0) return;
+    if (this.localVarStack.length > 0 && !this.options.has('errtrace')) return;
+    this.inErrTrap = true;
+    try {
+      await this.execute(this.traps.get('ERR')!, writeStdout, writeStderr, false, undefined, true);
+    } finally {
+      this.inErrTrap = false;
+    }
+    this.lastExitCode = code;
+    this.env['?'] = String(code);
+  }
+
+  /** Run the DEBUG trap: $? stays what it was; under set -e its failure ends the shell */
+  private async runDebugTrap(writeStdout: (s: string) => void, writeStderr: (s: string) => void): Promise<void> {
+    const status = this.lastExitCode;
+    this.inTrapDebug = true;
+    let code: number;
+    try {
+      code = await this.execute(this.traps.get('DEBUG')!, writeStdout, writeStderr, false, undefined, true);
+    } finally {
+      this.inTrapDebug = false;
+    }
+    this.lastExitCode = status;
+    this.env['?'] = String(status);
+    if (code !== 0 && this.options.has('errexit')) throw new ExitSignal(code);
+  }
 
   /** Here-document bodies, referenced by `< MARKER` redirections */
   heredocs = new HeredocStore();
@@ -1756,6 +1810,13 @@ export class Shell {
       }
       if (target === '/dev/stdout') { this.userFds.set(fd, this.resolveOutFd(1)!); return null; }
       if (target === '/dev/stderr') { this.userFds.set(fd, this.resolveOutFd(2)!); return null; }
+      // exec > >(cmd) (exec > >(tee log)): what the script writes, cmd reads when the script ends
+      const ps = /^>\(([\s\S]+)\)$/.exec(target);
+      if (ps) {
+        target = `/tmp/.procsub_${Date.now()}_${procSubCounter++}`;
+        this.execOutSubs.push({ path: target, cmd: ps[1] });
+        truncate = true;
+      }
       const path = this.fs.resolvePath(target, this.cwd);
       this.dropFd(fd);
       this.userFds.set(fd, { path });
@@ -2019,6 +2080,11 @@ export class Shell {
         continue;
       }
 
+      // trap … DEBUG: before each command (in functions only with set -T)
+      if (this.traps.has('DEBUG') && !this.inTrapDebug && (this.localVarStack.length === 0 || this.options.has('functrace'))) {
+        await this.runDebugTrap(writeStdout, stderrWriter);
+      }
+
       const trimmedCmd = trimCommand(compound.command);
 
       // Check for (( expr )) arithmetic command in compound
@@ -2027,6 +2093,7 @@ export class Shell {
         exitCode = this.arithStatus([expr], stderrWriter);
         this.lastExitCode = exitCode;
         this.env['?'] = String(exitCode);
+        await this.errTrap(exitCode, writeStdout, stderrWriter);
         continue;
       }
 
@@ -2061,6 +2128,8 @@ export class Shell {
           exitCode = await child.runSubshell(inner, writeStdout, stderrWriter, terminalOverride || this.terminal);
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
+          this.arrays.set('PIPESTATUS', [String(exitCode)]);
+          await this.errTrap(exitCode, writeStdout, stderrWriter);
           continue;
         }
       }
@@ -2179,7 +2248,11 @@ export class Shell {
         stderrWriter = (t: string) => { c.err += t; };
       };
 
+      // Segments started so far: one that ended early (a builtin's `continue`) left its status in exitCode
+      let segCount = 0;
       for (let i = 0; i < pipeline.length; i++) {
+        while (pipeExitCodes.length < i) pipeExitCodes.push(exitCode);
+        segCount = i + 1;
         // A builtin that captured its output `continue`d here: pipe/redirect it now
         await flushCapture();
 
@@ -2753,50 +2826,110 @@ export class Shell {
           continue;
         }
 
-        // Shell builtin: mapfile / readarray
+        // Shell builtin: mapfile / readarray [-d delim] [-n count] [-O origin] [-s count] [-t] [-u fd] [-C callback [-c quantum]] [array]
         if (!_builtinDisabled && (effectiveCmdName === 'mapfile' || effectiveCmdName === 'readarray')) {
-          // Parse flags: -t (strip), -d (delimiter), -s (skip N lines), -n (count), -C callback, -c quantum
           let mapDelim = '\n';
           let mapSkip = 0;
-          let mapCount = -1;
+          let mapCount = 0;
+          let mapOrigin: number | null = null;
+          let mapStrip = false;
+          let mapFd = -1;
           let mapCallback = '';
           let mapQuantum = 5000;
           let arrName = 'MAPFILE';
-          for (let mi = 0; mi < cmdArgs.length; mi++) {
-            if (cmdArgs[mi] === '-d' && mi + 1 < cmdArgs.length) { mapDelim = cmdArgs[++mi]; }
-            else if (cmdArgs[mi].startsWith('-d') && cmdArgs[mi].length > 2) { mapDelim = cmdArgs[mi].slice(2); }
-            else if (cmdArgs[mi] === '-s' && mi + 1 < cmdArgs.length) { mapSkip = parseInt(cmdArgs[++mi], 10) || 0; }
-            else if (cmdArgs[mi] === '-n' && mi + 1 < cmdArgs.length) { mapCount = parseInt(cmdArgs[++mi], 10) || -1; }
-            else if (cmdArgs[mi] === '-C' && mi + 1 < cmdArgs.length) { mapCallback = cmdArgs[++mi]; }
-            else if (cmdArgs[mi] === '-c' && mi + 1 < cmdArgs.length) { mapQuantum = parseInt(cmdArgs[++mi], 10) || 5000; }
-            else if (cmdArgs[mi] === '-t') { /* strip - already default */ }
-            else if (!cmdArgs[mi].startsWith('-')) { arrName = cmdArgs[mi]; }
+          let bad: string | null = null;
+          const optArgs = 'dnOsuCc';
+          for (let mi = 0; mi < cmdArgs.length && !bad; mi++) {
+            const a = cmdArgs[mi];
+            if (a === '--') { if (mi + 1 < cmdArgs.length) arrName = cmdArgs[mi + 1]; break; }
+            if (!a.startsWith('-') || a === '-') { arrName = a; continue; }
+            for (let k = 1; k < a.length; k++) {
+              const o = a[k];
+              if (o === 't') { mapStrip = true; continue; }
+              if (!optArgs.includes(o)) { bad = `-${o}: invalid option`; break; }
+              let v = a.slice(k + 1);
+              if (!v) { if (mi + 1 >= cmdArgs.length) { bad = `-${o}: option requires an argument`; break; } v = cmdArgs[++mi]; }
+              const num = Number(v);
+              const needNum = o !== 'd' && o !== 'C';
+              if (needNum && (!/^\d+$/.test(v) || (o === 'c' && num === 0))) { bad = `${v}: invalid ${o === 'O' ? 'array origin' : o === 'u' ? 'file descriptor specification' : o === 'c' ? 'callback quantum' : 'line count'}`; break; }
+              if (o === 'd') mapDelim = v === '' ? '\0' : v[0];
+              else if (o === 'n') mapCount = num;
+              else if (o === 'O') mapOrigin = num;
+              else if (o === 's') mapSkip = num;
+              else if (o === 'u') mapFd = num;
+              else if (o === 'C') mapCallback = v;
+              else if (o === 'c') mapQuantum = num;
+              break;
+            }
           }
+          if (!bad && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(arrName)) bad = `\`${arrName}': not a valid identifier`;
+          if (!bad && this.readonlyVars.has(this.refTarget(arrName))) bad = `${arrName}: readonly variable`;
+          if (bad) {
+            stderrWriter(`tabcomputer: ${effectiveCmdName}: ${bad}\r\n`);
+            exitCode = /invalid option|requires an argument/.test(bad) ? 2 : 1;
+            this.lastExitCode = exitCode;
+            this.env['?'] = String(exitCode);
+            lastOutput = '';
+            continue;
+          }
+          // Input as read gets it: -u FD, < FILE or here-doc, <<< word, the pipe, fd 0
           let mapInput = '';
-          const hasPipeStdin = '__PIPE_STDIN' in this.env;
-          if (hasPipeStdin) {
+          const inRedirect = redirects.find(r => r.type === '<' && r.fd === undefined);
+          if (mapFd >= 0 || (inRedirect && fdOfRef(inRedirect.target) !== null)) {
+            const fd = mapFd >= 0 ? mapFd : fdOfRef(inRedirect!.target)!;
+            const fdOpen = redirects.find(r => r.type === 'open' && r.mode === '<' && r.fd === fd);
+            if (fdOpen) mapInput = await this.readInputRedirect(fdOpen.target).catch(() => '');
+            else if (this.fileDescriptors.has(fd)) {
+              const f = this.fileDescriptors.get(fd)!;
+              mapInput = f.content.slice(f.offset);
+              f.offset = f.content.length;
+            } else if (fd === 0 && this.liveStdin(i, heredocStdin, hereString, redirects)) mapInput = await this.kernelStdio!.readAll();
+          } else if (hereString !== undefined) {
+            mapInput = hereString;
+          } else if (inRedirect) {
+            try {
+              mapInput = inRedirect.target === '/dev/null' ? '' : await this.readInputRedirect(inRedirect.target);
+            } catch (e: any) {
+              stderrWriter(`tabcomputer: ${inRedirect.target}: ${e.message}\r\n`);
+              exitCode = 1;
+              this.lastExitCode = 1;
+              this.env['?'] = '1';
+              lastOutput = '';
+              continue;
+            }
+          } else if (i === 0 && '__PIPE_STDIN' in this.env) {
             mapInput = this.env['__PIPE_STDIN'];
-            delete this.env['__PIPE_STDIN'];
+            this.env['__PIPE_STDIN'] = '';
           } else if (this.liveStdin(i, heredocStdin, hereString, redirects)) {
             mapInput = await this.kernelStdio!.readAll();
           } else {
             mapInput = i > 0 ? lastOutput : (heredocStdin || '');
           }
-          let lines = mapInput.split(mapDelim);
-          // Remove trailing empty element from trailing delimiter
-          if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
-          // Apply skip
-          if (mapSkip > 0) lines = lines.slice(mapSkip);
-          // Apply count
-          if (mapCount >= 0) lines = lines.slice(0, mapCount);
-          this.arrays.set(arrName, lines);
-          // Invoke -C callback every -c quantum lines
-          if (mapCallback && this.functions[mapCallback]) {
-            for (let li = 0; li < lines.length; li++) {
-              if ((li % mapQuantum) === 0) {
-                await this.execFunction(mapCallback, [String(li), lines[li]], writeStdout, stderrWriter);
-              }
+          // Records end with the delimiter, which stays unless -t
+          const records: string[] = [];
+          for (let at = 0; at < mapInput.length;) {
+            const end = mapInput.indexOf(mapDelim, at);
+            const stop = end < 0 ? mapInput.length : end + 1;
+            records.push(mapInput.slice(at, stop));
+            at = stop;
+          }
+          let take = records.slice(mapSkip);
+          if (mapCount > 0) take = take.slice(0, mapCount);
+          // (a NUL can't be in a shell string: it goes even without -t)
+          if (mapStrip || mapDelim === '\0') take = take.map((r) => (r.endsWith(mapDelim) ? r.slice(0, -1) : r));
+          const target = this.refTarget(arrName);
+          // Without -O the array starts empty; -O N stores from index N on
+          const arr: string[] = mapOrigin === null ? [] : this.arrays.get(target) ?? (this.env[target] !== undefined ? [this.env[target]] : []);
+          const origin = mapOrigin ?? 0;
+          this.assocArrays.delete(target);
+          delete this.env[target];
+          this.arrays.set(target, arr);
+          for (let li = 0; li < take.length; li++) {
+            if (mapCallback && (li + 1) % mapQuantum === 0) {
+              // (every QUANTUM lines, before storing: the index it goes to and the line)
+              await this.execute(`${mapCallback} ${origin + li} ${quoteReusable(take[li])}`, writeStdout, stderrWriter, false, undefined, true);
             }
+            arr[origin + li] = take[li];
           }
           exitCode = 0;
           this.lastExitCode = exitCode;
@@ -3174,71 +3307,6 @@ export class Shell {
           }
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
-          lastOutput = '';
-          continue;
-        }
-
-        // Shell builtin: pushd / popd / dirs
-        if (!_builtinDisabled && effectiveCmdName === 'pushd') {
-          if (cmdArgs.length === 0) {
-            // Swap top two entries
-            if (this.dirStack.length === 0) {
-              stderrWriter('pushd: no other directory\r\n');
-              exitCode = 1;
-            } else {
-              const top = this.dirStack.pop()!;
-              this.dirStack.push(this.cwd);
-              try {
-                const resolved = this.fs.resolvePath(top, this.cwd);
-                await this.fs.stat(resolved);
-                this.cwd = resolved;
-                this.env['PWD'] = resolved;
-              } catch {
-                stderrWriter(`pushd: ${top}: No such file or directory\r\n`);
-                exitCode = 1;
-              }
-            }
-          } else {
-            const dir = cmdArgs[0];
-            const resolved = this.fs.resolvePath(dir, this.cwd);
-            try {
-              await this.fs.stat(resolved);
-              this.dirStack.push(this.cwd);
-              this.cwd = resolved;
-              this.env['PWD'] = resolved;
-            } catch {
-              stderrWriter(`pushd: ${dir}: No such file or directory\r\n`);
-              exitCode = 1;
-            }
-          }
-          if (exitCode === 0) {
-            writeStdout(`${this.cwd} ${this.dirStack.slice().reverse().join(' ')}\r\n`);
-          }
-          this.lastExitCode = exitCode;
-          this.env['?'] = String(exitCode);
-          lastOutput = '';
-          continue;
-        }
-        if (!_builtinDisabled && effectiveCmdName === 'popd') {
-          if (this.dirStack.length === 0) {
-            stderrWriter('popd: directory stack empty\r\n');
-            exitCode = 1;
-          } else {
-            const dir = this.dirStack.pop()!;
-            this.cwd = dir;
-            this.env['PWD'] = dir;
-            writeStdout(`${this.cwd} ${this.dirStack.slice().reverse().join(' ')}\r\n`);
-          }
-          this.lastExitCode = exitCode;
-          this.env['?'] = String(exitCode);
-          lastOutput = '';
-          continue;
-        }
-        if (!_builtinDisabled && effectiveCmdName === 'dirs') {
-          const stack = [this.cwd, ...this.dirStack.slice().reverse()];
-          writeStdout(stack.join(' ') + '\r\n');
-          this.lastExitCode = 0;
-          this.env['?'] = '0';
           lastOutput = '';
           continue;
         }
@@ -3725,11 +3793,28 @@ export class Shell {
           continue;
         }
         if (!_builtinDisabled && effectiveCmdName === 'umask') {
-          if (cmdArgs.length === 0) {
-            writeStdout('0022\r\n');
+          // umask [-p] [-S] [MODE] (shell-umask.ts)
+          let printable = false, symbolic = false;
+          let k = 0;
+          exitCode = 0;
+          for (; k < cmdArgs.length && /^-./.test(cmdArgs[k]); k++) {
+            if (cmdArgs[k] === '--') { k++; break; }
+            for (const c of cmdArgs[k].slice(1)) {
+              if (c === 'p') printable = true;
+              else if (c === 'S') symbolic = true;
+              else { stderrWriter(`tabcomputer: umask: -${c}: invalid option\r\numask: usage: umask [-p] [-S] [mode]\r\n`); exitCode = 2; }
+            }
           }
-          this.lastExitCode = 0;
-          this.env['?'] = '0';
+          if (exitCode === 0) {
+            if (k < cmdArgs.length) {
+              const r = parseUmask(cmdArgs[k], this.umask);
+              if (typeof r === 'string') { stderrWriter(`tabcomputer: umask: ${r}\r\n`); exitCode = 1; }
+              else this.umask = r;
+            } else if (symbolic) writeStdout(`${printable ? 'umask -S ' : ''}${symbolicUmask(this.umask)}\r\n`);
+            else writeStdout(`${printable ? 'umask ' : ''}${formatUmask(this.umask)}\r\n`);
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
           lastOutput = '';
           continue;
         }
@@ -4200,6 +4285,7 @@ export class Shell {
         if (this.env['PWD'] && this.env['PWD'] !== pwdBefore && this.cwd === cwdBefore) this.cwd = this.env['PWD'];
       }
 
+      while (pipeExitCodes.length < segCount) pipeExitCodes.push(exitCode);
       await flushCapture();
       if (this.pendingOutSubs.length) await this.runOutSubs(outerStdout, outerStderr);
 
@@ -4237,17 +4323,7 @@ export class Shell {
       // ERR trap on a failure, where set -e would act (not in a condition, a
       // && / || list before its last command, or a ! pipeline), and not
       // again while it runs (its own failures don't fire it)
-      if (exitCode !== 0 && this.traps.has('ERR') && !this.inErrTrap && this.errexitSuppressed === 0 && !negateExit) {
-        const errCmd = this.traps.get('ERR')!;
-        this.inErrTrap = true;
-        try {
-          await this.execute(errCmd, writeStdout, stderrWriter, false, undefined, true);
-        } finally {
-          this.inErrTrap = false;
-        }
-        this.lastExitCode = exitCode;
-        this.env['?'] = String(exitCode);
-      }
+      if (!negateExit) await this.errTrap(exitCode, writeStdout, stderrWriter);
 
     }
     if (suppressing) this.errexitSuppressed--;
@@ -4345,9 +4421,12 @@ export class Shell {
   /** Write a redirect's file; a failure (a directory, a bad path) is reported and fails the command */
   private async redirectWrite(path: string, shown: string, text: string, append: boolean, writeStderr: (s: string) => void): Promise<void> {
     try {
-      if (await fifo.isFifo(this, path)) await fifo.writeFifo(this, path, text);
-      else if (append) await this.fs.appendFile(path, text);
+      if (await fifo.isFifo(this, path)) { await fifo.writeFifo(this, path, text); return; }
+      // A new file is 0666 less the umask (the filesystem's default, 0644, is that for 022)
+      const fresh = this.umask !== 0o022 && !(await this.fs.exists(path));
+      if (append) await this.fs.appendFile(path, text);
       else await this.fs.writeFile(path, text);
+      if (fresh) await this.fs.chmod?.(path, 0o666 & ~this.umask);
     } catch (e: any) {
       const msg = e?.code === 'EISDIR' || /EISDIR/.test(e?.message ?? '') ? 'Is a directory'
         : e?.code === 'ENOENT' || /ENOENT/.test(e?.message ?? '') ? 'No such file or directory' : (e?.message ?? String(e));
@@ -4466,17 +4545,16 @@ export class Shell {
       // The step's sign is ignored (and 0 is 1): the direction comes from start and end
       const mag = Math.abs(rangeMatch[3] ? parseInt(rangeMatch[3]) : 1) || 1;
       const step = start <= end ? mag : -mag;
+      // Zero-padded when an end has a leading zero (01, -05; not a lone 0), to the
+      // wider end's width, the sign included
       const padLen = Math.max(rangeMatch[1].length, rangeMatch[2].length);
-      const shouldPad = rangeMatch[1].startsWith('0') || rangeMatch[2].startsWith('0');
+      const shouldPad = /^-?0\d/.test(rangeMatch[1]) || /^-?0\d/.test(rangeMatch[2]);
+      const fmt = (n: number) => !shouldPad ? String(n) : n < 0 ? '-' + String(-n).padStart(padLen - 1, '0') : String(n).padStart(padLen, '0');
       const items: string[] = [];
       if (step > 0) {
-        for (let n = start; n <= end; n += step) {
-          items.push(shouldPad ? String(n).padStart(padLen, '0') : String(n));
-        }
+        for (let n = start; n <= end; n += step) items.push(fmt(n));
       } else if (step < 0) {
-        for (let n = start; n >= end; n += step) {
-          items.push(shouldPad ? String(Math.abs(n)).padStart(padLen, '0') : String(n));
-        }
+        for (let n = start; n >= end; n += step) items.push(fmt(n));
       }
       const result: string[] = [];
       for (const item of items) {
@@ -4764,6 +4842,7 @@ export class Shell {
           if (varName === 'PPID') { result += String(this.parentPid); i += m[0].length; continue; }
           if (varName === 'UID' || varName === 'EUID') { result += '1000'; i += m[0].length; continue; }
           if (varName === 'BASHPID') { result += String(this.bashPid); i += m[0].length; continue; }
+          if (varName === 'BASH_SUBSHELL' && this.env['BASH_SUBSHELL'] === undefined) { result += '0'; i += m[0].length; continue; }
           if (varName === 'LINENO') { result += (this.env['LINENO'] || '1'); i += m[0].length; continue; }
           if (varName === 'SECONDS') { result += String(Math.floor(performance.now() / 1000)); i += m[0].length; continue; }
           if (varName === 'EPOCHSECONDS') { result += String(Math.floor(Date.now() / 1000)); i += m[0].length; continue; }
@@ -6150,6 +6229,22 @@ export class Shell {
     return r.stdout.replace(/\r\n/g, '\n');
   }
 
+  /** exec > >(cmd): the files collecting the shell's output for each cmd, run when the script ends */
+  private execOutSubs: { path: string; cmd: string }[] = [];
+
+  /** Run exec's >(cmd) commands on what was written to them (the end of a script) */
+  private async runExecOutSubs(writeStdout: (s: string) => void, writeStderr: (s: string) => void): Promise<void> {
+    // (the shell's fds that wrote to them point back at its own stdout and stderr: cmd writes there)
+    const paths = new Set(this.execOutSubs.map((o) => this.fs.resolvePath(o.path, this.cwd)));
+    for (const [n, e] of [...this.userFds]) if (e && 'path' in e && paths.has(e.path)) this.userFds.delete(n);
+    while (this.execOutSubs.length) {
+      const { path, cmd } = this.execOutSubs.shift()!;
+      const data = await this.fs.readFile(path, 'utf8').catch(() => '') as string;
+      await this.fs.unlink(path).catch(() => {});
+      await this.inSubshell((sub) => sub.executeWithStdin(cmd, data, writeStdout, writeStderr));
+    }
+  }
+
   /** >(cmd) substitutions waiting for their command to finish */
   private pendingOutSubs: { path: string; cmd: string }[] = [];
 
@@ -6392,10 +6487,12 @@ export class Shell {
 
   /** Value of NAME (element 0 of an array) or NAME[SUB]; undefined if unset */
   getVar(name: string, sub?: string): string | undefined {
-    const ref = this.derefName(name);
-    if (!ref) return undefined;
-    name = ref.name;
-    if (ref.sub !== undefined && sub === undefined) sub = ref.sub;
+    if (this.namerefs.has(name)) {
+      const ref = this.derefName(name);
+      if (!ref) return undefined;
+      name = ref.name;
+      if (ref.sub !== undefined && sub === undefined) sub = ref.sub;
+    }
     const assoc = this.assocArrays.get(name);
     if (sub === undefined || sub === '@' || sub === '*') {
       if (sub !== undefined) {
@@ -6416,14 +6513,16 @@ export class Shell {
   /** Assign NAME (element 0 of an array) or NAME[SUB]; returns an error message or null */
   setVar(name: string, value: string, sub?: string): string | null {
     // (a nameref with no target yet takes VALUE as its target, as in bash)
-    if (this.namerefs.get(name) === '' && sub === undefined) { this.namerefs.set(name, value); return null; }
-    const ref = this.derefName(name);
-    if (!ref) return `${name}: circular name reference`;
-    if (ref.sub !== undefined) {
-      if (sub !== undefined) return `\`${this.namerefs.get(name)}': not a valid identifier`;
-      sub = ref.sub;
+    if (this.namerefs.has(name)) {
+      if (this.namerefs.get(name) === '' && sub === undefined) { this.namerefs.set(name, value); return null; }
+      const ref = this.derefName(name);
+      if (!ref) return `${name}: circular name reference`;
+      if (ref.sub !== undefined) {
+        if (sub !== undefined) return `\`${this.namerefs.get(name)}': not a valid identifier`;
+        sub = ref.sub;
+      }
+      name = ref.name;
     }
-    name = ref.name;
     if (this.readonlyVars.has(name)) return `${name}: readonly variable`;
     const attrs = this.varAttrs.get(name);
     if (attrs) {
@@ -6748,7 +6847,12 @@ export class Shell {
     let stdin = pipeStdin;
     let out = writeStdout, err = writeStderr;
     let outFile: { path: string; append: boolean } | null = null;
+    let errFile: { path: string; append: boolean } | null = null;
+    // > >(cmd) / 2> >(cmd): cmd reads what the compound wrote, once it is done
+    let outSub: string | null = null;
+    let errSub: string | null = null;
     let captured = '';
+    let capturedErr = '';
     // Descriptors 3-9 redirected for the compound: set with exec, put back after it
     const fdSaved = new Map<number, { inp: any; out: any }>();
     for (const r of redirects) {
@@ -6779,11 +6883,17 @@ export class Shell {
       } else if (r.op === '2>&1') {
         err = (s) => out(s);
       } else if (r.op === '2>' || r.op === '2>>') {
-        err = target === '/dev/null' ? () => {} : writeStderr;
+        if (target === '/dev/null') { err = () => {}; continue; }
+        const ps = /^>\(([\s\S]+)\)$/.exec(target);
+        if (ps) errSub = ps[1];
+        else errFile = { path: this.fs.resolvePath(target, this.cwd), append: r.op === '2>>' };
+        err = (s) => { capturedErr += s; };
       } else if (r.op === '>' || r.op === '>>' || r.op === '&>') {
         if (r.op === '&>') err = (s) => out(s);
         if (target === '/dev/null') { out = () => {}; continue; }
-        outFile = { path: this.fs.resolvePath(target, this.cwd), append: r.op === '>>' };
+        const ps = /^>\(([\s\S]+)\)$/.exec(target);
+        if (ps) outSub = ps[1];
+        else outFile = { path: this.fs.resolvePath(target, this.cwd), append: r.op === '>>' };
         out = (s) => { captured += s; };
       }
     }
@@ -6795,15 +6905,19 @@ export class Shell {
     } finally {
       restoreFds();
     }
-    if (outFile) {
-      const text = captured.replace(/\r\n/g, '\n');
+    for (const [file, text] of [[outFile, captured], [errFile, capturedErr]] as const) {
+      if (!file) continue;
       try {
-        if (outFile.append) await this.fs.appendFile(outFile.path, text);
-        else await this.fs.writeFile(outFile.path, text);
+        const t = text.replace(/\r\n/g, '\n');
+        if (file.append) await this.fs.appendFile(file.path, t);
+        else await this.fs.writeFile(file.path, t);
       } catch (e: any) {
-        writeStderr(`tabcomputer: ${outFile.path}: ${/EISDIR/.test(e?.message ?? '') ? 'Is a directory' : /ENOENT/.test(e?.message ?? '') ? 'No such file or directory' : e?.message ?? e}\r\n`);
+        writeStderr(`tabcomputer: ${file.path}: ${/EISDIR/.test(e?.message ?? '') ? 'Is a directory' : /ENOENT/.test(e?.message ?? '') ? 'No such file or directory' : e?.message ?? e}\r\n`);
         return 1;
       }
+    }
+    for (const [cmd, text] of [[outSub, captured], [errSub, capturedErr]] as const) {
+      if (cmd) await this.inSubshell((sub) => sub.executeWithStdin(cmd, text.replace(/\r\n/g, '\n'), writeStdout, writeStderr));
     }
     return code;
   }
@@ -8464,6 +8578,10 @@ export class Shell {
     this.env['?'] = String(exitCode);
     const trapExit = await this.runExitTrap(writeStdout, writeStderr, terminal);
     if (trapExit !== undefined) { exitCode = trapExit; this.env['?'] = String(exitCode); }
+    if (this.execOutSubs.length) {
+      if (this.flushFdWrites) await this.flushFdWrites();
+      await this.runExecOutSubs(writeStdout, writeStderr);
+    }
     this.closeOwnFds();
     this.endProcess();
     return exitCode;

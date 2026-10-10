@@ -17,6 +17,7 @@ import type { Process } from './kernel/process';
 import type { OpenFile } from './kernel/fd';
 import * as A from './kernel/abi';
 import { packageOfPath, packageShadows, packageKernelProgram } from './pkg-manager';
+import { nodeKernelProgram } from './node-worker/boot';
 
 /** Bash builtins the shell implements inline (never looked up on PATH) */
 const SHELL_BUILTINS = new Set([
@@ -47,7 +48,9 @@ const isElfBytes = (b: Uint8Array) => b.length >= 4 && b[0] === 0x7f && b[1] ===
 export function mayBeKernelProgram(shell: Shell, name: string): boolean {
   if (!name || SHELL_BUILTINS.has(name) || shell.functions[name] || shell.aliases.has(name)) return false;
   // An installed package's command replaces a builtin of the same name (pkg-manager.ts)
-  return !shell.commands.get(name) || (shell.pkgShadowBypass !== name && packageShadows(shell.fs).has(name));
+  if (!shell.commands.get(name) || (shell.pkgShadowBypass !== name && packageShadows(shell.fs).has(name))) return true;
+  // node as a kernel guest (TABCOMPUTER_NODE_WORKER=1)
+  return !!nodeKernelProgram(shell.env, name, []);
 }
 
 /**
@@ -59,6 +62,7 @@ export async function resolveKernelProgram(
   shell: Shell, name: string, args: string[], progress?: (msg: string) => void,
 ): Promise<KernelProgram | null> {
   if (!mayBeKernelProgram(shell, name)) return null;
+  if (shell.commands.get(name) && !(shell.pkgShadowBypass !== name && packageShadows(shell.fs).has(name))) return nodeKernelProgram(shell.env, name, args);
   const found = await shell.findExecutableInPath(name);
   if (!found) return null;
   let path = found;
@@ -266,7 +270,9 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
       parent: host ?? undefined,
       uid: shell.uid,
     };
-    procs.push(tty ? tty.spawnJob(kernel, spawn) : kernel.spawn(spawn));
+    const proc = tty ? tty.spawnJob(kernel, spawn) : kernel.spawn(spawn);
+    proc.umask = shell.umask; // (the shell's umask builtin, not the parent process's)
+    procs.push(proc);
     if (nextInput) input = nextInput;
   }
   // The children's fd tables hold the slave; if none took it, give it back

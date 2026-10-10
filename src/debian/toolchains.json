@@ -79,12 +79,16 @@
         "# go build in the tab only compiles the user's packages",
         "mkdir -p /home/user/.cache",
         "env HOME=/home/user CGO_ENABLED=0 go build std",
-        "# go trims cache entries unused for 5 days, by mtime; the layer's times are the",
-        "# snapshot's, so a far-future last-trim time keeps the shipped entries",
-        "echo 4102444800 > /home/user/.cache/go-build/trim.txt",
-        "# cgo off by default (go env -w writes this file; go env -u CGO_ENABLED undoes it):",
-        "# the PATH's cc is tabcomputer's WASM compiler, and the cache above is built without cgo",
-        "mkdir -p /home/user/.config/go && echo CGO_ENABLED=0 > /home/user/.config/go/env"
+        "# go deletes cache entries whose mtime is over 5 days old (and ignores a trim.txt",
+        "# dated in the future), so the entries themselves are dated 2100: never trimmed,",
+        "# never re-touched (build-layers.sh leaves such times unclamped)",
+        "rm -f /home/user/.cache/go-build/trim.txt",
+        "find /home/user/.cache/go-build -type f -exec touch -d @4102444800 {} +",
+        "# cgo off (the PATH's cc is tabcomputer's WASM compiler; the cache above is built",
+        "# without cgo) and one build job at a time: Blink runs one guest thread anyway, and",
+        "# parallel forks can wedge go until Blink's vfork stops taking Go's SIGURG.",
+        "# go env -w writes this file; go env -u NAME undoes a setting",
+        "mkdir -p /home/user/.config/go && printf 'CGO_ENABLED=0\\nGOFLAGS=-p=1\\n' > /home/user/.config/go/env"
       ],
       "check": "printf 'package main\\nimport \"fmt\"\\nfunc main(){fmt.Println(\"hello\")}\\n' > /tmp/tc-hello.go && cd /tmp && go run tc-hello.go"
     }

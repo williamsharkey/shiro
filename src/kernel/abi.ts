@@ -79,6 +79,7 @@ export const SYS_symlink = 88;
 export const SYS_chmod = 90;
 export const SYS_fchmod = 91;
 export const SYS_rt_sigpending = 127;
+export const SYS_rt_sigtimedwait = 128;
 export const SYS_rt_sigsuspend = 130;
 export const SYS_sigaltstack = 131;
 export const SYS_gettid = 186;
@@ -430,6 +431,8 @@ export const SIGTERM = 15;
 export const SIGCHLD = 17;
 export const SIGCONT = 18;
 export const SIGSTOP = 19;
+/** sizeof(siginfo_t) */
+export const SIGINFO_SIZE = 128;
 export const SIGTSTP = 20;
 export const SIGTTIN = 21;
 export const SIGTTOU = 22;
@@ -602,6 +605,13 @@ export const NR_OPEN = 1048576;
 export const RLIMIT_NOFILE = 7;
 export const SYS_prlimit64 = 302;
 export const SYS_memfd_create = 319;
+/** POSIX message queues (src/kernel/mqueue.ts) */
+export const SYS_mq_open = 240;
+export const SYS_mq_unlink = 241;
+export const SYS_mq_timedsend = 242;
+export const SYS_mq_timedreceive = 243;
+export const SYS_mq_notify = 244;
+export const SYS_mq_getsetattr = 245;
 export const MFD_CLOEXEC = 1;
 export const MFD_ALLOW_SEALING = 2;
 

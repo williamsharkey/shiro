@@ -318,16 +318,32 @@ export function createServerFactory(deps: ServerDeps) {
         server.emit('upgrade', req, socket, asBuffer(head.rest));
         return;
       }
-      // Not an upgrade (or nobody takes it): answer it as a request and hang up
-      const r = await handle(req, head.rest);
-      let bytes: Uint8Array;
-      if (r.body instanceof ReadableStream) {
-        const parts: Uint8Array[] = [];
-        const rd = r.body.getReader();
-        for (let x = await rd.read(); !x.done; x = await rd.read()) parts.push(x.value);
-        bytes = concat(parts);
-      } else bytes = typeof r.body === 'string' ? te.encode(r.body) : r.body ?? new Uint8Array(0);
+      // Not an upgrade (or nobody takes it): answer it as a request and hang up.
+      // The request body is all of Content-Length (it can span reads)
+      let reqBody = head.rest;
+      const want = Number(req.headers['content-length'] ?? 0) || 0;
+      while (reqBody.length < want) {
+        const d = await conn.read();
+        if (!d) break;
+        reqBody = concat([reqBody, d]);
+      }
+      const r = await handle(req, reqBody.subarray(0, Math.max(want, 0) || reqBody.length));
       if (upgrade && !server.listenerCount('upgrade')) r.status = r.status === 200 ? 426 : r.status;
+      if (r.body instanceof ReadableStream) {
+        // Still being written (server-sent events, flushHeaders): the head now, then each
+        // write as it comes, the end of the connection ending the body
+        const lines = [`HTTP/1.1 ${r.status} ${r.statusText || STATUS_CODES[r.status] || ''}`];
+        for (const [k, v] of Object.entries(r.headers as Record<string, string>)) if (k !== 'content-length' && k !== 'transfer-encoding' && k !== 'connection') lines.push(`${k}: ${v}`);
+        lines.push('connection: close', '', '');
+        try {
+          await conn.write(te.encode(lines.join('\r\n')));
+          const rd = r.body.getReader();
+          for (let x = await rd.read(); !x.done; x = await rd.read()) await conn.write(typeof x.value === 'string' ? te.encode(x.value) : x.value);
+        } catch { /* the client went away */ }
+        conn.close();
+        return;
+      }
+      const bytes: Uint8Array = typeof r.body === 'string' ? te.encode(r.body) : r.body ?? new Uint8Array(0);
       await conn.write(serialize(r, bytes)).catch(() => {});
       conn.close();
     };

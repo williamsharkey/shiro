@@ -112,6 +112,16 @@ console.log(a[0], a[1] === me, b[0], b[1] === me);
     expect(r.out).toBe('x true y,z true\n');
   }, 60_000);
 
+  it('in a script, node is the shell\'s child; its redirects and pipes are the shell\'s', async () => {
+    const r = await sh(`node -e '
+      const out = String(require("child_process").execSync("echo $$; node -e \\"console.log(require(\\\\\\"fs\\\\\\").readFileSync(\\\\\\"/proc/self/stat\\\\\\", \\\\\\"utf8\\\\\\").split(\\\\\\" \\\\\\")[3])\\" > /tmp/nk3; cat /tmp/nk3; node -p 6*7 | tr 4 x"));
+      const [sh, ppid, piped] = out.trim().split("\\n");
+      console.log(sh === ppid, piped);
+    ' < /dev/null`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('true x2\n');
+  }, 60_000);
+
   it('output to a pipe streams, and spawn() delivers it as it comes', async () => {
     // inner node waits for a file its parent makes on seeing inner's first line:
     // with output held until exit (either end) that never happens
@@ -250,6 +260,31 @@ w.terminate();
     });
     expect(r.err).toBe('');
     expect(r.out).toBe('ok 42\n');
+  }, 60_000);
+
+  it("a guest's server-sent events stream to the page as they are written", async () => {
+    const { iframeServer } = await import('@shiro/iframe-server');
+    const { shell, fs } = await createTestShell();
+    await fs.writeFile('/tmp/nh-sse.js', `require('http').createServer((req, res) => {
+  res.writeHead(200, { 'content-type': 'text/event-stream' });
+  let n = 0;
+  const t = setInterval(() => { res.write('data: ' + (++n) + '\\n\\n'); if (n === 3) { clearInterval(t); res.end(); setTimeout(() => process.exit(0), 50); } }, 150);
+}).listen(18494);`);
+    const run = shell.execute('export TABCOMPUTER_NODE_WORKER=1; node /tmp/nh-sse.js < /dev/null', () => {}, () => {});
+    const t0 = Date.now();
+    while (!iframeServer.isPortInUse(18494) && Date.now() - t0 < 20_000) await new Promise((r) => setTimeout(r, 20));
+    const start = Date.now();
+    const res = await iframeServer.fetch(18494, '/events');
+    expect(res.headers?.['content-type']).toBe('text/event-stream');
+    expect(res.body).toBeInstanceOf(ReadableStream);
+    const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+    const first = await reader.read();
+    const firstAt = Date.now() - start;
+    let all = new TextDecoder().decode(first.value);
+    for (;;) { const { value, done } = await reader.read(); if (done) break; all += new TextDecoder().decode(value); }
+    expect(firstAt).toBeLessThan(Date.now() - start - 150); // the first event came well before the end
+    expect(all).toBe('data: 1\n\ndata: 2\n\ndata: 3\n\n');
+    expect(await run).toBe(0);
   }, 60_000);
 
   it('stdin from a pipe; async exec', async () => {

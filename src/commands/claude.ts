@@ -36,9 +36,15 @@ export function needsSession(args: string[]): boolean {
   return args.length === 0 || args[0].startsWith('-');
 }
 
-/** `claude login` (and `/login`) is Claude Code's own `claude auth login`. */
-export function loginArgs(args: string[]): string[] {
-  return args[0] === 'login' || args[0] === '/login' ? ['auth', 'login', ...args.slice(1)] : args;
+/**
+ * `claude login` (and `/login`): Claude Code's own sign-in. The native build's
+ * `claude auth login` asks for the code to paste; the npm build's (2.1.112)
+ * only waits for a localhost callback that can't arrive here, so it starts a
+ * session whose first input is `/login`, which has the paste prompt.
+ */
+export function loginArgs(args: string[], build: 'native' | 'npm' = 'native'): string[] {
+  if (args[0] !== 'login' && args[0] !== '/login') return args;
+  return build === 'native' ? ['auth', 'login', ...args.slice(1)] : ['/login'];
 }
 
 /** Where `claude --native` looks for the binary: $CLAUDE_NATIVE_PATH, else ~/.local/bin/claude. */
@@ -142,7 +148,7 @@ export const claudeCmd: Command = {
       }
     }
 
-    args.splice(0, args.length, ...loginArgs(args));
+    args.splice(0, args.length, ...loginArgs(args, 'npm'));
 
     if (needsSession(args) && !args.some(a => a === '--dangerously-skip-permissions' || a === '--permission-mode')) {
       args.unshift('--dangerously-skip-permissions');

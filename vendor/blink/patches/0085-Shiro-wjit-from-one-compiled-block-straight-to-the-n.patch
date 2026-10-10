@@ -1,0 +1,82 @@
+From f25794dec38e0d8bd1ecfe6c63ed8b8f751104ac Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Sat, 10 Oct 2026 02:27:31 +0000
+Subject: [PATCH] Shiro wjit: from one compiled block straight to the next
+
+After a compiled block, WjExecute runs the next one directly when it has
+code (an indirect jmp's target, a block cut at its length) instead of
+going back through Actor's loop: up to 64 blocks, stopping for signals, a
+JIT epoch change, or another thread waiting for the GIL. A computed-goto
+bytecode loop (one block per op, like JSC's LLInt): 131 -> 92 ns per op.
+---
+ blink/gil.c  |  6 ++++++
+ blink/gil.h  |  1 +
+ blink/wjit.c | 14 ++++++++++++++
+ 3 files changed, 21 insertions(+)
+
+diff --git a/blink/gil.c b/blink/gil.c
+index 008f832..1448366 100644
+--- a/blink/gil.c
++++ b/blink/gil.c
+@@ -41,6 +41,12 @@ bool GilHeld(void) {
+   return t_gil_held;
+ }
+ 
++// another thread is waiting for the lock (a holder running a long stretch
++// should let it in at its next opportunity)
++bool GilWanted(void) {
++  return atomic_load_explicit(&g_gil_waiters, memory_order_relaxed) > 0;
++}
++
+ void GilAcquire(void) {
+   unsigned long ticket;
+   if (!g_gil_enabled || t_gil_held) return;
+diff --git a/blink/gil.h b/blink/gil.h
+index 6a610a2..03f254a 100644
+--- a/blink/gil.h
++++ b/blink/gil.h
+@@ -17,6 +17,7 @@ void GilRelease(void);
+ void GilYield(void);
+ void GilAfterFork(void);
+ bool GilHeld(void);
++bool GilWanted(void);
+ bool GilReleasesFor(unsigned long sysno);
+ 
+ #endif /* BLINK_GIL_H_ */
+diff --git a/blink/wjit.c b/blink/wjit.c
+index 8e4d6de..0de9e83 100644
+--- a/blink/wjit.c
++++ b/blink/wjit.c
+@@ -16,6 +16,7 @@
+ │ TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR             │
+ │ PERFORMANCE OF THIS SOFTWARE.                                                │
+ ╚─────────────────────────────────────────────────────────────────────────────*/
++#include "blink/gil.h"
+ #include "blink/wjit.h"
+ 
+ #ifdef __EMSCRIPTEN__
+@@ -3583,8 +3584,21 @@ int WjExecute(struct Machine *m) {
+   t_unwind = false;
+   t_slice = 0;
+   if ((e = Find(m->ip)) && e->fn > 0) {
++    int k;
+     ((wj_f)(uintptr_t)e->fn)(m);
+     ++t_runs;
++    // straight on to the next block when it has code (an indirect jmp's
++    // target, a block that ended at its length limit), rather than back
++    // through Actor's loop: bounded, so the GIL slice and signals still come
++    for (k = 0; k < 64; ++k) {
++      if (atomic_load_explicit(&m->attention, memory_order_acquire) ||
++          t_epoch != atomic_load_explicit(&g_wj_epoch, memory_order_relaxed) ||
++          (g_gil_enabled && GilWanted()) || !(e = Find(m->ip)) || e->fn <= 0) {
++        break;
++      }
++      ((wj_f)(uintptr_t)e->fn)(m);
++      ++t_runs;
++    }
+     return 1;
+   }
+   if (!e) {
+-- 
+2.43.0
+

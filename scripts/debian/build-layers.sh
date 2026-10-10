@@ -176,7 +176,9 @@ EOF
   find "$ROOT/var/log" -type f -delete
   rm -f "$ROOT/var/cache/debconf/"*-old "$ROOT/var/lib/dpkg/"*-old
   rm -rf "$ROOT/tmp/"* "$ROOT/var/tmp/"* "$ROOT/root/".bash_history "$ROOT/root/.cache"
-  find "$ROOT" -xdev -newermt "@$SOURCE_DATE_EPOCH" -print0 | xargs -0r touch --no-dereference --date="@$SOURCE_DATE_EPOCH"
+  # Times after the snapshot are clamped to it, except ones a prepare step set
+  # far in the future on purpose (Go's cache entries: see toolchains.json)
+  find "$ROOT" -xdev -newermt "@$SOURCE_DATE_EPOCH" ! -newermt "@4000000000" -print0 | xargs -0r touch --no-dereference --date="@$SOURCE_DATE_EPOCH"
 
   node "$HERE/pack-layer.mjs" "$BASEDIR" "$ROOT" "$OUT" --id "$id" --spec "$SPEC" --base-id "$BASE_ID" --snapshot "$SNAPSHOT" --recipe "$recipe"
   # Each finished layer is served right away

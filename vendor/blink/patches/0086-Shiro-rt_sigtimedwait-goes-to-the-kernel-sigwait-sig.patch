@@ -1,0 +1,67 @@
+From 1b344ebf69c8fec664226b8ce1e0a577a2aef7c3 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 02:55:47 +0000
+Subject: [PATCH 86/87] Shiro: rt_sigtimedwait goes to the kernel (sigwait,
+ sigwaitinfo, sigtimedwait)
+
+---
+ blink/shiro.inc | 43 +++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 43 insertions(+)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index b3ef185..8e84718 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2933,6 +2933,49 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       r = KS(m, 62, A12(m->system->pid, sig));                       // kill
+       break;
+     }
++    case 0x080: {                                                     // rt_sigtimedwait
++      // sigwait, sigwaitinfo, sigtimedwait: the lowest pending signal of the
++      // set, taken without running its handler. The kernel holds the ones the
++      // process blocked; Blink holds those sent to this thread (pthread_kill),
++      // which it checks between kernel waits of at most 50 ms
++      u8 w[8], *si;
++      u64 set, got;
++      int ms, sig;
++      struct timespec t0, t1;
++      if ((u64)d != 8) { r = -EINVAL_LINUX; break; }
++      if (CopyFromUserRead(m, w, a, 8) == -1) { r = -EFAULT_LINUX; break; }
++      set = Read64(w) & ~(((u64)1 << (SIGKILL_LINUX - 1)) | ((u64)1 << (SIGSTOP_LINUX - 1)));
++      if ((r = ShiroTimeoutMs(m, c, true, &ms)) < 0) break;
++      si = (u8 *)ShiroAlloc(m, 128);
++      clock_gettime(CLOCK_MONOTONIC, &t0);
++      for (;;) {
++        LOCK(&m->system->sig_lock);
++        if ((got = m->signals & set)) {
++          sig = __builtin_ctzll(got) + 1;
++          m->signals &= ~((u64)1 << (sig - 1));
++        }
++        UNLOCK(&m->system->sig_lock);
++        if (got) {
++          memset(si, 0, 128);
++          Write32(si, sig);  // si_code 0: SI_USER
++          r = sig;
++          break;
++        }
++        int left = 50;
++        if (ms >= 0) {
++          clock_gettime(CLOCK_MONOTONIC, &t1);
++          left = ms - (int)((t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000);
++          if (left < 0) left = 0;
++          if (left > 50) left = 50;
++        }
++        Write64(si, set);
++        r = ShiroCall(m, 128, A12(left), si, 8, 128, false, true);
++        if (r != -EAGAIN_LINUX || (ms >= 0 && left < 50)) break;
++      }
++      if (r == -ENOSYS_LINUX) return false;
++      if (r > 0 && b && CopyToUserWrite(m, b, si, 128) == -1) r = -EFAULT_LINUX;
++      break;
++    }
+     case 0x07F: {                                                     // rt_sigpending
+       // the kernel holds the signals the guest blocked (ShiroSyncMask), so
+       // they are pending there; Blink's own pending ones count too
+-- 
+2.43.0
+

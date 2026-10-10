@@ -101,6 +101,7 @@ import {
 import { getShiroOrigin } from './utils/shiro-origin';
 import { logIsolationStatus } from './utils/isolation';
 import { requestPersistentStorage, setActiveFileSystem, storageInfo } from './storage';
+import { installNodeWorkerBoot } from './node-worker/boot';
 
 /**
  * Register a command in both the CommandRegistry (for execution) and
@@ -560,8 +561,9 @@ async function main() {
   installNet(kernel); // socket syscalls (src/kernel/net.ts, docs/NETWORKING.md)
   // kernel.spawn() of an x86-64 ELF runs it in Blink when the page can (src/x86-engine)
   void import('./x86-engine/blink').then(m => m.registerBlinkLoader(kernel));
-  // TABCOMPUTER_NODE_WORKER=1: node the kernel starts (sh -c, #! scripts) runs as a guest (src/node-worker)
-  void import('./node-worker/host').then(m => m.installNodeLoader(kernel));
+  // TABCOMPUTER_NODE_WORKER=1: node the kernel starts (sh -c, #! scripts) runs as a guest
+  // (src/node-worker; the rest of it loads only for a process with the flag)
+  installNodeWorkerBoot(kernel);
   // Signals and job control for kernel processes; /dev/ptmx and /dev/pts/N
   attachKernelTty(kernel);
   // X11 display :0 (src/x11, docs/GUI.md): `Xshiro :0` listens on /tmp/.X11-unix/X0 now;

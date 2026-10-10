@@ -130,6 +130,7 @@ Layer rows are medians of 2 samples; apt rows are 1 sample.
 | `classic` | `gfortran h.f90 && ./hf` | 0.9 s | 9.2 s | **10.5 s** | not measured |
 | `node` | `/usr/bin/node -e` | 6.8 s | 17.0 s | **24.3 s** | not measured |
 | `java` | `javac Hello.java && java Hello` | 0.5 s | see below | — | not measured |
+| `go` | `go run hello.go` | 6.3 s | 41.4 s | **48.2 s** | ~35 min to compile std, before the link step failed (COMPAT.md) |
 
 - First use is the programs' own start-up in Blink plus fetching their
   chunks. Warm runs are 15–20 % faster (gcc 5.9 s, python 4.5 s, pdflatex
@@ -139,6 +140,11 @@ Layer rows are medians of 2 samples; apt rows are 1 sample.
   storage after the first use is 26–107 MiB; apt's python3 set left 412 MiB.
 - The apt `c` run overlapped with other browser checks on the machine for
   part of its hour. Even so, it was still unpacking when it timed out.
+- `go` (measured 2026-10-10 on the same machine, 2 samples): the standard
+  library comes precompiled in the build cache, so `go run` compiles only
+  `main`. The second `go run hello.go` takes 18.5 s. Then `go build` plus
+  running a net/http server and client over loopback takes 73.5 s (+553 MiB
+  peak). Browser storage at the end is 140 MiB.
 - `java`: at this run the JVM aborted at start (HotSpot fell back to the
   legacy vsyscall `getcpu` page; Blink had no getcpu). With Blink patch 0067
   it runs: in the Node test shell, `java -version` took 15.6 s and `javac
@@ -613,6 +619,16 @@ composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts,
 a few MiB each. The terminal UI's +19 KiB is /dom, the sign-in hook and the
 other integration changes since db9f698, not desktop code.
 
+### unix/shell-stdio 8 — mapfile, pushd/popd, umask, trap DEBUG, PIPESTATUS
+
+`node bench/ab.mjs HEAD~1 HEAD --suites shell,kernel --quick` (b0bc12b →
+46ec6d7) flagged kernel.spawn_wait.builtin +20% in every round. The cause:
+getVar/setVar followed the nameref chain on every call, allocating each time.
+After the fast path (1d14b48), `--suites kernel --quick` b0bc12b → 1d14b48 has all 15
+unchanged. A shell,kernel `--quick` run then flagged shell.loop_1000 +18%. It
+didn't reproduce: the same loop under vitest was 72 → 71 ms, and
+`--suites shell` (full rounds) b0bc12b → 1d14b48 has all 9 unchanged.
+
 ### unix/shell-stdio 7 — bash conformance: declare attributes, namerefs, call stack
 
 `node bench/ab.mjs HEAD~2 HEAD --suites shell,kernel --quick` (55e3426 →
@@ -698,6 +714,25 @@ proc/s within one run); two further 15-run passes on the new code gave
 medians 1240 and 1215 proc/s, base 1200. One of those passes stalled at
 ≈10 proc/s for its last 11 samples and did not recur in two more; worth
 watching if it shows up on other branches.
+
+### unix/perf-blink 10 — compiled blocks chain without the Actor loop
+
+Blink patch 0085. In native Claude Code's startup (agent-clis' profile,
+patch 0074), the main thread spent ~50 s of 78 s in compiled code running
+12.7 M blocks: JSC's LLInt ends every bytecode with an indirect jump, and
+each one left the compiled code for Actor's loop. Now WjExecute goes
+straight to the next compiled block (up to 64 in a row). A computed-goto
+loop with one block per op, in Node:
+
+| | ns per op |
+|---|---:|
+| native | 2 |
+| interpreter only (BLINK_WJIT=0) | 660 |
+| wasm JIT before | 131 (2 runs: 153, 131) |
+| wasm JIT after | 92 (3 runs: 154 first, 94, 91) |
+
+`node bench/ab.mjs HEAD --suites x86 --only 'x86\.blink\.' --rounds 3`:
+every metric "same" (the suite's programs don't dispatch indirectly much).
 
 ### unix/perf-blink 9 — shared pages in a hash table
 
