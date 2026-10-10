@@ -8,12 +8,9 @@ import { encodeText } from '../utils/byte-text';
  * every format aligned to the widest one.
  */
 
-/** A shell string as bytes: one byte per char (an older-style byte string), unless it holds chars past 0xff (then byte-exact text, src/utils/byte-text.ts) */
+/** A shell string as bytes: byte-exact text (src/utils/byte-text.ts), so `é` is c3 a9 */
 function toBytes(s: string): Uint8Array {
-  if (/[^\x00-\xff]/.test(s)) return encodeText(s);
-  const out = new Uint8Array(s.length);
-  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
-  return out;
+  return encodeText(s);
 }
 
 interface Spec {

@@ -152,6 +152,10 @@ const sse41bBin = join(out, 'sse41b');
 const haveSse41b = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', sse41bBin, 'sse41b.c']);
 const ssefloatBin = join(out, 'ssefloat');
 const haveSsefloat = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', ssefloatBin, 'ssefloat.c', '-lm']);
+const shmunlinkedBin = join(out, 'shmunlinked');
+const haveShmunlinked = tryBuild('gcc', ['-static', '-O1', '-o', shmunlinkedBin, 'shmunlinked.c']);
+const shmremoteBin = join(out, 'shmremote');
+const haveShmremote = tryBuild('gcc', ['-static', '-O1', '-o', shmremoteBin, 'shmremote.c']);
 const sharedmapBin = join(out, 'sharedmap');
 const haveSharedmap = tryBuild('gcc', ['-static', '-O1', '-o', sharedmapBin, 'sharedmap.c']);
 const roundingBin = join(out, 'rounding');
@@ -284,6 +288,9 @@ const haveTimerthread = blinkHasTimerthread && tryBuild('gcc', ['-static', '-O1'
 const mmaptailBin = join(out, 'mmaptail');
 const blinkHasMmaptail = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_mmaptail');
 const haveMmaptail = blinkHasMmaptail && tryBuild('gcc', ['-static', '-O1', '-w', '-o', mmaptailBin, 'mmaptail.c']);
+// a named semaphore's count survives sem_close (the kernel writes a /dev/shm object back to its linked names)
+const semreopenBin = join(out, 'semreopen');
+const haveSemreopen = tryBuild('gcc', ['-static', '-O1', '-w', '-o', semreopenBin, 'semreopen.c', '-lpthread']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -971,6 +978,12 @@ it.skipIf(!haveMmaptail)('a file mapping whose length ends mid-page shows the fi
   expect(r.output.replace(/\r\n/g, '\n')).toBe('tail a\nreplaced 1 tail b\n');
 }, 60_000);
 
+it.skipIf(!haveSemreopen)('a named semaphore keeps its count across sem_close and sem_open: a /dev/shm object goes back to the names link() gave it (Open POSIX sem_close_3-2)', async () => {
+  const { shell } = await setup(readFileSync(semreopenBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('value 1\n');
+}, 60_000);
+
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
 // (busybox picks its applet by it; Debian's redis-server -> redis-check-rdb)
 describe('argv[0] through a symlink', () => {
@@ -1295,6 +1308,24 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe('arith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\narith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\narith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\n');
   }, 60_000);
+
+  // Open POSIX mmap_7-4: the object is unlinked before it's mapped, so its
+  // fd's inode is no longer the path's; the fd still reads the mapping
+  it.skipIf(!haveShmunlinked)('an unlinked /dev/shm object: a fork child\'s private map and pread see the parent\'s shared store', async () => {
+    const { shell } = await setup(readFileSync(shmunlinkedBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe("child private map 'a' pread 'a'\n");
+  }, 60_000);
+
+  // a /dev/shm object as remote pages (0112): stores to more pages than a
+  // thread keeps leased all land (0121), and a pwrite through the fd is what
+  // the mapping sees (the kernel's inode uses the object's buffer)
+  it.skipIf(!haveShmremote)('a /dev/shm mapping keeps every store and agrees with pwrite and read, JIT on and off', async () => {
+    const { shell } = await setup(readFileSync(shmremoteBin));
+    const r = await run(shell, './prog 65536 6291456; BLINK_WJIT=0 ./prog 65536 6291456');
+    const ok = '65536: read 65536 map-and-fd-agree 1 bad 0 first -1\n6291456: read 6291456 map-and-fd-agree 1 bad 0 first -1\n';
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(ok + ok);
+  }, 180_000);
 
   // apt's pkgcache.bin: a 27 MB writable MAP_SHARED file mapping; msync and
   // munmap write back only this process's changes, so a child's writes

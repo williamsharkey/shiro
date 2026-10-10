@@ -2046,7 +2046,8 @@ export class Kernel {
             const path = f.path;
             if (f.kind !== 'file' || !path || !isShareablePath(path) || !this.fs) return -A.EINVAL;
             const fs = this.fs;
-            key = `file:${inodeNumber(fs, path)}`;
+            const ino = inodeNumber(fs, path);
+            key = `file:${ino}`;
             // (through the fd: writes it holds may not have reached the filesystem yet)
             initial = async () => {
               if (f.pread) {
@@ -2057,8 +2058,19 @@ export class Kernel {
               return typeof b === 'string' ? new TextEncoder().encode(b) : b;
             };
             // While remote, the file's fds read and write the buffer (not the control page)
-            onRemote = (sab) => attachInodeShared(fs, path, sab, sab.byteLength - CONTROL_BYTES);
-            writeBack = async (b) => { if (!(await writeInodeBytes(fs, path, b)) && await fs.exists(path)) await fs.writeFile(path, b); };
+            onRemote = (sab) => attachInodeShared(fs, path, sab, sab.byteLength - CONTROL_BYTES, f);
+            // The bytes go to the file and to the names link() gave its inode
+            // number (it copies): glibc's sem_open maps a temporary file,
+            // links it to the semaphore's name and unlinks it (Open POSIX
+            // sem_close_3-2)
+            writeBack = async (b) => {
+              const dir = path.slice(0, path.lastIndexOf('/')) || '/';
+              const names = new Set([path]);
+              try {
+                for (const e of await fs.readdir(dir)) if (fs.inoOf(`${dir}/${e}`) === ino) names.add(`${dir}/${e}`);
+              } catch { /* (the directory is gone) */ }
+              for (const p of names) if (!(await writeInodeBytes(fs, p, b)) && await fs.exists(p)) await fs.writeFile(p, b);
+            };
           } else if (kind === 1) {
             const seg = this.shm.list().find((x) => x.id === args[0]);
             if (!seg) return -A.EINVAL;

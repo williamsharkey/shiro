@@ -299,7 +299,9 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
   const termWrite = (s: string) => (opts.terminal ? opts.terminal.writeOutput(s.replace(/\r?\n/g, '\r\n')) : opts.writeStdout(s));
 
   if (opts.background) {
-    const code = await runKernelJob(shell, { command: opts.command, pgid, pids, background: true, tty, write: termWrite });
+    // (by their parent: the hosted shell's process, else init)
+    const reap = async () => { for (const p of procs) await kernel.waitpid(p.pid, A.WNOHANG, host ?? kernel.init); };
+    const code = await runKernelJob(shell, { command: opts.command, pgid, pids, background: true, tty, write: termWrite, reap });
     return { exitCode: code, statuses: pids.map(() => 0), stdout, stderr };
   }
 
@@ -321,7 +323,7 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
       exitCode = await runKernelJob(shell, { command: opts.command, pgid, pids, tty, write: termWrite });
     } else {
       await Promise.all(procs.map((p) => p.wait()));
-      for (const p of procs) await kernel.waitpid(p.pid, A.WNOHANG);
+      for (const p of procs) await kernel.waitpid(p.pid, A.WNOHANG, host ?? kernel.init);
       exitCode = shellStatus(procs[procs.length - 1].exitStatus ?? 0);
     }
   } finally {

@@ -1,6 +1,7 @@
 
 import type { Command } from './index';
 import { parseArgs, readInput } from './flags';
+import { decodeBytes, encodeText } from '../utils/byte-text';
 export const base64: Command = {
   name: "base64",
   description: "Base64 encode or decode",
@@ -29,15 +30,20 @@ export const base64: Command = {
 
         try {
           // Browser-compatible base64 decode
-          const decoded = (globalThis as any).atob(cleaned);
-          result = decoded;
+          const decoded: string = (globalThis as any).atob(cleaned);
+          // atob gives one char per byte: as byte-exact text, written back as those bytes
+          result = decodeBytes(Uint8Array.from(decoded, (c) => c.charCodeAt(0)));
         } catch (e) {
           ctx.stderr += `base64: invalid input\n`;
           return 1;
         }
       } else {
         // Encode base64
-        const encoded = (globalThis as any).btoa(content);
+        // The input's bytes (byte-exact text: a binary file's included), not its UTF-16
+        const bytes = encodeText(content);
+        let bin = '';
+        for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+        const encoded = (globalThis as any).btoa(bin);
 
         // Wrap lines
         if (wrap > 0) {

@@ -949,13 +949,17 @@ function useShared(ino: Inode, view: Uint8Array): void {
 }
 
 /** The shared object for the file at `path` turned remote: its fds use `sab`'s first `length` bytes. */
-export function attachInodeShared(fs: FileSystem, path: string, sab: SharedArrayBuffer, length: number): void {
+export function attachInodeShared(fs: FileSystem, path: string, sab: SharedArrayBuffer, length: number, file?: OpenFile): void {
   let m = sharedFiles.get(fs);
   if (!m) { m = new Map(); sharedFiles.set(fs, m); }
   const view = new Uint8Array(sab, 0, length);
   m.set(inodeKey(fs, path), view);
   const ino = findInode(fs, path);
   if (ino) useShared(ino, view);
+  // the mapped fd's own inode too: once unlinked (shm_open then shm_unlink,
+  // Open POSIX mmap_7-4) it's no longer the path's
+  const own = file instanceof RegularFile ? file.inode : undefined;
+  if (own && own !== ino) useShared(own, view);
 }
 
 /** Its last mapping went: the inode keeps a private copy of the bytes it has now. */
@@ -1189,6 +1193,8 @@ export class RegularFile implements OpenFile {
   constructor(private ino: Inode, public flags: number) {}
 
   get path(): string { return this.ino.path; }
+  /** (attachInodeShared) */
+  get inode(): Inode { return this.ino; }
 
   async read(buf: Uint8Array): Promise<number> {
     if (!canRead(this.flags)) return -EBADF;
