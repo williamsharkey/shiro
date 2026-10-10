@@ -46,7 +46,12 @@ const APPS = [
 const manifest = JSON.parse(readFileSync(join(ROOT, 'public/gui/apps.json'), 'utf8'));
 const results = existsSync(RESULTS) ? JSON.parse(readFileSync(RESULTS, 'utf8')) : {};
 // (renders: not one flat colour; results from before that rule are re-derived)
-for (const r of Object.values(results)) if (r.colors !== undefined) r.rendered = r.colors >= 2;
+/** A window titled like an error ("Fatal error", "Startup Failure"): the app opened only to say it can't run */
+const errorWindow = (titles = []) => titles.find((t) => /\b(fatal|failure|error)\b/i.test(t));
+for (const r of Object.values(results)) {
+  if (r.colors !== undefined) r.rendered = r.colors >= 2;
+  if (errorWindow(r.windows)) { r.window = false; r.note = `error window: “${errorWindow(r.windows)}”`; }
+}
 const save = () => writeFileSync(RESULTS, JSON.stringify(results, null, 1));
 /** A result is current while the app's package set is unchanged */
 const version = (id) => (manifest.apps[id]?.packages ?? []).map((n) => `${n}=${manifest.packages[n]?.version}`).join(' ');
@@ -144,6 +149,7 @@ async function scoreApp(browser, base, id) {
     // 4. reacts to input: click into the main window, type, compare pixels
     const [main] = await windowsOf(page, id);
     r.windows = (await windowsOf(page, id)).map((w) => w.title).slice(0, 3);
+    if (errorWindow(r.windows)) { r.window = false; r.note = `error window: “${errorWindow(r.windows)}”`; }
     if (main) {
       // focus it the way the desktop does (no click: a click can land on a menu or a dropdown)
       await page.evaluate((id) => {
@@ -219,7 +225,7 @@ const MARKER = '<!-- notes: everything below is kept when the tables are regener
 function report() {
   const rows = APPS.filter(([id]) => results[id]);
   const n = rows.length;
-  const count = (k) => rows.filter(([id]) => results[id][k]).length;
+  const count = (k) => rows.filter(([id]) => results[id][k] && (k === 'installed' || results[id].window)).length;
   let md = `# GUI app scoreboard\n\n` +
     `Debian 12 GUI apps installed from the streaming manifest (\`public/gui/apps.json\`, docs/GUI.md) in the built app, ` +
     `in headless Chromium (4 vCPUs), by \`scripts/gui/score.mjs\` (\`npm run gui-score\`). Each app in a fresh browser profile ` +
@@ -238,7 +244,7 @@ function report() {
       group = g;
     }
     const note = [r.note || r.error, KNOWN[id]].filter(Boolean).join('; ').replace(/\|/g, '\\|');
-    md += `| ${id} | ${r.toolkit} | ${r.mb} MB | ${r.installed ? secs(r.installMs) : '✗'} | ${yes(r.window)} | ${secs(r.windowMs)} | ${yes(r.rendered)} | ${yes(r.input)} | ${yes(r.textLayer)}${r.spans ? ` (${r.spans})` : ''} | ${note} |\n`;
+    md += `| ${id} | ${r.toolkit} | ${r.mb} MB | ${r.installed ? secs(r.installMs) : '✗'} | ${yes(r.window)} | ${r.window ? secs(r.windowMs) : '–'} | ${r.window ? yes(r.rendered) : '–'} | ${r.window ? yes(r.input) : '–'} | ${r.window ? yes(r.textLayer) : '–'}${r.window && r.spans ? ` (${r.spans})` : ''} | ${note} |\n`;
   }
   md += `\n${new Date().toISOString().slice(0, 10)}; per-app details (output tails, window titles) in .gui-score/results.json.\n`;
   // the hand-written part of the report (after the marker) is kept

@@ -74,7 +74,9 @@ APPS = {
     'vlc': (['vlc'], ['/usr/bin/vlc'], ['usr/lib/x86_64-linux-gnu/vlc/plugins/gui/libqt_plugin.so', 'usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so', 'usr/lib/x86_64-linux-gnu/qt5/plugins/imageformats/*.so'], [], 'Media player (Qt5)', 'qt5'),
     'audacity': (['audacity'], ['/usr/bin/audacity'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'], ['libglib2.0-bin', 'shared-mime-info'], 'Audio editor (wxWidgets/GTK3)', 'gtk3'),
     'blender': (['blender'], ['/usr/bin/blender'], [], [], '3D creation suite (OpenGL)', 'gl'),
-    'krita': (['krita'], ['/usr/bin/krita'], ['usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so', 'usr/lib/x86_64-linux-gnu/qt5/plugins/imageformats/*.so'], [], 'Painting program (Qt5)', 'qt5'),
+    # its resources live in an SQLite database: Qt's SQLite driver (a plugin, so not in the ELF closure)
+    'krita': (['krita', 'libqt5sql5-sqlite'], ['/usr/bin/krita'], ['usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so', 'usr/lib/x86_64-linux-gnu/qt5/plugins/imageformats/*.so',
+              'usr/lib/x86_64-linux-gnu/qt5/plugins/sqldrivers/libqsqlite.so'], [], 'Painting program (Qt5)', 'qt5'),
     'qterminal': (['qterminal'], ['/usr/bin/qterminal'], ['usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so', 'usr/lib/x86_64-linux-gnu/qt5/plugins/imageformats/*.so'], [], 'Terminal emulator (Qt5)', 'qt5'),
     'qpdfview': (['qpdfview'], ['/usr/bin/qpdfview'], ['usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so', 'usr/lib/x86_64-linux-gnu/qt5/plugins/imageformats/*.so'], [], 'PDF viewer (Qt5)', 'qt5'),
     'kcalc': (['kcalc'], ['/usr/bin/kcalc'], ['usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so', 'usr/lib/x86_64-linux-gnu/qt5/plugins/imageformats/*.so'], [], 'KDE calculator (Qt5)', 'qt5'),
