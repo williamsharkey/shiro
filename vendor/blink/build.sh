@@ -49,6 +49,9 @@ CFLAGS="-O2" emconfigure ./configure >/dev/null
 emmake make -j"$(nproc)" o//blink/blink.a o//blink/blink.o >/dev/null
 
 mkdir -p "$OUT"
+# PTHREAD_POOL_SIZE=2: the guest's main thread and one spare Worker, kept
+# replenished (shiro_pool_init in shiro-kernel.js); each Worker is a JS engine
+# instance, and every process is its own module.
 # PROXY_TO_PTHREAD: the guest's main thread runs in a pthread, so the module's
 # own thread (the Worker started by host.mjs) stays free to service proxied
 # syscalls and to block on the page for filesystem requests.
@@ -58,7 +61,8 @@ emcc -O2 o//blink/blink.o o//blink/blink.a -lm -pthread \
   -sENVIRONMENT=web,worker,node \
   -sPROXY_TO_PTHREAD -sEXIT_RUNTIME -sINVOKE_RUN=0 \
   -sALLOW_MEMORY_GROWTH -sINITIAL_MEMORY=64MB -sMAXIMUM_MEMORY=4GB \
-  -sPTHREAD_POOL_SIZE=4 -sSTACK_SIZE=1MB -sALLOW_TABLE_GROWTH \
+  -sPTHREAD_POOL_SIZE=2 -sSTACK_SIZE=1MB -sALLOW_TABLE_GROWTH \
+  -sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE=shiro_pool_init \
   -sEXPORTED_RUNTIME_METHODS=callMain,FS,ENV,HEAPU8 -sEXPORTED_FUNCTIONS=_main,_malloc \
   --js-library "$HERE/shiro-net.js" --js-library "$HERE/shiro-kernel.js" \
   --emit-symbol-map \

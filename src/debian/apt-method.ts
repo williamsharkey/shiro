@@ -15,6 +15,8 @@
 import type { Kernel } from '../kernel/kernel';
 import type { Process } from '../kernel/process';
 import { md5Hex } from '../commands/checksum';
+import type { FileSystem, FileWriter } from '../filesystem';
+import { AptHashes } from '../utils/stream-hash';
 
 const enc = new TextEncoder();
 
@@ -72,6 +74,25 @@ export async function hashFields(data: Uint8Array): Promise<string> {
   return `MD5-Hash: ${md5}\nMD5Sum-Hash: ${md5}\nSHA1-Hash: ${sha1}\nSHA256-Hash: ${sha256}\nSHA512-Hash: ${sha512}\n`;
 }
 
+/** Size and hash fields of a file; a big one is read a block at a time. */
+export async function hashFile(fs: FileSystem, path: string): Promise<{ size: number; fields: string }> {
+  const real = await fs.realpath(path);
+  const st = await fs.stat(real);
+  const blob = fs.blobOf(real);
+  if (!blob) {
+    const data = await fs.readFile(real) as Uint8Array;
+    return { size: data.length, fields: await hashFields(data) };
+  }
+  const h = new AptHashes();
+  for (let i = 0, off = 0; off < st.size; i++, off += fs.blockSize) {
+    const b = await fs.readBlock(blob, i, false);
+    h.update(b.subarray(0, Math.min(b.length, st.size - off)));
+    // A missing or short block inside the file reads as zeros
+    if (b.length < Math.min(fs.blockSize, st.size - off)) h.update(new Uint8Array(Math.min(fs.blockSize, st.size - off) - b.length));
+  }
+  return { size: st.size, fields: h.fields() };
+}
+
 /** The mirror URL for an archive URL, or null when it isn't one the mirror serves. */
 export function mirrorUrl(uri: string, mirror: string): string | null {
   const m = /^(?:https?|shiro):\/\/([^/]+)(\/.*)$/.exec(uri);
@@ -119,7 +140,7 @@ export async function aptMethodProgram(proc: Process, kernel: Kernel): Promise<n
     const uri = msg.fields.get('URI') ?? '';
     const filename = msg.fields.get('Filename') ?? '';
     const lastModified = msg.fields.get('Last-Modified');
-    const fetched = fetchOne(uri, mirror, lastModified);
+    const fetched = fetchOne(uri, mirror, lastModified, fs, filename);
     const report = order.then(async () => {
       const r = await fetched;
       if (r.kind === 'fail') {
@@ -127,19 +148,13 @@ export async function aptMethodProgram(proc: Process, kernel: Kernel): Promise<n
         return;
       }
       if (r.kind === 'ims') {
-        let data: Uint8Array = new Uint8Array(0);
-        try { data = await fs.readFile(filename) as Uint8Array; } catch { /* apt checks */ }
-        await write(`201 URI Done\nURI: ${uri}\nFilename: ${filename}\nSize: ${data.length}\nIMS-Hit: true\n${lastModified ? `Last-Modified: ${lastModified}\n` : ''}${await hashFields(data)}\n`);
+        let h = { size: 0, fields: await hashFields(new Uint8Array(0)) };
+        try { h = await hashFile(fs, filename); } catch { /* apt checks */ }
+        await write(`201 URI Done\nURI: ${uri}\nFilename: ${filename}\nSize: ${h.size}\nIMS-Hit: true\n${lastModified ? `Last-Modified: ${lastModified}\n` : ''}${h.fields}\n`);
         return;
       }
-      await write(`200 URI Start\nURI: ${uri}\nSize: ${r.data.length}\n${r.lastModified ? `Last-Modified: ${r.lastModified}\n` : ''}\n`);
-      try {
-        await fs.writeFile(filename, r.data);
-      } catch (e: any) {
-        await write(`400 URI Failure\nURI: ${uri}\nMessage: Could not write ${filename}: ${e?.message ?? e}\nFailReason: WriteError\n\n`);
-        return;
-      }
-      await write(`201 URI Done\nURI: ${uri}\nFilename: ${filename}\nSize: ${r.data.length}\n${r.lastModified ? `Last-Modified: ${r.lastModified}\n` : ''}${await hashFields(r.data)}\n`);
+      await write(`200 URI Start\nURI: ${uri}\nSize: ${r.size}\n${r.lastModified ? `Last-Modified: ${r.lastModified}\n` : ''}\n`);
+      await write(`201 URI Done\nURI: ${uri}\nFilename: ${filename}\nSize: ${r.size}\n${r.lastModified ? `Last-Modified: ${r.lastModified}\n` : ''}${r.fields}\n`);
     });
     order = report.catch(() => {});
     pending.push(report);
@@ -150,11 +165,16 @@ export async function aptMethodProgram(proc: Process, kernel: Kernel): Promise<n
 }
 
 type Fetched =
-  | { kind: 'ok'; data: Uint8Array; lastModified?: string }
+  | { kind: 'ok'; size: number; fields: string; lastModified?: string }
   | { kind: 'ims' }
   | { kind: 'fail'; message: string; reason: string; transient?: boolean };
 
-async function fetchOne(uri: string, mirror: string, ims?: string): Promise<Fetched> {
+/**
+ * Fetch `uri` from the mirror into `filename`: the body streams through a
+ * FileSystem writer and the hashes as it arrives (a .deb or an index is never
+ * in memory whole).
+ */
+async function fetchOne(uri: string, mirror: string, ims: string | undefined, fs: FileSystem, filename: string): Promise<Fetched> {
   const url = mirrorUrl(uri, mirror);
   if (!url) return { kind: 'fail', message: `Unsupported URI ${uri}`, reason: 'ConnectionRefused' };
   const headers: Record<string, string> = {};
@@ -172,8 +192,29 @@ async function fetchOne(uri: string, mirror: string, ims?: string): Promise<Fetc
       if (res.status >= 500 && attempt < 2) continue;
       return { kind: 'fail', message: `${res.status}  ${res.statusText || 'Error'}`, reason: `HttpError${res.status}`, transient: res.status >= 500 };
     }
-    const data = new Uint8Array(await res.arrayBuffer());
-    return { kind: 'ok', data, lastModified: res.headers.get('last-modified') ?? undefined };
+    let w: FileWriter;
+    try { w = await fs.createWriter(filename); } catch (e: any) {
+      return { kind: 'fail', message: `Could not write ${filename}: ${e?.message ?? e}`, reason: 'WriteError' };
+    }
+    const hashes = new AptHashes();
+    try {
+      const reader = res.body?.getReader();
+      if (reader) {
+        for (;;) {
+          const r = await reader.read();
+          if (r.done) break;
+          hashes.update(r.value);
+          await w.write(r.value);
+        }
+      }
+      await w.close();
+    } catch (e: any) {
+      w.abort();
+      if ((e as { code?: string })?.code) return { kind: 'fail', message: `Could not write ${filename}: ${e?.message ?? e}`, reason: 'WriteError' };
+      if (attempt < 2) continue;
+      return { kind: 'fail', message: `Connection to the package mirror failed (${e?.message ?? e})`, reason: 'ConnectionFailed', transient: true };
+    }
+    return { kind: 'ok', size: hashes.size, fields: hashes.fields(), lastModified: res.headers.get('last-modified') ?? undefined };
   }
 }
 
