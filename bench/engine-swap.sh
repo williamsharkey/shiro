@@ -5,6 +5,8 @@
 # its Worker glue (host.mjs) from <host-ref>. Separates an engine regression
 # from one in the kernel/net/page around it. <tree-ref> must already be built
 # in bench/.cache/ab/<sha12> (bench/ab.mjs or a run with --src does that).
+# Swaps the files in dist (the hashed copy from engines/manifest.json too):
+# TABCOMPUTER_BLINK_ASSETS is read only under Node, so in the browser it has no effect.
 cd "$(dirname "$0")/.."
 P=bench/.cache
 sha=$(git rev-parse --verify "$1^{commit}"); w=$(git rev-parse --verify "$2^{commit}"); hm=$(git rev-parse --verify "$3^{commit}"); d=bench/.cache/ab/${sha:0:12}
