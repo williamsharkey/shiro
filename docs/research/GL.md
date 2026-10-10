@@ -359,10 +359,11 @@ it covers it), a core context `3.3`, GLSL `1.20`/`3.30`; renderer
     backend per connection, broken streams) and `setup.ts`.
   - `x11.test.ts`: the GLX requests glvnd sends.
   - `gl-guest.test.ts`: glxinfo, glxgears and glbench in Blink against a
-    recording glshiro, with no vendor forced. Needs `GL_PROBE_ROOT`.
-- Browser: `tests/browser/gl-glxgears.mjs` runs glxgears in the page,
-  checks the window's pixels and that frames stop without animation
-  frames, and prints FPS. Needs `GL_PROBE_ROOT` too.
+    recording glshiro, with no vendor forced (`GL_PROBE_ROOT`); Neverball
+    (`NB_ROOT`) and OpenSCAD (`SCAD_ROOT`) the same way.
+- Browser: `tests/browser/gl-apps.mjs --app glxgears|neverball` runs the app
+  in the page, checks the window's pixels and that frames stop without
+  animation frames, and prints FPS. Needs `GL_PROBE_ROOT` too.
 - `GL_PROBE_ROOT` is an x86-64 rootfs with mesa-utils and libglvnd but not
   Mesa's vendor library: Debian's (`scripts/gui/debfetch.py`, `SKIP=libglx-mesa0,libgl1-mesa-dri`)
   or Ubuntu's (`apt-get download` of mesa-utils, libgl1, libglx0,
