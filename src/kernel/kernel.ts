@@ -627,8 +627,18 @@ export class Kernel {
     proc.markExited(status);
     this.logTrap(proc, status);
     const parent = this.procs.get(proc.ppid);
-    if (parent && parent.pid !== 1) this.deliver(parent, A.SIGCHLD);
+    if (parent && parent.pid !== 1) {
+      const killed = A.WIFSIGNALED(status);
+      this.deliver(parent, A.SIGCHLD, {
+        signo: A.SIGCHLD, code: !killed ? A.CLD_EXITED : status & 0x80 ? A.CLD_DUMPED : A.CLD_KILLED,
+        pid: proc.pid, uid: proc.ruid ?? proc.uid, status: killed ? A.WTERMSIG(status) : A.WEXITSTATUS(status),
+      });
+    }
     if (proc.ppid === 1) this.scheduleInitReap(proc);
+    // A parent ignoring SIGCHLD or with SA_NOCLDWAIT leaves no zombie: the
+    // child is reaped now, and a wait for it ends in ECHILD (Linux)
+    else if (parent && (parent.dispositions.get(A.SIGCHLD) === 'ignore' ||
+             ((parent.sigactions.get(A.SIGCHLD)?.flags ?? 0) & A.SA_NOCLDWAIT))) this.procs.delete(proc.pid);
     this.notify();
   }
 
@@ -720,7 +730,8 @@ export class Kernel {
         this.stateWaiters.add(onState);
         signal?.addEventListener('abort', onAbort, { once: true });
       });
-      if (!woke) return { pid: -A.EINTR, status: 0 };
+      // (no children left, as when SA_NOCLDWAIT reaped the last: ECHILD before EINTR, as Linux's do_wait)
+      if (!woke) return { pid: this.children(caller, pid).length ? -A.EINTR : -A.ECHILD, status: 0 };
     }
   }
 
@@ -759,8 +770,11 @@ export class Kernel {
   deliver(proc: Process, sig: number, info: A.SigInfo = { signo: sig, code: A.SI_KERNEL }): void {
     if (proc.state === 'zombie' || proc.exiting || proc.pid === 1) return;
     if (sig === A.SIGKILL) { void this.exit(proc, A.W_TERMSIG(A.SIGKILL)); return; }
-    if (sig === A.SIGSTOP) { proc.markStopped(sig); this.notify(); return; }
-    if (sig === A.SIGCONT) { proc.markContinued(); this.notify(); }
+    if (sig === A.SIGSTOP) { this.stopProcess(proc, sig); return; }
+    if (sig === A.SIGCONT && proc.state === 'stopped') {
+      proc.markContinued(); this.notify();
+      if (!proc.signalHook) this.notifyParentOfStop(proc, 0);
+    }
     if (proc.signalHook) {
       // (job control routes it: signals.ts queues what it carries when it goes pending)
       proc.data.sigInFlight = info;
@@ -785,9 +799,26 @@ export class Kernel {
     }
     switch (A.defaultSignalAction(sig)) {
       case 'term': void this.exit(proc, A.W_TERMSIG(sig)); break;
-      case 'stop': proc.markStopped(sig); this.notify(); break;
+      case 'stop': this.stopProcess(proc, sig); break;
       default: break;
     }
+  }
+
+  private stopProcess(proc: Process, sig: number): void {
+    const was = proc.state;
+    proc.markStopped(sig);
+    this.notify();
+    // (job control's targets have it say so: JobControl.noteStopped)
+    if (was === 'running' && !proc.signalHook) this.notifyParentOfStop(proc, sig);
+  }
+
+  /** SIGCHLD to the parent for a stop (sig) or a continue (0), unless it set SA_NOCLDSTOP */
+  private notifyParentOfStop(proc: Process, sig: number): void {
+    const parent = this.procs.get(proc.ppid);
+    if (!parent || parent.pid === 1 || ((parent.sigactions.get(A.SIGCHLD)?.flags ?? 0) & A.SA_NOCLDSTOP)) return;
+    this.deliver(parent, A.SIGCHLD, {
+      signo: A.SIGCHLD, code: sig ? A.CLD_STOPPED : A.CLD_CONTINUED, pid: proc.pid, uid: proc.ruid ?? proc.uid, status: sig || A.SIGCONT,
+    });
   }
 
   /**
@@ -2141,19 +2172,28 @@ export class Kernel {
           const ms = args[0] | 0;
           const end = ms >= 0 ? Date.now() + ms : Infinity;
           let got: number;
-          while (!(got = next())) {
-            const left = end - Date.now();
-            if (left <= 0) return -A.EAGAIN;
-            const wakes = new Set<() => void>();
-            const off = pendingSignalListeners(proc).add(() => { for (const w of [...wakes]) w(); });
-            const timer = end === Infinity ? undefined : setTimeout(() => { for (const w of [...wakes]) w(); }, left);
-            const ok = await abortableWait(wakes, sig);
-            off();
-            if (timer !== undefined) clearTimeout(timer);
-            if (!ok) return -A.EINTR;
+          // While it waits, the set's signals are the wait's even when not
+          // blocked (Linux's real_blocked): they're held, not handled. The
+          // caller's mask comes back after, delivering any others that came.
+          const unblocked = [...want].filter((s) => !proc.sigmask.has(s));
+          if (unblocked.length) for (const s of unblocked) proc.sigmask.add(s);
+          try {
+            while (!(got = next())) {
+              const left = end - Date.now();
+              if (left <= 0) return -A.EAGAIN;
+              const wakes = new Set<() => void>();
+              const off = pendingSignalListeners(proc).add(() => { for (const w of [...wakes]) w(); });
+              const timer = end === Infinity ? undefined : setTimeout(() => { for (const w of [...wakes]) w(); }, left);
+              const ok = await abortableWait(wakes, sig);
+              off();
+              if (timer !== undefined) clearTimeout(timer);
+              if (!ok) return -A.EINTR;
+            }
+            // one instance (a real-time signal may have more queued), with what it carries
+            A.encodeSiginfo(proc.takeSiginfo(got, proc.deferredSignals), data);
+          } finally {
+            if (unblocked.length) { const m = new Set(proc.sigmask); for (const s of unblocked) m.delete(s); this.setSigmask(proc, m); }
           }
-          // one instance (a real-time signal may have more queued), with what it carries
-          A.encodeSiginfo(proc.takeSiginfo(got, proc.deferredSignals), data);
           return got;
         }
         case A.SYS_rt_sigsuspend: {
