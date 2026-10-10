@@ -71,7 +71,7 @@ export async function createWebGLBackend(rawSend: (data: Uint8Array) => void): P
   const xs = session ? (await session).server : null;
   const host: ExecHost = {
     send,
-    presentMode: 'pixels',
+    presentMode: 'async-pixels',
     drawableSize(xid) {
       if (!xs) return null;
       try {
