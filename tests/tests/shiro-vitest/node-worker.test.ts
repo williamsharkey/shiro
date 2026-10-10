@@ -92,6 +92,39 @@ console.log(a[0], a[1] === me, b[0], b[1] === me);
     expect(r.out).toBe('x true y,z true\n');
   }, 60_000);
 
+  it('output to a pipe streams, and spawn() delivers it as it comes', async () => {
+    // inner node waits for a file its parent makes on seeing inner's first line:
+    // with output held until exit (either end) that never happens
+    const r = await sh(`node /tmp/ns/outer.js < /dev/null`, async (fs) => {
+      await fs.mkdir('/tmp/ns', { recursive: true });
+      await fs.writeFile('/tmp/ns/inner.js', `const fs = require('fs');
+console.log('early'); process.stderr.write('err-early\\n');
+const t0 = Date.now();
+const t = setInterval(() => {
+  if (fs.existsSync('/tmp/ns/go')) { clearInterval(t); console.log('late'); }
+  else if (Date.now() - t0 > 8000) { clearInterval(t); console.log('timed out'); }
+}, 20);
+`);
+      await fs.writeFile('/tmp/ns/outer.js', `const fs = require('fs'), cp = require('child_process');
+const c = cp.spawn('node', ['/tmp/ns/inner.js']);
+let out = '', err = '';
+c.stdout.on('data', (d) => { out += d; if (out.includes('early')) fs.writeFileSync('/tmp/ns/go', ''); });
+c.stderr.on('data', (d) => { err += d; });
+c.on('close', (code) => console.log(JSON.stringify(out), JSON.stringify(err), code));
+`);
+    });
+    expect(r.err).toBe('');
+    expect(r.out).toBe('"early\\nlate\\n" "err-early\\n" 0\n');
+  }, 60_000);
+
+  it('a ref\'d interval keeps the guest running until cleared; an unref\'d one does not', async () => {
+    const r = await sh(`node -e '
+      const t0 = Date.now(); let n = 0;
+      const t = setInterval(() => { if (++n === 30) { clearInterval(t); console.log("ticks", n, Date.now() - t0 >= 500); } }, 20);
+    ' < /dev/null; node -e 'setInterval(() => console.log("never"), 5000).unref(); console.log("bye")' < /dev/null`);
+    expect(r.out).toBe('ticks 30 true\nbye\n');
+  }, 60_000);
+
   it('stdin from a pipe; async exec', async () => {
     const r = await sh(`printf 'a\\nb\\n' | node -e '
       let t = ""; process.stdin.on("data", (d) => t += d).on("end", () => {

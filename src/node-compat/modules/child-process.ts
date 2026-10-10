@@ -185,7 +185,9 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
   };
   // execAsync is the underlying impl — returns a Promise
   // Shell natively handles setopt (no-op), eval (builtin), >| (clobber), /dev/null (virtual file)
-  const execAsync = async (cmd: string, env?: Record<string, unknown>, input?: string): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
+  /** Output as it arrives (a guest's spawn(): data events and stdio 'inherit' don't wait for the end) */
+  type Live = { out: (s: string) => void; err: (s: string) => void };
+  const execAsync = async (cmd: string, env?: Record<string, unknown>, input?: string, live?: Live): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
     let normalized = stripShellPrefix(cmd);
     // Strip leading shell flags (-l, -i, -e) that leak through from spawn args
     normalized = normalized.replace(/^(-[a-zA-Z]+\s+)+/, '');
@@ -205,7 +207,20 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
 
     if (deps.guest) {
       // A real child process; files it changed are read again afterwards
-      const r = await deps.guest.runChild(normalized, { input, cwd: ctx.cwd, ...(env ? { env: Object.fromEntries(Object.entries(env).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)])) } : {}) });
+      const outDec = new TextDecoder(), errDec = new TextDecoder();
+      const r = await deps.guest.runChild(normalized, {
+        input, cwd: ctx.cwd,
+        ...(env ? { env: Object.fromEntries(Object.entries(env).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)])) } : {}),
+        ...(live ? {
+          onStdout: (b: Uint8Array) => { const t = outDec.decode(b, { stream: true }); if (t) live.out(t); },
+          onStderr: (b: Uint8Array) => { const t = errDec.decode(b, { stream: true }); if (t) live.err(t); },
+        } : {}),
+      });
+      if (live) {
+        const t = outDec.decode(), e = errDec.decode();
+        if (t) live.out(t);
+        if (e) live.err(e);
+      }
       fileCache.clear();
       const dec = new TextDecoder();
       return { stdout: dec.decode(r.stdout), stderr: dec.decode(r.stderr), exitCode: r.status ?? 128 + (r.signal ?? 0) };
@@ -580,10 +595,15 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       child.catch = (reject?: (e: any) => any) => _childPromise.catch(reject);
       child.finally = (fn?: () => void) => _childPromise.finally(fn);
       // For clipboard commands, resolve after a microtask to let stdin.write/end happen first
+      // A guest's child: output reaches data listeners (or our stdout, for 'inherit') as it comes
+      const live: Live | undefined = deps.guest && !isClipboardCmd && !stdioOutPath && !stdioErrPath ? {
+        out: (t) => { if (inheritOut) deps.getProcess?.()?.stdout?.write(t); else (stdoutEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(t))); },
+        err: (t) => { if (inheritErr) deps.getProcess?.()?.stderr?.write(t); else (stderrEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(t))); },
+      } : undefined;
       const cmdPromise = isClipboardCmd
         ? new Promise<{ stdout: string; stderr: string; exitCode: number }>(resolve =>
             setTimeout(() => resolve({ stdout: '', stderr: '', exitCode: 0 }), 0))
-        : execAsync(fullCmd, opts?.env);
+        : execAsync(fullCmd, opts?.env, undefined, live);
       const p = cmdPromise.then(r => {
         const writePromises: Promise<any>[] = [];
         // Write output to stdio file paths FIRST (before emitting events, because
@@ -608,13 +628,13 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
           writePromises.push(flush);
         }
         const proc = deps.getProcess?.();
-        if (inheritOut && r.stdout) proc?.stdout?.write(r.stdout);
-        if (inheritErr && r.stderr) proc?.stderr?.write(r.stderr);
+        if (inheritOut && r.stdout && !live) proc?.stdout?.write(r.stdout);
+        if (inheritErr && r.stderr && !live) proc?.stderr?.write(r.stderr);
         return Promise.all(writePromises).then(() => {
-          if (r.stdout) (stdoutEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(r.stdout)));
+          if (r.stdout && !live) (stdoutEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(r.stdout)));
           (stdoutEvents['end'] || []).forEach(fn => fn());
           (stdoutEvents['close'] || []).forEach(fn => fn());
-          if (r.stderr) (stderrEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(r.stderr)));
+          if (r.stderr && !live) (stderrEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(r.stderr)));
           (stderrEvents['end'] || []).forEach(fn => fn());
           (stderrEvents['close'] || []).forEach(fn => fn());
           child.exitCode = r.exitCode;

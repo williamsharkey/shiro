@@ -82,6 +82,7 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
       // a child may change the tree: fs forgets the directories it knew
       runChildSync: (cmd, opts) => { try { return runChildSync(sys, cmd, opts); } finally { fs.invalidate(); } },
       runChild: (cmd, opts) => runChild(sys, cmd, opts).finally(() => fs.invalidate()),
+      writeOut: (fd, s) => { sys.write(fd, s); },
     };
     const env = { ...start.env };
     const shell: any = { cwd: start.cwd, env, abortController: null, fork() { throw new Error('no shell in a node guest'); } };
