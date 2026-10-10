@@ -21,7 +21,8 @@ describe("a script's timers and the page's", () => {
       setInterval(() => require('fs').writeFileSync('/tmp/tm/interval', 'x'), 250);
       setTimeout(() => { console.log('exiting'); process.exit(0); }, 30);
     `);
-    const { output } = await run(shell, 'node /tmp/tm/a.js');
+    // (the page's node: page code and the script share the page's globals)
+    const { output } = await run(shell, 'TABCOMPUTER_NODE_WORKER=0 node /tmp/tm/a.js');
     expect(output).toContain('exiting');
     await sleep(700);
     delete (globalThis as any).__pageSchedule;
