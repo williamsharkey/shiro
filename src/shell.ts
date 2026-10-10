@@ -3478,7 +3478,8 @@ export class Shell {
                   break;
                 }
                 case 'builtin': writeStdout(`${name} is a shell builtin\r\n`); break;
-                case 'registered': writeStdout(`${name} is ${k.path}\r\n`); break;
+                // (tabcomputer's own command, told apart from an installed program of that name)
+                case 'registered': writeStdout(`${name} is a registered command\r\n`); break;
                 case 'file': writeStdout(`${name} is ${name.includes('/') ? name : k.path}\r\n`); break;
               }
             }
@@ -4720,11 +4721,6 @@ export class Shell {
           if (hashed && hashedAbs && !hashed.pinned && hashedAbs !== executable && !this.commands.get(effectiveCmdName)) {
             if (await this.fs.exists(hashedAbs)) executable = hashedAbs;
             else failure = { msg: `${hashed.path}: No such file or directory`, code: 127 };
-          }
-          // A file named by path that isn't executable: Permission denied (126)
-          if (executable && effectiveCmdName.includes('/')) {
-            const st = await this.fs.stat(this.fs.resolvePath(executable, this.cwd)).catch(() => null);
-            if (st && st.type !== 'dir' && !(((st as { mode?: number }).mode ?? 0o755) & 0o111)) failure = { msg: `${effectiveCmdName}: Permission denied`, code: 126 };
           }
           if (failure) {
             ctx.stderr += `tabcomputer: ${failure.msg}\n`;
@@ -8810,10 +8806,9 @@ export class Shell {
         const shown = pathDir.startsWith('/') ? candidate : `${pathDir.replace(/\/+$/, '')}/${name}${suffix}`;
         try {
           const stat = await this.fs.stat(candidate);
-          // A file on PATH without an x bit isn't a program (bash skips it); npm's
-          // node_modules/.bin links and .wasm modules run however they're marked
-          const execOk = suffix === '.wasm' || pathDir.endsWith('node_modules/.bin') || ((stat as { mode?: number }).mode ?? 0o755) & 0o111;
-          if ((stat.type === 'file' || stat.type === 'symlink') && execOk) {
+          // (bash skips a file without an x bit; here tabcomputer's own files on PATH,
+          // shims, wasm modules and package bins, are not all marked, so it doesn't)
+          if (stat.type === 'file' || stat.type === 'symlink') {
             return display ? shown : candidate;
           }
         } catch {
