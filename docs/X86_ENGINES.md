@@ -846,6 +846,17 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    - Blink's own writes (futex words, clear-tid, robust lists, CopyToUser)
      resolve with LookupAddressWrite.
    - BLINK_FORK_COW=0 gives the copying fork.
+96–98. unix/conformance's:
+   - 0096: a blocked real-time raise() queues in the kernel;
+     sigprocmask leaves SIGKILL/SIGSTOP out; sigaltstack modes as on
+     Linux.
+   - 0097: mprotect(PROT_WRITE) keeps the page readable.
+   - 0098: writable shared mappings of kernel files are written back
+     before a new mapping reads the file, and at exit.
+110. A same-instance child's signals carry their siginfo too: host.mjs
+   makes call 1030 as the child, and blink_shiro_signal_pid_info queues it
+   on the child's System. Open POSIX sigqueue_1-1 (the child's handler
+   checks si_value) passes. Test: fixtures/x86/siginfochild.c.
 
    fork+exit+wait with 16 MiB of dirty heap went from 30 to 7.5 ms, and
    with 64 MiB from 104 to 12 ms (native: 3.1 ms). Test:
