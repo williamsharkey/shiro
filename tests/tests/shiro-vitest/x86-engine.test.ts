@@ -226,6 +226,10 @@ const haveTkill0 = blinkHasTkill0 && tryBuild('gcc', ['-static', '-O1', '-w', '-
 const schedpermBin = join(out, 'schedperm');
 const blinkHasSchedperm = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_schedperm');
 const haveSchedperm = blinkHasSchedperm && tryBuild('gcc', ['-static', '-O1', '-w', '-o', schedpermBin, 'schedperm.c']);
+// Blink 0505: ITIMER_VIRTUAL/PROF are the kernel's, per process
+const itimersBin = join(out, 'itimers');
+const blinkHasItimers = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_itimers');
+const haveItimers = blinkHasItimers && tryBuild('gcc', ['-static', '-O1', '-w', '-o', itimersBin, 'itimers.c']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -778,6 +782,12 @@ it.skipIf(!haveSchedperm)('sched_setparam of another user\'s process (init) is E
   const { shell } = await setup(readFileSync(schedpermBin));
   const r = await run(shell, './prog');
   expect(r.output.replace(/\r\n/g, '\n')).toBe('get ok getscheduler ok set EPERM setscheduler EPERM self ok\n');
+}, 60_000);
+
+it.skipIf(!haveItimers)('ITIMER_VIRTUAL and ITIMER_PROF are per process: a fork child has none (Open POSIX fork_13-1)', async () => {
+  const { shell } = await setup(readFileSync(itimersBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('set 0 0 parent armed 1\nchild virtual 0 prof 0\n');
 }, 60_000);
 
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
