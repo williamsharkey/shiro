@@ -95,7 +95,8 @@ prebuilt build ([how they coexist](#how-prebuilt-debian-and-built-in-commands-co
 Real:
 
 - **The kernel.** Processes, fork/exec, file descriptors, pipes, ptys, signals, job control,
-  sockets and `/proc`, written in TypeScript for the page ([docs/KERNEL_ABI.md](docs/KERNEL_ABI.md),
+  sockets, `/proc`, and System V shared memory, semaphores and message queues (`ipcs`, `ipcrm`),
+  written in TypeScript for the page ([docs/KERNEL_ABI.md](docs/KERNEL_ABI.md),
   [docs/UNIX_COMPAT.md](docs/UNIX_COMPAT.md)).
 - **The programs.** WebAssembly (WASI/WASIX) builds, and unmodified x86-64 Linux ELF
   binaries, including Debian's own glibc, apt and dpkg.
@@ -123,17 +124,29 @@ Not here: hardware devices, kernel modules, and any access to your own machine.
 - **Debian.** `debian install` streams in Debian 13 "trixie" amd64; then `sudo apt install` is
   Debian's apt against a Debian mirror. 496 of popcon's top 500 packages install and pass a
   smoke test ([docs/DEBIAN_SCORE.md](docs/DEBIAN_SCORE.md), [docs/DEBIAN.md](docs/DEBIAN.md)).
+  Heavier tools work too, slowly: `tesseract` (OCR; 4 min to install, 7.5 s for a line of text)
+  and LibreOffice headless (`libreoffice-writer-nogui`: 10 min to install, then
+  `soffice --headless --convert-to pdf note.txt` in 37 s; measured in headless Chromium with
+  two installs running). calibre doesn't work yet: its install fails or hangs
+  ([docs/research/OPPORTUNITIES.md](docs/research/OPPORTUNITIES.md)).
 - **Prebuilt packages.** 72 programs built for the page, WebAssembly or static x86-64, that
   install in about a second ([above](#tabcomputers-prebuilt-packages), [docs/PACKAGES.md](docs/PACKAGES.md)).
-- **Conformance.** LTP syscall tests under Blink pass 237/320; the busybox testsuite
+- **Conformance.** LTP syscall tests under Blink pass 240/322 (272 with engine patches waiting for the next Blink build); the busybox testsuite
   625/635; the oils shell spec tests 1413/1567 ([docs/CONFORMANCE.md](docs/CONFORMANCE.md)).
-- **GUI apps.** `gui` lists Debian X11 apps (xeyes, xterm, GTK and Qt editors and viewers,
-  GIMP, Inkscape, NetSurf). They open as desktop windows. GTK 2/3 text can render as real
-  DOM text ([docs/GUI.md](docs/GUI.md), [docs/DOM-RENDERING.md](docs/DOM-RENDERING.md)).
+- **GUI apps.** `gui` lists Debian X11 apps (xterm, GTK and Qt editors and viewers, GIMP,
+  Inkscape, Krita, VLC, NetSurf). They open as desktop windows. Of the 29 in the scoreboard,
+  all install, 24 open a window and 18 take keyboard input; GTK 2/3 text can render as real
+  DOM text ([docs/GUI_SCORE.md](docs/GUI_SCORE.md), [docs/GUI.md](docs/GUI.md),
+  [docs/DOM-RENDERING.md](docs/DOM-RENDERING.md)).
 - **Browser app (research spike).** Tabs showing real sites on per-site origins, with TLS done
   in the page over the relay ([docs/BROWSER.md](docs/BROWSER.md), [docs/WEB_SCORE.md](docs/WEB_SCORE.md)).
-- **Languages.** Node.js (tabcomputer's runtime with real npm tarballs), Python, Go, clang,
-  and whatever Debian packages ([docs/COMPAT.md](docs/COMPAT.md)).
+- **Languages.** Node.js (tabcomputer's runtime with real npm tarballs; `node` alone is a
+  REPL), Python, Ruby (`irb` works), Go, clang, and whatever Debian packages
+  ([docs/COMPAT.md](docs/COMPAT.md)).
+- **Web development.** `npm create vite@latest app -- --template react`, `npm i`,
+  `npm run dev`, then `serve open 5173`: the app renders in a preview window and an edit to
+  `src/App.jsx` arrives by hot reload (about 15 s from nothing to running; COMPAT.md "vite 8").
+  Node's `fs.watch` sees every write, so nodemon, jest --watch and chokidar work too.
 - **Web servers in the tab.** `serve DIR` serves a folder in a preview window; programs that
   `listen()` are reachable the same way; `page :PORT click #id` drives the page.
 - **Media.** `ffmpeg` is ffmpeg.wasm, served by tabcomputer itself; its ~31 MB core loads the first time it runs.
@@ -168,6 +181,8 @@ An agent outside the tab can drive it: run `remote start` here, then connect wit
 gh auth login        # shows a one-time code; fills in git user.name/email from your account
 gh repo clone owner/private-repo
 gh repo create my-project --private --source . --push
+gh issue create --title T --body-file notes.md
+gh pr list --json number,title --jq '.[].title'
 ```
 
 Debian's `git` and OpenSSH (`apt install git openssh-client` in Debian mode) work too, over
@@ -177,11 +192,11 @@ the relay.
 
 - **Speed.** Hot loops in the x86-64 engine run at about 2–5x native, but starting a big
   program is slow: `gh --version` takes 5.0 s on its first run in a page (75 ms native), and
-  GTK and Qt apps take 7–32 s to their first frame (GIMP longer) ([docs/X86_ENGINES.md](docs/X86_ENGINES.md),
-  [docs/GUI.md](docs/GUI.md)).
+  most GTK and Qt apps take 4–24 s to their first window (Inkscape 38 s) ([docs/X86_ENGINES.md](docs/X86_ENGINES.md),
+  [docs/GUI_SCORE.md](docs/GUI_SCORE.md)).
 - **Network.** TCP to ports 22, 80, 443 and 9418 only, through the relay. UDP to the internet
   is DNS only (answered over DNS-over-HTTPS). No listening on the internet.
-- **Not yet working.** `fs.watch` and inotify (file watchers, hot reload); a D-Bus session bus
+- **Not yet working.** inotify for Linux programs (Node's `fs.watch` works); a D-Bus session bus
   (some GUI apps wait on it or quit); opencode. Each scoreboard lists its failures
   and why.
 - **dpkg under Blink.** dpkg-deb's `.xz` decompression occasionally crashes or reports corrupt

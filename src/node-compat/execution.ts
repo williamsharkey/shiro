@@ -34,6 +34,7 @@ import { createStreamModule } from './modules/stream';
 import { createCryptoModule } from './modules/crypto';
 import { createProcessGlobal, createProcessFunction } from './process-global';
 import { loadBrowserPackages } from './browser-packages';
+import { patchPackageSource } from './source-patches';
 import { createHttpModule, createHttpsModule, createHttp2Module } from './modules/http';
 import { createNetModule, createTlsModule } from './modules/net-tls';
 import { createMiscModule } from './modules/misc';
@@ -380,7 +381,7 @@ export async function executeNodeScript(
 
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
     // Transform TypeScript/JSX/ESM syntax for execution
-    let transformedCode = isClaudeCodeScript(scriptPath) ? patchClaudeCodeSource(code) : code;
+    let transformedCode = isClaudeCodeScript(scriptPath) ? patchClaudeCodeSource(code) : patchPackageSource(scriptPath, code);
     if (scriptPath && (scriptPath.endsWith('.ts') || scriptPath.endsWith('.tsx'))) {
       transformedCode = transformTS(transformedCode);
     }
@@ -915,6 +916,7 @@ export async function executeNodeScript(
 
     // Clean up
     uncountScript?.();
+    _st.ttyStdin?.close();
     if (ctx.terminal && _st.ownsStdinPassthrough) ctx.terminal.exitStdinPassthrough();
     if (typeof window !== 'undefined') {
       setTimeout(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000);
@@ -926,6 +928,7 @@ export async function executeNodeScript(
   } catch (e: any) {
     // Clean up on error
     uncountScript?.();
+    _st.ttyStdin?.close();
     if (ctx.terminal && _st.ownsStdinPassthrough) ctx.terminal.exitStdinPassthrough();
     if (typeof window !== 'undefined') {
       setTimeout(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000);

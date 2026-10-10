@@ -82,7 +82,10 @@ export async function run(h) {
 
   // 10k-file tree for the recursive searches
   const files = h.quick ? 2000 : 10000;
-  const treeReady = await h.try('wasm.tree', '', async () => {
+  // The searches below need the tree: build it whenever any of them is wanted, not only
+  // when --only names wasm.tree (compare.mjs's A/B filter names just the metrics)
+  const treeUsers = ['wasm.tree', 'wasm.tree_create', 'wasm.ripgrep.tree', 'wasm.builtin_grep_r.tree', 'wasm.peak_rss.ripgrep_tree'];
+  if (treeUsers.some((n) => h.wants(n))) await h.try('wasm.tree', '', async () => {
     const t = await h.eval(async (files) => {
       const fs = window.__tabcomputer.fs;
       const root = `/tmp/bench-tree-${files}`;
@@ -99,8 +102,8 @@ export async function run(h) {
       }
       return performance.now() - t0;
     }, files);
-    if (t) h.sample('wasm.tree_create', [t], 'ms', { notes: `${files} files × ~160 B in 100 dirs via fs.writeFile (IndexedDB), one sample` });
-  });
+    if (t && (h.wants('wasm.tree_create') || !h.only)) h.sample('wasm.tree_create', [t], 'ms', { notes: `${files} files × ~160 B in 100 dirs via fs.writeFile (IndexedDB), one sample` });
+  }, { force: true });
   const root = `/tmp/bench-tree-${files}`;
   const want = String(files / 10);
   if (threads) {

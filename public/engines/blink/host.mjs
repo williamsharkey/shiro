@@ -707,6 +707,8 @@ async function run(msg) {
       // Blink's own messages: logged with TABCOMPUTER_BLINK_DEBUG=1, and the
       // last few go with an abort's report (an assertion's file:line)
       printErr: (s) => { errTail.push(String(s)); if (errTail.length > 12) errTail.shift(); if (msg.debug) console.error(s); },
+      // a failed assertion's text (Blink's AssertFailed), from whichever thread
+      shiroNote: (s) => { errTail.push(String(s)); if (errTail.length > 12) errTail.shift(); },
       // Blink calls shiroExit on this thread as soon as the guest exits;
       // onExit only fires if emscripten's own teardown completes.
       shiroExit: (code) => exitGuest(code),

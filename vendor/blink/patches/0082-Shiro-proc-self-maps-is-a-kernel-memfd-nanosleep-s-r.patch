@@ -1,8 +1,8 @@
-From c5ba07785e8f08ac0002c165afbe5f4f652f1c25 Mon Sep 17 00:00:00 2001
+From 391b1e7412933fd40e002eb27d8937ba6c83fc97 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 01:39:11 +0000
-Subject: [PATCH] Shiro: /proc/self/maps is a kernel memfd; nanosleep's rem is
- written before the signal frame
+Subject: [PATCH 82/82] Shiro: /proc/self/maps is a kernel memfd; nanosleep's
+ rem is written before the signal frame
 
 Conformance (LTP syscalls):
 - /proc/self/maps comes from a kernel memfd (memfd_create, a regular file
@@ -20,10 +20,10 @@ Conformance (LTP syscalls):
  2 files changed, 41 insertions(+), 29 deletions(-)
 
 diff --git a/blink/shiro.inc b/blink/shiro.inc
-index 7892bd9..86a3e93 100644
+index 20d71a8..fe3d5c6 100644
 --- a/blink/shiro.inc
 +++ b/blink/shiro.inc
-@@ -541,20 +541,28 @@ static i64 ShiroMapsFd(struct Machine *m, int oflags) {
+@@ -548,20 +548,28 @@ static i64 ShiroMapsFd(struct Machine *m, int oflags) {
    if (s->cr3) ShiroMapsWalk(s, &u, s->cr3, 0, 0);
    ShiroMapsEnd(&u, (i64)1 << 47);
    free(u.starts);
@@ -61,10 +61,10 @@ index 7892bd9..86a3e93 100644
    return rfd;
  }
 diff --git a/blink/syscall.c b/blink/syscall.c
-index af771bf..fed64fd 100644
+index 2870ff0..388b0a9 100644
 --- a/blink/syscall.c
 +++ b/blink/syscall.c
-@@ -4242,8 +4242,9 @@ static int SysNanosleep(struct Machine *m, i64 req, i64 rem) {
+@@ -4251,8 +4251,9 @@ static int SysNanosleep(struct Machine *m, i64 req, i64 rem) {
    const struct timespec_linux *gtp;
    struct timespec ts, now, deadline;
    now = GetMonotonic();
@@ -76,7 +76,7 @@ index af771bf..fed64fd 100644
      return -1;
    }
    ts.tv_sec = Read64(gtp->sec);
-@@ -4281,22 +4282,22 @@ static int SysNanosleep(struct Machine *m, i64 req, i64 rem) {
+@@ -4290,22 +4291,22 @@ static int SysNanosleep(struct Machine *m, i64 req, i64 rem) {
      if (nanosleep(&ts, 0)) {
        unassert(errno == EINTR);
  #endif
@@ -112,7 +112,7 @@ index af771bf..fed64fd 100644
          return -1;
        }
      }
-@@ -4367,20 +4368,23 @@ static int SysClockNanosleep(struct Machine *m, int clock, int flags,
+@@ -4376,20 +4377,23 @@ static int SysClockNanosleep(struct Machine *m, int clock, int flags,
          rc = -1;
          break;
        }

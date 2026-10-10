@@ -531,6 +531,22 @@ class Inode {
    * wait for the disk (dpkg closed ~1700 files per python3 install, ~4 ms each);
    * fsync does (RegularFile.sync).
    */
+  /**
+   * flush() without waiting, when the FileSystem has the node in memory and
+   * no backlog: the data goes into its cache now (stored by the next commit).
+   * False when that needs flush().
+   */
+  flushSync(): boolean {
+    if (this.flushing) return false;
+    if (!this.dirty || this.unlinked) return true;
+    if (this.fs.pendingBytes > WRITE_BACKLOG_BYTES) return false;
+    const times = { mtime: this.mtimeMs, mtimeNs: this.mtimeNs, ...(this.atimeMs === null ? {} : { atime: this.atimeMs, atimeNs: this.atimeNs }) };
+    if (!this.fs.writeCachedSync(this.path, this.data.slice(0, this.size), times)) return false;
+    if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null; }
+    this.dirty = false;
+    return true;
+  }
+
   async flush(paced = false): Promise<void> {
     if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null; }
     while (this.flushing) await this.flushing;
@@ -593,7 +609,8 @@ export async function writeBackAll(fs: FileSystem): Promise<void> {
 
 /** closeInode when nothing needs to be written back; false = use closeInode. */
 function closeInodeSync(ino: Inode): boolean {
-  if (ino.dirty || ino.busy) return false;
+  // Written data goes back now when the FileSystem can take it synchronously (node in a Worker closes after each write)
+  if (ino.busy || (ino.dirty && !ino.flushSync())) return false;
   ino.opens--;
   const table = inodeTables.get(ino.fs);
   if (ino.opens === 0 && table?.get(ino.path) === ino) table.delete(ino.path);
@@ -644,6 +661,11 @@ export async function unlinkInode(fs: FileSystem, path: string): Promise<void> {
   ino.unlinked = true;
   table.delete(path);
   await ino.flush();
+}
+
+/** Whether `path` (resolved) is open: unlink must then hand its data to the open fds. */
+export function isInodeOpen(fs: FileSystem, path: string): boolean {
+  return !!inodeTables.get(fs)?.has(path);
 }
 
 /** Whether any file of `fs` is open (inodeStat can only answer then). */
@@ -821,7 +843,9 @@ export class RegularFile implements OpenFile {
     return next;
   }
 
-  async truncate(len: number): Promise<number> {
+  async truncate(len: number): Promise<number> { return this.truncateSync(len); }
+
+  truncateSync(len: number): number {
     if (!canWrite(this.flags)) return -EINVAL;
     if (len < 0) return -EINVAL;
     const ino = this.ino;

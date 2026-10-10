@@ -7,6 +7,7 @@ import { previewStreamsScript } from '../preview-streams';
 import { createServerWindow, findServerWindow, ServerWindow } from '../server-window';
 import { previewUrl } from '../preview-sw-host';
 import { createSplitView, closeSplitView, getActiveSplit } from '../split-view';
+import { previewUI } from '../preview-ui';
 
 // Track active servers and their cleanup functions
 const activeServers = new Map<number, {
@@ -96,6 +97,13 @@ async function openInIframe(ctx: CommandContext, port: number, path: string = '/
   if (!iframeServer.isPortInUse(port)) {
     ctx.stderr = `serve: no server on port ${port}\n`;
     return 1;
+  }
+  // The desktop: a Preview window
+  const ui = previewUI();
+  if (ui) {
+    await ui.open(port, path, activeServers.get(port)?.directory);
+    ctx.stdout = `Opened port ${port} in a window\nPath: ${path}\n`;
+    return 0;
   }
 
   // Check if window already exists for this port
@@ -224,6 +232,13 @@ async function openInSplit(ctx: CommandContext, port: number, path: string = '/'
   if (!iframeServer.isPortInUse(port)) {
     ctx.stderr = `serve: no server on port ${port}\n`;
     return 1;
+  }
+  // The desktop has no split: a Preview window, tiled beside the Terminal
+  const ui = previewUI();
+  if (ui) {
+    await ui.open(port, path, activeServers.get(port)?.directory);
+    ctx.stdout = `Opened port ${port} in a window\n`;
+    return 0;
   }
 
   const serverInfo = activeServers.get(port);

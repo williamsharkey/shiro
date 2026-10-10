@@ -271,6 +271,41 @@ untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
 
+### Integration b63f9d9 → 073944d: boot requests, and what wasn't real (unix/bench)
+
+**Boot requests, confirmed by the hourly compare.** Cold and warm boots go
+11 → 13 requests, settled 13 → 15. Diffing the two builds' request lists
+gives exactly two new URLs:
+
+- `/assets/host-*.js`, the node-worker host.
+- `/assets/index-*.css`, the entry's CSS, which is already inlined in
+  index.html. Vite preloads it because that chunk's dynamic import lists
+  the entry chunk and its CSS as dependencies.
+
+Both come from ff6875a (node-worker, compat-tools). It added
+`import('./node-worker/host').then(m => m.installNodeLoader(kernel))` to
+main.ts, which runs on every boot even with `TABCOMPUTER_NODE_WORKER`
+unset. Reported, with a suggestion to load the host on the first node guest.
+It wasn't compat-dev's preview service worker, which doesn't register at
+boot in either build.
+
+**The rest, re-run with `ab.mjs b63f9d9 073944d`** (5 rounds × 5 runs,
+quick, machine `e57125c23b92`):
+
+| metric | base → new | shift (99% CI) | rounds | verdict |
+|---|---|---|---|---|
+| `wasm.ripgrep.tree` | 145 → 154 ms | −0.6% (−40…+30) | `+--+-` | same |
+| `wasm.builtin_grep_r.tree` | 16.4 → 16.5 ms | −1.7% (−73…+13) | `--+++` | same |
+| `wasm.peak_rss.ripgrep_tree` | 9.3 → 9.2 MiB | 0.0% (−88…+92) | `-+++-` | same (very noisy) |
+| `wasm.tree_create` | 19.9 → 21.6 ms | +6.4% (−57…+50) | `--+-+` | same |
+| `npm.install_small.first` | 102 → 103 ms | −2.4% (−35…+21) | `-++-+` | same |
+| `claude.version` | 847 → 891 ms | +5.7% (−1.4…+13.6) | `+++++` | same (interval includes 0) |
+
+Why the hourly A/B had no samples for the three ripgrep/grep metrics:
+compare.mjs's filter named only those metrics, so the wasm suite skipped
+its `wasm.tree` setup and `rg`/`grep -r` searched an empty directory. The
+tree is now built whenever a metric that searches it is wanted (98873f8).
+
 ### Integration 1d9582a → 9bb1a06: A/B-confirmed candidates (unix/bench)
 
 `node bench/compare.mjs bench/results/integration-1d9582a-quick.json
@@ -577,6 +612,12 @@ three `data:` SVGs (traffic-light glyphs) that CDP counts. The +22 MiB RSS is
 composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts,
 a few MiB each. The terminal UI's +19 KiB is /dom, the sign-in hook and the
 other integration changes since db9f698, not desktop code.
+
+### unix/shell-stdio 7 — bash conformance: declare attributes, namerefs, call stack
+
+`node bench/ab.mjs HEAD~2 HEAD --suites shell,kernel --quick` (55e3426 →
+8709aa3, 3 rounds × 5 runs, alpha 0.01): all 24 metrics unchanged. setVar's
+attribute check and the call-stack frames on function calls cost nothing measurable.
 
 ### unix/shell-stdio 6 — REPLs: ctx.stdinIsTTY; node's REPL on a terminal
 
@@ -1462,6 +1503,31 @@ The coordinator's `ab.mjs a5e66fb 7382bdc` showed `kernel.epoll_wakeup`
   (−3%, p 0.41) and `pty_echo.kernel` 0.245 → 0.245 ms. Both are back
   within noise.
 
+### unix/perf-kernel, round 10: Blink pool channels on watched state words; sync create/unlink
+
+- **Pool channels on watched state words:** host.mjs stores the hosted pid in
+  a trailer word, stores REQUEST and notifies. The page serves the channel from
+  an `Atomics.waitAsync` loop rather than a `blink-sys` message, and the host
+  awaits REPLY the same way rather than a `blink-done` message. A/B against
+  f298f8f, `--suites debian`, 6 rounds × 5 runs; every row is "same":
+  - `debian.rootfs.first_bash` (`bash -c true`): 834 → 830 ms (−0.6%, p 0.80).
+  - `first_dpkg_list`: 1931 → 1977 ms (+2.0%, p 0.12, 5 of 6 rounds worse).
+  - `rootfs.install`: 540 → 522 ms (−3.3%, p 0.27).
+  - `warm.first_bash`: 442 → 436 ms (−2.3%, p 0.35).
+  - An earlier 3-round run had shown −20%. It didn't hold up at 6 rounds.
+  - Profiling (round 9 notes) puts the page's main thread 76–86% idle during
+    these commands, so the message hop isn't on the critical path.
+  - The code stays, but opt-in: `TABCOMPUTER_BLINK_POOL_WAKE=atomics`. The
+    default is still messages.
+- **Sync O_CREAT/O_TRUNC open and unlink** (compat-tools asked; they measured
+  openat create at about 75 µs and unlinkat at about 25 µs through the async
+  path). `syscallSync` now answers these when the parent directory and file
+  are in the write-behind cache:
+  - creating an empty file, truncating an existing one, and EEXIST/ELOOP;
+  - unlinking a file that no fd has open and that isn't a socket or fifo.
+  Anything else still takes the async path. Not yet measured end to end;
+  compat-tools' harness is the one that shows it.
+
 ### unix/perf-fs-shell 7 — 1d9582a → bb39a38 regressions: shell-stdio's per-command pass; ab.mjs decides on rounds
 
 The coordinator's `ab.mjs 1d9582a bb39a38 --suites boot,kernel,shell,wasm
@@ -1831,6 +1897,67 @@ Left:
   IndexedDB schema change).
 - **.debs at the peak:** dropping a .deb's cached content once dpkg has
   unpacked it (the debian session's suggestion).
+
+### unix/perf-fs-shell 14 — node in a Worker: synchronous close write-back, the hot-guest spin, path ops
+
+compat-tools' node-in-a-Worker guest (`TABCOMPUTER_NODE_WORKER=1`) does its
+fs through kernel syscalls. On top of perf-kernel's 98715c1 (synchronous
+O_CREAT/O_TRUNC open and unlink):
+
+- **close** of a written file always took the async path: closeInodeSync
+  wrote nothing back, so that was 200 async closes per fs_200 round.
+  `Inode.flushSync` now puts the data into the FileSystem's cached node
+  (`FileSystem.writeCachedSync`) when there is no write backlog, and close
+  completes in syscallSync.
+- **rename, mkdir, rmdir** (`unlinkat` with `AT_REMOVEDIR`) of cached paths
+  in syscallSync (`FileSystem.renameNow`, `createDirNow`, `rmdirNow`). Open
+  files, directory renames, sockets and FIFOs take the async path.
+- **"Slower after the guest ran JS"** is the channel. The page spun 30 µs
+  for a hot guest's next request and counted a guest hot only within 60 µs
+  of a reply. A guest that ran more JS than that was served through
+  `Atomics.waitAsync`, and waking an idle page that way took longer the
+  longer it had idled. Measured from the guest, one `fstatSync` (one
+  syscall) after a busy gap:
+
+  | gap before the call | before | `HOT_SPIN_MS` 0.25, `HOT_GAP_MS` 0.3 |
+  |---|---:|---:|
+  | 0.05–0.1 ms | 30–35 µs | 10 µs |
+  | 1 ms | 105–110 µs | unchanged |
+  | 5 ms | 165–205 µs | unchanged |
+
+  The page spins at most 0.25 ms after each served call (bounded by
+  SLICE_MS).
+
+`bench/ab.mjs origin/unix/integration HEAD --suites node --rounds 3`. This
+includes perf-kernel's open/unlink paths, which integration doesn't have yet.
+
+| metric | before | after | |
+|---|---:|---:|---|
+| `node.worker.fs_200` | 190.7 ms | 148.0 ms | −19.2% |
+| `node.fs_200` (in page) | 110.0 ms | 109.2 ms | same |
+| `node.worker.exec_sync_10` | 143.0 ms | 127.3 ms | same (−9%) |
+| `npm.install_small.first` | 87.1 ms | 64.0 ms | −26.6% |
+
+Worker / in-page for fs_200 is 1.36× (target 1.3×). In a 10-round loop of
+the fs_200 body, the file work alone is ~23 ms per round in the worker
+against 3.9 ms in the page: about 1,400 syscalls per round at ~14 µs each.
+The rest is round trips per operation (3 `newfstatat` + open/write/close +
+open/read/close per file). Fewer of those is guest-side work, offered to
+compat-tools.
+
+Quick suite (`--rounds 3`):
+- 93 metrics the same;
+- `x86.blink.go_nethttp` −10.8%, `net.relay_connect.first` −18%;
+- boot +9 KiB, with perf-kernel's merged code.
+
+Debian A/B of the spin change alone (`--suites debian --rounds 3 --runs 2`):
+all the same; `first_bash` +0.7%, `first_dpkg_list` +1.1%.
+
+Tests: `kernel-core.test.ts`:
+- mkdir/rename/rmdir through syscallSync;
+- a dirty close completes synchronously, and its data is stored after
+  `sync()`;
+- with a backlog, close falls back to the async path.
 
 ## Results
 

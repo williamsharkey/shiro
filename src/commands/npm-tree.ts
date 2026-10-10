@@ -41,6 +41,7 @@ export const WASM_ALTERNATES: Record<string, string> = {
   rollup: '@rollup/wasm-node',
   // its browser build (node-compat runs it as page code: browser-packages.ts)
   rolldown: '@rolldown/browser',
+  lightningcss: 'lightningcss-wasm',
 };
 
 /**

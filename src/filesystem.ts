@@ -1454,6 +1454,37 @@ export class FileSystem {
     this._emitChange('write', path);
   }
 
+  /**
+   * Create an empty file from the cache alone (the kernel's synchronous
+   * O_CREAT path): `path` must be canonical, its parent a cached directory
+   * and the name known to be free. The node, or undefined: use writeFile.
+   */
+  createEmptyCachedSync(path: string, mode: number): FSNode | undefined {
+    if (this.virtualProviders.some((vp) => vp.handles(path))) return undefined;
+    const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
+    const parent = this.lookupCached(parentPath);
+    if (!parent || parent.path !== parentPath || parent.node.type !== 'dir') return undefined;
+    if (this.lookupCached(path, false) !== null) return undefined;
+    const now = Date.now();
+    const node: FSNode = { path, type: 'file', content: new Uint8Array(0), mode, mtime: now, ctime: now, size: 0 };
+    try { this._putNow(node); } catch { return undefined; } // ENOSPC: writeFile reports it
+    this._emitChange('write', path);
+    return node;
+  }
+
+  /**
+   * unlink(2) from the cache alone: `path`'s node is cached and not a
+   * directory. True when done, undefined when it must go through unlink().
+   */
+  unlinkCachedSync(path: string): true | undefined {
+    if (this.virtualProviders.some((vp) => vp.handles(path))) return undefined;
+    const hit = this.lookupCached(path, false);
+    if (!hit || hit.path !== path || hit.node.type === 'dir') return undefined;
+    this._deleteNow(path);
+    this._emitChange('delete', path);
+    return true;
+  }
+
   /** Append to a file (created if missing). Appends in one flush window are
    *  committed as a single put of the final content. */
   async appendFile(path: string, data: Uint8Array | string): Promise<void> {
@@ -1632,6 +1663,52 @@ export class FileSystem {
     if (node.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, unlink '${path}'`);
     await this._delete(path);
     this._emitChange('delete', path);
+  }
+
+  /**
+   * writeFile of a regular file whose node is cached, now (the kernel writing
+   * back an open file on close): false when it needs writeFile (uncached,
+   * lazy, not a file, or storage full).
+   */
+  writeCachedSync(path: string, content: Uint8Array, times: { mtime: number; mtimeNs?: number; atime?: number; atimeNs?: number }): boolean {
+    const node = this.cache.get(path);
+    if (!node || node.type !== 'file' || node.lazy || node.special || this._full) return false;
+    this._putNow({
+      ...node, content, size: content.length, mtime: times.mtime,
+      mtimeNs: times.mtimeNs || undefined, atime: times.atime, atimeNs: times.atimeNs || undefined,
+    });
+    this._emitChange('write', path);
+    return true;
+  }
+
+  /** Create a directory at canonical `path` now (the kernel's syscallSync checked the parent); false when it needs the async path. */
+  createDirNow(path: string, mode: number): boolean {
+    if (this._full) return false;
+    const node = this._makeNode(path, 'dir');
+    node.mode = mode & 0o7777;
+    this._putNow(node);
+    this._emitChange('mkdir', path);
+    return true;
+  }
+
+  /** Rename the cached non-directory at canonical `from` to canonical `to` now; false when it needs the async path. */
+  renameNow(from: string, to: string): boolean {
+    const node = this.cache.get(from);
+    const dst = this.cache.get(to);
+    if (!node || node.type === 'dir' || dst?.type === 'dir') return false;
+    this._putNow({ ...node, path: to, ctime: Date.now(), ino: node.ino ?? pathIno(from) }, true);
+    this._deleteNow(from);
+    this._emitChange('rename', from, to);
+    return true;
+  }
+
+  /** Remove the directory at canonical `path` when the child index knows it: true, false (not empty), undefined (unknown). */
+  rmdirNow(path: string): boolean | undefined {
+    if (!this._children || this.cache.get(path)?.type !== 'dir') return undefined;
+    if (this._children.get(path)?.size) return false;
+    this._deleteNow(path);
+    this._emitChange('delete', path);
+    return true;
   }
 
   async rmdir(path: string): Promise<void> {

@@ -623,10 +623,15 @@ export function canWatch(): boolean { return typeof waitAsync === 'function'; }
  * input, rendering and timers still run.
  */
 const SLICE_MS = 4;
-/** How long watch() spins for a hot guest's next request after a reply. */
-const HOT_SPIN_MS = 0.03;
+/**
+ * How long watch() spins for a hot guest's next request after a reply. A
+ * guest that runs some JS between calls (node in a Worker: ~20-200 µs) is
+ * otherwise served through Atomics.waitAsync, whose wake-up of an idle page
+ * took 30-200 µs, longer the longer the page had been idle.
+ */
+const HOT_SPIN_MS = 0.25;
 /** A request that came within this long of the previous reply (spin plus a waitAsync wake-up) makes the guest hot. */
-const HOT_GAP_MS = 0.06;
+const HOT_GAP_MS = 0.3;
 const now: () => number = typeof performance !== 'undefined' ? () => performance.now() : () => Date.now();
 let sliceStart = 0;
 let yielder: MessagePort | null = null;
