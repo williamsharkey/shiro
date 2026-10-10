@@ -49,7 +49,7 @@ export function mayBeKernelProgram(shell: Shell, name: string): boolean {
   if (!name || SHELL_BUILTINS.has(name) || shell.functions[name] || shell.aliases.has(name)) return false;
   // An installed package's command replaces a builtin of the same name (pkg-manager.ts)
   if (!shell.commands.get(name) || (shell.pkgShadowBypass !== name && packageShadows(shell.fs).has(name))) return true;
-  // node as a kernel guest (TABCOMPUTER_NODE_WORKER=1)
+  // node as a kernel guest (the default; TABCOMPUTER_NODE_WORKER=0 keeps the builtin)
   return !!nodeKernelProgram(shell.env, name, [], (shell as any).terminal);
 }
 

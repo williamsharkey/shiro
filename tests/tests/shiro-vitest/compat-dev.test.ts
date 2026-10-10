@@ -1542,6 +1542,9 @@ describe('git (upstream, x86-64 in Blink)', () => {
 import { iframeServer } from '@shiro/iframe-server';
 import { WsClient } from '@shiro/browser/websocket';
 
+/** A whole body as text: the page's node gives what it was written (a string), a guest's comes over the kernel's bridge as bytes */
+const text = (body: unknown) => (body instanceof Uint8Array ? new TextDecoder().decode(body) : String(body));
+
 describe('in-tab servers: streamed responses and WebSocket upgrades (what a preview window reaches)', () => {
   let shell: Shell;
   let fs: FileSystem;
@@ -1550,6 +1553,23 @@ describe('in-tab servers: streamed responses and WebSocket upgrades (what a prev
     const r = await sh(shell, 'mkdir -p /home/user/live && cd /home/user/live && npm init -y > /dev/null && npm install ws@8.18.0 socket.io@4.8.1 > /dev/null; echo $?');
     expect(r.out).toBe('0\n');
   }, 300_000);
+
+  /**
+   * Start a server script in the background and wait for its port (node keeps
+   * running while it listens, as on Linux, when it runs as a kernel guest; in
+   * the page the server lives on in the page). Its output goes to a file.
+   */
+  const serve = async (script: string, port: number) => {
+    const out = `/tmp/live-${port}.out`;
+    await sh(shell, `cd /home/user/live && node ${script} > ${out} 2>&1 &`);
+    const t0 = Date.now();
+    while (!iframeServer.isPortInUse(port)) {
+      if (Date.now() - t0 > 30_000) throw new Error(`nothing listens on ${port}: ${await fs.readFile(out, 'utf8').catch(() => '')}`);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  };
+  // (the background servers end with the tests)
+  afterAll(async () => { await sh(shell, 'kill -9 $(jobs -p) 2>/dev/null; true'); });
 
   /** Talk RFC 6455 to `port` the way the preview's WebSocket does; resolve after `want` messages */
   const wsTalk = (port: number, path: string, onMessage: (m: string, send: (s: string) => void) => void, want: number) =>
@@ -1580,10 +1600,14 @@ srv.on('request', (req, res) => {
     res.end(body + ' at ' + req.url + ' ' + res.headersSent);
   });
 });
-srv.listen(4801, () => console.log('up', srv.address().port, srv.listening));`);
-    expect((await sh(shell, 'cd /home/user/live && node plain.js')).out).toContain('up 4801 true');
+srv.listen(4801, () => require('fs').writeFileSync('/tmp/live-4801.up', ['up', srv.address().port, srv.listening].join(' ')));`);
+    await serve('plain.js', 4801);
+    // (a file: a backgrounded node in the page writes its stdout only when it ends)
+    let up = '';
+    for (let i = 0; i < 250 && !up; i++) { up = String(await fs.readFile('/tmp/live-4801.up', 'utf8').catch(() => '')); if (!up) await new Promise((r) => setTimeout(r, 20)); }
+    expect(up).toBe('up 4801 true');
     const r = await iframeServer.fetch(4801, '/p?q=1', { method: 'POST', headers: { 'x-in': 'hi' }, body: 'payload' });
-    expect([r.status, r.headers?.['x-seen'], r.body]).toEqual([201, 'POST hi', 'got payload at /p?q=1 false']);
+    expect([r.status, r.headers?.['x-seen'], text(r.body)]).toEqual([201, 'POST hi', 'got payload at /p?q=1 false']);
     const b = await iframeServer.fetch(4801, '/bytes');
     expect(Array.from(b.body as Uint8Array)).toEqual([0, 255, 1]);
   }, 60_000);
@@ -1594,7 +1618,7 @@ srv.listen(4801, () => console.log('up', srv.address().port, srv.listening));`);
   let n = 0;
   const t = setInterval(() => { res.write('event: tick\\ndata: ' + (++n) + '\\n\\n'); if (n === 3) { clearInterval(t); res.end(); } }, 100);
 }).listen(4802);`);
-    await sh(shell, 'cd /home/user/live && node sse.js');
+    await serve('sse.js', 4802);
     const t0 = Date.now();
     const r = await iframeServer.fetch(4802, '/events');
     expect(r.status).toBe(200);
@@ -1619,18 +1643,18 @@ srv.on('upgrade', (req, socket, head) => {
   wss.handleUpgrade(req, socket, head, (ws) => ws.on('message', (m, isBinary) => ws.send(isBinary ? 'bin:' + [...m].join(',') : 'echo:' + m)));
 });
 srv.listen(4803);`);
-    await sh(shell, 'cd /home/user/live && node ws.js');
+    await serve('ws.js', 4803);
     const got = await wsTalk(4803, '/echo', (m, send) => { if (m === '') { send('a'); send('b'); } }, 2);
     expect(got).toEqual(['echo:a', 'echo:b']);
     // the same port still answers plain requests
-    expect((await iframeServer.fetch(4803, '/')).body).toBe('not a socket');
+    expect(text((await iframeServer.fetch(4803, '/')).body)).toBe('not a socket');
   }, 60_000);
 
   it('Socket.IO: a WebSocket connection and the polling handshake reach the server; events echo', async () => {
     await fs.writeFile('/home/user/live/sio.js', `const { Server } = require('socket.io');
 const io = new Server(4804);
 io.on('connection', (s) => s.on('echo', (m) => s.emit('echo', m + '!')));`);
-    await sh(shell, 'cd /home/user/live && node sio.js');
+    await serve('sio.js', 4804);
     const got = await wsTalk(4804, '/socket.io/?EIO=4&transport=websocket', (m, send) => {
       if (m.startsWith('0{')) send('40');
       else if (m.startsWith('40{')) send('42["echo","hi"]');
@@ -1640,7 +1664,7 @@ io.on('connection', (s) => s.on('echo', (m) => s.emit('echo', m + '!')));`);
     expect(got[2]).toBe('42["echo","hi!"]');
     const poll = await iframeServer.fetch(4804, '/socket.io/?EIO=4&transport=polling');
     expect(poll.status).toBe(200);
-    expect(String(poll.body)).toMatch(/^0\{"sid":.*"upgrades":\["websocket"\]/);
+    expect(text(poll.body)).toMatch(/^0\{"sid":.*"upgrades":\["websocket"\]/);
   }, 60_000);
 
   it('a kernel listener (net.createServer) takes a raw connection: its own WebSocket handshake and frames', async () => {
@@ -1664,7 +1688,7 @@ net.createServer((sock) => {
     sock.write(Buffer.concat([Buffer.from([0x81, out.length]), out]));
   });
 }).listen(4805, () => console.log('raw up'));`);
-    await sh(shell, 'cd /home/user/live && node raw.js');
+    await serve('raw.js', 4805);
     expect(await wsTalk(4805, '/', (m, send) => { if (m === '') send('ping'); }, 1)).toEqual(['kernel:ping']);
   }, 60_000);
 });

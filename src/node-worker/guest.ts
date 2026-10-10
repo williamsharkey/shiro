@@ -1,5 +1,5 @@
 /**
- * node as a kernel guest (TABCOMPUTER_NODE_WORKER=1): this runs in a
+ * node as a kernel guest (by default; TABCOMPUTER_NODE_WORKER=0 opts out): this runs in a
  * Worker. It turns the kernel's start message into the CommandContext
  * node-compat expects (files through SyscallFs, children through real
  * processes, fds 0/1/2 for stdio and the terminal), runs the `node`
