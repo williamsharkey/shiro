@@ -59,14 +59,6 @@ export const KNOWN_ISSUES: { issue: string; workaround?: string }[] = [
     workaround: 'Wrap a command that may read stdin as `{ cmd; } </dev/null`; a group\'s redirect works.',
   },
   {
-    issue: 'Once a `node` has been killed by `timeout`, the tab can wedge so that `node -e CODE`, `node file.js`, `esbuild` and `claude --npm` print nothing and hang, whatever their stdin (tabcomputer#13). `node -v`, `npm init` and `python3` still work.',
-    workaround: 'Reload the tab (this ends running agents, including you), or do node work such as `vitest` and `esbuild` in a checkout outside the tab.',
-  },
-  {
-    issue: "In the page's own shell (the terminal's, and commands it runs in the page), `/proc/self/fd/N` links read `/dev/pts/0` even when the fd is redirected to a pipe or file, `stat -L` on them gives the redirect's type, and `/proc/self/cmdline` is just `bash`. Kernel processes' `/proc/PID/fd` are right.",
-    workaround: 'Ask `[ -t N ]` whether an fd is a terminal rather than reading the link.',
-  },
-  {
     issue: "Images can't be pasted into Claude Code: `xclip` and `xsel` here are text only.",
     workaround: 'Save the image to a file and give its path.',
   },
@@ -139,7 +131,9 @@ ${bootSection(ctx, name)}
   calls block, \`ps\` and \`kill\` see it, and a server (\`node server.js\`, \`npm run
   dev\`) stays in the foreground while it listens, as on Linux. Start one with
   \`&\` (\`node server.js > server.log 2>&1 &\`) to keep using the shell, and stop it
-  with \`kill %1\`. \`TABCOMPUTER_NODE_WORKER=0\` runs node in the page instead.
+  with \`kill %1\`. That needs a cross-origin isolated page (\`doctor\` says;
+  ${site} is one): elsewhere, or with \`TABCOMPUTER_NODE_WORKER=0\`, node runs in
+  the page instead.
 - Network: outbound HTTP(S) works. Linux programs get TCP through the site's
   relay when it is on (ports 22, 80, 443, 9418); UDP is DNS only. Nothing on the
   internet can connect in.

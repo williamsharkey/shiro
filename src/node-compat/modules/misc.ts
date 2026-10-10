@@ -65,7 +65,8 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
 
     case 'tty':
     case 'node:tty': return {
-      isatty: (fd?: number) => !!ctx.terminal,
+      // (per fd, as the shell set them up: `node x.js 2> f` has fd 1 on the tty, not fd 2)
+      isatty: (fd?: number) => !!ctx.terminal && (fd === 0 ? ctx.stdinIsTTY !== false : fd === 1 ? ctx.stdoutIsTTY !== false : fd === 2 ? ctx.stderrIsTTY !== false : false),
       ReadStream: class ReadStream { constructor() {} setRawMode() { return this; } isTTY = !!ctx.terminal; },
       WriteStream: class WriteStream {
         isTTY = !!ctx.terminal;
@@ -175,7 +176,7 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
           if (mk) return mk(dir);
           const fakeReq: any = (id: string) => requireModule(id, dir);
           fakeReq.resolve = (id: string) => id;
-          fakeReq.cache = moduleCache;
+          fakeReq.cache = (requireModule as any).cache ?? moduleCache;
           return fakeReq;
         },
         // The node_modules directories searched from a directory (pnpm's bin linking)
@@ -208,7 +209,7 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
           const dir = typeof f === 'string' && f.startsWith('/') ? f.substring(0, f.lastIndexOf('/')) || '/' : ctx.cwd;
           return mk(dir).resolve(request);
         },
-        _cache: moduleCache,
+        _cache: (requireModule as any).cache ?? moduleCache,
         _extensions: (requireModule as any).extensions ?? {},
         Module: class Module {
           id: string;

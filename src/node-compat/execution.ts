@@ -207,7 +207,7 @@ export async function executeNodeScript(
     const guest = nodeGuestOf(ctx);
     // A forked guest: its channel to the parent (process.send / 'message')
     const ipcAlive = guest?.ipc ? attachProcessIpc(fakeProcess, guest.ipc, processEvents) : () => false;
-    const { fileCache, fileMtimes, moduleCache, tickSyncOps } = createFileCache(guest?.readText, guest ? (p) => !!(ctx.fs as any).isDirCached?.(p) : undefined);
+    const { fileCache, fileMtimes, moduleCache, tickSyncOps } = createFileCache(guest?.readText, guest ? (p) => !!(ctx.fs as any).isDirCached?.(p) : undefined, guest ? undefined : ctx.fs);
 
     // Pre-load environment (the page's: files into the cache, Claude's bootstrap)
     if (!guest) await preloadEnvironment(ctx, fileCache, fileMtimes, scriptPath);

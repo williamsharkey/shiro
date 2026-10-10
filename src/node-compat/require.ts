@@ -442,7 +442,8 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
 
     if (resolved.endsWith('.json')) {
       const exp = JSON.parse(content);
-      moduleCache.set(resolved, { exports: exp });
+      // (a module as node has it: Next's dev server walks require.cache entries' children)
+      moduleCache.set(resolved, { exports: exp, id: resolved, filename: resolved, loaded: true, children: [] } as { exports: any });
       lastResolved = resolved;
       return exp;
     }
@@ -537,6 +538,16 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
     return mod.exports;
   }
 
+  /** require.cache / Module._cache: an object keyed by filename, as in node, over the module cache */
+  const requireCache = new Proxy({}, {
+    get: (_t, k) => typeof k === 'string' && moduleCache.has(k) ? moduleCache.get(k) : undefined,
+    set: (_t, k, v) => { if (typeof k === 'string') moduleCache.set(k, v); return true; },
+    has: (_t, k) => typeof k === 'string' && moduleCache.has(k),
+    deleteProperty: (_t, k) => { if (typeof k === 'string') moduleCache.delete(k); return true; },
+    ownKeys: () => [...moduleCache.keys()],
+    getOwnPropertyDescriptor: (_t, k) => typeof k === 'string' && moduleCache.has(k)
+      ? { value: moduleCache.get(k), writable: true, enumerable: true, configurable: true } : undefined,
+  });
   /**
    * A module's `require`, with Node's properties: resolve (and
    * resolve.paths: the node_modules directories searched, null for a
@@ -568,14 +579,7 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
       }
       return out;
     };
-    req.cache = new Proxy({}, {
-      get: (_t, k) => typeof k === 'string' && moduleCache.has(k) ? moduleCache.get(k) : undefined,
-      has: (_t, k) => typeof k === 'string' && moduleCache.has(k),
-      deleteProperty: (_t, k) => { if (typeof k === 'string') moduleCache.delete(k); return true; },
-      ownKeys: () => [...moduleCache.keys()],
-      getOwnPropertyDescriptor: (_t, k) => typeof k === 'string' && moduleCache.has(k)
-        ? { value: moduleCache.get(k), enumerable: true, configurable: true } : undefined,
-    });
+    req.cache = requireCache;
     req.main = mainModule;
     req.extensions = extensions;
     if (mod) {
@@ -586,6 +590,7 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
   }
   let mainModule: any;
   (requireModule as any).makeRequire = makeRequire;
+  (requireModule as any).cache = requireCache;
   /**
    * require.extensions / Module._extensions: what loads each kind of file, as
    * node has them (Next's config loader reads `require.extensions['.js']` to

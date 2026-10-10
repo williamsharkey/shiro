@@ -242,3 +242,111 @@ describe('SharedObjects: a memfd passed between instances', () => {
     expect(new TextDecoder().decode(d.subarray(0, 6))).toBe('Jello!');
   });
 });
+
+describe('SharedObjects: a /dev/shm file mapped remote', () => {
+  // conformance's report: shm_open, ftruncate, mmap MAP_SHARED, p[1] = 'a', munmap, pread
+  it('pread sees the mapping, the mapping sees pwrite, an fd opened later too; the bytes stay after the last unmap', async () => {
+    const { fs } = await createTestShell();
+    const kernel = new Kernel({ fs, registerWithProcessTable: false });
+    const inbox: Record<number, ShmObjMessage[]> = {};
+    const ia = kernel.registerEngineInstance((m) => (inbox[ia] ??= []).push(m));
+    const a = kernel.spawn({ path: 'p', cwd: '/tmp', uid: 1000, run: () => new Promise<number>(() => {}) });
+    a.data.engineInstance = ia;
+    await fs.mkdir('/dev/shm', { recursive: true }).catch(() => {});
+    await fs.writeFile('/dev/shm/coh', new Uint8Array(12288));
+    const d = new Uint8Array(256);
+    const open = async () => {
+      const e = new TextEncoder().encode('/dev/shm/coh'); d.set(e);
+      return kernel.syscall(a, A.SYS_openat, [A.AT_FDCWD, e.length, A.O_RDWR, 0], d);
+    };
+    const pread = async (fd: number, off: number) => {
+      const b = new Uint8Array(1);
+      return (await kernel.syscall(a, A.SYS_pread64, [fd, 1, off, 0], b)) === 1 ? String.fromCharCode(b[0]) : '?';
+    };
+    const fd = await open();
+    const out = new Uint8Array(8);
+    const id = await kernel.syscall(a, A.SYS_shiro_shmobj_map, [fd, A.SHMOBJ_EAGER, 12288, 0], out);
+    expect(new DataView(out.buffer).getInt32(0, true)).toBe(1);
+    const sab = (inbox[ia][0] as { sab: SharedArrayBuffer }).sab;
+    const mem = new Uint8Array(sab);
+    mem[1] = 0x61; // 'a' through the mapping
+    expect(await pread(fd, 1)).toBe('a');
+    d[0] = 0x77; // 'w' through the fd
+    expect(await kernel.syscall(a, A.SYS_pwrite64, [fd, 1, 2, 0], d)).toBe(1);
+    expect(mem[2]).toBe(0x77);
+    // shm_open, mmap, close, then shm_open again: the new inode reads the mapping too
+    expect(await kernel.syscall(a, A.SYS_close, [fd], d)).toBe(0);
+    mem[3] = 0x7a; // 'z'
+    const fd2 = await open();
+    expect(await pread(fd2, 3)).toBe('z');
+    // munmap: the fd keeps the final bytes (the pwrite included), and so does the file
+    expect(await kernel.syscall(a, A.SYS_shiro_shmobj_unmap, [id], d)).toBe(0);
+    mem.fill(0, 0, 8); // no longer the file's memory
+    expect([await pread(fd2, 1), await pread(fd2, 2), await pread(fd2, 3)].join('')).toBe('awz');
+    expect(await kernel.syscall(a, A.SYS_close, [fd2], d)).toBe(0);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(Array.from((await fs.readFile('/dev/shm/coh') as Uint8Array).subarray(1, 4))).toEqual([0x61, 0x77, 0x7a]);
+    await kernel.engineInstanceGone(ia);
+    kernel.dispose();
+  });
+  it('the same with a 6 MiB file (a big file the kernel holds as pages): pages not yet written back, the mapping, pwrite and munmap agree', async () => {
+    const { fs } = await createTestShell();
+    const kernel = new Kernel({ fs, registerWithProcessTable: false });
+    const inbox: Record<number, ShmObjMessage[]> = {};
+    const ia = kernel.registerEngineInstance((m) => (inbox[ia] ??= []).push(m));
+    const a = kernel.spawn({ path: 'p', cwd: '/tmp', uid: 1000, run: () => new Promise<number>(() => {}) });
+    a.data.engineInstance = ia;
+    const SZ = 6 << 20, HI = (5 << 20) + 77;
+    await fs.mkdir('/dev/shm', { recursive: true }).catch(() => {});
+    await fs.writeFile('/dev/shm/big', new Uint8Array(SZ));
+    expect(fs.blobOf('/dev/shm/big')).toBeTruthy();
+    const d = new Uint8Array(256);
+    const open = async () => {
+      const e = new TextEncoder().encode('/dev/shm/big'); d.set(e);
+      return kernel.syscall(a, A.SYS_openat, [A.AT_FDCWD, e.length, A.O_RDWR, 0], d);
+    };
+    const pread = async (fd: number, off: number) => {
+      const b = new Uint8Array(1);
+      return (await kernel.syscall(a, A.SYS_pread64, [fd, 1, off, 0], b)) === 1 ? String.fromCharCode(b[0]) : '?';
+    };
+    const pwrite = (fd: number, off: number, c: string) => { d[0] = c.charCodeAt(0); return kernel.syscall(a, A.SYS_pwrite64, [fd, 1, off, 0], d); };
+    const fd = await open();
+    expect(await pwrite(fd, HI, 'p')).toBe(1); // a page written, not yet back in the FileSystem
+    const out = new Uint8Array(8);
+    const id = await kernel.syscall(a, A.SYS_shiro_shmobj_map, [fd, A.SHMOBJ_EAGER, SZ, 0], out);
+    expect(new DataView(out.buffer).getInt32(0, true)).toBe(1);
+    const mem = new Uint8Array((inbox[ia][0] as { sab: SharedArrayBuffer }).sab);
+    expect(String.fromCharCode(mem[HI])).toBe('p'); // the buffer starts with the inode's pages
+    mem[HI + 1] = 0x61; // 'a' through the mapping
+    expect(await pread(fd, HI + 1)).toBe('a');
+    expect(await pwrite(fd, HI + 2, 'w')).toBe(1);
+    expect(String.fromCharCode(mem[HI + 2])).toBe('w');
+    expect(await kernel.syscall(a, A.SYS_close, [fd], d)).toBe(0);
+    mem[HI + 3] = 0x7a; // 'z'
+    const fd2 = await open();
+    expect(await pread(fd2, HI + 3)).toBe('z');
+    expect(await kernel.syscall(a, A.SYS_shiro_shmobj_unmap, [id], d)).toBe(0);
+    mem.fill(0, HI, HI + 8); // no longer the file's memory
+    expect([await pread(fd2, HI), await pread(fd2, HI + 1), await pread(fd2, HI + 2), await pread(fd2, HI + 3)].join('')).toBe('pawz');
+    expect(await pwrite(fd2, SZ - 1, 'e')).toBe(1); // still writable after the detach
+    expect(await kernel.syscall(a, A.SYS_close, [fd2], d)).toBe(0);
+    await new Promise((r) => setTimeout(r, 50));
+    await fs.sync();
+    const back = await fs.readFile('/dev/shm/big') as Uint8Array;
+    expect(back.length).toBe(SZ);
+    expect(String.fromCharCode(...back.subarray(HI, HI + 4), back[SZ - 1])).toBe('pawze');
+    expect(back.subarray(0, HI).every((x) => x === 0)).toBe(true);
+    expect(fs.blobOf('/dev/shm/big')).toBeTruthy(); // stored as blocks again
+    // A mapping of less than the file: the inode stays pages, and munmap writes the mapping back into them
+    const fd3 = await open();
+    const id2 = await kernel.syscall(a, A.SYS_shiro_shmobj_map, [fd3, A.SHMOBJ_EAGER, 12288, 0], out);
+    expect(id2).toBeGreaterThan(0);
+    const mem2 = new Uint8Array((inbox[ia].filter((m) => (m as { id?: number }).id === id2 && 'sab' in m).pop() as { sab: SharedArrayBuffer }).sab);
+    mem2[5] = 0x6d; // 'm'
+    expect(await kernel.syscall(a, A.SYS_shiro_shmobj_unmap, [id2], d)).toBe(0);
+    expect([await pread(fd3, 5), await pread(fd3, HI)].join('')).toBe('mp');
+    expect(await kernel.syscall(a, A.SYS_close, [fd3], d)).toBe(0);
+    await kernel.engineInstanceGone(ia);
+    kernel.dispose();
+  });
+});
