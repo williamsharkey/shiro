@@ -68,6 +68,8 @@ const ERRNO_BY_NAME: Record<string, number> = {
 export const errnoName = (e: number): string =>
   Object.entries(ERRNO_BY_NAME).find(([k, v]) => v === e && !k.startsWith('EAI') && k !== 'ENOTFOUND')?.[0] ?? `E${e}`;
 
+import type { ByteChannel } from '../byte-pipe';
+
 // ── Types ──
 
 export interface SockAddr {
@@ -79,11 +81,12 @@ export interface SockAddr {
 
 /** Where listening sockets get published so Shiro's preview/fetch path can reach them. */
 export interface PortHost {
-  serve(port: number, handler: (req: VirtualHttpRequest) => Promise<VirtualHttpResponse>, name?: string): () => void;
+  serve(port: number, handler: (req: VirtualHttpRequest) => Promise<VirtualHttpResponse>, name?: string,
+    opts?: { connect?: (conn: ByteChannel) => void }): () => void;
   isPortInUse?(port: number): boolean;
 }
 export interface VirtualHttpRequest {
-  method: string; path: string; headers?: Record<string, string>; body?: string | null; query?: Record<string, string>;
+  method: string; path: string; headers?: Record<string, string>; body?: string | Uint8Array | null; query?: Record<string, string>;
 }
 export interface VirtualHttpResponse {
   status?: number; statusText?: string; headers?: Record<string, string>; body?: string | Uint8Array;
@@ -970,7 +973,7 @@ const dec = new TextDecoder();
 
 function encodeHttpRequest(req: VirtualHttpRequest, port: number): Uint8Array {
   const qs = req.query && Object.keys(req.query).length ? '?' + new URLSearchParams(req.query).toString() : '';
-  const body = req.body ? enc.encode(req.body) : new Uint8Array(0);
+  const body = !req.body ? new Uint8Array(0) : typeof req.body === 'string' ? enc.encode(req.body) : req.body; // a preview's fetch sends bytes
   const headers: Record<string, string> = {};
   for (const [k, v] of Object.entries(req.headers || {})) headers[k.toLowerCase()] = String(v);
   headers.host ??= `localhost:${port}`;
@@ -1280,9 +1283,38 @@ export class NetStack {
     this.portHost().then((host) => {
       if (!host || cancelled || listener.state !== 'listening') return;
       if (host.isPortInUse?.(port)) return; // an http.createServer already owns it; loopback still works
-      try { undo = host.serve(port, (req) => this.bridgeHttp(listener, req), `socket:${port}`); } catch { /* port taken */ }
+      try {
+        undo = host.serve(port, (req) => this.bridgeHttp(listener, req), `socket:${port}`,
+          { connect: (conn) => { void this.bridgeConnect(listener, conn); } });
+      } catch { /* port taken */ }
     });
     return () => { cancelled = true; undo?.(); };
+  }
+
+  /**
+   * A raw connection from the page (a preview's WebSocket) to `listener`:
+   * an accepted loopback connection, bytes piped both ways until either side ends.
+   */
+  async bridgeConnect(listener: KSocket, conn: ByteChannel): Promise<void> {
+    const client = new KSocket(this, AF_INET, 0, 0);
+    const r = await client.connect({ family: AF_INET, address: '127.0.0.1', port: listener.local!.port });
+    if (r < 0) { conn.close(); return; }
+    const toGuest = (async () => {
+      for (let d = await conn.read(); d; d = await conn.read()) {
+        if (await client.write(d) < 0) break;
+      }
+    })();
+    const toPage = (async () => {
+      const buf = new Uint8Array(64 * 1024);
+      for (;;) {
+        const n = await client.read(buf);
+        if (n <= 0) break;
+        try { await conn.write(buf.slice(0, n)); } catch { break; }
+      }
+    })();
+    await Promise.race([toGuest, toPage]).catch(() => {});
+    conn.close();
+    await client.close();
   }
 
   /** Turn one virtual HTTP request into an accepted connection on `listener`. */

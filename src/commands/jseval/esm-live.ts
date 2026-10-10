@@ -167,6 +167,9 @@ export function liveEsbuildChunk(src: string): string {
     const next = nextChar(j);
     const top = stack[stack.length - 1];
     const memberPos = prev === '{' || prev === ',' || prev === ';' || prev === '}';
+    // `get name() {}`, `static x`, `async *gen()`: the keyword, when an import is named like it
+    if (MEMBER_PREFIX.has(word) && ((top === 'o' && (prev === '{' || prev === ',')) || (top === 'c' && memberPos))
+      && (/[A-Za-z_$\[*'"#]/.test(next) || next.charCodeAt(0) > 127)) return null;
     if (top === 'o' && (prev === '{' || prev === ',')) {
       if (next === ':' || next === '(') return null;      // key or method
       if (next === ',' || next === '}') return `${word}: ${ref}`; // shorthand property

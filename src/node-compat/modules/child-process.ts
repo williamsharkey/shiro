@@ -77,7 +77,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
     }
     // node --version / node -v
     if (/^node\s+(--version|-v)$/.test(trimmed)) {
-      return { stdout: 'v20.0.0\n', stderr: '', status: 0 };
+      return { stdout: 'v22.12.0\n', stderr: '', status: 0 };
     }
     // npm --version
     if (/^npm\s+--version$/.test(trimmed)) {

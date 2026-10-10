@@ -1,6 +1,7 @@
 import { Command, CommandContext } from './index';
+import { quoteArgsForShell } from '../shell';
 import { extractTarGzToFS, type FileSystemWriter } from '../utils/tar-utils';
-import { maxSatisfying, satisfiesRange } from '../utils/semver-utils';
+import { buildTree, binDirOf, binEntries, WASM_ALTERNATES, type BuildResult, type PackageMetadata, type TreeNode, type Wanted } from './npm-tree';
 
 /**
  * npm: Browser-native package manager for Node.js packages
@@ -60,12 +61,6 @@ interface NpmPackageMetadata {
   };
 }
 
-interface ResolvedPackage {
-  name: string;
-  version: string;
-  tarballUrl: string;
-  dependencies: Record<string, string>;
-}
 
 export const npmCmd: Command = {
   name: 'npm',
@@ -78,6 +73,8 @@ export const npmCmd: Command = {
       ctx.stdout += 'Usage: npm <command>\n\n';
       ctx.stdout += 'Commands:\n';
       ctx.stdout += '  init              Create a package.json file\n';
+      ctx.stdout += '  create <name>     Run create-<name> (npm init <name>), e.g. npm create vite@latest app\n';
+      ctx.stdout += '  exec, x <pkg>     Run a package\'s bin (npx)\n';
       ctx.stdout += '  install [pkg]     Install package(s) from registry.npmjs.org\n';
       ctx.stdout += '  i [pkg]           Alias for install\n';
       ctx.stdout += '  list              List installed packages\n';
@@ -101,8 +98,19 @@ export const npmCmd: Command = {
     }
 
     switch (subcommand) {
+      case 'create':
+      case 'innit':
+        return await npmCreate(ctx);
       case 'init':
+        // npm init <initializer> is npm create
+        if (ctx.args[1] && !ctx.args[1].startsWith('-')) return await npmCreate(ctx);
         return await npmInit(ctx);
+      case 'exec':
+      case 'x': {
+        // npm exec [--] <pkg> [args]: npx
+        const rest = ctx.args.slice(1).filter((a, i) => !(i === 0 && a === '--'));
+        return ctx.shell.execute(quoteArgsForShell(['npx', ...rest]), (o) => { ctx.stdout += o.replace(/\r\n/g, '\n'); }, (e) => { ctx.stderr += e.replace(/\r\n/g, '\n'); }, false, ctx.terminal, true);
+      }
       case 'install':
       case 'i':
         return await npmInstall(ctx);
@@ -142,6 +150,31 @@ export const npmCmd: Command = {
     }
   },
 };
+
+/**
+ * npm create <initializer> [args]: npx create-<name> with the arguments
+ * (vite@latest → create-vite@latest, @scope → @scope/create,
+ * @scope/name → @scope/create-name); a `--` before them is dropped.
+ */
+export function initializerPackage(spec: string): string {
+  const m = /^(@[^/@]+)(?:\/([^@]+))?(@.*)?$/.exec(spec);
+  if (m) return `${m[1]}/${m[2] ? 'create-' + m[2] : 'create'}${m[3] ?? ''}`;
+  const at = spec.indexOf('@', 1);
+  const name = at > 0 ? spec.slice(0, at) : spec;
+  return `create-${name}${at > 0 ? spec.slice(at) : ''}`;
+}
+
+async function npmCreate(ctx: CommandContext): Promise<number> {
+  const spec = ctx.args[1];
+  if (!spec || spec.startsWith('-')) {
+    ctx.stderr += 'npm create: usage: npm create <initializer> [args]\n';
+    return 1;
+  }
+  const rest = ctx.args.slice(2);
+  const args = rest[0] === '--' ? rest.slice(1) : rest.filter((a, i) => !(a === '--' && i === rest.indexOf('--')));
+  return ctx.shell.execute(quoteArgsForShell(['npx', initializerPackage(spec), ...args]),
+    (o) => { ctx.stdout += o.replace(/\r\n/g, '\n'); }, (e) => { ctx.stderr += e.replace(/\r\n/g, '\n'); }, false, ctx.terminal, true);
+}
 
 async function npmInit(ctx: CommandContext): Promise<number> {
   const pkgPath = ctx.fs.resolvePath('package.json', ctx.cwd);
@@ -196,8 +229,10 @@ async function fetchPackageMetadata(packageName: string): Promise<NpmPackageMeta
     const registryUrl = `https://registry.npmjs.org/${packageName}`;
 
     const response = await fetch(registryUrl, {
+      // The abbreviated install document: deps, peers, bins, os/cpu and dist
+      // are all the resolver reads, at a fraction of the full document's size
       headers: {
-        'Accept': 'application/json',
+        'Accept': 'application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8',
       },
     });
 
@@ -227,204 +262,84 @@ async function fetchPackageMetadata(packageName: string): Promise<NpmPackageMeta
   }
 }
 
-/**
- * Resolve a version range to a specific version
- */
-function resolveVersion(metadata: NpmPackageMetadata, versionRange: string): string | null {
-  // Handle 'latest' or '*'
-  if (versionRange === 'latest' || versionRange === '*' || versionRange === '') {
-    return metadata['dist-tags'].latest;
-  }
-
-  // Get all available versions
-  const versions = Object.keys(metadata.versions);
-
-  // Find maximum satisfying version
-  return maxSatisfying(versions, versionRange);
-}
 
 /**
- * Resolve dependency tree with parallel metadata fetching
+ * Install a resolved tree under `baseDir` (a project, or /usr/local/lib for -g):
+ * shallower packages first (a version change empties the directory, nested
+ * packages included), each level's downloads together, then the bins.
  */
-async function resolveDependencyTree(
-  packageName: string,
-  versionRange: string,
-  ctx: CommandContext
-): Promise<Map<string, ResolvedPackage>> {
-  const resolved = new Map<string, ResolvedPackage>();
-  let queue: Array<{ name: string; range: string }> = [{ name: packageName, range: versionRange }];
-  const seen = new Set<string>();
-
-  while (queue.length > 0) {
-    // Filter out already-seen packages
-    const toProcess = queue.filter(({ name, range }) => {
-      const key = `${name}@${range}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-
-    if (toProcess.length === 0) break;
-    queue = []; // Clear queue, will be refilled from results
-
-    // Fire all metadata requests at once - browser handles connection pooling
-    const promises = toProcess.map(async ({ name, range }) => {
-      try {
-        const metadata = await fetchPackageMetadata(name);
-        return { name, range, metadata };
-      } catch (error: any) {
-        ctx.stderr += `Error resolving ${name}@${range}: ${error.message}\n`;
-        return { name, range, metadata: null };
-      }
-    });
-
-    const results = await Promise.all(promises);
-
-    // Process results and queue new dependencies
-    for (const { name, range, metadata } of results) {
-      if (!metadata) continue;
-
-      const version = resolveVersion(metadata, range);
-      if (!version) {
-        ctx.stderr += `Warning: No version found for ${name}@${range}\n`;
-        continue;
-      }
-
-      const versionData = metadata.versions[version];
-      if (!versionData) {
-        ctx.stderr += `Warning: Version ${version} not found for ${name}\n`;
-        continue;
-      }
-
-      // Store resolved package
-      resolved.set(`${name}@${version}`, {
-        name,
-        version,
-        tarballUrl: versionData.dist.tarball,
-        dependencies: versionData.dependencies || {},
-      });
-
-      // Queue dependencies
-      for (const [depName, depRange] of Object.entries(versionData.dependencies || {})) {
-        queue.push({ name: depName, range: depRange });
-      }
-    }
-  }
-
-  return resolved;
-}
-
-/**
- * Download and extract a package tarball
- */
-async function installPackage(
-  pkg: ResolvedPackage,
-  ctx: CommandContext
-): Promise<void> {
-  ctx.stdout += `  + ${pkg.name}@${pkg.version}\n`;
-
-  // Download tarball
-  const response = await fetch(pkg.tarballUrl);
-  if (!response.ok) {
-    throw new Error(`Failed to download ${pkg.name}: ${response.statusText}`);
-  }
-
-  const arrayBuffer = await response.arrayBuffer();
-  const tarballData = new Uint8Array(arrayBuffer);
-
-  // Create node_modules directory if needed
-  const nodeModulesPath = ctx.fs.resolvePath('node_modules', ctx.cwd);
-  try {
-    await ctx.fs.mkdir(nodeModulesPath);
-  } catch {
-    // Already exists
-  }
-
-  // Create package directory
-  const packageDir = ctx.fs.resolvePath(`node_modules/${pkg.name}`, ctx.cwd);
-  await ctx.fs.mkdir(packageDir, { recursive: true });
-
-  // Extract tarball to package directory
-  let filesWritten = 0;
-  const fsWriter: FileSystemWriter = {
-    writeFile: async (path: string, data: Uint8Array) => {
-      await ctx.fs.writeFile(path, data);
-      filesWritten++;
-    },
-    mkdir: async (path: string) => {
-      try {
-        await ctx.fs.mkdir(path, { recursive: true });
-      } catch {
-        // Directory might exist
-      }
-    },
-  };
-
-  await extractTarGzToFS(tarballData, packageDir, fsWriter);
-  ctx.stdout += `  ${filesWritten} files extracted\n`;
-}
-
-/**
- * Create symlinks in node_modules/.bin for packages with bin entries
- */
-async function createBinSymlinks(
+async function installTree(
   ctx: CommandContext,
-  packages: Map<string, ResolvedPackage>
-): Promise<void> {
-  const binDir = ctx.fs.resolvePath('node_modules/.bin', ctx.cwd);
-
-  // Ensure .bin directory exists
-  try {
-    await ctx.fs.mkdir(binDir, { recursive: true });
-  } catch {
-    // Already exists
+  baseDir: string,
+  tree: BuildResult,
+  opts: { globalBinDir?: string } = {},
+): Promise<{ added: number; failed: number }> {
+  const base = baseDir.replace(/\/$/, '');
+  const byDepth = new Map<number, TreeNode[]>();
+  for (const n of tree.nodes) {
+    const d = n.dir.split('/node_modules/').length;
+    (byDepth.get(d) ?? byDepth.set(d, []).get(d)!).push(n);
+  }
+  let added = 0;
+  let failed = 0;
+  for (const depth of [...byDepth.keys()].sort((x, y) => x - y)) {
+    const queue = [...byDepth.get(depth)!];
+    const worker = async () => {
+      for (let n = queue.shift(); n; n = queue.shift()) {
+        const dir = `${base}/${n.dir}`;
+        try {
+          try {
+            const have = JSON.parse(await ctx.fs.readFile(`${dir}/package.json`, 'utf8') as string);
+            if (have.version === n.version && (have.name === n.source || have.name === n.name)) continue;
+            await ctx.fs.rm(dir, { recursive: true, force: true } as any);
+          } catch { /* not installed */ }
+          const response = await fetch(n.tarball);
+          if (!response.ok) throw new Error(`download failed: ${response.status} ${response.statusText}`);
+          const tarballData = new Uint8Array(await response.arrayBuffer());
+          await ctx.fs.mkdir(dir, { recursive: true });
+          const fsWriter: FileSystemWriter = {
+            writeFile: async (path: string, data: Uint8Array) => { await ctx.fs.writeFile(path, data); },
+            mkdir: async (path: string) => { try { await ctx.fs.mkdir(path, { recursive: true }); } catch { /* exists */ } },
+          };
+          await extractTarGzToFS(tarballData, dir, fsWriter);
+          added++;
+        } catch (e: any) {
+          failed++;
+          ctx.stderr += `npm: ${n.name}@${n.version}: ${e?.message ?? e}\n`;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(16, queue.length) }, worker));
   }
 
-  let binCount = 0;
-
-  for (const pkg of packages.values()) {
-    try {
-      // Read package.json from installed package
-      const pkgJsonPath = ctx.fs.resolvePath(
-        `node_modules/${pkg.name}/package.json`,
-        ctx.cwd
-      );
-
-      const content = await ctx.fs.readFile(pkgJsonPath, 'utf8') as string;
-      const pkgData = JSON.parse(content) as PackageJson;
-
-      if (!pkgData.bin) continue;
-
-      // Handle bin as string or object
-      const bins: Record<string, string> = typeof pkgData.bin === 'string'
-        ? { [pkg.name]: pkgData.bin }
-        : pkgData.bin;
-
-      // Create symlink for each bin entry
-      for (const [binName, binPath] of Object.entries(bins)) {
-        const symlinkPath = ctx.fs.resolvePath(`node_modules/.bin/${binName}`, ctx.cwd);
-        // Target is relative from .bin to the actual script
-        const cleanBinPath = binPath.replace(/^\.\//, '');
-        const targetPath = `../${pkg.name}/${cleanBinPath}`;
-
+  // Bins: each package's in the node_modules/.bin of its level; -g also links the top ones into the global bin dir
+  for (const n of tree.nodes) {
+    for (const [binName, rel] of binEntries(n.name, n.bin)) {
+      const clean = rel.replace(/^\.\//, '');
+      const links: [string, string][] = [[`${base}/${binDirOf(n)}/${binName}`, `../${n.name}/${clean}`]];
+      if (opts.globalBinDir && n.parent?.dir === '') links.push([`${opts.globalBinDir}/${binName}`, `${base}/${n.dir}/${clean}`]);
+      for (const [link, target] of links) {
         try {
-          // Remove existing symlink if any
-          await ctx.fs.unlink(symlinkPath);
-        } catch {
-          // Doesn't exist, that's fine
-        }
-
-        await ctx.fs.symlink(targetPath, symlinkPath);
-        binCount++;
+          await ctx.fs.mkdir(link.slice(0, link.lastIndexOf('/')), { recursive: true });
+          try { await ctx.fs.unlink(link); } catch { /* none */ }
+          await ctx.fs.symlink(target, link);
+        } catch { /* skip */ }
       }
-    } catch {
-      // Package doesn't have valid package.json or bin entries, skip
     }
   }
+  return { added, failed };
+}
 
-  if (binCount > 0) {
-    ctx.stdout += `Created ${binCount} bin symlink(s) in node_modules/.bin\n`;
-  }
+/** The tree for `wanted`, with what was left out reported */
+async function resolveTree(ctx: CommandContext, wanted: Wanted[]): Promise<BuildResult> {
+  const tree = await buildTree(wanted, fetchPackageMetadata as (n: string) => Promise<PackageMetadata>);
+  for (const w of tree.warnings) ctx.stderr += `npm warn ${w}\n`;
+  // The packages asked for, as npm lists them
+  for (const n of tree.nodes) if (n.parent === tree.root && wanted.some((w) => w.name === n.name)) ctx.stdout += `  + ${n.name}@${n.version}\n`;
+  const alternates = tree.nodes.filter((n) => n.source !== n.name && Object.values(WASM_ALTERNATES).includes(n.source));
+  for (const n of alternates) ctx.stdout += `  ${n.name}@${n.version}: the WebAssembly build (${n.source})\n`;
+  if (tree.skipped.length) ctx.stdout += `  skipped ${tree.skipped.length} native platform package(s): ${tree.skipped.slice(0, 6).join(', ')}${tree.skipped.length > 6 ? ', ...' : ''}\n`;
+  return tree;
 }
 
 async function npmInstall(ctx: CommandContext): Promise<number> {
@@ -503,37 +418,12 @@ async function npmInstall(ctx: CommandContext): Promise<number> {
     ctx.stdout += 'Installing packages...\n';
   }
 
-  // Resolve dependency tree for each package
-  const allResolved = new Map<string, ResolvedPackage>();
-
-  for (const [name, range] of Object.entries(depsToResolve)) {
-    try {
-      const resolved = await resolveDependencyTree(name, range, ctx);
-      for (const [key, value] of resolved) {
-        allResolved.set(key, value);
-      }
-    } catch (error: any) {
-      ctx.stderr += `Error installing ${name}: ${error.message}\n`;
-      return 1;
-    }
-  }
-
-  // Install all resolved packages in parallel - browser handles connection pooling
-  ctx.stdout += `\nResolved ${allResolved.size} package(s):\n`;
-
-  const packages = Array.from(allResolved.values());
-
-  // Fire all install requests at once
-  const installPromises = packages.map(pkg => installPackage(pkg, ctx).catch(err => {
-    ctx.stderr += `Error installing ${pkg.name}: ${err.message}\n`;
-  }));
-
-  await Promise.all(installPromises);
-
-  // Create .bin symlinks for packages with bin entries
-  await createBinSymlinks(ctx, allResolved);
-
-  ctx.stdout += '\nPackages installed successfully.\n';
+  const t0 = Date.now();
+  const tree = await resolveTree(ctx, Object.entries(depsToResolve).map(([name, range]) => ({ name, range })));
+  const { added, failed } = await installTree(ctx, ctx.cwd, tree);
+  ctx.stdout += `\nadded ${added} package(s), ${tree.nodes.length} in the tree, in ${((Date.now() - t0) / 1000).toFixed(1)}s\n`;
+  if (failed || (tree.warnings.length && tree.nodes.length === 0)) return 1;
+  ctx.stdout += 'Packages installed successfully.\n';
   return 0;
 }
 
@@ -586,122 +476,12 @@ async function npmInstallGlobal(
   }
 
   ctx.stdout += 'Installing packages globally...\n';
-
-  // Resolve dependency tree
-  const allResolved = new Map<string, ResolvedPackage>();
-  for (const [name, range] of Object.entries(depsToResolve)) {
-    try {
-      const resolved = await resolveDependencyTree(name, range, ctx);
-      for (const [key, value] of resolved) {
-        allResolved.set(key, value);
-      }
-    } catch (error: any) {
-      ctx.stderr += `Error installing ${name}: ${error.message}\n`;
-      return 1;
-    }
-  }
-
-  ctx.stdout += `\nResolved ${allResolved.size} package(s):\n`;
-
-  // Install packages to global node_modules
-  const packages = Array.from(allResolved.values());
-  const installPromises = packages.map(pkg => installPackageToDir(pkg, ctx, globalModulesDir).catch(err => {
-    ctx.stderr += `Error installing ${pkg.name}: ${err.message}\n`;
-  }));
-  await Promise.all(installPromises);
-
-  // Create bin symlinks in /usr/local/bin/
-  await createGlobalBinSymlinks(ctx, allResolved, globalModulesDir, globalBinDir);
-
-  ctx.stdout += '\nPackages installed globally.\n';
+  const tree = await resolveTree(ctx, Object.entries(depsToResolve).map(([name, range]) => ({ name, range })));
+  const { added, failed } = await installTree(ctx, '/usr/local/lib', tree, { globalBinDir });
+  ctx.stdout += `\nadded ${added} package(s)\n`;
+  if (failed) return 1;
+  ctx.stdout += 'Packages installed globally.\n';
   return 0;
-}
-
-/**
- * Install a package to a specific directory (used for global installs)
- */
-async function installPackageToDir(
-  pkg: ResolvedPackage,
-  ctx: CommandContext,
-  baseDir: string
-): Promise<void> {
-  ctx.stdout += `  + ${pkg.name}@${pkg.version}\n`;
-
-  const response = await fetch(pkg.tarballUrl);
-  if (!response.ok) {
-    throw new Error(`Failed to download ${pkg.name}: ${response.statusText}`);
-  }
-
-  const arrayBuffer = await response.arrayBuffer();
-  const tarballData = new Uint8Array(arrayBuffer);
-
-  const packageDir = `${baseDir}/${pkg.name}`;
-  await ctx.fs.mkdir(packageDir, { recursive: true });
-
-  let filesWritten = 0;
-  const fsWriter: FileSystemWriter = {
-    writeFile: async (path: string, data: Uint8Array) => {
-      await ctx.fs.writeFile(path, data);
-      filesWritten++;
-    },
-    mkdir: async (path: string) => {
-      try {
-        await ctx.fs.mkdir(path, { recursive: true });
-      } catch {
-        // Directory might exist
-      }
-    },
-  };
-
-  await extractTarGzToFS(tarballData, packageDir, fsWriter);
-  ctx.stdout += `  ${filesWritten} files extracted\n`;
-}
-
-/**
- * Create bin symlinks in a global bin directory
- */
-async function createGlobalBinSymlinks(
-  ctx: CommandContext,
-  packages: Map<string, ResolvedPackage>,
-  modulesDir: string,
-  binDir: string
-): Promise<void> {
-  let binCount = 0;
-
-  for (const pkg of packages.values()) {
-    try {
-      const pkgJsonPath = `${modulesDir}/${pkg.name}/package.json`;
-      const content = await ctx.fs.readFile(pkgJsonPath, 'utf8') as string;
-      const pkgData = JSON.parse(content) as PackageJson;
-
-      if (!pkgData.bin) continue;
-
-      const bins: Record<string, string> = typeof pkgData.bin === 'string'
-        ? { [pkg.name.replace(/^@.*\//, '')]: pkgData.bin }
-        : pkgData.bin;
-
-      for (const [binName, binPath] of Object.entries(bins)) {
-        const symlinkPath = `${binDir}/${binName}`;
-        const cleanBinPath = binPath.replace(/^\.\//, '');
-        const targetPath = `${modulesDir}/${pkg.name}/${cleanBinPath}`;
-
-        try {
-          await ctx.fs.unlink(symlinkPath);
-        } catch {
-          // Doesn't exist
-        }
-
-        await ctx.fs.symlink(targetPath, symlinkPath);
-        binCount++;
-      }
-    } catch {
-      // Package doesn't have valid package.json or bin entries
-    }
-  }
-
-  if (binCount > 0) {
-    ctx.stdout += `Created ${binCount} bin symlink(s) in ${binDir}\n`;
-  }
 }
 
 async function npmList(ctx: CommandContext): Promise<number> {

@@ -30,6 +30,7 @@ import { createFsModule, createFsPromisesModule } from './modules/fs';
 import { createChildProcessModule } from './modules/child-process';
 import { createStreamModule } from './modules/stream';
 import { createCryptoModule } from './modules/crypto';
+import { createProcessGlobal, createProcessFunction } from './process-global';
 import { createHttpModule, createHttpsModule, createHttp2Module } from './modules/http';
 import { createNetModule, createTlsModule } from './modules/net-tls';
 import { createMiscModule } from './modules/misc';
@@ -63,6 +64,8 @@ const IDLE_EXIT_SYNC_MS = 60;
 /** ...and as many quiet turns of the 20 ms idle poll (see idleExit) */
 const IDLE_EXIT_POLLS = 8;
 const IDLE_EXIT_SYNC_POLLS = 3;
+/** Node scripts running now (an unhandled rejection is only attributable when there is one) */
+let runningScripts = 0;
 
 /**
  * Execute a Node.js script in Shiro's browser-based JS VM.
@@ -77,14 +80,19 @@ export async function executeNodeScript(
 ): Promise<number> {
   // Suppress unhandled rejections from CLI force-exit patterns
   let _nodeStderrBuf: string[] | null = null;
+  /** process 'unhandledRejection' listeners, else node's exit 1 (set once the process exists) */
+  let onUnhandled: ((reason: any, promise: Promise<any>) => boolean) | null = null;
+  let uncountScript: (() => void) | null = null;
   const suppressRejection = (event: PromiseRejectionEvent) => {
     const msg = event.reason?.message || String(event.reason || '');
     if (event.reason?._isProcessExit || msg === 'unreachable' || msg.startsWith('Aborted(') || msg === 'need dylink section') {
       event.preventDefault();
+    } else if (onUnhandled?.(event.reason, event.promise)) {
+      event.preventDefault();
     } else {
       const errStr = msg || 'Unknown error';
       console.warn('[node] unhandled rejection:', event.reason?.stack || errStr);
-      _nodeStderrBuf?.push(`UnhandledPromiseRejection: ${errStr}`);
+      _nodeStderrBuf?.push(`UnhandledPromiseRejection: ${errStr}\n`);
       // Don't paint over a fullscreen TUI (Claude Code): its screen is on the
       // alternate buffer and stray text lands in its input box.
       const altScreen = (ctx.terminal as any)?.term?.buffer?.active?.type === 'alternate';
@@ -164,6 +172,9 @@ export async function executeNodeScript(
 
     // Buffer shim
     const FakeBuffer = createFakeBuffer();
+    // The process's own globalThis (its writes stay its own; globalThis.process is its process)
+    const processGlobal = createProcessGlobal({ process: fakeProcess, Buffer: FakeBuffer });
+    const processFunction = createProcessFunction(processGlobal, fakeProcess, FakeBuffer);
 
     // Built-in module registry with caching
     const _builtinCache = new Map<string, any>();
@@ -231,7 +242,7 @@ export async function executeNodeScript(
     // Require function (module resolver + loader)
     const requireModule = createRequireFunction({
       ctx, fileCache, fileMtimes, moduleCache, pendingPromises, processEvents,
-      getBuiltinModule, fakeConsole, fakeProcess, FakeBuffer,
+      getBuiltinModule, fakeConsole, fakeProcess, FakeBuffer, processGlobal, processFunction,
       createExpressShim: expressFactory,
       createSqliteShim: () => createSqliteShim({ ctx }),
       createAutoStub,
@@ -301,7 +312,7 @@ export async function executeNodeScript(
     const wrappedCode = printResult ? `return (${transformedCode})` : transformedCode;
     const fn = compileAsyncModule(AsyncFunction, [
       'console', 'process', 'require', 'Buffer', '__filename', '__dirname', 'shiro', '__import_meta', 'module', 'exports', '__dynamic_import',
-      '__shiro_module', '__shiro_require', 'global', '__shiro_require_ready',
+      '__shiro_module', '__shiro_require', 'global', '__shiro_require_ready', 'globalThis', 'Function',
     ], wrappedCode);
 
     // Fake import.meta for ES modules
@@ -347,6 +358,26 @@ export async function executeNodeScript(
     if (typeof window !== 'undefined') {
       window.addEventListener('unhandledrejection', suppressRejection);
     }
+    runningScripts++;
+    let counted = true;
+    uncountScript = () => { if (counted) { counted = false; runningScripts--; } };
+    // As node: the process's 'unhandledRejection' listeners take it, or the
+    // script ends with exit code 1. The page's event can't say whose promise
+    // it was, so a script ends this way only while it is the only one running
+    // (overlapping scripts, such as Claude and its tools, just print it).
+    onUnhandled = (reason, promise) => {
+      const listeners = processEvents['unhandledRejection'];
+      if (listeners?.length) {
+        for (const fn of [...listeners]) { try { fn(reason, promise); } catch { /* ignore */ } }
+        return true;
+      }
+      if (runningScripts === 1 && !_st.exitCalled && !_st.isInteractiveMode) {
+        _st.exitCode = 1;
+        _st.exitCalled = true;
+        _st.deferredExitResolve?.(1);
+      }
+      return false;
+    };
 
     // CORS proxy setup
     const corsProxyOrigin = typeof window !== 'undefined' ? getShiroOrigin() : '';
@@ -385,10 +416,12 @@ export async function executeNodeScript(
               method: init?.method || 'GET',
               headers: (init?.headers && typeof init.headers === 'object' && !Array.isArray(init.headers))
                 ? init.headers as Record<string, string> : {},
-              body: typeof init?.body === 'string' ? init.body : null,
+              body: typeof init?.body === 'string' ? init.body
+                : init?.body instanceof Uint8Array ? init.body as any
+                : init?.body instanceof ArrayBuffer ? new Uint8Array(init.body) as any : null,
             }).then(vResp => new Response(
-              typeof vResp.body === 'string' ? vResp.body
-                : vResp.body instanceof Uint8Array ? new TextDecoder().decode(vResp.body)
+              // bytes stay bytes; a stream (server-sent events) is read as it comes
+              typeof vResp.body === 'string' || vResp.body instanceof Uint8Array || vResp.body instanceof ReadableStream ? vResp.body as BodyInit
                 : JSON.stringify(vResp.body ?? ''),
               { status: vResp.status || 200, statusText: vResp.statusText || 'OK', headers: vResp.headers || {} },
             ));
@@ -482,9 +515,9 @@ export async function executeNodeScript(
             if (isLocalhost) {
               const { port, path, method } = (this as any)._localhost;
               iframeServer.fetch(port, path, { method, body: typeof body === 'string' ? body : null })
-                .then(vResp => {
+                .then(async vResp => {
                   const text = typeof vResp.body === 'string' ? vResp.body
-                    : vResp.body instanceof Uint8Array ? new TextDecoder().decode(vResp.body)
+                    : vResp.body instanceof Uint8Array || vResp.body instanceof ReadableStream ? await new Response(vResp.body as BodyInit).text()
                     : JSON.stringify(vResp.body ?? '');
                   respondWith(vResp.status || 200, vResp.statusText || 'OK', text);
                 })
@@ -602,8 +635,8 @@ export async function executeNodeScript(
           shell: ctx.shell,
           env: ctx.env,
           cwd: ctx.cwd,
-        }, fakeImportMeta, fakeModule, fakeExports, dynamicImport, fakeModule, entryRequire, globalThis,
-        (p: string) => requireModule.ready(p, entryDirname, entryFilename)),
+        }, fakeImportMeta, fakeModule, fakeExports, dynamicImport, fakeModule, entryRequire, processGlobal,
+        (p: string) => requireModule.ready(p, entryDirname, entryFilename), processGlobal, processFunction),
         timeoutPromise,
       ]);
     } catch (e: any) {
@@ -636,9 +669,11 @@ export async function executeNodeScript(
     // Wait for pending timers (max 5s)
     // Timers still pending after this cap (a 60s timeout) don't keep the script alive
     let timersOutlasted = false;
-    if (_activeTimers > 0 && _timersDone && !_st.isInteractiveMode) {
+    if (_activeTimers > 0 && _timersDone && !_st.isInteractiveMode && !_st.exitCalled) {
       try {
-        await Promise.race([_timersDone, new Promise((_, rej) => _baseST(() => rej('timer-wait-timeout'), 5000))]);
+        // (an exit meanwhile ends the wait: process.exit() or an unhandled
+        // rejection in async code, and the timers left go with the script)
+        await Promise.race([_timersDone, deferredExitPromise, new Promise((_, rej) => _baseST(() => rej('timer-wait-timeout'), 5000))]);
       } catch { timersOutlasted = true; }
     }
 
@@ -750,6 +785,7 @@ export async function executeNodeScript(
     }
 
     // Clean up
+    uncountScript?.();
     if (ctx.terminal && _st.ownsStdinPassthrough) ctx.terminal.exitStdinPassthrough();
     if (typeof window !== 'undefined') {
       setTimeout(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000);
@@ -760,6 +796,7 @@ export async function executeNodeScript(
     return _st.exitCode;
   } catch (e: any) {
     // Clean up on error
+    uncountScript?.();
     if (ctx.terminal && _st.ownsStdinPassthrough) ctx.terminal.exitStdinPassthrough();
     if (typeof window !== 'undefined') {
       setTimeout(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000);
