@@ -22,6 +22,7 @@ import { builtinIndex, findEntry, packageStatus, packageShadows, pkgOwnShadows, 
 import { activeProfile } from './profile';
 import { BUILTIN_SHIM_INTERP } from './path-shims';
 import { parseShellArgs } from './shell-args';
+import { redirectWordSpans } from './shell-redirect-words';
 
 // Lazy-load the WASI runtime (~960 lines) only when WASM execution is needed
 let _wasiRuntime: typeof import('./wasi-runtime') | null = null;
@@ -61,6 +62,8 @@ interface Redirect {
   mode?: '>' | '>>' | '<';
   /** >| : write even with noclobber */
   force?: boolean;
+  /** N<> file: open N<file that writes too */
+  rw?: boolean;
 }
 
 /** Does a word have a glob character the tokenizer didn't mark as quoted (\x01)? */
@@ -557,6 +560,10 @@ function isControlSignal(e: unknown): boolean {
   return e instanceof ExitSignal || e instanceof BreakSignal || e instanceof ContinueSignal || e instanceof ReturnSignal;
 }
 
+/** A redirection with its file word (`>f`, `2>> "a b"`, `<&3`), then a blank */
+const PREFIX_REDIR_RE = /^\s*(\d*(?:&>>?|>>|>\||<>|>&|<&|>|<)\s*(?:"(?:[^"\\]|\\.)*"|'[^']*'|\\.|[^\s'"|;&<>()\\])+)(?=\s)/;
+/** A command word as it stands after expansion */
+const PREFIX_WORD_RE = /^(?:"(?:[^"\\]|\\.)*"|'[^']*'|\\.|[^\s'"|;&<>()\\])+/;
 const ENV_PREFIX_RE = /^\s*([A-Za-z_][A-Za-z0-9_]*)(\+?)=((?:"(?:[^"\\]|\\.)*"|'[^']*'|\\.|[^\s'"|;&<>()\\])*)(?=\s)/;
 
 /**
@@ -609,7 +616,17 @@ export function rawCommandWord(seg: string): string | null {
 export function splitEnvPrefix(segment: string): { assignments: ([string, string] | [string, string, true])[]; rest: string } | null {
   const assignments: ([string, string] | [string, string, true])[] = [];
   let rest = segment;
-  for (let m = ENV_PREFIX_RE.exec(rest); m; m = ENV_PREFIX_RE.exec(rest)) {
+  // Redirections among the assignments (`A=1 >f B=2 cmd`) go after the command word
+  const redirs: string[] = [];
+  for (;;) {
+    const m = ENV_PREFIX_RE.exec(rest);
+    if (!m) {
+      const r = /^\s*\d*[<>&]/.test(rest) ? PREFIX_REDIR_RE.exec(rest) : null;
+      if (!r) break;
+      redirs.push(r[1]);
+      rest = rest.slice(r[0].length);
+      continue;
+    }
     const value = m[3].replace(/"((?:[^"\\]|\\.)*)"|'([^']*)'|\\(.)/g, (_all, dq, sq, esc) =>
       dq !== undefined ? dq.replace(/\\(["\\$`])/g, '$1') : sq ?? esc);
     assignments.push(m[2] === '+' ? [m[1], value, true] : [m[1], value]); // (NAME+=value appends)
@@ -618,7 +635,12 @@ export function splitEnvPrefix(segment: string): { assignments: ([string, string
   if (assignments.length === 0 || !rest.trim() || /^\s*[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/.test(rest)) return null;
   // Array assignments (arr=(...)) and bare compound words stay on the existing path
   if (/^\s*\(/.test(rest)) return null;
-  return { assignments, rest: rest.trimStart() };
+  rest = rest.trimStart();
+  if (redirs.length) {
+    const w = PREFIX_WORD_RE.exec(rest)?.[0].length ?? 0;
+    rest = `${rest.slice(0, w)} ${redirs.join(' ')}${rest.slice(w)}`;
+  }
+  return { assignments, rest };
 }
 
 /**
@@ -2162,7 +2184,16 @@ export class Shell {
         case '2>': case '2>>': err = openOut(2, r.target, r.type === '2>'); break;
         case '2>&1': this.userFds.set(2, this.resolveOutFd(1)!); break;
         case 'open':
-          if (r.mode === '<') {
+          if (r.mode === '<' && r.rw) {
+            // N<> file: read from the start, writes go after what is there (made if missing)
+            const fd = r.fd!;
+            const path = this.fs.resolvePath(r.target, this.cwd);
+            if (await fifo.isFifo(this, path)) { err = openOut(fd, r.target, false); break; }
+            this.dropFd(fd);
+            this.userFds.set(fd, { path });
+            pending.push(this.fs.appendFile(path, '').then(() => this.readInputRedirect(r.target))
+              .then((content) => { this.fileDescriptors.set(fd, { content, offset: 0 }); }));
+          } else if (r.mode === '<') {
             const fd = r.fd!;
             pending.push(this.readInputRedirect(r.target).then((content) => { this.fileDescriptors.set(fd, { content, offset: 0 }); }));
           } else err = openOut(r.fd!, r.target, r.mode === '>');
@@ -2507,7 +2538,17 @@ export class Shell {
       {
         const neg = /^!\s+\[\[/.test(trimmedCmd);
         const dbText = neg ? trimmedCmd.replace(/^!\s+/, '') : trimmedCmd;
-        if (dbText.startsWith('[[') && doubleBracketEnd(dbText, 0) === dbText.length) {
+        const dbEnd = dbText.startsWith('[[') ? doubleBracketEnd(dbText, 0) : -1;
+        // [[ … ]] > f: as a { …; } group, so f is opened before the operands expand
+        if (dbEnd > 0 && dbEnd < dbText.length && /^\s+\d*[<>&]/.test(dbText.slice(dbEnd)) &&
+          splitCompoundRedirects(`{ ${dbText.slice(0, dbEnd)}; }${dbText.slice(dbEnd)}`).redirects.length) {
+          exitCode = await this.execControlStructure(`{ ${dbText.slice(0, dbEnd)}; }${dbText.slice(dbEnd)}`, writeStdout, stderrWriter);
+          if (neg) exitCode = exitCode === 0 ? 1 : 0;
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          continue;
+        }
+        if (dbEnd === dbText.length) {
           exitCode = await this.evalDoubleBracket(dbText.slice(2, -2), stderrWriter);
           if (neg) exitCode = exitCode === 0 ? 1 : 0;
           this.lastExitCode = exitCode;
@@ -2530,9 +2571,21 @@ export class Shell {
       // are expanded up front
       let pipeline: string[];
       this.substStatus = null;
-      const rawSegments = splitTopLevelPipes(compound.command);
+      let cmdText = compound.command;
+      let rawSegments = splitTopLevelPipes(cmdText);
       // (A `( … )` subshell segment too: its words expand inside the subshell)
       const keepRaw = (seg: string) => this.isControlStructure(seg) || /^\s*\((?!\()[\s\S]*\)\s*$/.test(seg);
+      // `> $f`, `< a-*`: each redirection's file word expands on its own, to one word
+      if (/[<>]/.test(cmdText)) {
+        const fixed = await this.expandRedirectWords(rawSegments, keepRaw, stderrWriter);
+        if (!fixed) {
+          exitCode = 1;
+          this.lastExitCode = 1;
+          this.env['?'] = '1';
+          continue;
+        }
+        if (fixed !== rawSegments) { rawSegments = fixed; cmdText = fixed.join(' | '); }
+      }
       if (rawSegments.length > 1 && rawSegments.some(keepRaw)) {
         pipeline = [];
         for (const seg of rawSegments) {
@@ -2541,9 +2594,9 @@ export class Shell {
       } else {
         // Only `a=1 b=$a cmd` (two or more leading assignments, one expanding) needs the ordered pass;
         // checking that first keeps a tokenizer pass and an await off every other command
-        const ordered = rawSegments.length === 1 && ORDERED_PREFIX_RE.test(compound.command) && /[$`]/.test(compound.command)
-          ? await this.expandPrefixAssignments(compound.command, stderrWriter) : null;
-        pipeline = this.parsePipeline(ordered ?? await this.expandWords(quoteAssignmentValues(compound.command), stderrWriter));
+        const ordered = rawSegments.length === 1 && ORDERED_PREFIX_RE.test(cmdText) && /[$`]/.test(cmdText)
+          ? await this.expandPrefixAssignments(cmdText, stderrWriter) : null;
+        pipeline = this.parsePipeline(ordered ?? await this.expandWords(quoteAssignmentValues(cmdText), stderrWriter));
       }
 
       // Check for ! negation prefix
@@ -6482,7 +6535,7 @@ export class Shell {
       if (fd === 2 && kind !== '<') redirects.push({ type: kind === '>>' ? '2>>' : '2>', target, force });
       else if (fd === 1 && kind !== '<') redirects.push({ type: kind as '>' | '>>', target, force });
       else if (fd === 0 && kind === '<') redirects.push({ type: '<', target });
-      else redirects.push({ type: 'open', mode: kind as '>' | '>>' | '<', target, fd, force });
+      else redirects.push({ type: 'open', mode: kind as '>' | '>>' | '<', target, fd, force, ...(op === '<>' ? { rw: true } : {}) });
     }
 
     return {
@@ -6709,28 +6762,11 @@ export class Shell {
           j++;
         }
         const subCmd = input.slice(i + 2, j - 1);
-        // $(< file) shorthand: read file contents directly
-        const fileReadMatch = subCmd.trim().match(/^<(?![<&(])\s*((?:"[^"]*"|'[^']*'|\\.|[^\s;&|<>"'\\])+)$/);
-        let subOut: string;
-        if (fileReadMatch) {
-          const filePath = restoreExpansion(this.expandVars(fileReadMatch[1].trim())).replace(/^["']|["']$/g, '').replace(/\\(.)/g, '$1');
-          const resolved = this.fs.resolvePath(filePath, this.cwd);
-          try {
-            subOut = await this.fs.readFile(resolved, 'utf8') as string;
-            subOut = subOut.replace(/[\r\n]+$/, '');
-          } catch {
-            stderrWriter(`${filePath}: No such file or directory\r\n`);
-            subOut = '';
-          }
-        } else {
-          const subResult = await this.subshellExec(subCmd);
-          if (subResult.stderr) stderrWriter(subResult.stderr);
-          subOut = subResult.stdout.replace(/\r\n/g, '\n').replace(/\n+$/, '');
-        }
+        const subOut0 = await this.substitutionOutput(subCmd, stderrWriter);
         // If $() appears as the RHS of a variable assignment (VAR=$(...)), wrap the
         // output in double-quotes so tokenize() preserves spaces. This matches bash
         // semantics: VAR=$(cmd) preserves spaces, bare $(cmd) word-splits.
-        subOut = this.substitutionText(subOut, result.join(''), outerDQ || quoted);
+        const subOut = this.substitutionText(subOut0, result.join(''), outerDQ || quoted);
         result.push(subOut);
         i = j;
       } else if (input[i] === '`') {
@@ -6740,9 +6776,7 @@ export class Shell {
         while (j < input.length && input[j] !== '`') j += input[j] === '\\' ? 2 : 1;
         if (j >= input.length) { result.push(input.slice(i)); break; }
         const subCmd = input.slice(i + 1, j).replace(outerDQ || quoted ? /\\([\\$`"])/g : /\\([\\$`])/g, '$1');
-        const subResult = await this.subshellExec(subCmd);
-        if (subResult.stderr) stderrWriter(subResult.stderr);
-        const subOut = this.substitutionText(subResult.stdout.replace(/\r\n/g, '\n').replace(/\n+$/, ''), result.join(''), outerDQ || quoted);
+        const subOut = this.substitutionText(await this.substitutionOutput(subCmd, stderrWriter), result.join(''), outerDQ || quoted);
         result.push(subOut);
         i = j + 1;
       } else {
@@ -7386,6 +7420,29 @@ export class Shell {
       || isBraceGroup(input);
   }
 
+  /** What $(cmd) or `cmd` gives: cmd's output less trailing newlines; $(< file) reads file */
+  private async substitutionOutput(subCmd: string, stderrWriter: (s: string) => void): Promise<string> {
+    // $(< file) shorthand: read file contents directly
+    const fileReadMatch = subCmd.trim().match(/^<(?![<&(])\s*((?:"[^"]*"|'[^']*'|\\.|[^\s;&|<>"'\\])+)$/);
+    let subOut: string;
+    if (fileReadMatch) {
+      const filePath = restoreExpansion(this.expandVars(fileReadMatch[1].trim())).replace(/^["']|["']$/g, '').replace(/\\(.)/g, '$1');
+      const resolved = this.fs.resolvePath(filePath, this.cwd);
+      try {
+        subOut = await this.fs.readFile(resolved, 'utf8') as string;
+        subOut = subOut.replace(/[\r\n]+$/, '');
+      } catch {
+        stderrWriter(`${filePath}: No such file or directory\r\n`);
+        subOut = '';
+      }
+    } else {
+      const subResult = await this.subshellExec(subCmd);
+      if (subResult.stderr) stderrWriter(subResult.stderr);
+      subOut = subResult.stdout.replace(/\r\n/g, '\n').replace(/\n+$/, '');
+    }
+    return subOut;
+  }
+
   /** Brace, arithmetic, command-substitution, and variable expansion of command text */
   private async expandWords(text: string, writeStderr: (s: string) => void): Promise<string> {
     // <(…) and >(…) bodies expand in their own subshell, not here
@@ -7397,6 +7454,46 @@ export class Shell {
     expanded = this.expandArithmetic(expanded);
     expanded = this.expandVars(expanded);
     return procSubs.length ? expanded.replace(/\uE030(\d+)\uE031/g, (_m, n) => procSubs[Number(n)]) : expanded;
+  }
+
+  /**
+   * A simple command's redirection file words, expanded each on its own (as
+   * bash does) and put back quoted: one word, a glob matching one file, else
+   * "ambiguous redirect" (null). The segments as they were when none needs it.
+   */
+  private async expandRedirectWords(segments: string[], keepRaw: (seg: string) => boolean,
+    writeStderr: (s: string) => void): Promise<string[] | null> {
+    let out = segments;
+    for (const [k, seg] of segments.entries()) {
+      if (keepRaw(seg)) continue;
+      const spans = redirectWordSpans(seg);
+      if (!spans.length) continue;
+      let text = seg;
+      for (const sp of spans.reverse()) {
+        const expanded = await this.expandWords(sp.word, writeStderr);
+        const words = await this.expandGlobs(this.parseSegment(expanded).args, writeStderr);
+        if (!words) return null; // failglob
+        let file: string;
+        if (words.length === 1) file = words[0];
+        else { writeStderr(`tabcomputer: ${sp.word}: ambiguous redirect\r\n`); return null; }
+        text = text.slice(0, sp.start) + `'${file.replace(/'/g, `'\\''`)}'` + text.slice(sp.end);
+      }
+      if (out === segments) out = [...segments];
+      out[k] = text;
+    }
+    return out;
+  }
+
+  /**
+   * A compound's redirection target as it runs: expanded ($var, $(…), $((…)),
+   * quotes removed), one word or "ambiguous redirect"; <(…) and >(…) as written
+   */
+  private async expandRedirectTarget(raw: string, writeStderr: (s: string) => void): Promise<string | null> {
+    if (/^[<>]\(/.test(raw) || /^&(\d+|-)$/.test(raw)) return raw;
+    if (!/[$`'"\\{]/.test(raw)) return raw;
+    const words = this.parseSegment(await this.expandWords(raw, writeStderr)).args;
+    if (words.length !== 1) { writeStderr(`tabcomputer: ${raw}: ambiguous redirect\r\n`); return null; }
+    return words[0];
   }
 
   /**
@@ -7442,7 +7539,8 @@ export class Shell {
         if (code !== 0) { restoreFds(); return code; }
         continue;
       }
-      const target = restoreExpansion(this.expandVars(r.target));
+      const target = await this.expandRedirectTarget(r.target, writeStderr);
+      if (target === null) { restoreFds(); return 1; }
       // >&N, 2>&N, > /dev/stdout, 2> /dev/stderr: a copy of another descriptor
       const dup = /^&(\d+|-)$/.exec(target)?.[1] ?? (target === '/dev/stdout' ? '1' : target === '/dev/stderr' ? '2' : undefined);
       if (dup !== undefined && r.op !== '<' && r.op !== '2>&1') {
@@ -7481,6 +7579,16 @@ export class Shell {
         if (ps) outSub = ps[1];
         else outFile = { path: this.fs.resolvePath(target, this.cwd), append: r.op === '>>' };
         out = (s) => { captured += s; };
+      }
+    }
+    // `> f` opens (truncates) f before the compound runs, so `(echo $(cat f)) > f` and
+    // `for x in $(cat f); do …; done > f` read it empty. Only one with data is
+    // emptied now (a new file is made by the one write at the end); not a virtual one
+    for (const file of [outFile, errFile]) {
+      if (!file || file.append || this.fs.isVirtual?.(file.path)) continue;
+      const st = await this.fs.stat(file.path).catch(() => null);
+      if (st && !st.isDirectory() && st.size > 0 && !(await fifo.isFifo(this, file.path))) {
+        await this.fs.writeFile(file.path, '').catch(() => {});
       }
     }
     let code: number;
@@ -9353,7 +9461,8 @@ export function splitCompoundRedirects(cmd: string): { compound: string; redirec
   const suffix = cmd.slice(end);
   const redirects: CompoundRedirect[] = [];
   // (a target may be a process substitution: `done < <(cmd)`)
-  const re = /\s*(2>&1|&>|2>>|2>|>>|>|<)\s*([<>]\((?:[^()]|\([^()]*\))*\)|'[^']*'|"[^"]*"|[^\s<>]+)?/y;
+  // (1> and 0< are > and <)
+  const re = /\s*(?:1(?=>)|0(?=<(?!&)))?(2>&1|&>|2>>|2>|>>|>|<)\s*([<>]\((?:[^()]|\([^()]*\))*\)|'[^']*'|"[^"]*"|[^\s<>]+)?/y;
   // N<file, N>file, N>>file, N<&M, N>&M, N<&-, N>&- for a descriptor other than 0-2
   const fdRe = /\s*(([3-9])(?:<&-|>&-|<&\d|>&\d|>>|<|>)\s*(?:'[^']*'|"[^"]*"|[^\s<>&]+)?)/y;
   let pos = 0;
@@ -9372,8 +9481,7 @@ export function splitCompoundRedirects(cmd: string): { compound: string; redirec
     const op = m[1] as CompoundRedirect['op'];
     let target = m[2] ?? '';
     if (op !== '2>&1' && !target) return { compound: cmd, redirects: [] };
-    if (/^['"]/.test(target)) target = target.slice(1, -1);
-    redirects.push({ op, target });
+    redirects.push({ op, target }); // (as written: expanded when it runs)
     pos = re.lastIndex;
   }
   return { compound: cmd.slice(0, end).trim(), redirects };
