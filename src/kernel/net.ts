@@ -892,7 +892,9 @@ export class KDatagramSocket implements OpenFile {
     addr = this.mapped(addr);
     this.remote = { ...addr };
     this.soError = 0;
-    // A connected datagram socket has a source address (getsockname)
+    // A connected datagram socket has a source address (getsockname); after
+    // mapped() an IPv4 peer on an IPv6 socket gives a v4-mapped one, as Linux's
+    // ip6_datagram_connect does (Firefox and uv aborted in getaddrinfo without it)
     const src = localAddressFor({ ...addr, family: this.domain });
     if (!this.local) this.autobind(src);
     else if (this.local.address === '::' || this.local.address === '0.0.0.0') this.local = { ...this.local, address: src };

@@ -59,7 +59,7 @@ reset, e.g.).
 | gpicview | GTK 2.24 | 26.8 MB (64 pkgs) | 4.8–7.6 s | 7.2–7.6 s | 6.9–9.7 s | 6.7 s | works (opens a PNG) |
 | featherpad | Qt 5.15 (xcb) | 35.0 MB (73 pkgs; closure 84 MB) | 6.1–7.8 s | 7.0–8.2 s | 10.5–16 s | 8.9–14.7 s | works (menus, icons, editing) |
 | GIMP 2.10 | GTK 2.24, GEGL | 53.2 MB (83 pkgs; closure 141 MB) | 18.3–19.2 s | 21.8 s | 290 s³ | 84 s³ | works: main window, menus (stretch app) |
-| lximage-qt | Qt 5.15 | 36.8 MB | 7.4–8.7 s | — | — | — | exits: no D-Bus session bus, so its single-instance check thinks another copy runs |
+| lximage-qt | Qt 5.15 | 36.8 MB | 7.4–8.7 s | — | — | — | works since the launcher starts a D-Bus session bus (its single-instance check needed one) |
 
 Ranges are the runs of this session (the 4-vCPU container was busy to
 different degrees). "Warm" is close + start again in the same page: it is
@@ -150,7 +150,10 @@ Where the time went, and what changed:
   package adds a loader.
 - **Adwaita's `icon-theme.cache`** ships as an overlay (built by
   gen-apps.py with gtk-update-icon-cache): GTK no longer scans the theme's
-  directories, ~0.7 s off every GTK 3 start.
+  directories, ~0.7 s off every GTK 3 start. **hicolor's** cache can't be
+  prebuilt (each app adds icons to it), so the installer writes it after
+  every install that adds icons there (`src/gui/icon-cache.ts`, GTK's
+  format): ~1.6 s off every GTK start (docs/GUI_SCORE.md).
 - The rest is the app starting in Blink. A first start in a page is ~3 s
   slower than the next one with the same files (not fontconfig's or GTK's
   caches: measured); mousepad's 17 s is syscall-free guest compute
@@ -348,9 +351,10 @@ deviceScaleFactor 2 and 3, before and after.)
 
 ## Known gaps and next steps
 
-1. **A D-Bus session bus** (dbus-daemon in Blink on an AF_UNIX socket):
-   lximage-qt quits without one, Mousepad and GApplication-based apps wait
-   on it, and portals/thumbnailers need it.
+1. ~~A D-Bus session bus~~: done. The launcher starts Debian's `dbus-daemon`
+   (manifest entry `dbus-session`) with the first app and gives apps its
+   address (`src/gui/apps.ts` `sessionBus`); lximage-qt runs now. The
+   accessibility bus (at-spi2) is still off (`NO_AT_BRIDGE=1`).
 2. **Speed of toolkit startup** is Blink's: Qt reaches its first frame in
    ~10 s, GTK 2 ~15 s. Snapshotting a started process, caching JIT output
    across runs, and WASM builds of the toolkits (Qt for WebAssembly has an
