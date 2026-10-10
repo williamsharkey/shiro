@@ -97,12 +97,16 @@ async function vite(h, add) {
   if (!await frame.evaluate(() => window.__notReloaded === true)) throw new Error('the preview reloaded instead of hot-updating');
 }
 
+const VITE = ['workflow.vite', 'workflow.vite.create', 'workflow.vite.npm_i', 'workflow.vite.dev_ready', 'workflow.vite.preview', 'workflow.vite.hmr', 'workflow.peak_rss.vite_npm_i', 'workflow.peak_rss.vite_dev'];
+const GO = ['workflow.go', 'workflow.go.toolchain_install', 'workflow.go.run_first', 'workflow.go.run_warm', 'workflow.peak_rss.go_run_first', 'workflow.peak_rss.go_run_warm'];
+const APT = ['workflow.apt', 'workflow.apt.update', 'workflow.apt.install_hello', 'workflow.apt.hello_run', 'workflow.peak_rss.apt_update', 'workflow.peak_rss.apt_install_hello'];
+
 export async function run(h) {
   if (!h.isolated) { h.skip('workflow.suite', '', 'measured in the isolated (production) configuration only'); return; }
   const rounds = h.quick ? 1 : Math.min(h.runs, 3);
   const S = (R, name, key, unit, notes) => { if (R[key]?.length) h.sample(name, R[key], unit, { notes }); };
 
-  if (h.wants('workflow.vite')) {
+  if (h.wantsAny(...VITE)) {
     const R = {};
     const add = (k, v) => (R[k] ??= []).push(v);
     for (let i = 0; i < rounds; i++) {
@@ -119,13 +123,13 @@ export async function run(h) {
 
   const layers = process.env.TABCOMPUTER_DEBIAN_LAYERS || join(ROOT, '.toolchain-build', 'layers');
   const haveGo = existsSync(join(layers, 'go', 'layer.json'));
-  if (!haveGo && h.wants('workflow.go')) h.skip('workflow.go.run', 'ms', `no go layer in ${layers} (sudo bash scripts/debian/build-layers.sh go builds it locally)`);
-  if (h.wants('workflow.go') || h.wants('workflow.apt')) {
+  if (!haveGo && h.wantsAny(...GO)) h.skip('workflow.go.run', 'ms', `no go layer in ${layers} (sudo bash scripts/debian/build-layers.sh go builds it locally)`);
+  if (h.wantsAny(...GO) || h.wantsAny(...APT)) {
     const R = {};
     const add = (k, v) => (R[k] ??= []).push(v);
     const apt = 'sudo DEBIAN_FRONTEND=noninteractive apt-get';
     for (let i = 0; i < rounds; i++) {
-      if (haveGo && h.wants('workflow.go')) {
+      if (haveGo && h.wantsAny(...GO)) {
         await h.page?.context().close().catch(() => {});
         await h.boot({ path: '/?ui=terminal' });
         try {
@@ -140,7 +144,7 @@ export async function run(h) {
         }
       }
       // apt in a profile of its own (no go layer, no Go processes before it)
-      if (h.wants('workflow.apt')) {
+      if (h.wantsAny(...APT)) {
         await h.page?.context().close().catch(() => {});
         await h.boot({ path: '/?ui=terminal' });
         try {
