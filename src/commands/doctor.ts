@@ -174,6 +174,20 @@ async function debianCheck(ctx: CommandContext): Promise<Check> {
   }
 }
 
+/** Installed prebuilt packages against the index (no network: the index is local) */
+export async function packagesCheck(ctx: CommandContext): Promise<Check> {
+  const { readStatus, outdatedPackages } = await import('../pkg-manager');
+  const installed = Object.keys(await readStatus(ctx.fs)).length;
+  if (!installed) return { label: 'packages', status: 'INFO', detail: 'no prebuilt packages installed (pkg available)' };
+  const out = await outdatedPackages(ctx.fs);
+  if (!out.length) return { label: 'packages', status: 'OK', detail: `${installed} installed, all at the index versions` };
+  const broken = out.filter((o) => o.broken).length;
+  return {
+    label: 'packages', status: 'WARN',
+    detail: `${out.length} upgradable (pkg upgrade): ${out.map((o) => `${o.name} ${o.installed} → ${o.available}`).join(', ')}${broken ? ` · ${broken} known broken, upgraded at boot` : ''}`,
+  };
+}
+
 async function storageCheck(): Promise<Check> {
   const st = g.navigator?.storage;
   if (!st?.estimate) return { label: 'storage', status: 'INFO', detail: 'StorageManager unavailable' };
@@ -185,26 +199,6 @@ async function storageCheck(): Promise<Check> {
     label: 'storage',
     status: frac > 0.9 ? 'FAIL' : frac > 0.75 || !persisted ? 'WARN' : 'OK',
     detail: `${mb(used)} of ${mb(quota)} (${(frac * 100).toFixed(1)}%) · ${persisted ? 'persisted' : 'not persisted: the browser may evict it under storage pressure'}`,
-  };
-}
-
-/** Installed packages with a newer version (`pkg outdated`) */
-async function packagesCheck(ctx: CommandContext): Promise<Check> {
-  const { runIn } = await import('./doctor-agents');
-  const r = await runIn(ctx, 'pkg outdated', 20_000);
-  const out = r.out.replace(/\r/g, '').replace(/\x1b\[[0-9;]*m/g, '').trim();
-  if (r.code !== 0 && /unknown|usage|not a command|invalid/i.test(out)) {
-    return { label: 'packages', status: 'INFO', detail: '`pkg outdated` is not in this build' };
-  }
-  if (r.code !== 0) return { label: 'packages', status: 'WARN', detail: `pkg outdated exited ${r.code}${out ? `: ${out.split('\n').pop()!.slice(0, 160)}` : ''}` };
-  // One package per line; headers and "up to date" notes are not packages
-  const rows = out.split('\n').map((l) => l.trim()).filter((l) => l && !/^(listing|package|name)\b|up[ -]to[ -]date|^[-=\s]+$/i.test(l));
-  if (!rows.length) return { label: 'packages', status: 'OK', detail: 'every installed package is up to date' };
-  const names = rows.map((l) => l.split(/\s+/)[0]);
-  return {
-    label: 'packages',
-    status: 'INFO',
-    detail: `${rows.length} can be upgraded: ${names.slice(0, 8).join(', ')}${names.length > 8 ? ', …' : ''} (pkg outdated; pkg upgrade)`,
   };
 }
 
@@ -227,8 +221,8 @@ export async function runDoctorChecks(ctx: CommandContext): Promise<Check[]> {
     guard('relay', () => relayChecks(ctx), 15_000),
     guard('sign-in', () => signInChecks(ctx)),
     guard('debian', () => debianCheck(ctx)),
+    guard('packages', () => packagesCheck(ctx)),
     guard('storage', storageCheck),
-    guard('packages', () => packagesCheck(ctx), 25_000),
     guard('kernel', () => kernelCheck(ctx)),
     guard('agents', async () => {
       const { agentChecks, agentSummary } = await import('./doctor-agents');

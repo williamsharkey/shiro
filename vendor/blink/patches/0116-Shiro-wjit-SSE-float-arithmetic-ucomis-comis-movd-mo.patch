@@ -1,0 +1,351 @@
+From 8c33526c4f61f2bdda565ee75635e9e127e2b059 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 10:46:46 +0000
+Subject: [PATCH] Shiro wjit: SSE float arithmetic, ucomis/comis, movd/movq and
+ leave inline
+
+The calls compiled code made most to Blink's handlers in a libc-heavy run
+(comisd 1.7 M, movd/movq 0.9 M, leave 0.3 M, addsd and friends 0.3 M) and in
+unix/gui's Inkscape/GIMP/Firefox startup profiles. Now inline:
+- add/sub/mul/div/min/max/sqrt in their ss, sd, ps and pd forms, as the
+  interpreter computes them (plain float arithmetic; min/max in x86's
+  order: pmin/pmax(src, dst) for packed, compare-and-select for scalars);
+- ucomis/comis: ZF, PF, CF, with OF/SF/AF clear; an unordered comis goes
+  to the interpreter (MXCSR.IE);
+- movd/movq xmm<->r/m, F3 0F 7E and 66 0F D6 movq;
+- leave.
+Test: fixtures/x86/fpjit.c (special values through compiled loops; NaN
+results counted as one value, their sign and payload being the engine's
+choice in wasm) matches native and the interpreter.
+---
+ blink/wjit.c | 286 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 286 insertions(+)
+
+diff --git a/blink/wjit.c b/blink/wjit.c
+index 2993a51..101a011 100644
+--- a/blink/wjit.c
++++ b/blink/wjit.c
+@@ -974,6 +974,8 @@ static bool SseUnpack(int op, u8 *lanes) {
+   return true;
+ }
+ 
++static bool FpInline(u64);
++
+ static bool SseInline(u64 rde, u64 imm) {
+   int op = Mopcode(rde), r = ModrmReg(rde);
+   u8 lanes[16];
+@@ -1887,8 +1889,24 @@ static void Analyze(struct Ins *in) {
+     case 0x157:  // xorps/xorpd (register form)
+       if (Rep(rde) || !IsModrmRegister(rde)) goto Call;
+       return;
++    case 0x16E:  // movd/movq xmm, r/m (not mmx)
++      if (!Osz(rde) || Rep(rde)) goto Call;
++      return;
++    case 0x17E:  // movd/movq r/m, xmm; F3: movq xmm, xmm/m64
++      if (Rep(rde) != 3 && (!Osz(rde) || Rep(rde))) goto Call;
++      return;
++    case 0x1D6:  // movq xmm/m64, xmm
++      if (!Osz(rde) || Rep(rde)) goto Call;
++      return;
++    case 0x0C9:  // leave
++      if (Osz(rde)) goto Call;
++      return;
+     default:
+       if (SseInline(rde, in->uimm0)) return;
++      if (FpInline(rde)) {
++        if (op == 0x12E || op == 0x12F) in->fw = kAllFlags;
++        return;
++      }
+       if (IsJcc(op)) {
+         in->fr = CondFlags(op & 15);
+         return;
+@@ -2327,6 +2345,256 @@ static void TranslateShift(struct Cg *g, struct Ins *in) {
+ // rol/ror by a constant, as alu.c's Rol/Ror: CF is the bit rotated into
+ // the low (rol) or high (ror) end, OF the top bit xor CF (rol) or the top
+ // two bits xored (ror); a masked count of 0 changes nothing
++// SSE floating point, scalar and packed (add, sub, mul, div, min, max, sqrt
++// for ss/sd/ps/pd), ucomis/comis, as the interpreter computes them
++// (ssefloat.c: plain C float arithmetic, MIN/MAX's x86 order; MXCSR's
++// rounding mode and FTZ/DAZ aren't modeled there either)
++enum {
++  W_F32_LOAD = 0x2a, W_F64_LOAD = 0x2b,
++  W_F32_EQ = 0x5b, W_F32_NE = 0x5c, W_F32_LT = 0x5d,
++  W_F64_EQ = 0x61, W_F64_NE = 0x62, W_F64_LT = 0x63,
++  W_F32_SQRT = 0x91, W_F32_ADD = 0x92, W_F64_SQRT = 0x9f, W_F64_ADD = 0xa0,
++  W_I32_REINTERPRET_F32 = 0xbc, W_I64_REINTERPRET_F64 = 0xbd,
++  W_F32_REINTERPRET_I32 = 0xbe, W_F64_REINTERPRET_I64 = 0xbf,
++};
++
++// 0: add, 1: mul, 2: sub, 3: min, 4: div, 5: max, 6: sqrt
++static int FpKind(int op) {
++  switch (op) {
++    case 0x158: return 0;
++    case 0x159: return 1;
++    case 0x15C: return 2;
++    case 0x15D: return 3;
++    case 0x15E: return 4;
++    case 0x15F: return 5;
++    case 0x151: return 6;
++    default: return -1;
++  }
++}
++
++static bool FpInline(u64 rde) {
++  int op = Mopcode(rde);
++  if (FpKind(op) >= 0) return true;
++  if (op == 0x12E || op == 0x12F) return !Rep(rde);  // ucomis/comis ss/sd
++  return false;
++}
++
++// pushes x (f32 or f64) from the i64 bits in local l
++static void FpGet(struct Cg *g, int l, bool dbl) {
++  Get(g, l);
++  if (dbl) {
++    Op(g, W_F64_REINTERPRET_I64);
++  } else {
++    Op(g, W_I32_WRAP_I64);
++    Op(g, W_F32_REINTERPRET_I32);
++  }
++}
++
++static void TranslateFp(struct Cg *g, struct Ins *in) {
++  u64 rde = in->rde;
++  int op = Mopcode(rde), d = RexrReg(rde), x = RexbRm(rde), rep = Rep(rde);
++  int k = FpKind(op), n, base;
++  bool scalar, dbl;
++  if (op == 0x12E || op == 0x12F) {  // ucomis/comis: ZF PF CF, OF SF AF clear
++    int live = in->live & kAllFlags;
++    dbl = Osz(rde);
++    n = dbl ? 8 : 4;
++    if (!live && op == 0x12E) return;
++    if (!IsModrmRegister(rde)) {
++      Ea(g, in, true);
++      Resolve(g, in, n, false);
++    }
++    Get(g, L_M);
++    Mem(g, dbl ? W_I64_LOAD : W_I64_LOAD32_U, dbl ? 3 : 2, XMM(d));
++    Set(g, L_CX);
++    if (IsModrmRegister(rde)) {
++      Get(g, L_M);
++      Mem(g, dbl ? W_I64_LOAD : W_I64_LOAD32_U, dbl ? 3 : 2, XMM(x));
++    } else {
++      Get(g, L_HR);
++      Mem(g, dbl ? W_I64_LOAD : W_I64_LOAD32_U, 0, 0);
++    }
++    Set(g, L_CY);
++    // L_V = unordered
++    FpGet(g, L_CX, dbl);
++    FpGet(g, L_CX, dbl);
++    Op(g, dbl ? W_F64_NE : W_F32_NE);
++    FpGet(g, L_CY, dbl);
++    FpGet(g, L_CY, dbl);
++    Op(g, dbl ? W_F64_NE : W_F32_NE);
++    Op(g, W_I32_OR);
++    Op(g, W_I64_EXTEND_I32_U);
++    Set(g, L_V);
++    if (op == 0x12F) {  // comis: an unordered compare raises IE (the interpreter's)
++      Get(g, L_V);
++      Op(g, W_I32_WRAP_I64);
++      If(g, T_VOID);
++      Get(g, L_M);
++      I32(g, 0);
++      Mem(g, W_I32_STORE8, 0, OFF(wjhot));
++      ExitTo(g, in->pc);
++      End(g);
++      Get(g, L_M);
++      Get(g, L_M);
++      Mem(g, W_I32_LOAD, 2, OFF(mxcsr));
++      I32(g, ~1);  // ~kMxcsrIe
++      Op(g, W_I32_AND);
++      Mem(g, W_I32_STORE, 2, OFF(mxcsr));
++      if (!live) return;
++    }
++    g->flags = true;
++    Get(g, L_F);
++    I32(g, ~((CF | ZF | SF | OF | AF) | 0xff000000u));
++    Op(g, W_I32_AND);
++    // zf: x == y || unordered
++    FpGet(g, L_CX, dbl);
++    FpGet(g, L_CY, dbl);
++    Op(g, dbl ? W_F64_EQ : W_F32_EQ);
++    Get(g, L_V);
++    Op(g, W_I32_WRAP_I64);
++    Op(g, W_I32_OR);
++    I32(g, FLAGS_ZF);
++    Op(g, W_I32_SHL);
++    Op(g, W_I32_OR);
++    // cf: x < y || unordered
++    FpGet(g, L_CX, dbl);
++    FpGet(g, L_CY, dbl);
++    Op(g, dbl ? W_F64_LT : W_F32_LT);
++    Get(g, L_V);
++    Op(g, W_I32_WRAP_I64);
++    Op(g, W_I32_OR);
++    Op(g, W_I32_OR);
++    // pf: unordered (the lazy parity byte: 0 = parity even = PF set)
++    Get(g, L_V);
++    Op(g, W_I32_WRAP_I64);
++    Op(g, W_I32_EQZ);
++    I32(g, 24);
++    Op(g, W_I32_SHL);
++    Op(g, W_I32_OR);
++    Set(g, L_F);
++    return;
++  }
++  scalar = rep == 2 || rep == 3;
++  dbl = rep == 2 || (!rep && Osz(rde));
++  n = rep == 2 ? 8 : rep == 3 ? 4 : 16;
++  if (!IsModrmRegister(rde)) {
++    Ea(g, in, true);
++    Resolve(g, in, n, false);  // (the interpreter doesn't fault misaligned packed operands either)
++  }
++  if (scalar) {
++    Get(g, L_M);
++    Mem(g, dbl ? W_I64_LOAD : W_I64_LOAD32_U, dbl ? 3 : 2, XMM(d));
++    Set(g, L_CX);
++    if (IsModrmRegister(rde)) {
++      Get(g, L_M);
++      Mem(g, dbl ? W_I64_LOAD : W_I64_LOAD32_U, dbl ? 3 : 2, XMM(x));
++    } else {
++      Get(g, L_HR);
++      Mem(g, dbl ? W_I64_LOAD : W_I64_LOAD32_U, 0, 0);
++    }
++    Set(g, L_CY);
++    Get(g, L_M);
++    if (k == 6) {
++      FpGet(g, L_CY, dbl);
++      Op(g, dbl ? W_F64_SQRT : W_F32_SQRT);
++    } else if (k == 3 || k == 5) {  // min: x < y ? x : y; max: y < x ? x : y
++      FpGet(g, L_CX, dbl);
++      FpGet(g, L_CY, dbl);
++      FpGet(g, k == 3 ? L_CX : L_CY, dbl);
++      FpGet(g, k == 3 ? L_CY : L_CX, dbl);
++      Op(g, dbl ? W_F64_LT : W_F32_LT);
++      Op(g, W_SELECT);
++    } else {
++      FpGet(g, L_CX, dbl);
++      FpGet(g, L_CY, dbl);
++      base = dbl ? W_F64_ADD : W_F32_ADD;  // add, sub, mul, div follow in order
++      Op(g, base + (k == 0 ? 0 : k == 2 ? 1 : k == 1 ? 2 : 3));
++    }
++    if (dbl) {
++      Op(g, W_I64_REINTERPRET_F64);
++      Mem(g, W_I64_STORE, 3, XMM(d));
++    } else {
++      Op(g, W_I32_REINTERPRET_F32);
++      Mem(g, W_I32_STORE, 2, XMM(d));
++    }
++    return;
++  }
++  // packed: f32x4 / f64x2 (min/max as pmin(y, x)/pmax(y, x): x86's order)
++  Get(g, L_M);
++  if (k == 6) {
++    SseSrc(g, in);
++    Simd(g, dbl ? 0xef : 0xe3, 0);
++  } else if (k == 3 || k == 5) {
++    SseSrc(g, in);
++    Get(g, L_M);
++    Simd(g, V128_LOAD, XMM(d));
++    Simd(g, dbl ? (k == 3 ? 0xf6 : 0xf7) : (k == 3 ? 0xea : 0xeb), 0);
++  } else {
++    Get(g, L_M);
++    Simd(g, V128_LOAD, XMM(d));
++    SseSrc(g, in);
++    Simd(g, (dbl ? 0xf0 : 0xe4) + (k == 0 ? 0 : k == 2 ? 1 : k == 1 ? 2 : 3), 0);
++  }
++  Simd(g, V128_STORE, XMM(d));
++}
++
++// movd/movq between xmm and general registers or memory, F3 0F 7E and
++// 66 0F D6 movq: the low 32 or 64 bits, the rest of an xmm destination zero
++static void TranslateMovq(struct Cg *g, struct Ins *in) {
++  u64 rde = in->rde;
++  int op = Mopcode(rde), d = RexrReg(rde), x = RexbRm(rde);
++  int w = Rexw(rde) ? 8 : 4;
++  if (op == 0x16E) {  // movd/movq xmm, r/m
++    GetRm(g, in, w);
++    Set(g, L_CX);
++    Get(g, L_M);
++    Get(g, L_CX);
++    Mem(g, W_I64_STORE, 3, XMM(d));
++    Get(g, L_M);
++    I64(g, 0);
++    Mem(g, W_I64_STORE, 3, XMM(d) + 8);
++    return;
++  }
++  if (op == 0x17E && Rep(rde) != 3) {  // movd/movq r/m, xmm
++    Get(g, L_M);
++    Mem(g, w == 8 ? W_I64_LOAD : W_I64_LOAD32_U, w == 8 ? 3 : 2, XMM(d));
++    PutRm(g, in, w, false);
++    return;
++  }
++  if (op == 0x17E) {  // movq xmm, xmm/m64
++    if (IsModrmRegister(rde)) {
++      Get(g, L_M);
++      Mem(g, W_I64_LOAD, 3, XMM(x));
++      Set(g, L_CX);
++      Get(g, L_M);
++      Get(g, L_CX);
++      Mem(g, W_I64_STORE, 3, XMM(d));
++      Get(g, L_M);
++      I64(g, 0);
++      Mem(g, W_I64_STORE, 3, XMM(d) + 8);
++    } else {
++      Ea(g, in, true);
++      XmmLoad(g, in, d, 8);
++    }
++    return;
++  }
++  // 0x1D6: movq xmm/m64, xmm
++  if (IsModrmRegister(rde)) {
++    Get(g, L_M);
++    Mem(g, W_I64_LOAD, 3, XMM(d));
++    Set(g, L_CX);
++    Get(g, L_M);
++    Get(g, L_CX);
++    Mem(g, W_I64_STORE, 3, XMM(x));
++    Get(g, L_M);
++    I64(g, 0);
++    Mem(g, W_I64_STORE, 3, XMM(x) + 8);
++  } else {
++    Ea(g, in, true);
++    XmmStore(g, in, d, 8);
++  }
++}
++
+ static void TranslateRotate(struct Cg *g, struct Ins *in) {
+   u64 rde = in->rde;
+   int op = Mopcode(rde);
+@@ -3334,11 +3602,29 @@ static void Translate(struct Cg *g, struct Ins *in) {
+       Simd(g, V128_XOR, 0);
+       Simd(g, V128_STORE, XMM(RexrReg(rde)));
+       return;
++    case 0x16E:
++    case 0x17E:
++    case 0x1D6:
++      TranslateMovq(g, in);
++      return;
++    case 0x0C9:  // leave: rsp = rbp, then pop rbp
++      UseReg(g, 5);
++      UseReg(g, 4);
++      Get(g, L_R(5));
++      Set(g, L_R(4));
++      g->wregs |= 1u << 4;
++      Pop64(g, in);
++      PutReg(g, 5, 8);
++      return;
+     default:
+       if (SseInline(rde, in->uimm0)) {
+         TranslateSse(g, in);
+         return;
+       }
++      if (FpInline(rde)) {
++        TranslateFp(g, in);
++        return;
++      }
+       abort();
+   }
+ }
+-- 
+2.43.0
+

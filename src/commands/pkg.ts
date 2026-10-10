@@ -1,7 +1,7 @@
 import { Command, CommandContext } from './index';
 import {
   loadIndex, findEntry, searchIndex, installPackages, removePackage, readStatus, reverseDeps,
-  packageStatus, missingFeatures, downloadSize, formatSize, parseIndex, resolveDeps,
+  packageStatus, missingFeatures, downloadSize, formatSize, parseIndex, resolveDeps, outdatedPackages,
   PKG_LISTS_DIR, PKG_SOURCES, PKG_ROOT, type PkgEntry,
 } from '../pkg-manager';
 
@@ -16,7 +16,8 @@ import {
  *   pkg info <name>
  *   pkg files <name>          files an installed package owns
  *   pkg update                fetch the index lists named in /etc/pkg/sources.list
- *   pkg upgrade               reinstall packages whose index version changed
+ *   pkg outdated              installed packages whose index version differs
+ *   pkg upgrade [--dry-run]   reinstall packages whose index version changed
  */
 
 const USAGE = `Usage: pkg <command> [args]
@@ -30,7 +31,8 @@ Commands:
   info <name>         Package details (version, license, source, files)
   files <name>        Files an installed package owns
   update              Fetch extra index lists from ${PKG_SOURCES}
-  upgrade             Upgrade installed packages to the index versions
+  outdated            Installed packages the index has a different version of
+  upgrade [--dry-run] Upgrade installed packages to the index versions
 
 Options: --force (install despite missing kernel features), --reinstall, -y (ignored)
 Packages install to ${PKG_ROOT}/<name>/ with commands linked into /usr/bin.
@@ -110,9 +112,12 @@ async function cmdList(ctx: CommandContext, args: string[]): Promise<number> {
     ctx.stdout += "No packages installed. Run 'pkg available' to see what can be.\n";
     return 0;
   }
+  const outdated = new Map((await outdatedPackages(ctx.fs)).map(o => [o.name, o]));
   for (const p of status) {
-    ctx.stdout += `  ${p.name.padEnd(13)} ${p.version.padEnd(9)} ${formatSize(p.size).padEnd(8)} ${p.bins.slice(0, 6).join(' ')}${p.bins.length > 6 ? ' …' : ''}\n`;
+    const o = outdated.get(p.name);
+    ctx.stdout += `  ${p.name.padEnd(13)} ${p.version.padEnd(9)} ${formatSize(p.size).padEnd(8)} ${p.bins.slice(0, 6).join(' ')}${p.bins.length > 6 ? ' …' : ''}${o ? `  [installed ${o.installed}, index ${o.available}${o.broken ? ', known broken' : ''}]` : ''}\n`;
   }
+  if (outdated.size) ctx.stdout += `\n${outdated.size} upgradable: pkg upgrade\n`;
   return 0;
 }
 
@@ -121,7 +126,9 @@ async function cmdAvailable(ctx: CommandContext): Promise<number> {
   const status = await readStatus(ctx.fs);
   for (const p of [...index.packages].sort((a, b) => a.name.localeCompare(b.name))) {
     const st = STATUS_LABEL[packageStatus(p)];
-    ctx.stdout += line(p, `  [${st}${status[p.name] ? ', installed' : ''}]`);
+    const inst = status[p.name];
+    const which = !inst ? '' : inst.version === p.version ? ', installed' : `, installed ${inst.version}, index ${p.version}`;
+    ctx.stdout += line(p, `  [${st}${which}]`);
   }
   ctx.stdout += `\n${index.packages.length} packages. 'pkg info <name>' for details, 'pkg install <name>' to install.\n`;
   return 0;
@@ -229,18 +236,33 @@ async function cmdUpdate(ctx: CommandContext): Promise<number> {
   return rc;
 }
 
-async function cmdUpgrade(ctx: CommandContext, args: string[]): Promise<number> {
-  const index = await loadIndex(ctx.fs);
-  const status = await readStatus(ctx.fs);
-  const stale = Object.values(status).filter(p => {
-    const e = findEntry(index, p.name);
-    return e && e.name === p.name && e.version !== p.version;
-  }).map(p => p.name);
-  if (stale.length === 0) {
+async function cmdOutdated(ctx: CommandContext): Promise<number> {
+  const outdated = await outdatedPackages(ctx.fs);
+  if (outdated.length === 0) {
     ctx.stdout += 'All packages are up to date.\n';
     return 0;
   }
-  return cmdInstall(ctx, [...args.filter(a => a.startsWith('-')), ...stale]);
+  for (const o of outdated) {
+    ctx.stdout += `  ${o.name.padEnd(13)} installed ${o.installed}, index ${o.available}${o.broken ? '  (installed build is known broken; upgraded at boot)' : ''}\n`;
+  }
+  ctx.stdout += `${outdated.length} upgradable: pkg upgrade\n`;
+  return 0;
+}
+
+const DRY_RUN = ['--dry-run', '-s', '--simulate', '--just-print', '--no-act'];
+
+async function cmdUpgrade(ctx: CommandContext, args: string[]): Promise<number> {
+  const outdated = await outdatedPackages(ctx.fs);
+  if (outdated.length === 0) {
+    ctx.stdout += 'All packages are up to date.\n';
+    return 0;
+  }
+  if (args.some(a => DRY_RUN.includes(a))) {
+    for (const o of outdated) ctx.stdout += `Inst ${o.name} [${o.installed}] (${o.available})${o.broken ? ' (installed build known broken)' : ''}\n`;
+    ctx.stdout += `${outdated.length} upgraded (dry run: nothing was changed)\n`;
+    return 0;
+  }
+  return cmdInstall(ctx, [...args.filter(a => a.startsWith('-')), ...outdated.map(o => o.name)]);
 }
 
 async function dispatch(ctx: CommandContext, tool: string, sub: string | undefined, rest: string[]): Promise<number> {
@@ -265,7 +287,10 @@ async function dispatch(ctx: CommandContext, tool: string, sub: string | undefin
       return cmdRemove(ctx, rest);
     case 'list':
     case 'ls':
+      if (rest.includes('--upgradable') || rest.includes('--outdated')) return cmdOutdated(ctx);
       return cmdList(ctx, tool === 'pkg' ? rest : (rest.includes('--installed') ? [] : ['--all']));
+    case 'outdated':
+      return cmdOutdated(ctx);
     case 'available':
     case 'avail':
       return cmdAvailable(ctx);
@@ -306,7 +331,10 @@ export const aptCmd: Command = {
   description: 'Package manager (same as pkg)',
   exec(ctx) {
     const args = ctx.args.filter(a => a !== '-y' && a !== '--yes' && a !== '-q');
-    return dispatch(ctx, 'apt', args[0], args.slice(1));
+    // Options may come before the verb, as in apt (`apt-get -s upgrade`)
+    const i = args.findIndex(a => !a.startsWith('-'));
+    if (i <= 0) return dispatch(ctx, 'apt', args[0], args.slice(1));
+    return dispatch(ctx, 'apt', args[i], [...args.slice(0, i), ...args.slice(i + 1)]);
   },
 };
 

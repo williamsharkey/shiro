@@ -24,6 +24,7 @@ import {
 import { retain, type OpenFile } from './fd';
 import type { Kernel, SpawnOptions } from './kernel';
 import type { Process } from './process';
+import { klog, LOG_INFO } from './klog';
 
 export { O_RDWR, O_NOCTTY, O_NONBLOCK, POLLIN, POLLOUT, POLLERR, POLLHUP };
 
@@ -630,6 +631,8 @@ export class Pty {
       const ignored = st.isIgnored(sig) || st.isBlocked(sig);
       if (ignored) return sig === SIGTTOU ? 0 : -EIO;
       if (this.jc.isOrphanedPgrp(caller.pgid)) return -EIO;
+      klog.logRatelimited(LOG_INFO, `tty: ${this.name}: pid ${caller.pid} in background process group ${caller.pgid} ` +
+        `${sig === SIGTTIN ? 'read' : 'wrote or changed'} the terminal (foreground ${this.fgPgrp}): ${sig === SIGTTIN ? 'SIGTTIN' : 'SIGTTOU'}`);
       this.jc.kill(-caller.pgid, sig);
       if (caller.runState === 'stopped') {
         await this.jc.whileStopped(caller);
