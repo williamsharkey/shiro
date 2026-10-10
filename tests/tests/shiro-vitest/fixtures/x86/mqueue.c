@@ -1,4 +1,4 @@
-// Blink 0086 + kernel mqueue.ts: POSIX message queues (Open POSIX mq_*):
+// Blink 0088 + kernel mqueue.ts: POSIX message queues (Open POSIX mq_*):
 // priority order, a full queue, a child blocked in mq_receive until the
 // parent sends, unlink.
 #include <errno.h>

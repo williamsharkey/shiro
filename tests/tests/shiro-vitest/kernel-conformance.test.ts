@@ -305,6 +305,35 @@ describe('kernel syscalls found by LTP', () => {
     await call(A.SYS_close, [fd]);
   });
 
+  it('Open POSIX timer_*: POSIX timers send their signal and count overruns while it is held', async () => {
+    const t = kernel.vfork(proc);
+    kernel.setSigmask(t, new Set([A.SIGUSR1]));
+    const sev = new Uint8Array(24);
+    new DataView(sev.buffer).setInt32(8, A.SIGUSR1, true); // SIGEV_SIGNAL
+    const id = await kernel.syscall(t, A.SYS_timer_create, [1 /* CLOCK_MONOTONIC */, 1], sev);
+    expect(id).toBe(0);
+    expect(await kernel.syscall(t, A.SYS_timer_create, [77, 0], new Uint8Array(24))).toBe(-A.EINVAL);
+    const its = (intervalMs: number, valueMs: number) => {
+      const b = new Uint8Array(32); const v = new DataView(b.buffer);
+      v.setBigInt64(8, BigInt(intervalMs * 1e6), true); v.setBigInt64(24, BigInt(valueMs * 1e6), true);
+      return b;
+    };
+    // every 20 ms from 20 ms; the signal is blocked, so expiries after the first are overruns
+    expect(await kernel.syscall(t, A.SYS_timer_settime, [id, 0], its(20, 20))).toBe(0);
+    const cur = new Uint8Array(32);
+    expect(await kernel.syscall(t, A.SYS_timer_gettime, [id], cur)).toBe(0);
+    expect(Number(new DataView(cur.buffer).getBigInt64(8, true))).toBe(20e6);
+    await new Promise((r) => setTimeout(r, 130));
+    expect(t.deferredSignals.has(A.SIGUSR1)).toBe(true);
+    // once the held signal is taken (sigwait), the overruns of that one are reported
+    t.deferredSignals.delete(A.SIGUSR1);
+    expect(await kernel.syscall(t, A.SYS_timer_getoverrun, [id], new Uint8Array(8))).toBeGreaterThanOrEqual(3);
+    expect(await kernel.syscall(t, A.SYS_timer_delete, [id], new Uint8Array(8))).toBe(0);
+    expect(await kernel.syscall(t, A.SYS_timer_delete, [id], new Uint8Array(8))).toBe(-A.EINVAL);
+    kernel.kill(t.pid, A.SIGKILL);
+    await kernel.syscall(proc, A.SYS_wait4, [t.pid, 0], new Uint8Array(8));
+  });
+
   it('connect03: connecting to an AF_UNIX socket file takes write permission on it', async () => {
     const stack = new NetStack();
     stack.configure({ relayUrl: null, tokenUrl: null, dohUrl: null, portHost: null });

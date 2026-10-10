@@ -170,10 +170,14 @@ const haveRaiseKill = blinkHasRaiseKill && tryBuild('gcc', ['-static', '-O1', '-
 const aioSigqueueBin = join(out, 'aio-sigqueue');
 const blinkHasSigqueue = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_sigqueue');
 const haveAioSigqueue = blinkHasSigqueue && tryBuild('gcc', ['-static', '-O1', '-w', '-o', aioSigqueueBin, 'aio-sigqueue.c', '-lrt', '-pthread']);
-// Blink 0086: POSIX message queues are the kernel's
+// Blink 0088: POSIX message queues are the kernel's
 const mqueueBin = join(out, 'mqueue');
 const blinkHasMqueue = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_mqueue');
 const haveMqueue = blinkHasMqueue && tryBuild('gcc', ['-static', '-O1', '-w', '-o', mqueueBin, 'mqueue.c', '-lrt', '-pthread']);
+// Blink 0089: POSIX timers are the kernel's (0086 sigtimedwait); sched_* as Linux answers
+const timersBin = join(out, 'timers');
+const blinkHasTimers = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_timers');
+const haveTimers = blinkHasTimers && tryBuild('gcc', ['-static', '-O1', '-w', '-o', timersBin, 'timers.c', '-lrt']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -677,6 +681,13 @@ it.skipIf(!haveMqueue)('POSIX message queues', async () => {
   const { shell } = await setup(readFileSync(mqueueBin));
   const r = await run(shell, './prog');
   expect(r.output.replace(/\r\n/g, '\n')).toBe('full 1 first high/7 second low/1 blocked 1 unlink 1\n');
+}, 60_000);
+
+// Open POSIX timer_*, sigtimedwait, sched_* (as an unprivileged process)
+it.skipIf(!haveTimers)('POSIX timers signal into sigtimedwait; sched_* answers as Linux\'s', async () => {
+  const { shell } = await setup(readFileSync(timersBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('timer 1 overruns 1 timeout 1 sched 1 1 1 1\n');
 }, 60_000);
 
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink

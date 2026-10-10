@@ -1,8 +1,8 @@
-From 08912ea91580a5e72c8699f7723b83c8579fe31d Mon Sep 17 00:00:00 2001
+From c844782686aaa63bd9b15b3c925fefa92673e22a Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 02:59:02 +0000
-Subject: [PATCH] Shiro: POSIX message queues are the kernel's (mq_open ...
- mq_getsetattr)
+Subject: [PATCH 88/89] Shiro: POSIX message queues are the kernel's (mq_open
+ ... mq_getsetattr)
 
 Conformance (Open POSIX mq_*): mq_open, mq_unlink, mq_timedsend,
 mq_timedreceive, mq_notify and mq_getsetattr were ENOSYS; they go to the
@@ -16,10 +16,10 @@ blink_shiro_mqueue (x86-engine test fixtures/x86/mqueue.c).
  1 file changed, 45 insertions(+)
 
 diff --git a/blink/shiro.inc b/blink/shiro.inc
-index 89ea4b5..0e9ed8e 100644
+index 1099c65..31ebee4 100644
 --- a/blink/shiro.inc
 +++ b/blink/shiro.inc
-@@ -2219,6 +2219,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_conformance(void) { return 1; }
+@@ -2229,6 +2229,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_conformance(void) { return 1; }
  EMSCRIPTEN_KEEPALIVE int blink_shiro_raise_kill(void) { return 1; }
  // 0084: rt_sigqueueinfo is the kernel's (sigqueue, POSIX AIO)
  EMSCRIPTEN_KEEPALIVE int blink_shiro_sigqueue(void) { return 1; }
@@ -28,7 +28,7 @@ index 89ea4b5..0e9ed8e 100644
  
  // the kernel signalled hosted child `pid` (host.mjs routes by pid)
  EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid(int pid, int sig) {
-@@ -2874,6 +2876,49 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+@@ -2919,6 +2921,49 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
        if (r >= 0 && old && CopyToUserWrite(m, old, lim, 16) == -1) r = -EFAULT_LINUX;
        break;
      }

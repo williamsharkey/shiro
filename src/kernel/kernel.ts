@@ -31,6 +31,7 @@ import { SysvShm } from './sysvshm';
 import { SysvSem } from './sysvsem';
 import { SysvMsg } from './sysvmsg';
 import { MessageQueues, MqFile } from './mqueue';
+import { PosixTimers } from './posixtimers';
 import { SharedObjects, isShareablePath, type ShmObjMessage } from './shmobj';
 import { EpollFile, waitReady } from './epoll';
 import { SignalFile, notifySignalPending } from './signalfd';
@@ -198,6 +199,8 @@ export class Kernel {
   readonly msg = new SysvMsg();
   /** POSIX message queues (mq_open, mq_timedsend, ...) */
   readonly mq = new MessageQueues((pid, sig) => { const p = this.procs.get(pid); if (p) this.deliver(p, sig); });
+  /** POSIX timers (timer_create, timer_settime, ...) */
+  readonly timers = new PosixTimers((proc, sig) => this.deliver(proc, sig), bootMs);
   /** Engine instances (a Blink worker each) and how to post to them: shared objects' messages */
   private engineInstances = new Map<number, (msg: ShmObjMessage) => void>();
   private nextEngineInstance = 1;
@@ -1721,6 +1724,14 @@ export class Kernel {
           return await this.sem.semop(proc, args[0], args[1], data, args[3] * 1000 + Math.floor(args[4] / 1e6), sig);
         }
         case A.SYS_semctl: return this.sem.semctl(proc, args[0], args[1], args[2], args[3], data);
+        case A.SYS_timer_create:
+          return this.timers.create(proc, args[0] | 0, args[1] ? new DataView(data.buffer, data.byteOffset, 24) : null);
+        case A.SYS_timer_settime:
+          return this.timers.settime(proc, args[0] | 0, args[1], new DataView(data.buffer, data.byteOffset, 32));
+        case A.SYS_timer_gettime:
+          return this.timers.gettime(proc, args[0] | 0, new DataView(data.buffer, data.byteOffset, 32));
+        case A.SYS_timer_getoverrun: return this.timers.getoverrun(proc, args[0] | 0);
+        case A.SYS_timer_delete: return this.timers.delete(proc, args[0] | 0);
         case A.SYS_mq_open: {
           const name = str(0, args[0]);
           const attr = args[3] ? new DataView(data.buffer, data.byteOffset + args[0], 32) : null;
@@ -2716,6 +2727,7 @@ export class Kernel {
     // The point of no return: exec bookkeeping, as Linux does it
     await proc.fds.closeOnExec();
     this.shm.detachAll(proc); // exec drops SysV shm attachments
+    this.timers.clear(proc); // and POSIX timers
     proc.path = path;
     proc.argv = argv;
     proc.env = env;

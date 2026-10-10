@@ -609,6 +609,12 @@ export const SYS_mq_timedsend = 242;
 export const SYS_mq_timedreceive = 243;
 export const SYS_mq_notify = 244;
 export const SYS_mq_getsetattr = 245;
+/** POSIX timers (src/kernel/posixtimers.ts) */
+export const SYS_timer_create = 222;
+export const SYS_timer_settime = 223;
+export const SYS_timer_gettime = 224;
+export const SYS_timer_getoverrun = 225;
+export const SYS_timer_delete = 226;
 export const MFD_CLOEXEC = 1;
 export const MFD_ALLOW_SEALING = 2;
 
