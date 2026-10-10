@@ -1,5 +1,5 @@
 /**
- * The page's side of node as a kernel guest (TABCOMPUTER_NODE_WORKER=1):
+ * The page's side of node as a kernel guest (by default; TABCOMPUTER_NODE_WORKER=0 opts out):
  * `node` runs as a kernel process whose program is a Worker (guest.ts), so
  * its files and children are real syscalls and its *Sync child_process
  * calls really block. Needs a blocking channel (a cross-origin isolated

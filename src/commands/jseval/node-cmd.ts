@@ -1,5 +1,6 @@
 import { Command, CommandContext } from '../index';
 import { runNode } from './node-run';
+import { nodeWorkerMode } from '../../node-worker/boot';
 
 /**
  * node: A Node.js-like command that executes JS files from the virtual filesystem.
@@ -18,12 +19,13 @@ export const nodeCmd: Command = {
   name: 'node',
   description: 'Execute JavaScript files (browser JS VM)',
   async exec(ctx: CommandContext): Promise<number> {
-    // TABCOMPUTER_NODE_WORKER=1: as a kernel guest in a Worker (src/node-worker), unless this is that guest.
-    // A terminal without a pty (no keys for a guest to read) keeps it in the page, as boot.ts's nodeKernelProgram does.
+    // As a kernel guest in a Worker (src/node-worker) where the page can, unless this is that
+    // guest or TABCOMPUTER_NODE_WORKER=0; otherwise in the page. A terminal without a pty
+    // (no keys for a guest to read) keeps it in the page, as boot.ts's nodeKernelProgram does.
     const terminal = ctx.terminal as { tty?: unknown } | undefined;
-    if (ctx.env.TABCOMPUTER_NODE_WORKER === '1' && !(ctx as any).nodeGuest && !(terminal && !terminal.tty)) {
+    if (!(ctx as any).nodeGuest && nodeWorkerMode(ctx.env) && !(terminal && !terminal.tty)) {
       const host = await import('../../node-worker/host');
-      if (host.nodeWorkerMode(ctx.env)) return host.runNodeInWorker(ctx);
+      return host.runNodeInWorker(ctx);
     }
     return runNode(ctx);
   },

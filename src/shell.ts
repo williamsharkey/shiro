@@ -1546,6 +1546,10 @@ export class Shell {
     const outer = this.abortController ?? this.inheritedAbort;
     outer?.signal.addEventListener('abort', () => abort.abort(outer.signal.reason), { once: true });
     child.inheritedAbort = abort;
+    // A script or a kernel process's `sh -c` (an agent's) has no job control: the job's stdin
+    // is /dev/null (POSIX 2.9.3.1), not the stream the shell reads, and no [N] pid is printed
+    const jobControl = this.options.has('monitor') || this.interactiveFlag || (!this.scriptShell && !this.kernelStdio);
+    if (!jobControl) child.kernelStdinLive = false;
     const job: BackgroundJob = {
       id: jobId,
       command,
@@ -1578,8 +1582,7 @@ export class Shell {
     this.backgroundJobs.set(jobId, job);
     if (job.status === 'running') inPageJobs.set(pid, job);
     this.env['!'] = String(pid);
-    // An interactive shell reports the job; a script doesn't
-    if (!this.scriptShell) writeStdout(`[${jobId}] ${pid}\n`);
+    if (jobControl) writeStdout(`[${jobId}] ${pid}\n`);
     return 0;
   }
 
@@ -4574,8 +4577,7 @@ export class Shell {
           }
         }
 
-        if (liveOut) await liveOut.flush();
-        const output = await this.applyOutputRedirects(ctx.stdout, ctx.stderr, liveOut ? liveOut.rest : redirects, i === pipeline.length - 1, writeStdout, stderrWriter);
+        const output = await this.applyOutputRedirects(ctx.stdout, ctx.stderr, liveOut ? await liveOut.finish() : redirects, i === pipeline.length - 1, writeStdout, stderrWriter);
 
         lastOutput = output;
         pipeExitCodes.push(exitCode);
@@ -4726,13 +4728,15 @@ export class Shell {
    * 'failed': a file couldn't be opened (reported; the command doesn't run).
    */
   private async openLiveRedirects(redirects: Redirect[], stderrWriter: (s: string) => void, create = true):
-    Promise<{ out?: (s: string) => void; err?: (s: string) => void; rest: Redirect[]; flush: () => Promise<void> } | null | 'failed'> {
+    Promise<{ out?: (s: string) => void; err?: (s: string) => void; finish: () => Promise<Redirect[]> } | null | 'failed'> {
     if (!redirects.some((r) => r.type === '>' || r.type === '>>' || r.type === '2>' || r.type === '2>>')) return null;
     if (this.options.has('noclobber')) return null;
-    const writers = new Map<string, ((s: string) => void) & { flush: () => Promise<void> }>();
+    const writers = new Map<string, ((s: string) => void) & { flush: () => Promise<void>; used: boolean }>();
     const appender = (path: string) => {
       let pending = '';
       let busy: Promise<void> | null = null;
+      const w = Object.assign((t: string) => { if (!t) return; w.used = true; pending += t; busy ??= pump(); },
+        { flush: () => busy ?? Promise.resolve(), used: false });
       const pump = async () => {
         while (pending) {
           const t = pending;
@@ -4741,23 +4745,25 @@ export class Shell {
         }
         busy = null;
       };
-      return Object.assign((t: string) => { if (!t) return; pending += t; busy ??= pump(); }, { flush: () => busy ?? Promise.resolve() });
+      return w;
     };
-    const drop = Object.assign((_t: string) => {}, { flush: () => Promise.resolve() });
+    const drop = Object.assign((_t: string) => {}, { flush: () => Promise.resolve(), used: false });
     // Where fds 1 and 2 go (undefined: where they went before)
     let w1: ((s: string) => void) | undefined;
     let w2: ((s: string) => void) | undefined;
-    const rest: Redirect[] = [];
+    // What takes the command's leftover output, worked out when it ends
+    const rest: (Redirect | (() => Promise<Redirect>))[] = [];
     for (const r of redirects) {
       if (r.type === '<') { rest.push(r); continue; }
       if (r.type === '2>&1') { w2 = w1; rest.push(r); continue; }
       if (r.type !== '>' && r.type !== '>>' && r.type !== '2>' && r.type !== '2>>') return null;
       const append = r.type === '>>' || r.type === '2>>';
-      let w: ((s: string) => void) & { flush: () => Promise<void> };
+      let w: ((s: string) => void) & { flush: () => Promise<void>; used: boolean };
+      let path = '';
       if (r.target === '/dev/null') w = drop;
       else {
         if (fdOfRef(r.target) !== null || r.target.startsWith('/dev/') || /^>\(/.test(r.target)) return null;
-        const path = this.fs.resolvePath(r.target, this.cwd);
+        path = this.fs.resolvePath(r.target, this.cwd);
         // (a virtual file, /dom's say, takes each write as an action: one write at the end)
         if (this.fs.isVirtual?.(path)) return null;
         if (writers.has(path)) {
@@ -4778,10 +4784,30 @@ export class Shell {
         }
       }
       if (r.type === '>' || r.type === '>>') w1 = w; else w2 = w;
-      // (the file is open: what is left at the end is appended)
-      rest.push(w === drop ? r : { ...r, type: r.type === '>' || r.type === '>>' ? '>>' : '2>>' });
+      const appended: Redirect = { ...r, type: r.type === '>' || r.type === '>>' ? '>>' : '2>>' };
+      if (w === drop || r.type === '>>' || r.type === '2>>') rest.push(w === drop ? r : appended);
+      else if (create) rest.push(appended); // (the file is open: what is left is appended)
+      else {
+        // A builtin's `> f`: when nothing streamed into f and it is still as the shell
+        // left it (missing, or emptied), one plain write as before; else append, so
+        // what the command wrote to f itself stays
+        const wr = w;
+        rest.push(async () => {
+          if (wr.used) return appended;
+          const st = await this.fs.stat(path).catch(() => null);
+          return !st || st.size === 0 ? r : appended;
+        });
+      }
     }
-    return { out: w1, err: w2, rest, flush: async () => { await Promise.all([...writers.values()].map((w) => w.flush())); } };
+    return {
+      out: w1, err: w2,
+      finish: async () => {
+        await Promise.all([...writers.values()].map((w) => w.flush()));
+        const out: Redirect[] = [];
+        for (const x of rest) out.push(typeof x === 'function' ? await x() : x);
+        return out;
+      },
+    };
   }
 
   /** Write a redirect's file; a failure (a directory, a bad path) is reported and fails the command */
@@ -8496,15 +8522,26 @@ export class Shell {
     if (this.kernelTty) term = this.kernelTty;
     else if (ks) term = undefined;
     const onFds = !term && !!ks && writesTo(writeStdout, ks.out);
-    if ((!term?.tty && !onFds) || /[;&]|\|\||\$\(|`/.test(command)) return false;
+    if ((!term?.tty && !onFds) || /[;&]|\|\||\$\(|`/.test(command.replace(/2>&1/g, ''))) return false;
     const { mayBeKernelProgram, resolveKernelProgram, runKernelPipeline } = _shellKernel ?? await loadShellKernel();
     const segments = this.parsePipeline(await this.expandWords(command, () => {}));
     const programs = [];
-    for (const seg of segments) {
+    // The last stage's file redirects (`node server.js > log 2>&1 &`): the job's fds 1 and 2
+    let stdoutTo: { path: string; append: boolean } | undefined;
+    let stderrTo: { path: string; append: boolean } | 'stdout' | undefined;
+    for (const [i, seg] of segments.entries()) {
       const t = seg.trim();
       if (!t || splitEnvPrefix(t) || this.isControlStructure(t) || t.startsWith('(')) return false;
       const parsed = this.parseSegment(t);
-      if (parsed.redirects.length || parsed.hereString !== undefined || parsed.args.length === 0) return false;
+      if (parsed.hereString !== undefined || parsed.args.length === 0) return false;
+      if (parsed.redirects.length && (i < segments.length - 1 || this.options.has('noclobber'))) return false;
+      for (const r of parsed.redirects) {
+        if (r.type === '2>&1') { stderrTo = stdoutTo ? 'stdout' : undefined; continue; }
+        if ((r.type !== '>' && r.type !== '>>' && r.type !== '2>' && r.type !== '2>>') || fdOfRef(r.target) !== null ||
+          (r.target.startsWith('/dev/') && r.target !== '/dev/null') || /^>\(/.test(r.target)) return false;
+        const to = { path: this.fs.resolvePath(r.target, this.cwd), append: r.type.endsWith('>>') };
+        if (r.type === '>' || r.type === '>>') stdoutTo = to; else stderrTo = to;
+      }
       const words = await this.expandGlobs(parsed.args);
       if (!words || !mayBeKernelProgram(this, words[0], words.slice(1))) return false;
       const prog = await resolveKernelProgram(this, words[0], words.slice(1));
@@ -8522,6 +8559,7 @@ export class Shell {
       fds: onFds ? { 0: ks!.file(0), 1: ks!.file(1), 2: ks!.file(2) } : undefined,
       terminal: term, command, background: true, cwd: this.cwd, env: this.exportedEnv(),
       inheritFds: onFds ? this.inheritableFds(writeStdout, writeStdout) : undefined,
+      stdoutTo, stderrTo,
     });
     const job = [...this.backgroundJobs.values()].pop();
     if (job?.pids?.length) this.env['!'] = String(job.pids[job.pids.length - 1]);

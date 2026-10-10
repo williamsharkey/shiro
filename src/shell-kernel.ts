@@ -52,7 +52,7 @@ export function mayBeKernelProgram(shell: Shell, name: string, args?: string[]):
   // except where the builtin keeps these arguments (Command.keepOverPackage)
   const cmd = shell.commands.get(name);
   if (!cmd || (shell.pkgShadowBypass !== name && packageShadows(shell.fs).has(name) && !(args && cmd.keepOverPackage?.(args)))) return true;
-  // node as a kernel guest (TABCOMPUTER_NODE_WORKER=1)
+  // node as a kernel guest (the default; TABCOMPUTER_NODE_WORKER=0 keeps the builtin)
   return !!nodeKernelProgram(shell.env, name, [], (shell as any).terminal);
 }
 
@@ -264,6 +264,8 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
     }
   }
 
+  // Under timeout (its abort says so) the job leads a group of its own even in a hosted shell
+  const ownGroup = !!(shell.abortController as { ownProcessGroup?: boolean } | null)?.ownProcessGroup;
   const procs: Process[] = [];
   let input = stdin0;
   for (let i = 0; i < programs.length; i++) {
@@ -276,7 +278,7 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
       path: p.path ?? p.argv[0], argv: p.argv, env: p.env ? { ...p.env, ...env } : env, cwd: opts.cwd,
       fds: { ...extra, 0: input, 1: out, 2: errOut }, run: p.run,
       // children of a hosted shell stay in its process group, under it
-      pgid: host && !shell.options.has('monitor') ? undefined : procs.length ? procs[0].pgid : 0,
+      pgid: host && !shell.options.has('monitor') && !ownGroup ? undefined : procs.length ? procs[0].pgid : 0,
       parent: host ?? undefined,
       uid: shell.uid,
     };
@@ -294,7 +296,9 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
   const termWrite = (s: string) => (opts.terminal ? opts.terminal.writeOutput(s.replace(/\r?\n/g, '\r\n')) : opts.writeStdout(s));
 
   if (opts.background) {
-    const code = await runKernelJob(shell, { command: opts.command, pgid, pids, background: true, tty, write: termWrite });
+    // (by their parent: the hosted shell's process, else init)
+    const reap = async () => { for (const p of procs) await kernel.waitpid(p.pid, A.WNOHANG, host ?? kernel.init); };
+    const code = await runKernelJob(shell, { command: opts.command, pgid, pids, background: true, tty, write: termWrite, reap });
     return { exitCode: code, statuses: pids.map(() => 0), stdout, stderr };
   }
 
@@ -316,7 +320,7 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
       exitCode = await runKernelJob(shell, { command: opts.command, pgid, pids, tty, write: termWrite });
     } else {
       await Promise.all(procs.map((p) => p.wait()));
-      for (const p of procs) await kernel.waitpid(p.pid, A.WNOHANG);
+      for (const p of procs) await kernel.waitpid(p.pid, A.WNOHANG, host ?? kernel.init);
       exitCode = shellStatus(procs[procs.length - 1].exitStatus ?? 0);
     }
   } finally {
