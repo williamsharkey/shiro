@@ -8,7 +8,8 @@
 //   [APT_MEM_ROUNDS=3] [APT_MEM_PKGS=64000] [APT_MEM_SRC=dir] node bench/apt-mem.mjs
 // APT_MEM_SRC measures another checkout's dist/ (an A/B: run once per tree).
 // APT_MEM_CMDS='cmd;;cmd' measures those commands instead (after the same
-// setup; the repo is at /debian/mirror/deb.debian.org/debian/dists/trixie/).
+// setup; the repo is at /debian/mirror/deb.debian.org/debian/dists/trixie/);
+// APT_MEM_SHOW=1 prints each one's output.
 import { createServer } from 'node:http';
 import { mkdirSync, existsSync, writeFileSync, readFileSync, rmSync, mkdtempSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -95,6 +96,7 @@ try {
         const m = await h.withPeakRss(() => sh(`{ ${c}; } >/tmp/c.out 2>&1; echo $?`), { buffer: true });
         console.log(`${c.slice(0, 60).padEnd(60)} exit ${m.result.out.trim()} ${(m.result.ms / 1000).toFixed(1)} s  peak +${((m.peakDeltaNet ?? m.peakDelta) / MB).toFixed(1)} MiB`);
         if (m.result.out.trim() !== '0') console.log('   ', (await sh('tail -3 /tmp/c.out')).out.trim());
+        else if (process.env.APT_MEM_SHOW) console.log((await sh('head -c 20000 /tmp/c.out')).out.trimEnd());
       }
       continue;
     }
