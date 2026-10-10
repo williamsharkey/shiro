@@ -1,3 +1,4 @@
+import { nodeGuestOf } from '../../node-worker/hooks';
 import type { CommandContext } from '../../commands/index';
 import { decodeUtf8Strict } from '../preload';
 import { PAGE_SET_TIMEOUT } from '../page-globals';
@@ -409,7 +410,17 @@ export function createFsModule(deps: FsDeps): any {
   };
   const writeChains = writeState.chains;
   const inflight = { push: writeState.push };
+  // A kernel guest's filesystem calls are blocking syscalls: do the write now, so a
+  // child process started right after (a really blocking execSync) sees it
+  const writeNowToo = !!nodeGuestOf(ctx);
   const queueWrite = (path: string, op: () => Promise<unknown>): Promise<void> => {
+    if (writeNowToo) {
+      let r: Promise<unknown>;
+      try { r = op(); } catch (e) { r = Promise.reject(e); }
+      const done = Promise.resolve(r).then(() => {}, () => {});
+      inflight.push(done);
+      return done;
+    }
     const next = (writeChains.get(path) ?? Promise.resolve()).then(op).then(() => {}, () => {});
     writeChains.set(path, next);
     inflight.push(next);
@@ -713,6 +724,12 @@ export function createFsModule(deps: FsDeps): any {
     renameSync: (oldP: string, newP: string) => {
       const oldRes = ctx.fs.resolvePath(oldP, ctx.cwd);
       const newRes = ctx.fs.resolvePath(newP, ctx.cwd);
+      if (writeNowToo) {
+        // A kernel guest: one rename(2), at once; the cache reads both paths again
+        (ctx.fs as any).renameSync(oldRes, newRes);
+        for (const k of [...fileCache.keys()]) if (k === oldRes || k === newRes || k.startsWith(oldRes + '/') || k.startsWith(newRes + '/')) fileCache.delete(k);
+        return;
+      }
       // A directory (pnpm stages a package in name_tmp_PID, then renames it):
       // move the cached tree now, and the stored one once the writes into it
       // have landed (renaming first moved a half-written or missing tree)

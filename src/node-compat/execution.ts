@@ -21,6 +21,7 @@ import { createAutoStubFactory } from './auto-stub';
 import { createRequireFunction, compileAsyncModule, esmNamespace } from './require';
 import { createExpressFactory } from './shims/express';
 import { awaitSyncCalls } from './sync-await';
+import { nodeGuestOf } from '../node-worker/hooks';
 import { createSqliteShim } from './shims/sqlite';
 import { createPathModule } from './modules/path';
 import { createOsModule } from './modules/os';
@@ -165,10 +166,12 @@ export async function executeNodeScript(
     _st.fakeProcess = fakeProcess;
 
     // File cache, module cache, and sync watchdog
-    const { fileCache, fileMtimes, moduleCache, tickSyncOps } = createFileCache();
+    // As a kernel guest (node-worker), files come from blocking syscalls as they're needed
+    const guest = nodeGuestOf(ctx);
+    const { fileCache, fileMtimes, moduleCache, tickSyncOps } = createFileCache(guest?.readText);
 
-    // Pre-load environment
-    await preloadEnvironment(ctx, fileCache, fileMtimes, scriptPath);
+    // Pre-load environment (the page's: files into the cache, Claude's bootstrap)
+    if (!guest) await preloadEnvironment(ctx, fileCache, fileMtimes, scriptPath);
     const homeDir = ctx.env['HOME'] || '/home/user';
 
     // Buffer shim
@@ -199,7 +202,7 @@ export async function executeNodeScript(
         case 'fs/promises':
         case 'node:fs/promises': return trackModule(createFsPromisesModule({ ctx, fileCache, fileMtimes, pendingPromises, tickSyncOps, FakeBuffer, getBuiltinModule, homeDir, trackAsync, atExit }));
         case 'child_process':
-        case 'node:child_process': return createChildProcessModule({ ctx, fileCache, fileMtimes, pendingPromises, FakeBuffer, getProcess: () => fakeProcess });
+        case 'node:child_process': return createChildProcessModule({ ctx, fileCache, fileMtimes, pendingPromises, FakeBuffer, getProcess: () => fakeProcess, guest });
         case 'os':
         case 'node:os': return createOsModule(ctx);
         case 'util':
@@ -391,7 +394,9 @@ export async function executeNodeScript(
     };
 
     // CORS proxy setup
-    const corsProxyOrigin = typeof window !== 'undefined' ? getShiroOrigin() : '';
+    // (a kernel guest's worker has the page's origin in its own location)
+    const corsProxyOrigin = typeof window !== 'undefined' ? getShiroOrigin()
+      : nodeGuestOf(ctx) && typeof location !== 'undefined' ? location.origin : '';
     const corsProxyMap: [string, string][] = [
       ['https://api.anthropic.com/', '/api/anthropic/'],
       ['https://platform.claude.com/', '/api/platform/'],
@@ -412,7 +417,8 @@ export async function executeNodeScript(
     ];
     const isBlocked = (u: string) => blockedUrls.some(b => u.includes(b));
 
-    if (corsProxyOrigin) {
+    // A kernel guest routes too (its own servers on localhost), wherever it runs
+    if (corsProxyOrigin || nodeGuestOf(ctx)) {
       globalThis.fetch = _st.installedFetch = (input: RequestInfo | URL, init?: RequestInit) => trackAsync(routedFetch(input, init));
       const routedFetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         let url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
