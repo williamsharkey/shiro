@@ -220,6 +220,10 @@ const haveSharedmaps = blinkHasSharedmaps && tryBuild('gcc', ['-static', '-O1', 
 const memerrsBin = join(out, 'memerrs');
 const blinkHasMemerrs = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_memerrs');
 const haveMemerrs = blinkHasMemerrs && tryBuild('gcc', ['-static', '-O1', '-w', '-o', memerrsBin, 'memerrs.c']);
+// Blink 0501: a thread's tkill is SI_TKILL from this process, and the signal frame is Linux's (pthread_cancel)
+const cancelBin = join(out, 'cancel');
+const blinkHasTkillinfo = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_tkillinfo');
+const haveCancel = blinkHasTkillinfo && tryBuild('gcc', ['-static', '-O1', '-w', '-o', cancelBin, 'cancel.c', '-lpthread']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -823,6 +827,12 @@ it.skipIf(!haveMemerrs)('mlock, munlock, mlockall and mmap refuse bad arguments 
   const { shell } = await setup(readFileSync(memerrsBin));
   const r = await run(shell, './prog');
   expect(r.output.replace(/\r\n/g, '\n')).toBe('mlock far ENOMEM mine ok\nmunlock far ENOMEM mine ok\nmlockall 0 EINVAL onfault EINVAL current ok\nmmap flags ~0 EINVAL pipe ENODEV huge ENOMEM\n');
+}, 60_000);
+
+it.skipIf(!haveCancel)('pthread_cancel, deferred and asynchronous, runs the cleanup handlers; a thread\'s tkill is SI_TKILL from this process (Open POSIX)', async () => {
+  const { shell } = await setup(readFileSync(cancelBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('deferred cleaned 1 canceled 1\nasync cleaned 11 canceled 1\ntkill code -6 self 1 frame 1\n');
 }, 60_000);
 
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
