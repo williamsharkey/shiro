@@ -14,6 +14,13 @@ const PATCHES: { file: RegExp; edits: [string, string][] }[] = [{
   edits: [[
     'const module = new WebAssembly.Module(bytes);\n  const instance = new WebAssembly.Instance(module, importObject);\n  return Promise.resolve({ instance, module });',
     'return WebAssembly.instantiate(bytes, importObject);',
+  ], [
+    // Go's runtime ends with go.exit(code) from inside its own event loop, where
+    // process.exit's throw (how a script stops here) has nothing above it to land
+    // in, and surfaced as a page error: the process has ended all the same.
+    // (wasm_exec_node.js is read and run by this file, not required)
+    "const code = fs.readFileSync(wasm_exec_node, 'utf8');",
+    String.raw`const code = fs.readFileSync(wasm_exec_node, 'utf8').replace('go.exit = process.exit;', 'go.exit = (c) => { try { process.exit(c); } catch (e) { if (!/^process\\.exit\\(/.test(String(e && e.message))) throw e; } };');`,
   ]],
 }];
 

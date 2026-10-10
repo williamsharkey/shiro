@@ -19,6 +19,8 @@ const shots = opt('--shots');
 const url = args[0] || 'http://localhost:5299/';
 const exe = process.env.CHROMIUM || '/opt/pw-browsers/chromium';
 const LIMIT = Number(process.env.STEP_LIMIT_MS || 600_000);
+// VITE=7 for vite 7's template (esbuild and Rollup as their WebAssembly builds)
+const VITE = process.env.VITE || 'latest';
 if (shots) mkdirSync(shots, { recursive: true });
 
 const bufferOf = (page) => page.evaluate(() => {
@@ -117,7 +119,7 @@ try {
   });
   await page.evaluate(() => window.__tabcomputer.terminal.term.focus());
 
-  await step(page, 'npm create vite@latest app -- --template react --no-interactive');
+  await step(page, `npm create vite@${VITE} app -- --template react --no-interactive`);
   await step(page, 'cd app && npm i');
   await rss('installed');
 
@@ -140,14 +142,14 @@ try {
   const opened = await side(page, 'serve open 5173');
   if (opened.code !== 0) throw new Error(`serve open 5173: ${opened.out}`);
   let frame = await preview(page);
-  await frame.waitForFunction(() => /Count is \d/.test(document.body?.innerText ?? ''), null, { timeout: LIMIT });
+  await frame.waitForFunction(() => /count is \d/i.test(document.body?.innerText ?? ''), null, { timeout: LIMIT });
   frame = await preview(page);
   await record(page, 'preview renders the app', t0);
   await frame.evaluate(() => { window.__notReloaded = true; });
 
   // The edit, from a shell of its own (the terminal's is running vite)
   t0 = Date.now();
-  await side(page, "sed -i 's|Get started|Edited by HMR|' ~/app/src/App.jsx");
+  await side(page, "sed -i 's|<h1>[^<]*</h1>|<h1>Edited by HMR</h1>|' ~/app/src/App.jsx");
   await frame.waitForFunction(() => /Edited by HMR/.test(document.body?.innerText ?? ''), null, { timeout: 60_000 });
   if (!await frame.evaluate(() => window.__notReloaded === true)) throw new Error('the preview reloaded instead of hot-updating');
   await record(page, 'edit App.jsx → HMR update', t0);
@@ -174,6 +176,6 @@ try {
   }
 }
 if (shots) await page.screenshot({ path: `${shots}/vite-react.png` }).catch(() => {});
-console.log(`${failed ? 'FAIL' : 'ok  '} vite react template  ${((Date.now() - T) / 1000).toFixed(0)} s`);
+console.log(`${failed ? 'FAIL' : 'ok  '} vite@${VITE} react template  ${((Date.now() - T) / 1000).toFixed(0)} s`);
 await browser.close();
 process.exit(failed ? 1 : 0);

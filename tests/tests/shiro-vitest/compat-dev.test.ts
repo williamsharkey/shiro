@@ -789,7 +789,51 @@ s.on('error', (e) => console.log('error', e.code));`)).toBe('{"address":"::","fa
       expect(patchPackageSource(path, src)).not.toContain('new WebAssembly.Module');
     }
     expect(patchPackageSource('/p/other/bin/esbuild', src)).toBe(src);
+    // Go's go.exit (process.exit from its own event loop) doesn't throw out of it
+    const bin = patchPackageSource('/p/node_modules/esbuild/bin/esbuild', "const code = fs.readFileSync(wasm_exec_node, 'utf8');\nreturn code;");
+    const code = new Function('fs', 'wasm_exec_node', bin)({ readFileSync: () => 'go.exit = process.exit;' }, '');
+    const exit = new Function('process', `const go = {}; ${code} return go.exit;`)({ exit: (c: number) => { throw new Error(`process.exit(${c})`); } });
+    expect(() => exit(0)).not.toThrow();
   });
+
+  it("a node child's stdio are live pipes: the parent talks to it while it runs (esbuild's service)", async () => {
+    // The child answers each line as it comes, from fs.read(0) (as Go does), with raw bytes on fd 1
+    await fs.writeFile('/home/user/m/echo-child.js', `const fs = require('fs');
+const buf = Buffer.alloc(64);
+function next() {
+  fs.read(0, buf, 0, buf.length, null, (e, n) => {
+    if (e || n === 0) return;
+    const line = buf.slice(0, n).toString();
+    fs.writeSync(1, Buffer.concat([Buffer.from([0xff, 0x00]), Buffer.from(line.toUpperCase())]));
+    next();
+  });
+}
+next();`);
+    expect(await node(`const { spawn } = require('child_process');
+const c = spawn(process.execPath, ['echo-child.js'], { stdio: ['pipe', 'pipe', 'inherit'] });
+const got = [];
+let i = 0;
+const words = ['one', 'two', 'three'];
+c.stdout.on('data', (d) => {
+  got.push([...d.slice(0, 2)].join(',') + ':' + d.slice(2).toString());
+  if (++i < words.length) c.stdin.write(words[i]); else c.stdin.end();
+});
+c.on('exit', (code) => console.log(JSON.stringify(got), code));
+c.stdin.write(words[0]);`)).toBe('["255,0:ONE","255,0:TWO","255,0:THREE"] 0\n');
+    // An unref()'d child that never ends doesn't keep its parent alive (esbuild's service); it sees EOF when the parent goes
+    await fs.writeFile('/home/user/m/forever-child.js', `process.stdin.on('data', () => {}); process.stdin.on('end', () => require('fs').writeFileSync('/home/user/m/child-saw-eof', 'yes'));`);
+    expect(await node(`const c = require('child_process').spawn('node', ['forever-child.js'], { stdio: ['pipe', 'pipe', 'inherit'] });
+c.unref(); c.stdin.write('x'); console.log('parent done')`)).toBe('parent done\n');
+    await new Promise((r) => setTimeout(r, 300));
+    expect(await fs.readFile('/home/user/m/child-saw-eof', 'utf8')).toBe('yes');
+    // Piped input through fs.readSync(0) and fs.read(0)
+    let r = await sh(shell, 'cd /home/user/m && echo hello | node -e "const b = Buffer.alloc(16); setTimeout(() => console.log(require(\'fs\').readSync(0, b, 0, 16, null), String(b.slice(0, 6))), 10)"');
+    expect(r.out).toBe('6 hello\n\n');
+    r = await sh(shell, 'cd /home/user/m && echo hi | node -e "const b = Buffer.alloc(16); require(\'fs\').read(0, b, 0, 16, null, (e, n) => console.log(e, n, JSON.stringify(String(b.slice(0, n)))))"');
+    expect(r.out).toBe('null 3 "hi\\n"\n');
+    r = await sh(shell, 'cd /home/user/m && printf \'{"a":1}\' | node -e "console.log(JSON.parse(require(\'fs\').readFileSync(0, \'utf8\')).a, require(\'fs\').readFileSync(\'/dev/stdin\').length)"');
+    expect(r.out).toBe('1 0\n');
+  }, 60_000);
 
   it('path follows Node (relative paths stay relative)', async () => {
     expect(await node(`const p = require('path');

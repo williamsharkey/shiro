@@ -239,6 +239,33 @@ Shell and platform fixes these needed (all with tests in the same file):
     so its browser build's async `init()` runs before the script starts.
   - `npm install x` in a directory without package.json creates one (as
     npm); `npm install` there is "up to date".
+- vite 7 (React template), the same script with VITE=7: `npm create vite@7`
+  2.1 s, `npm i` 5.1 s, `npm run dev` to ready 4.4 s, preview 1.6 s, HMR
+  0.1 s, `vite build` 3.7 s; renderer resident 671 MB with dev up, 788 MB
+  after the build. Its esbuild is esbuild-wasm, whose API runs
+  `node bin/esbuild --service` as a child and talks to it over stdin and
+  stdout while it lives. What that took:
+  - A node child spawned with piped stdio (`spawn(process.execPath, …)`)
+    runs with live pipes (live-stdin.ts): `child.stdin.write` reaches the
+    child as it is written, its `process.stdin` and `fs.read(0)` get the
+    bytes as they arrive, and its stdout/stderr reach the parent's 'data'
+    listeners as written, byte for byte (Go writes binary with
+    `fs.writeSync(1)`). An `unref()`'d child doesn't keep its parent alive,
+    and when the parent ends the child's stdin closes.
+  - node-compat's fs has fds 0-2: `fs.read(0)`/`readSync(0)` read stdin,
+    `fs.readFileSync(0)` and `'/dev/stdin'` too (piped input is loaded
+    before a script that reads it so runs), and `fs.writeSync(1|2)` writes
+    stdout/stderr (it wrote nothing).
+  - esbuild-wasm's bin compiles its 12 MB .wasm asynchronously (Chromium
+    refuses a synchronous compile over 8 MB on the main thread), and Go's
+    `go.exit` no longer throws out of its event loop as a page error
+    (source-patches.ts).
+  - Output into a pipe from in-page node streams where the shell gives a
+    live writer (`ctx.streamStdout`, a shell running as a kernel process)
+    and to a spawned child's pipes, not at exit.
+  - On the terminal, `\n` is `\r\n` in every write, escape sequences or
+    not (libuv keeps ONLCR in raw mode): output with colours or cursor moves
+    (clack's prompts in create-vite 7) stepped down the screen.
   Not yet: node output into a pipe or file comes when the process exits
   (only the terminal streams), so `npm run dev > log &` shows nothing while
   it runs.
