@@ -223,6 +223,9 @@ export class Harness {
       name, suite: this.suite ?? null, mode: this.mode, cache: cache ?? null, unit,
       median: round(s.median), p90: round(s.p90), min: round(s.min), max: round(s.max), n: s.n,
       samples: samples.map((x) => round(x)), notes,
+      // The h.try() block that records it, when named otherwise (kernel.file_write
+      // records kernel.file_read): compare.mjs's A/B must select that block
+      ...(this.gate && this.gate !== name ? { gate: this.gate } : {}),
       ...(extra ? { extra } : {}),
     };
     this.results.push(rec);
@@ -247,9 +250,12 @@ export class Harness {
     const t0 = Date.now();
     const prof = process.env.BENCH_PROFILE && new RegExp(process.env.BENCH_PROFILE).test(name) && this.cdp;
     if (prof) await startProfile(this.cdp);
+    const outer = this.gate;
+    this.gate = name;
     try { await fn(); if (process.env.BENCH_VERBOSE) this.log(`    (${name}: ${((Date.now() - t0) / 1000).toFixed(1)} s)`); } catch (e) {
       this.skip(name, unit, 'failed: ' + String(e?.message || e).split('\n')[0].slice(0, 200));
     } finally {
+      this.gate = outer;
       if (prof) await stopProfile(this.cdp, `${this.mode}-${name}`, this.log).catch((e) => this.log(`      profile failed: ${e.message}`));
     }
   }
