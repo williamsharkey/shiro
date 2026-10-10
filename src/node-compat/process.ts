@@ -239,7 +239,10 @@ function createStdout(ctx: CommandContext, stdoutBuf: string[], _st: SharedState
           const port = parseInt(portMatch[1]);
           if (port > 0 && port < 65536) {
             _st.portDetected = true;
-            import('../split-view').then(({ createSplitView }) => {
+            // (a kernel guest has no page of its own: the page opens it)
+            const guestPage = nodeGuestOf(ctx)?.page;
+            if (guestPage) guestPage.preview(port);
+            else import('../split-view').then(({ createSplitView }) => {
               createSplitView({ port, direction: 'right', title: `Server :${port}` });
             }).catch(() => {});
           }

@@ -17,6 +17,11 @@ export interface ChildProcessDeps {
 export function createChildProcessModule(deps: ChildProcessDeps): any {
   const { ctx, fileCache, fileMtimes, pendingPromises, FakeBuffer } = deps;
   /** Whether spawn's stdio[i] is the parent's own stream ('inherit', the fd number, or process.stdout/stderr). */
+  /** pbcopy & co.: the browser's clipboard (a kernel guest has none of its own: the page writes it) */
+  const toClipboard = (text: string) => {
+    if (deps.guest?.page) { deps.guest.page.clipboard(text); return; }
+    navigator.clipboard?.writeText(text).catch(() => {});
+  };
   const inherits = (stdio: any, i: number): boolean => {
     if (stdio === 'inherit') return true;
     if (!Array.isArray(stdio)) return false;
@@ -449,7 +454,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
         stderr: { on: (ev: string, fn: Function) => { (childEvents['stderr_' + ev] ??= []).push(fn); return child.stderr; }, pipe: (d: any) => d },
         stdin: {
           write: (data: any) => { if (isClipCmd) clipBuf += (typeof data === 'string' ? data : String(data)); return true; },
-          end: () => { if (isClipCmd) navigator.clipboard.writeText(clipBuf).catch(() => {}); },
+          end: () => { if (isClipCmd) toClipboard(clipBuf); },
           on: () => child.stdin,
         },
         on: (ev: string, fn: Function) => { (childEvents[ev] ??= []).push(fn); return child; },
@@ -544,7 +549,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
         pid: Math.floor(Math.random() * 10000) + 1000,
         stdin: {
           write: (data: any) => { if (isClipboardCmd) clipboardBuf += (typeof data === 'string' ? data : String(data)); return true; },
-          end: () => { if (isClipboardCmd) navigator.clipboard.writeText(clipboardBuf).catch(() => {}); },
+          end: () => { if (isClipboardCmd) toClipboard(clipboardBuf); },
           on: () => child.stdin,
           destroy: () => {},
         },

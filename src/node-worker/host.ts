@@ -52,6 +52,10 @@ function wire(w: GuestWorker, proc: Process, kernel: Kernel): void {
       case 'node-guest-listen':
         if (typeof m.port === 'number') openPreview(m.port);
         return;
+      case 'node-guest-clipboard':
+        // (pbcopy, xclip, wl-copy from the guest: the page's clipboard)
+        if (typeof m.text === 'string' && typeof navigator !== 'undefined') navigator.clipboard?.writeText(m.text).catch(() => {});
+        return;
       case 'node-guest-watch': {
         // fs.watch in the guest: the filesystem's changes (every process's writes) go to it
         if (watching || !kernel.fs) return;

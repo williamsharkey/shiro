@@ -351,6 +351,20 @@ w.terminate();
     expect(r.out.trim().split('\n').pop()).toBe('undefined');
   }, 60_000);
 
+  it("pbcopy from a guest reaches the page's clipboard", async () => {
+    let copied: string | null = null;
+    const nav: any = globalThis.navigator;
+    const had = Object.getOwnPropertyDescriptor(nav, 'clipboard');
+    Object.defineProperty(nav, 'clipboard', { value: { writeText: async (t: string) => { copied = t; } }, configurable: true });
+    try {
+      await sh(`node -e 'const c = require("child_process").spawn("pbcopy"); c.stdin.write("from the guest"); c.stdin.end()' < /dev/null`);
+      for (let i = 0; i < 100 && copied === null; i++) await new Promise((r) => setTimeout(r, 10));
+      expect(copied).toBe('from the guest');
+    } finally {
+      if (had) Object.defineProperty(nav, 'clipboard', had); else delete nav.clipboard;
+    }
+  }, 60_000);
+
   it('stdin from a pipe; async exec', async () => {
     const r = await sh(`printf 'a\\nb\\n' | node -e '
       let t = ""; process.stdin.on("data", (d) => t += d).on("end", () => {
