@@ -6,13 +6,15 @@
  */
 import { describe, expect, it } from 'vitest';
 import { createTestShell } from './helpers';
+import { createReadline } from '@shiro/node-compat/modules/readline';
 
-async function node(script: string, prep?: (fs: any) => Promise<void>) {
+async function node(script: string, prep?: (fs: any) => Promise<void>, stdin?: string) {
   const { shell, fs } = await createTestShell();
   if (prep) await prep(fs);
   await fs.writeFile('/tmp/t.js', script);
+  if (stdin !== undefined) await fs.writeFile('/tmp/in.txt', stdin);
   let out = '', err = '';
-  const code = await shell.execute('node /tmp/t.js < /dev/null', (s) => { out += s; }, (s) => { err += s; });
+  const code = await shell.execute(`node /tmp/t.js < ${stdin !== undefined ? '/tmp/in.txt' : '/dev/null'}`, (s) => { out += s; }, (s) => { err += s; });
   return { code, out: out.replace(/\r\n/g, '\n'), err: err.replace(/\r\n/g, '\n') };
 }
 
@@ -83,5 +85,61 @@ describe('npm and npx', () => {
     let out = '', err = '';
     const code = await shell.execute('cd /tmp/empty-dir && npx -y hello-cli@1.0.0 world', (s) => { out += s; }, (s) => { err += s; });
     expect([code, out.replace(/\r\n/g, '\n'), err]).toEqual([0, 'hello world\n', '']);
+  });
+});
+
+describe('readline', () => {
+  it("'line' per line (\\n, \\r\\n, a last line without one), then 'close' at the end of input", async () => {
+    const r = await node(`
+      const rl = require('readline').createInterface({ input: process.stdin });
+      rl.on('line', (l) => console.log('line:' + l)).on('close', () => console.log('closed'));
+    `, undefined, 'a\nb\r\nc');
+    expect(r.out).toBe('line:a\nline:b\nline:c\nclosed\n');
+  });
+
+  it('rl.question in turn, readline/promises, the async iterator', async () => {
+    const q = await node(`
+      const rl = require('readline').createInterface({ input: process.stdin, output: process.stdout });
+      rl.question('name? ', (n) => rl.question('age? ', (a) => { console.log('|' + n + ' is ' + a); rl.close(); }));
+    `, undefined, 'Ann\n42\n');
+    expect(q.out).toBe('name? age? |Ann is 42\n');
+    const p = await node(`
+      (async () => {
+        const rl = require('node:readline/promises').createInterface({ input: process.stdin, output: process.stdout });
+        const a = await rl.question('q? ');
+        console.log('[' + a + ']');
+        rl.close();
+        await rl.question('again? ').catch((e) => console.log(e.code));
+      })();
+    `, undefined, 'p\n');
+    expect(p.out).toBe('q? [p]\nERR_USE_AFTER_CLOSE\n');
+    const it2 = await node(`
+      (async () => {
+        const rl = require('readline').createInterface({ input: process.stdin, crlfDelay: Infinity });
+        let n = 0;
+        for await (const line of rl) n += Number(line);
+        console.log('sum', n);
+      })();
+    `, undefined, '1\n2\n3\n');
+    expect(it2.out).toBe('sum 6\n');
+  });
+
+  it('on a raw terminal: keys echoed and edited (backspace), Enter ends the line, Ctrl-D closes', () => {
+    const handlers: Record<string, (d: any) => void> = {};
+    const input: any = { isTTY: true, isRaw: false, on: (e: string, f: any) => { handlers[e] = f; }, off() {}, resume() {}, pause() {}, setRawMode(m: boolean) { this.isRaw = m; } };
+    let out = '';
+    const rl: any = createReadline(false).createInterface({ input, output: { isTTY: true, write: (s: string) => { out += s; } } });
+    const lines: string[] = [];
+    let closed = false;
+    rl.on('close', () => { closed = true; });
+    rl.question('name? ', (n: string) => lines.push('q:' + n));
+    rl.on('line', (l: string) => lines.push(l));
+    handlers.data('Ab');
+    handlers.data('\x7fnn\r');
+    handlers.data('x\r\x04');
+    expect(out).toBe('name? Ab\b \bnn\r\nx\r\n');
+    expect(lines).toEqual(['q:Ann', 'x']);
+    expect(closed).toBe(true);
+    expect(input.isRaw).toBe(false); // raw mode back off
   });
 });
