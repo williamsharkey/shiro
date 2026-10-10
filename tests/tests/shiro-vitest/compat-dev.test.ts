@@ -15,6 +15,7 @@ import type { Shell } from '@shiro/shell';
 import type { FileSystem } from '@shiro/filesystem';
 import type { GuestWorker } from '@shiro/kernel/worker-host';
 import { setGuestWorkerFactory, forceWasmProcessMode } from '@shiro/wasi/host';
+import { nodeWorkerFactory, nodeWorkerMode } from '@shiro/node-worker/boot';
 import { readTarball } from '@shiro/utils/tar';
 import { createPathShims } from '@shiro/path-shims';
 import { simpleCommandWords } from '@shiro/kernel/kernel';
@@ -24,6 +25,7 @@ const REPO = path.resolve(here, '../../..');
 const srcWasi = path.join(REPO, 'src/wasi');
 const CACHE = `${REPO}/tests/.pkg-cache`;
 let tmp: string;
+let guestFactory: (() => GuestWorker) | null = null;
 const realFetch = globalThis.fetch;
 
 beforeAll(async () => {
@@ -38,7 +40,7 @@ beforeAll(async () => {
   `);
   const workerFile = path.join(tmp, 'guest-worker.mjs');
   await build({ entryPoints: [entry], bundle: true, platform: 'node', format: 'esm', outfile: workerFile, logLevel: 'error' });
-  setGuestWorkerFactory((): GuestWorker => {
+  setGuestWorkerFactory(guestFactory = (): GuestWorker => {
     const w = new Worker(workerFile);
     return {
       postMessage: (m) => w.postMessage(m),
@@ -1305,8 +1307,13 @@ w.on('all', (e, p) => { ev.push(e + ' ' + p); if (p.endsWith('stop')) setTimeout
 w.on('ready', () => console.log('ready'));`);
     const watcher = sh(shell, 'cd /home/user/ck && node w.js');
     await new Promise((res) => setTimeout(res, 2000));
-    await sh((shell as any).fork(), 'cd /home/user/ck/src && echo b > b.js && echo aa >> a.js && mkdir lib/deep && echo c > lib/c.js && rm b.js && sleep 0.5 && touch stop');
+    // (b.js lives long enough for chokidar's stat of it: one created and removed at once may be
+    // reported as neither, on Linux too)
+    await sh((shell as any).fork(), 'cd /home/user/ck/src && echo b > b.js && echo aa >> a.js && mkdir lib/deep && echo c > lib/c.js && sleep 0.5 && rm b.js && sleep 0.5 && touch stop');
     r = await watcher;
+    // (`echo c > c.js` creates the file, then writes it: chokidar may report the write as a change
+    // when its stat for the add came first, as it may on Linux; a guest's stat comes later than the page's)
+    r.out = r.out.replace('change src/lib/c.js\n', '');
     expect(r.out).toBe('ready\nadd src/b.js\nadd src/lib/c.js\naddDir src/lib/deep\nchange src/a.js\nunlink src/b.js\n');
   }, 180_000);
 
@@ -1565,6 +1572,9 @@ describe('git (upstream, x86-64 in Blink)', () => {
 import { iframeServer } from '@shiro/iframe-server';
 import { WsClient } from '@shiro/browser/websocket';
 
+/** A whole body as text: the page's node gives what it was written (a string), a guest's comes over the kernel's bridge as bytes */
+const text = (body: unknown) => (body instanceof Uint8Array ? new TextDecoder().decode(body) : String(body));
+
 describe('in-tab servers: streamed responses and WebSocket upgrades (what a preview window reaches)', () => {
   let shell: Shell;
   let fs: FileSystem;
@@ -1573,6 +1583,25 @@ describe('in-tab servers: streamed responses and WebSocket upgrades (what a prev
     const r = await sh(shell, 'mkdir -p /home/user/live && cd /home/user/live && npm init -y > /dev/null && npm install ws@8.18.0 socket.io@4.8.1 > /dev/null; echo $?');
     expect(r.out).toBe('0\n');
   }, 300_000);
+
+  /**
+   * Start a server script and wait for its port; its output goes to a file. A
+   * guest keeps running while it listens, as node does on Linux, so it starts in
+   * the background. The page's node returns once idle and its server lives on in
+   * the page; started in the background, timers its handlers set don't run (an
+   * SSE stream never starts), so there it starts in the foreground.
+   */
+  const serve = async (script: string, port: number) => {
+    const out = `/tmp/live-${port}.out`;
+    await sh(shell, `cd /home/user/live && node ${script} > ${out} 2>&1${nodeWorkerMode(shell.env) ? ' &' : ''}`);
+    const t0 = Date.now();
+    while (!iframeServer.isPortInUse(port)) {
+      if (Date.now() - t0 > 30_000) throw new Error(`nothing listens on ${port}: ${await fs.readFile(out, 'utf8').catch(() => '')}`);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  };
+  // (the background servers end with the tests)
+  afterAll(async () => { await sh(shell, 'kill -9 $(jobs -p) 2>/dev/null; true'); });
 
   /** Talk RFC 6455 to `port` the way the preview's WebSocket does; resolve after `want` messages */
   const wsTalk = (port: number, path: string, onMessage: (m: string, send: (s: string) => void) => void, want: number) =>
@@ -1603,10 +1632,14 @@ srv.on('request', (req, res) => {
     res.end(body + ' at ' + req.url + ' ' + res.headersSent);
   });
 });
-srv.listen(4801, () => console.log('up', srv.address().port, srv.listening));`);
-    expect((await sh(shell, 'cd /home/user/live && node plain.js')).out).toContain('up 4801 true');
+srv.listen(4801, () => require('fs').writeFileSync('/tmp/live-4801.up', ['up', srv.address().port, srv.listening].join(' ')));`);
+    await serve('plain.js', 4801);
+    // (a file: a backgrounded node in the page writes its stdout only when it ends)
+    let up = '';
+    for (let i = 0; i < 250 && !up; i++) { up = String(await fs.readFile('/tmp/live-4801.up', 'utf8').catch(() => '')); if (!up) await new Promise((r) => setTimeout(r, 20)); }
+    expect(up).toBe('up 4801 true');
     const r = await iframeServer.fetch(4801, '/p?q=1', { method: 'POST', headers: { 'x-in': 'hi' }, body: 'payload' });
-    expect([r.status, r.headers?.['x-seen'], r.body]).toEqual([201, 'POST hi', 'got payload at /p?q=1 false']);
+    expect([r.status, r.headers?.['x-seen'], text(r.body)]).toEqual([201, 'POST hi', 'got payload at /p?q=1 false']);
     const b = await iframeServer.fetch(4801, '/bytes');
     expect(Array.from(b.body as Uint8Array)).toEqual([0, 255, 1]);
   }, 60_000);
@@ -1617,7 +1650,7 @@ srv.listen(4801, () => console.log('up', srv.address().port, srv.listening));`);
   let n = 0;
   const t = setInterval(() => { res.write('event: tick\\ndata: ' + (++n) + '\\n\\n'); if (n === 3) { clearInterval(t); res.end(); } }, 100);
 }).listen(4802);`);
-    await sh(shell, 'cd /home/user/live && node sse.js');
+    await serve('sse.js', 4802);
     const t0 = Date.now();
     const r = await iframeServer.fetch(4802, '/events');
     expect(r.status).toBe(200);
@@ -1642,18 +1675,18 @@ srv.on('upgrade', (req, socket, head) => {
   wss.handleUpgrade(req, socket, head, (ws) => ws.on('message', (m, isBinary) => ws.send(isBinary ? 'bin:' + [...m].join(',') : 'echo:' + m)));
 });
 srv.listen(4803);`);
-    await sh(shell, 'cd /home/user/live && node ws.js');
+    await serve('ws.js', 4803);
     const got = await wsTalk(4803, '/echo', (m, send) => { if (m === '') { send('a'); send('b'); } }, 2);
     expect(got).toEqual(['echo:a', 'echo:b']);
     // the same port still answers plain requests
-    expect((await iframeServer.fetch(4803, '/')).body).toBe('not a socket');
+    expect(text((await iframeServer.fetch(4803, '/')).body)).toBe('not a socket');
   }, 60_000);
 
   it('Socket.IO: a WebSocket connection and the polling handshake reach the server; events echo', async () => {
     await fs.writeFile('/home/user/live/sio.js', `const { Server } = require('socket.io');
 const io = new Server(4804);
 io.on('connection', (s) => s.on('echo', (m) => s.emit('echo', m + '!')));`);
-    await sh(shell, 'cd /home/user/live && node sio.js');
+    await serve('sio.js', 4804);
     const got = await wsTalk(4804, '/socket.io/?EIO=4&transport=websocket', (m, send) => {
       if (m.startsWith('0{')) send('40');
       else if (m.startsWith('40{')) send('42["echo","hi"]');
@@ -1663,7 +1696,7 @@ io.on('connection', (s) => s.on('echo', (m) => s.emit('echo', m + '!')));`);
     expect(got[2]).toBe('42["echo","hi!"]');
     const poll = await iframeServer.fetch(4804, '/socket.io/?EIO=4&transport=polling');
     expect(poll.status).toBe(200);
-    expect(String(poll.body)).toMatch(/^0\{"sid":.*"upgrades":\["websocket"\]/);
+    expect(text(poll.body)).toMatch(/^0\{"sid":.*"upgrades":\["websocket"\]/);
   }, 60_000);
 
   it('a kernel listener (net.createServer) takes a raw connection: its own WebSocket handshake and frames', async () => {
@@ -1687,7 +1720,7 @@ net.createServer((sock) => {
     sock.write(Buffer.concat([Buffer.from([0x81, out.length]), out]));
   });
 }).listen(4805, () => console.log('raw up'));`);
-    await sh(shell, 'cd /home/user/live && node raw.js');
+    await serve('raw.js', 4805);
     expect(await wsTalk(4805, '/', (m, send) => { if (m === '') send('ping'); }, 1)).toEqual(['kernel:ping']);
   }, 60_000);
 });
@@ -1959,6 +1992,9 @@ describe('npm install: install scripts and platform packages', () => {
 describe("the page's esbuild is let go when idle", () => {
   it('stops after the idle time and starts again for the next build', async () => {
     // The page's esbuild is esbuild-wasm's browser build (here in this thread, from esbuild.wasm)
+    // (after resetModules, modules a later test imports are new copies: they get this file's and
+    // the setup's guest factories again in `finally`, or node and WASM there would run without them)
+    const nodeFactory = nodeWorkerFactory();
     vi.resetModules();
     vi.doMock('esbuild-wasm', () => import(`${REPO}/node_modules/esbuild-wasm/esm/browser.js`));
     const saved = globalThis.fetch;
@@ -1984,6 +2020,10 @@ describe("the page's esbuild is let go when idle", () => {
       setEsbuildIdleMs(60_000);
       globalThis.fetch = saved;
       vi.doUnmock('esbuild-wasm');
+      (await import('@shiro/node-worker/boot')).setNodeWorkerFactory(nodeFactory);
+      const wasi = await import('@shiro/wasi/host');
+      wasi.setGuestWorkerFactory(guestFactory);
+      wasi.forceWasmProcessMode('sab');
     }
   }, 120_000);
 });
@@ -1995,7 +2035,9 @@ describe('node: a process that exits closes its servers', () => {
     let r = await sh(shell, `node -e "require('http').createServer((q, s) => s.end('up')).listen(4811, () => setTimeout(() => process.exit(0), 50))"; echo "e=$?"`);
     expect(r.out).toBe('e=0\n');
     expect(iframeServer.isPortInUse(4811)).toBe(false);
-    r = await sh(shell, `node -e "require('http').createServer((q, s) => s.end('up')).listen(4812)"; echo "e=$?"`);
+    // (the page's node: its script returns and the server lives on in the page; a guest stays
+    // running while it listens, as node does)
+    r = await sh(shell, `TABCOMPUTER_NODE_WORKER=0 node -e "require('http').createServer((q, s) => s.end('up')).listen(4812)"; echo "e=$?"`);
     expect(r.out).toBe('e=0\n');
     expect(iframeServer.isPortInUse(4812)).toBe(true);
     expect((await iframeServer.fetch(4812, '/')).body).toBe('up');
@@ -2255,11 +2297,14 @@ describe('http: ServerResponse internals middleware uses', () => {
         gz.end('compressed hello');
       }).listen(4813);
     `);
-    await sh(shell, 'cd /home/user/gz && node s.js');
+    // (in the background: node as a guest stays running while it listens, as node does)
+    await sh(shell, 'cd /home/user/gz && node s.js &');
+    for (let t = 0; t < 200 && !iframeServer.isPortInUse(4813); t++) await new Promise((res) => setTimeout(res, 100));
     const r = await iframeServer.fetch(4813, '/');
     const body = typeof r.body === 'string' ? new TextEncoder().encode(r.body) : new Uint8Array(r.body as Uint8Array);
     const text = await new Response(new Blob([body]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
     expect([r.status, r.headers?.['x-before'], r.headers?.['content-encoding'], text]).toEqual([200, 'null', 'gzip', 'compressed hello']);
+    await sh(shell, 'kill %1');
     iframeServer.close(4813);
   }, 60_000);
 });
