@@ -1,44 +1,15 @@
 import { createAssertModule } from './assert';
+import { inspect, inspectCustom, styles, colors, formatWithOptions } from '../inspect';
 
 let deepStrict: ((a: any, b: any) => boolean) | undefined;
 
 export function createUtilModule(): any {
-  const _inspect = (obj: any, opts?: any): string => {
-    if (obj === null) return 'null';
-    if (obj === undefined) return 'undefined';
-    if (typeof obj === 'string') return opts?.stylize ? opts.stylize(`'${obj}'`, 'string') : `'${obj}'`;
-    if (typeof obj === 'number' || typeof obj === 'boolean' || typeof obj === 'bigint') return String(obj);
-    if (typeof obj === 'function') return `[Function: ${obj.name || 'anonymous'}]`;
-    if (typeof obj === 'symbol') return obj.toString();
-    if (obj instanceof Date) return obj.toISOString();
-    if (obj instanceof RegExp) return obj.toString();
-    if (obj instanceof Error) return `${obj.name}: ${obj.message}`;
-    if (ArrayBuffer.isView(obj)) return `<Buffer ${Array.from(obj as Uint8Array).slice(0, 50).map(b => b.toString(16).padStart(2, '0')).join(' ')}${(obj as Uint8Array).length > 50 ? ' ...' : ''}>`;
-    try { return JSON.stringify(obj, null, 2); } catch { return '[Circular]'; }
-  };
-  _inspect.custom = Symbol.for('nodejs.util.inspect.custom');
-  _inspect.styles = {};
-  _inspect.colors = {};
-  _inspect.defaultOptions = { depth: 2, colors: false };
-  const _format = (fmt: any, ...args: any[]): string => {
-    if (typeof fmt !== 'string') return [fmt, ...args].map(a => typeof a === 'object' ? _inspect(a) : String(a)).join(' ');
-    let i = 0;
-    const str = fmt.replace(/%[sdjifoO%]/g, (m: string) => {
-      if (m === '%%') return '%';
-      if (i >= args.length) return m;
-      const a = args[i++];
-      switch (m) {
-        case '%s': return String(a);
-        case '%d': case '%i': return parseInt(a, 10).toString();
-        case '%f': return parseFloat(a).toString();
-        case '%j': try { return JSON.stringify(a); } catch { return '[Circular]'; }
-        case '%o': case '%O': return _inspect(a);
-        default: return m;
-      }
-    });
-    const rest = args.slice(i).map(a => typeof a === 'object' ? _inspect(a) : String(a));
-    return rest.length ? str + ' ' + rest.join(' ') : str;
-  };
+  const _inspect: any = (obj: any, opts?: any, depth?: number, colors?: boolean): string => inspect(obj, opts, depth, colors);
+  _inspect.custom = inspectCustom;
+  _inspect.styles = styles;
+  _inspect.colors = colors;
+  _inspect.defaultOptions = { depth: 2, colors: false, compact: 3, breakLength: 80, maxArrayLength: 100, maxStringLength: 10000 };
+  const _format = (...args: any[]): string => formatWithOptions({}, args);
   return {
     promisify: (fn: any) => {
       // Check for custom promisify implementation (e.g., child_process.exec)
@@ -54,7 +25,7 @@ export function createUtilModule(): any {
     },
     inspect: _inspect,
     format: _format,
-    formatWithOptions: (_opts: any, fmt: any, ...args: any[]) => _format(fmt, ...args),
+    formatWithOptions: (opts: any, ...args: any[]) => formatWithOptions(opts ?? {}, args),
     types: {
       isDate: (v: any) => v instanceof Date,
       isRegExp: (v: any) => v instanceof RegExp,
