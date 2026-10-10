@@ -697,8 +697,11 @@ describe('kernel processes', () => {
     expect(A.decodeStat(data).mode & A.S_IFMT).toBe(A.S_IFLNK);
     expect(kernel.syscallSync(proc, A.SYS_openat, [A.AT_FDCWD, put('nope'), A.O_RDONLY, 0], data)).toBe(-A.ENOENT);
     expect(kernel.syscallSync(proc, A.SYS_openat, [A.AT_FDCWD, put('a.txt'), A.O_RDONLY | A.O_DIRECTORY, 0], data)).toBe(-A.ENOTDIR);
-    // O_CREAT and O_TRUNC take the async path
-    expect(kernel.syscallSync(proc, A.SYS_openat, [A.AT_FDCWD, put('b.txt'), A.O_CREAT | A.O_WRONLY, 0o644], data)).toBeUndefined();
+    // O_CREAT of a cached directory's new file is answered here too; O_EXCL of an existing one fails
+    const bfd = kernel.syscallSync(proc, A.SYS_openat, [A.AT_FDCWD, put('b.txt'), A.O_CREAT | A.O_WRONLY, 0o644], data)!;
+    expect(bfd).toBeGreaterThanOrEqual(0);
+    expect(kernel.syscallSync(proc, A.SYS_openat, [A.AT_FDCWD, put('b.txt'), A.O_CREAT | A.O_EXCL | A.O_WRONLY, 0o644], data)).toBe(-A.EEXIST);
+    expect(await kernel.syscall(proc, A.SYS_close, [bfd], data)).toBe(0);
     expect(kernel.syscallSync(proc, A.SYS_close, [fd], data)).toBe(0);
     expect(kernel.syscallSync(proc, A.SYS_close, [fd], data)).toBe(-A.EBADF);
     // A file with unwritten data closes through the async path, which stores it

@@ -647,6 +647,34 @@ faulthandler) and `umask()` (its cache), which WASI lacks, so the CPython
 package sets `PYTEST_ADDOPTS="--capture=sys -p no:faulthandler -p
 no:cacheprovider"`.
 
+## Shared memory and IPC between processes (unix/perf-kernel)
+
+What works across x86-64 (Blink) processes, as of 2026-10-10:
+
+- **Work everywhere (the kernel holds the state):**
+  - SysV semaphores (`semget`/`semop`/`semctl`) and message queues
+    (`msgget`/`msgsnd`/`msgrcv`/`msgctl`);
+  - pipes, FIFOs, sockets, files read and written with syscalls;
+  - `ipcs`/`ipcrm`, and `/proc/sysvipc`.
+- **Work within a fork tree:** `MAP_SHARED` memory, futexes in it,
+  `PTHREAD_PROCESS_SHARED` mutexes, POSIX shm (`shm_open` + `mmap`), named
+  semaphores (`sem_open`) and SysV shm. Same-instance fork children share
+  their parent's pages, so PostgreSQL's postmaster and backends work.
+- **Don't work between processes that don't share an instance:**
+  - a program and something it exec'd;
+  - two programs started separately.
+  - Each has its own copy of a shared mapping, and atomics and futex wakes
+    don't cross. Measured: an exec'd process's `sem_post` is never seen
+    (fixture `psem.c`).
+  - The fix is designed and approved (docs/research/SHARED_MAPPINGS.md:
+    kernel-owned SharedArrayBuffers with slow-path pages in Blink) but not
+    built yet.
+  - Programs this matters for: Firefox and Chromium-style multi-process
+    browsers (content processes share memory with the parent), pulseaudio
+    and PipeWire clients (shm audio rings), and test suites that `sem_open`
+    across exec. X11 clients are unaffected: Shiro's X server doesn't offer
+    MIT-SHM, so they use plain `PutImage`.
+
 ## Claude Code native binary (unix/perf-kernel)
 
 Status (2026-10-09, see "Agent CLIs" below): with Blink's SSE4.1/4.2
