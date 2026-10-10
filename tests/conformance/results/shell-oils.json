@@ -248,16 +248,12 @@
    ]
   },
   "redirect": {
-   "pass": 36,
+   "pass": 37,
    "total": 39,
    "failures": [
     {
      "i": 27,
      "name": "1>&2- (Bash bug: fail to restore closed fd)"
-    },
-    {
-     "i": 28,
-     "name": "<> for read/write"
     },
     {
      "i": 29,
@@ -441,7 +437,7 @@
    ]
   },
   "dbracket": {
-   "pass": 45,
+   "pass": 46,
    "total": 49,
    "failures": [
     {
@@ -455,10 +451,6 @@
     {
      "i": 23,
      "name": "[[ with env prefix doesn't work"
-    },
-    {
-     "i": 45,
-     "name": "[[ ]] with redirect"
     }
    ]
   },
@@ -1464,90 +1456,19 @@
    ]
   },
   "redirect-command": {
-   "pass": 18,
+   "pass": 23,
    "total": 23,
-   "failures": [
-    {
-     "i": 2,
-     "name": "`< $file` behaves like $(< file)"
-    },
-    {
-     "i": 8,
-     "name": "Redirect in the middle of two assignments"
-    },
-    {
-     "i": 10,
-     "name": "Redirect in function body"
-    },
-    {
-     "i": 11,
-     "name": "Redirect in function body is evaluated multiple times"
-    },
-    {
-     "i": 18,
-     "name": "redirect subshell"
-    }
-   ]
+   "failures": []
   },
   "redirect-multi": {
-   "pass": 5,
+   "pass": 13,
    "total": 13,
-   "failures": [
-    {
-     "i": 0,
-     "name": "File redirects with glob args (bash and zsh only)"
-    },
-    {
-     "i": 3,
-     "name": "File redirect without matching any file, with failglob"
-    },
-    {
-     "i": 6,
-     "name": "File redirect to $var with glob char"
-    },
-    {
-     "i": 7,
-     "name": "File redirect that globs to more than one file (bash and zsh only)"
-    },
-    {
-     "i": 8,
-     "name": "File redirect with extended glob"
-    },
-    {
-     "i": 9,
-     "name": "Extended glob that doesn't match anything"
-    },
-    {
-     "i": 11,
-     "name": "Redirect with brace expansion isn't allowed"
-    },
-    {
-     "i": 12,
-     "name": "File redirects have word splitting too!"
-    }
-   ]
+   "failures": []
   },
   "redir-order": {
-   "pass": 1,
+   "pass": 5,
    "total": 5,
-   "failures": [
-    {
-     "i": 1,
-     "name": "subshell + redirect order"
-    },
-    {
-     "i": 2,
-     "name": "for word + redirect order"
-    },
-    {
-     "i": 3,
-     "name": "case word + redirect order"
-    },
-    {
-     "i": 4,
-     "name": "[[ + redirect order"
-    }
-   ]
+   "failures": []
   },
   "arith-context": {
    "pass": 12,

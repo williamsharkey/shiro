@@ -134,7 +134,7 @@ Not here: hardware devices, kernel modules, and any access to your own machine.
   install in about a second ([above](#tabcomputers-prebuilt-packages), [docs/PACKAGES.md](docs/PACKAGES.md)).
 - **Conformance.** Under Blink, LTP's syscall tests pass 283/322 and the Open POSIX Test Suite
   1428/1448 (only tests that pass natively as uid 1000 are scored); the busybox testsuite
-  625/635; the oils shell spec tests 2086/2417; smoosh's POSIX shell tests 159/162; the
+  625/635; the oils shell spec tests 2105/2417; smoosh's POSIX shell tests 159/162; the
   wasi-testsuite 71/72 ([docs/CONFORMANCE.md](docs/CONFORMANCE.md)).
 - **GUI apps.** `gui` lists Debian X11 apps (xterm, GTK and Qt editors and viewers, GIMP,
   Inkscape, Krita, VLC, NetSurf). They open as desktop windows. Of the 29 in the scoreboard,

@@ -6,7 +6,7 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **2086/2417 (86.3%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **2105/2417 (87.1%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **2035/2417 (84.2%)** |
 | [Shell: smoosh POSIX tests](#shell-smoosh-posix-tests) | 111/162 (68.5%) | **159/162 (98.1%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **625/635 (98.4%)** |
@@ -40,7 +40,7 @@ The file set grew from 62 to 117 oils spec files (1567 to 2417 cases) with the b
 | arith | 2/71 | 74/74 | 0 |
 | command-sub | 0/28 | 27/28 | 1 |
 | here-doc | 0/32 | 30/32 | 2 |
-| redirect | 3/39 | 36/39 | 3 |
+| redirect | 3/39 | 37/39 | 2 |
 | if_ | 0/5 | 5/5 | 0 |
 | loop | 1/28 | 27/29 | 2 |
 | case_ | 0/13 | 13/13 | 0 |
@@ -57,7 +57,7 @@ The file set grew from 62 to 117 oils spec files (1567 to 2417 cases) with the b
 | builtin-special | 1/12 | 12/12 | 0 |
 | builtin-type | 0/6 | 5/6 | 1 |
 | builtin-vars | 0/38 | 38/39 | 1 |
-| dbracket | 1/49 | 45/49 | 4 |
+| dbracket | 1/49 | 46/49 | 3 |
 | dparen | 0/14 | 13/14 | 1 |
 | assign | 2/43 | 41/45 | 4 |
 | append | 1/20 | 20/20 | 0 |
@@ -112,9 +112,9 @@ The file set grew from 62 to 117 oils spec files (1567 to 2417 cases) with the b
 | var-ref | — | 23/30 | 7 |
 | xtrace | — | 18/19 | 1 |
 | sh-options-bash | — | 6/9 | 3 |
-| redirect-command | — | 18/23 | 5 |
-| redirect-multi | — | 5/13 | 8 |
-| redir-order | — | 1/5 | 4 |
+| redirect-command | — | 23/23 | 0 |
+| redirect-multi | — | 13/13 | 0 |
+| redir-order | — | 5/5 | 0 |
 | arith-context | — | 12/16 | 4 |
 | arith-dynamic | — | 2/4 | 2 |
 | for-expr | — | 7/8 | 1 |
@@ -154,7 +154,7 @@ The file set grew from 62 to 117 oils spec files (1567 to 2417 cases) with the b
 - **vars-special**: $PATH is set if unset at startup; Vars set interactively only: $HISTFILE; Some vars are set, even without startup file, or env: PATH, PWD; $LINENO is the current line, not line of function call; $LINENO in other for loops; $_ with assignments, arrays, etc.
 - **command-sub**: Syntax errors with double quotes within backticks
 - **here-doc**: Here doc with bad comsub delimiter; Function def and execution with here doc
-- **redirect**: 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes (hang/timeout)
+- **redirect**: 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write named pipes (hang/timeout)
 - **loop**: bad arg to break; too many args to continue
 - **func-parsing**: Function name with $; Function name with command sub
 - **builtin-printf**: printf %c unicode - prints the first BYTE of a string - it does not respect UTF-8; bash truncates long strftime string at 128; printf positive integer overflow; printf negative integer overflow
@@ -165,7 +165,7 @@ The file set grew from 62 to 117 oils spec files (1567 to 2417 cases) with the b
 - **builtin-cd**: pwd in symlinked dir on shell initialization
 - **builtin-type**: type -\> alias external
 - **builtin-vars**: local after readonly
-- **dbracket**: [[ regex syntax error; [[ at runtime doesn't work; [[ with env prefix doesn't work; [[ ]] with redirect
+- **dbracket**: [[ regex syntax error; [[ at runtime doesn't work; [[ with env prefix doesn't work
 - **dparen**: (( )) with redirect
 - **assign**: Trying to run keyword 'for'; Test above without 'local' (which is not POSIX); aliased assignment doesn't split; "declare -a arr" and "readonly -a a" creates an empty array (OSH)
 - **array**: array with invalid token
@@ -209,9 +209,6 @@ The file set grew from 62 to 117 oils spec files (1567 to 2417 cases) with the b
 - **var-ref**: ${!a[@]-'default'} is legal but fails with more than one element; var ref TO array with arbitrary subscripts; Var Ref Code Injection $(tee PWNED); ${!array_ref:-set} and ${!array_ref:=assign}; Array indirect expansion with suffix operators; Array indirect expansion with replacements; Array indirect expansion with @? conversion
 - **xtrace**: xtrace with unprintable chars
 - **sh-options-bash**: export SHELLOPTS does cross-process tracing; export SHELLOPTS does cross-process tracing with bash; OSH calling bash with SHELLOPTS does not change braceexpand
-- **redirect-command**: `\< $file` behaves like $(\< file); Redirect in the middle of two assignments; Redirect in function body; Redirect in function body is evaluated multiple times; redirect subshell
-- **redirect-multi**: File redirects with glob args (bash and zsh only); File redirect without matching any file, with failglob; File redirect to $var with glob char; File redirect that globs to more than one file (bash and zsh only); File redirect with extended glob; Extended glob that doesn't match anything; Redirect with brace expansion isn't allowed; File redirects have word splitting too!
-- **redir-order**: subshell + redirect order; for word + redirect order; case word + redirect order; [[ + redirect order
 - **arith-context**: $[ is a synonym for $((; $[$var is a synonym for $(($var (#2426); $[$undefined] is a synonym for $(($undefined (#2566); Empty expression a[]
 - **arith-dynamic**: Double quotes; Substitutions
 - **for-expr**: Accepts { } syntax too
