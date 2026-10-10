@@ -13,7 +13,7 @@ import { setShiroOrigin } from '../utils/shiro-origin';
 import { runChild, runChildSync } from './child';
 import { GuestNetStack, installGuestPorts } from './net';
 import { GuestTtyStdin } from './tty';
-import type { NodeGuestHooks, ThreadEvents } from './hooks';
+import type { GuestIpc, NodeGuestHooks, ThreadEvents } from './hooks';
 
 const dec = new TextDecoder();
 
@@ -108,6 +108,9 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
       writeOut: (fd, s) => { sys.write(fd, s); },
       netStack: net,
       busy: () => net.busy,
+      ids: { pid: sys.getpid(), ppid: sys.getppid() },
+      kill: (pid, sig) => sys.kill(pid, sig),
+      ...(ipcFd(sys, start.env) >= 0 ? { ipc: guestIpc(sys, ipcFd(sys, start.env)) } : {}),
       onUnhandledRejection: (fn) => { rejection = fn; },
       page: {
         clipboard: (text) => post({ type: 'node-guest-clipboard', text }),
@@ -137,6 +140,8 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
       } : {}),
     };
     const env = { ...start.env };
+    // (node takes its channel's variables out of process.env: its own children aren't forked)
+    if (hooks.ipc) { delete env.NODE_CHANNEL_FD; delete env.NODE_CHANNEL_SERIALIZATION_MODE; }
     const shell: any = { cwd: start.cwd, env, abortController: null, fork() { throw new Error('no shell in a node guest'); } };
     const ctx: any = {
       args: nodeThread ? (nodeThread.eval ? ['-e', nodeThread.file] : [nodeThread.file, ...(nodeThread.argv ?? [])]) : start.argv.slice(1),
@@ -196,6 +201,49 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
 }
 
 const workerTimeout = globalThis.setTimeout.bind(globalThis);
+
+/** NODE_CHANNEL_FD, when it names an open fd (a forked node's channel) */
+function ipcFd(sys: GuestSys, env: Record<string, string>): number {
+  const fd = /^\d+$/.test(env.NODE_CHANNEL_FD ?? '') ? Number(env.NODE_CHANNEL_FD) : -1;
+  return fd >= 0 && sys.fcntl(fd, A.F_GETFD, 0) >= 0 ? fd : -1;
+}
+
+/** A forked node's channel to its parent (hooks.ts GuestIpc), read from the Worker's timers */
+function guestIpc(sys: GuestSys, fd: number): GuestIpc {
+  const enc = new TextEncoder();
+  let open = true;
+  sys.fcntl(fd, A.F_SETFD, A.FD_CLOEXEC); // (not its children's)
+  const close = () => { if (open) { open = false; sys.close(fd); } };
+  return {
+    send(text) {
+      if (!open) return false;
+      let b = enc.encode(text);
+      while (b.length) {
+        const n = sys.write(fd, b);
+        if (n === -A.EINTR || n === -A.EAGAIN) continue;
+        if (n <= 0) { close(); return false; }
+        b = b.subarray(n);
+      }
+      return true;
+    },
+    onData(fn) {
+      const buf = new Uint8Array(65536);
+      let idle = 0;
+      const tick = () => {
+        if (!open) return;
+        const { ready } = sys.poll([{ fd, events: A.POLLIN }], 0);
+        if (ready > 0) {
+          const n = sys.read(fd, buf);
+          if (n > 0) { idle = 0; fn(buf.slice(0, n)); }
+          else if (n !== -A.EAGAIN && n !== -A.EINTR) { close(); fn(null); return; }
+        } else idle = Math.min(20, idle + 1);
+        workerTimeout(tick, idle);
+      };
+      tick();
+    },
+    close,
+  };
+}
 
 /** fd 0 (a pipe or a file) as node-compat's live stdin: read when poll says so, from timers */
 function pipeStdin(sys: GuestSys): { read(): Promise<Uint8Array | null> } {

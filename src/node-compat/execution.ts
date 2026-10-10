@@ -4,6 +4,7 @@
  * Extracted from node-cmd.ts exec() body.
  */
 
+import { attachProcessIpc } from './ipc';
 import { createActivity } from './activity';
 import type { CommandContext } from '../commands/index';
 import { iframeServer } from '../iframe-server';
@@ -15,7 +16,7 @@ import { createFakeBuffer } from './buffer';
 import { createFakeConsole, formatLog } from './console';
 import { createFakeProcess } from './process';
 import { createFileCache } from './file-cache';
-import { preloadEnvironment } from './preload';
+import { claudeBootstrap, preloadEnvironment } from './preload';
 import { isClaudeCodeScript, patchClaudeCodeSource } from '../claude-code-version';
 import { createAutoStubFactory } from './auto-stub';
 import { createRequireFunction, compileAsyncModule, esmNamespace } from './require';
@@ -192,10 +193,13 @@ export async function executeNodeScript(
     // File cache, module cache, and sync watchdog
     // As a kernel guest (node-worker), files come from blocking syscalls as they're needed
     const guest = nodeGuestOf(ctx);
+    // A forked guest: its channel to the parent (process.send / 'message')
+    const ipcAlive = guest?.ipc ? attachProcessIpc(fakeProcess, guest.ipc, processEvents) : () => false;
     const { fileCache, fileMtimes, moduleCache, tickSyncOps } = createFileCache(guest?.readText, guest ? (p) => !!(ctx.fs as any).isDirCached?.(p) : undefined);
 
     // Pre-load environment (the page's: files into the cache, Claude's bootstrap)
     if (!guest) await preloadEnvironment(ctx, fileCache, fileMtimes, scriptPath);
+    else await claudeBootstrap(ctx, ctx.env['HOME'] || '/home/user', scriptPath);
     const homeDir = ctx.env['HOME'] || '/home/user';
 
     // Buffer shim
@@ -682,7 +686,7 @@ export async function executeNodeScript(
     const _intervalIds = new Set<any>();
     const _refdIntervals = new Set<any>(); // a guest's ref'd intervals: activity, as in node
     // (and its open sockets and servers)
-    const intervalsAlive = () => _refdIntervals.size > 0 || !!guest?.busy?.() || threadsAlive();
+    const intervalsAlive = () => _refdIntervals.size > 0 || !!guest?.busy?.() || threadsAlive() || ipcAlive();
     if (code.length <= 500000) {
       const settle = () => { if (_activeTimers <= 0 && _timersResolve) { _timersResolve(); _timersResolve = null; _timersDone = null; } };
       globalThis.setTimeout = _st.installedSetTimeout = function(fn: any, ms?: number, ...args: any[]) {
