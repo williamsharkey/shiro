@@ -667,6 +667,11 @@ export class FileSystem {
     if (!this.virtualProviders.includes(vp)) this.virtualProviders.push(vp);
   }
 
+  /** Is `path` a virtual provider's (/dev, /proc, /dom …), where a write may be an action rather than data? */
+  isVirtual(path: string): boolean {
+    return this.virtualProviders.some((vp) => vp.handles(path));
+  }
+
   /** st_ino of the node at canonical `path` (see FSNode.ino); the node is normally cached (just stat'ed). */
   inoOf(path: string): number {
     return this.cache.get(path)?.ino ?? pathIno(path);
