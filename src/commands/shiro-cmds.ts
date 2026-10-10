@@ -4,6 +4,7 @@
  * These override unix.ts versions with Shiro FS-aware behavior,
  * or provide browser-specific functionality.
  */
+import { encodeText } from '../utils/byte-text';
 import { Command } from './index';
 import { getAssociation } from '../file-associations';
 import { activeProfile, unameRelease, UNAME_VERSION } from '../profile';
@@ -570,7 +571,7 @@ export const shasumCmd: Command = {
     };
 
     if (files.length === 0 || files.includes('-')) {
-      const data = new TextEncoder().encode(ctx.stdin);
+      const data = encodeText(ctx.stdin);
       await processData(data, '-');
     }
 

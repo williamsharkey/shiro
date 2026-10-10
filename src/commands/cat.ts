@@ -1,3 +1,4 @@
+import { encodeText } from '../utils/byte-text';
 import type { Command, CommandContext } from './index';
 import { domProvider } from '../dom-fs';
 
@@ -112,14 +113,13 @@ export const cat: Command = {
           if (numberNonBlank ? !blank : number) out += String(++lineNo).padStart(6) + '\t';
         }
         if (showNonPrinting) {
-          line = [...line].map((ch) => {
-            const c = ch.charCodeAt(0);
-            if (ch === '\t') return ch;
+          // Byte by byte, as GNU cat: é (c3 a9) is M-CM-), byte ff is M-^?
+          line = Array.from(encodeText(line), (c) => {
+            if (c === 9) return '\t';
             if (c < 32) return '^' + String.fromCharCode(c + 64);
             if (c === 127) return '^?';
-            if (c >= 128 && c < 160) return 'M-^' + String.fromCharCode(c - 128 + 64);
-            if (c >= 160 && c < 256) return 'M-' + String.fromCharCode(c - 128);
-            return ch;
+            if (c >= 128) return 'M-' + (c === 255 ? '^?' : c < 160 ? '^' + String.fromCharCode(c - 64) : String.fromCharCode(c - 128));
+            return String.fromCharCode(c);
           }).join('');
         }
         if (showTabs) line = line.replace(/\t/g, '^I');

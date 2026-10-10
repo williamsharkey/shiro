@@ -2,6 +2,7 @@
  * cksum — POSIX CRC32 checksum
  */
 
+import { encodeText } from '../utils/byte-text';
 import type { Command } from './index';
 import { parseArgs, readInput } from './flags';
 
@@ -41,8 +42,7 @@ export const cksumCmd: Command = {
 
       if (positional.length === 0) {
         // Read from stdin
-        const encoder = new TextEncoder();
-        const data = encoder.encode(ctx.stdin);
+        const data = encodeText(ctx.stdin);
         const crc = posixCksum(data);
         ctx.stdout += `${crc} ${data.length}\n`;
         return 0;
@@ -53,7 +53,7 @@ export const cksumCmd: Command = {
         const content = await ctx.fs.readFile(path);
         let data: Uint8Array;
         if (typeof content === 'string') {
-          data = new TextEncoder().encode(content);
+          data = encodeText(content);
         } else {
           data = content;
         }
