@@ -1217,4 +1217,37 @@ describe('kernel syscalls found by LTP', () => {
       }
     }
   });
+
+  it('a timer started long in the past: the expiries missed are the first signal\'s overruns, capped at DELAYTIMER_MAX (LTP timer_settime03)', async () => {
+    const t = kernel.vfork(proc);
+    kernel.setSigmask(t, new Set([A.SIGUSR1]));
+    const sev = new Uint8Array(24);
+    new DataView(sev.buffer).setInt32(8, A.SIGUSR1, true);
+    const id = await kernel.syscall(t, A.SYS_timer_create, [0 /* CLOCK_REALTIME */, 1], sev);
+    // every 1 µs from 3000 s ago (TIMER_ABSTIME): 3e9 expiries missed
+    const b = new Uint8Array(32), v = new DataView(b.buffer);
+    v.setBigInt64(8, 1000n, true);
+    const start = BigInt(Date.now() - 3_000_000) * 1_000_000n;
+    v.setBigInt64(16, start / 1_000_000_000n, true); v.setBigInt64(24, start % 1_000_000_000n, true);
+    expect(await kernel.syscall(t, A.SYS_timer_settime, [id, 1], b)).toBe(0);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(t.deferredSignals.has(A.SIGUSR1)).toBe(true);
+    t.deferredSignals.delete(A.SIGUSR1);
+    expect(await kernel.syscall(t, A.SYS_timer_getoverrun, [id], new Uint8Array(8))).toBe(0x7fffffff);
+    kernel.kill(t.pid, A.SIGKILL);
+    await kernel.syscall(proc, A.SYS_wait4, [t.pid, 0], new Uint8Array(8));
+  });
+
+  it('setpgid of a child that has exec\'d is EACCES; prctl(PR_SET_NAME) is the process\'s comm until exec, and a fork child keeps it (LTP setpgid03, prctl05)', async () => {
+    const c = kernel.vfork(proc);
+    await kernel.syscall(proc, A.SYS_setpgid, [c.pid, 0], new Uint8Array(8)); // (still the parent's to move)
+    c.data.execed = true;
+    expect(await kernel.syscall(proc, A.SYS_setpgid, [c.pid, 0], new Uint8Array(8))).toBe(-A.EACCES);
+    const name = new TextEncoder().encode('renamed-thread-name');
+    expect(await kernel.syscall(c, A.SYS_prctl, [15, name.length], name)).toBe(0);
+    expect(c.comm).toBe('renamed-thread-');
+    expect(kernel.vfork(c).comm).toBe('renamed-thread-');
+    expect(await kernel.syscall(c, A.SYS_prctl, [16, 0], new Uint8Array(16))).toBe(-A.EINVAL);
+    kernel.kill(c.pid, A.SIGKILL);
+  });
 });

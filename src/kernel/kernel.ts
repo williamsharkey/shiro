@@ -2367,10 +2367,17 @@ export class Kernel {
           if (!p) return -A.ESRCH;
           return nr === A.SYS_getpgid ? p.pgid : p.sid;
         }
+        case A.SYS_prctl: { // PR_SET_NAME (15), len; data = the name: the main thread's is the process's comm
+          if (args[0] !== 15) return -A.EINVAL;
+          proc.data.comm = new TextDecoder().decode(data.subarray(0, Math.min(15, args[1] >>> 0)));
+          return 0;
+        }
         case A.SYS_setpgid: {
           const p = args[0] === 0 ? proc : this.procs.get(args[0]);
           if (!p || (p !== proc && p.ppid !== proc.pid)) return -A.ESRCH;
           if (p.sid !== proc.sid) return -A.EPERM;
+          // a child that has exec'd is no longer its parent's to move (LTP setpgid03)
+          if (p !== proc && p.data.execed) return -A.EACCES;
           if (p.pid === p.sid) return -A.EPERM;
           const pgid = args[1] === 0 ? p.pid : args[1];
           if (pgid < 0) return -A.EINVAL;
@@ -3293,6 +3300,7 @@ export class Kernel {
     this.procs.set(pid, child);
     const cpu = parent.data.cpuLimit as { cur: number; max: number } | undefined;
     if (cpu) this.setCpuLimit(child, cpu.cur, cpu.max);
+    if (typeof parent.data.comm === 'string') child.data.comm = parent.data.comm;
     for (const h of [...this.spawnHooks]) {
       try { h(child); } catch (e) { console.warn('[kernel] onSpawn hook failed', e); }
     }
@@ -3379,6 +3387,8 @@ export class Kernel {
     const runner = embryo || !inproc ? await this.findProgram(path, probe) : null;
     if ((embryo || !inproc) && !runner) return -A.ENOEXEC;
     // The point of no return: exec bookkeeping, as Linux does it
+    proc.data.execed = true; // (its parent can no longer setpgid it: EACCES)
+    delete proc.data.comm; // (a name prctl set: the new program's from now)
     await proc.fds.closeOnExec();
     this.shm.detachAll(proc); // exec drops SysV shm attachments
     this.timers.clear(proc); // and POSIX timers

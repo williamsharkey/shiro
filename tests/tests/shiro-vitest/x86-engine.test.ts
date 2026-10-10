@@ -309,6 +309,10 @@ const haveCpulimit = blinkHas0515 && tryBuild('gcc', ['-static', '-O1', '-w', '-
 // (and the kernel's leases: perf-kernel's F_SETLEASE)
 const leaseBin = join(out, 'lease');
 const haveLease = blinkHas0515 && (Abi as Record<string, unknown>).F_SETLEASE !== undefined && tryBuild('gcc', ['-static', '-O1', '-w', '-o', leaseBin, 'lease.c']);
+// Blink 0516: what a process asks about itself and others
+const procbitsBin = join(out, 'procbits');
+const haveProcbits = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_procbits') &&
+  tryBuild('gcc', ['-static', '-O1', '-w', '-o', procbitsBin, 'procbits.c', '-lpthread']);
 // a named semaphore's count survives sem_close (the kernel writes a /dev/shm object back to its linked names)
 const semreopenBin = join(out, 'semreopen');
 const haveSemreopen = tryBuild('gcc', ['-static', '-O1', '-w', '-o', semreopenBin, 'semreopen.c', '-lpthread']);
@@ -1003,6 +1007,12 @@ it.skipIf(!haveCpulimit)('RLIMIT_CPU: SIGXCPU at the soft limit and SIGKILL at t
   const { shell } = await setup(readFileSync(cpulimitBin));
   const r = await run(shell, './prog');
   expect(r.output.replace(/\r\n/g, '\n')).toBe('limit 1 2\nafter sleep 0\ngrandchild SIGKILL xcpu 1\n');
+}, 60_000);
+
+it.skipIf(!haveProcbits)('affinity of a pid that does not exist and tgkill of an exited thread are ESRCH; brk keeps an unaligned break; timer slack and the name pass to a fork child; stat(NULL) is EFAULT; a write-sealed memfd maps shared+writable as EPERM (LTP sched_getaffinity01, tgkill03, brk01, prctl05, prctl08, lstat02, memfd_create01)', async () => {
+  const { shell } = await setup(readFileSync(procbitsBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('affinity other 3\ntgkill dead 3\nbrk exact 1\nparent comm renamed\nslack 70000\nchild slack default 70000\nchild comm renamed\nlstat null 14\nsealed map 1\n');
 }, 60_000);
 
 it.skipIf(!haveLease)('fcntl leases: a read lease on a file open for writing is EAGAIN; on a read-only open it is granted and F_GETLEASE reports it (LTP fcntl27)', async () => {

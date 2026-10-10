@@ -98,6 +98,7 @@ export const SYS_epoll_create = 213;
 export const SYS_epoll_wait = 232;
 export const SYS_epoll_ctl = 233;
 export const SYS_tgkill = 234;
+export const SYS_prctl = 157;
 export const SYS_mkdirat = 258;
 export const SYS_mknod = 133;
 export const SYS_mknodat = 259;

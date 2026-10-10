@@ -181,6 +181,8 @@ export class Process {
 
   /** Short command name, like /proc/PID/comm. */
   get comm(): string {
+    // (prctl(PR_SET_NAME) of its main thread, until it execs)
+    if (typeof this.data.comm === 'string') return this.data.comm;
     const a0 = this.argv[0] ?? this.path;
     return a0.slice(a0.lastIndexOf('/') + 1);
   }

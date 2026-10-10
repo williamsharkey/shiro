@@ -119,26 +119,25 @@ export class PosixTimers {
   }
 
   private fire(proc: Process, tm: Timer): void {
+    // Behind by an interval or more (late, or an absolute start long past):
+    // the expiries missed are overruns of the signal this one generates
+    // (LTP timer_settime03: a start 1.4 x INT_MAX intervals ago reads
+    // DELAYTIMER_MAX)
+    const missed = tm.interval > 0 ? Math.max(0, Math.floor((now() - tm.deadline) / tm.interval)) : 0;
     if (tm.signo) {
       this.settle(proc, tm);
       // A signal that would only be discarded isn't generated, and the last
       // signal's overruns stay the reported ones (Linux 6.13's ignored timers)
       if (!tm.queued && PosixTimers.discarded(proc, tm.signo)) tm.cur = 0;
-      else if (tm.queued) tm.cur = Math.min(DELAYTIMER_MAX, tm.cur + 1);
+      else if (tm.queued) tm.cur = Math.min(DELAYTIMER_MAX, tm.cur + 1 + missed);
       else {
         tm.queued = true;
+        tm.cur = Math.min(DELAYTIMER_MAX, missed);
         this.deliver(proc, tm.signo, { signo: tm.signo, code: A.SI_TIMER, timerid: tm.id, overrun: 0, value: tm.value, tid: tm.tid });
       }
     }
     if (tm.interval > 0) {
-      tm.deadline += tm.interval;
-      // (behind by more than an interval: the missed expiries are overruns too)
-      const behind = now() - tm.deadline;
-      if (behind > tm.interval) {
-        const n = Math.floor(behind / tm.interval);
-        if (tm.signo) tm.cur = Math.min(DELAYTIMER_MAX, tm.cur + n);
-        tm.deadline += n * tm.interval;
-      }
+      tm.deadline += (missed + 1) * tm.interval;
       this.arm(proc, tm);
     } else tm.deadline = 0;
   }

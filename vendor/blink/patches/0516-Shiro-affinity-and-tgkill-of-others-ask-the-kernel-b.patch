@@ -1,0 +1,253 @@
+From 5f5844dfe809f03c4f1652b13b1d031529a587ec Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 20:02:34 +0000
+Subject: [PATCH] Shiro: affinity and tgkill of others ask the kernel; brk
+ keeps the address asked for; timer slack, comm and prctl flags per thread and
+ through fork; stat of NULL is EFAULT; a write-sealed memfd doesn't map shared
+ and writable; cap drops and securebits are root's
+
+---
+ blink/machine.h |  3 +++
+ blink/shiro.inc | 66 +++++++++++++++++++++++++++++++++++++++++++++++--
+ blink/syscall.c | 27 +++++++++++++++++---
+ 3 files changed, 91 insertions(+), 5 deletions(-)
+
+diff --git a/blink/machine.h b/blink/machine.h
+index cd2c6c3..0d7fdbf 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -299,6 +299,7 @@ struct System {
+   u64 cr3;
+   u64 cr4;
+   i64 brk;
++  i64 brkexact;  // the break as asked for (unaligned), when brk is it rounded up
+   i64 automap;
+   i64 memchurn;
+   i64 codestart;
+@@ -370,6 +371,8 @@ struct Machine {               //
+   u64 ip;                      // instruction pointer
+   char comm[16];               // prctl(PR_SET_NAME), "" = the program's name
+   u8 keepcaps, nonewprivs;     // prctl flags (recorded; not enforced)
++  u64 timerslack, timerslack0; // PR_SET_TIMERSLACK: current, default (0: 50 us)
++  int slack_tid;               // the thread they're this thread's own for
+   u8 subreaper, pdeathsig;
+   u8 oplen;                    // length of operation
+   struct XedMachineMode mode;  // [dup] XED_MACHINE_MODE_REAL etc.
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 818ca68..5bb1960 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2064,6 +2064,12 @@ struct ShiroForkHeader {
+   int nice;
+   u32 persona;
+   int sched_policy;
++  // the forking thread's prctl state (a child keeps its name, timer slack and
++  // flags: LTP prctl08) and the exact break (brk01)
++  char comm[16];
++  u64 timerslack;
++  u8 keepcaps, nonewprivs;
++  i64 brkexact;
+   i64 elfbase, at_base, at_phdr, at_phent, at_entry, at_phnum;
+   u8 rng[16];
+   u32 proglen, execfnlen, interplen;
+@@ -2246,6 +2252,11 @@ static int ShiroSnapshot(struct Machine *m, u64 flags, i64 stack, i64 ctid,
+   h.cloneflags = flags;
+   h.ctid = ctid;
+   h.brk = s->brk;
++  h.brkexact = s->brkexact;
++  memcpy(h.comm, m->comm, sizeof(h.comm));
++  h.timerslack = m->timerslack;
++  h.keepcaps = m->keepcaps;
++  h.nonewprivs = m->nonewprivs;
+   h.automap = s->automap;
+   h.iscosmo = s->iscosmo;
+   LOCK(&s->sig_lock);
+@@ -2424,6 +2435,11 @@ static void ShiroRestoreFrom(struct Machine *m, const u8 *p, size_t len) {
+     }
+   }
+   s->brk = h.brk;
++  s->brkexact = h.brkexact;
++  memcpy(m->comm, h.comm, sizeof(m->comm));
++  m->timerslack = h.timerslack;  // (its default too: slack_tid isn't this thread's yet)
++  m->keepcaps = h.keepcaps;
++  m->nonewprivs = h.nonewprivs;
+   s->automap = h.automap;
+   s->iscosmo = h.iscosmo;
+   memcpy(s->hands, h.hands, sizeof(h.hands));
+@@ -2564,6 +2580,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_splice(void) { return 1; }
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_argchecks(void) { return 1; }
+ // 0515: leases, a CLONE_VM process, RLIMIT_CPU go to the kernel
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_cpulimit(void) { return 1; }
++// 0516: affinity and tgkill of others ask the kernel, exact brk, timer slack, comm
++EMSCRIPTEN_KEEPALIVE int blink_shiro_procbits(void) { return 1; }
+ 
+ // the same with the signal's siginfo (the kernel's call 1030, made as `pid`)
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid_info(int pid, int sig, int w0, int w1, int w2,
+@@ -2597,6 +2615,27 @@ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid(int pid, int sig) {
+ 
+ // The process is ending in this thread: its other threads notice at their
+ // next instruction or blocking wait (CheckForSignals: SysExit) and go too.
++// PR_SET_NAME of the main thread: the kernel's /proc/PID/comm and ps show it
++static void ShiroSetComm(struct Machine *m, const char *name) {
++  char buf[16];
++  if (!g_shiro_pid || t_vfork || m->tid != m->system->pid) return;
++  memcpy(buf, name, 16);
++  ShiroCall(m, 157, A12(15, (int)strnlen(buf, 15)), buf, (int)strnlen(buf, 15), 0, false, false);
++}
++
++// Whether tid is one of this process's threads
++static bool ShiroOwnTid(struct Machine *m, int tid) {
++  struct Dll *e;
++  bool found = false;
++  if (tid == m->tid || tid == m->system->pid) return true;
++  LOCK(&m->system->machines_lock);
++  for (e = dll_first(m->system->machines); e; e = dll_next(m->system->machines, e)) {
++    if (MACHINE_CONTAINER(e)->tid == tid) found = true;
++  }
++  UNLOCK(&m->system->machines_lock);
++  return found;
++}
++
+ // (Waiting for them, as KillOtherThreads does, hangs under emscripten.)
+ static void ShiroKillSiblings(struct Machine *self) {
+   struct Dll *e;
+@@ -3528,6 +3567,9 @@ static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
+   if ((r = KS(m, 72, A12(fd, 3, 0))) < 0) return r;  // F_GETFL
+   if (r & 010000000) return -EBADF_LINUX;
+   if ((r & 3) == 1 || (shared && (prot & 2) && (r & 3) != 2)) return -EACCES_LINUX;
++  // a memfd sealed against writes can't be mapped shared and writable
++  // (F_SEAL_WRITE, F_SEAL_FUTURE_WRITE: EPERM; LTP memfd_create01)
++  if (shared && (prot & 2) && (r = KS(m, 72, A12(fd, 1034, 0))) > 0 && (r & 0x18)) return -EPERM_LINUX;
+   if (shared && (r = ShiroRemoteMapFile(m, virt, size, prot, flags, fd, off)) != SHIRO_NOT_REMOTE) {
+     if (r >= 0 && ShiroStatAt(m, fd, 0, 0, 0x1000, st) >= 0 && (Read32(st + 24) & 0170000) == 0100000) {
+       ShiroBusAdd(m, r, size, prot, fd, off, Read64(st + 48), true);
+@@ -4051,6 +4093,14 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       // kernel too, which queues every instance (Blink's pending set holds
+       // one of each): raise(SIGRTMIN) twice is taken twice by sigwait
+       int tid = nr == 0x0C8 ? (int)a : (int)b, sig = nr == 0x0C8 ? (int)b : (int)c;
++      // Not one of our live threads (another process's, or ours that has
++      // exited): the kernel's, which says ESRCH for a tid it doesn't know
++      // (LTP tgkill03: a defunct tid or tgid; Blink said EPERM)
++      if (tid > 0 && sig >= 0 && sig <= 64 && (nr == 0x0C8 || (int)a > 0) &&
++          ((nr == 0x0EA && (int)a != m->system->pid) || !ShiroOwnTid(m, tid))) {
++        r = nr == 0x0C8 ? KS(m, 200, A12(tid, sig)) : KS(m, 234, A12((int)a, tid, sig));
++        break;
++      }
+       if (tid != m->tid || (nr == 0x0EA && (int)a != m->system->pid)) return false;
+       if (sig == 9 || sig == 19) {
+         r = KS(m, 62, A12(m->system->pid, sig));                     // kill
+@@ -4324,10 +4374,13 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+     case 0x1B4: r = KS(m, 436, A12(a, b, c)); break;                  // close_range
+     // (a NULL buffer is EFAULT once the file is found, as on Linux; for
+     // ShiroStatAt, st == 0 means "just check it exists")
+-    case 0x004: r = ShiroStatAt(m, -100, a, b, 0, 0); if (!r && !b) r = -EFAULT_LINUX; break;          // stat
+-    case 0x006: r = ShiroStatAt(m, -100, a, b, 0x100, 0); if (!r && !b) r = -EFAULT_LINUX; break;      // lstat
++    // (a NULL path is EFAULT, not fstatat's empty path: LTP lstat02)
++    case 0x004: r = !a ? -EFAULT_LINUX : ShiroStatAt(m, -100, a, b, 0, 0); if (!r && !b) r = -EFAULT_LINUX; break;          // stat
++    case 0x006: r = !a ? -EFAULT_LINUX : ShiroStatAt(m, -100, a, b, 0x100, 0); if (!r && !b) r = -EFAULT_LINUX; break;      // lstat
+     case 0x005: r = ShiroStatAt(m, a, 0, b, 0x1000, 0); if (!r && !b) r = -EFAULT_LINUX; break;        // fstat
+     case 0x106:                                                       // newfstatat
++      // a NULL path without AT_EMPTY_PATH is EFAULT (glibc's lstat: LTP lstat02)
++      if (!b && !(d & 0x1000)) { r = -EFAULT_LINUX; break; }
+       if (b && !(d & 0x1000)) {
+         char *s = LoadStr(m, b);
+         if (s && !*s) { r = -ENOENT_LINUX; break; }
+@@ -4743,6 +4796,15 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+                       : ShiroCall(m, 289, A12((int)a, (int)c, (int)d), mask, 8, 0, false, false);
+       break;
+     }
++    case 0x0CB: case 0x0CC:                                           // sched_{set,get}affinity
++      // another process's: the kernel says whether it exists (ESRCH; LTP
++      // sched_getaffinity01) and whether we may (EPERM); its CPUs are ours
++      if ((int)a <= 0 || ShiroOwnTid(m, (int)a)) return false;
++      if ((r = KS(m, 62, A12((int)a, 0))) < 0) break;                // kill(pid, 0)
++      if (nr == 0x0CB) { r = 0; break; }
++      r = SysSchedGetaffinity(m, 0, b, c);
++      if (r == -1) r = ShiroErr();
++      break;
+     case 0x039:                                                       // fork
+       r = ShiroSameInstanceFork()          ? ShiroForkSame(m, 0, 0, 0)
+           : ShiroHasSharedMemory(m->system) ? ShiroVfork(m, 0, true)
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 95f4c18..e7a6084 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -781,6 +781,8 @@ static void ShiroInterruptThread(struct Machine *);
+ static bool ShiroCpuTimes(struct Machine *, i64 *, i64 *);
+ static struct timespec CpuClockNow(struct Machine *, int);
+ static void ShiroCommitPages(struct Machine *, i64, i64);
++static void ShiroSetComm(struct Machine *, const char *);
++static i64 ShiroEuid(struct Machine *);
+ #else
+ #define ShiroSleeping(m, n) (void)0
+ #define ShiroSyncMask(m) (void)0
+@@ -1355,6 +1357,7 @@ static int SysPrctl(struct Machine *m, int op, i64 arg2, i64 arg3, i64 arg4,
+         if (!name[i]) break;
+       }
+       memcpy(m->comm, name, 16);
++      ShiroSetComm(m, name);  // (the main thread's is /proc/PID/comm: LTP prctl05)
+       return 0;
+     case 16:  // PR_GET_NAME: 16 bytes
+       GetComm(m, name);
+@@ -1386,8 +1389,17 @@ static int SysPrctl(struct Machine *m, int op, i64 arg2, i64 arg3, i64 arg4,
+       Write32((u8 *)name, m->subreaper);
+       return CopyToUserWrite(m, arg2, name, 4);
+     case 39:  // PR_GET_NO_NEW_PRIVS
++      if (arg2 || arg3 || arg4 || arg5) return einval();  // (LTP prctl02)
+       return m->nonewprivs;
++    case 29:  // PR_SET_TIMERSLACK: 0 is the thread's default (LTP prctl08)
++    case 30:  // PR_GET_TIMERSLACK
++      // a new thread's (or fork child's) default is its creator's current value
++      if (m->slack_tid != m->tid) m->slack_tid = m->tid, m->timerslack0 = m->timerslack;
++      if (op == 30) return m->timerslack ? (int)MIN(m->timerslack, 0x7fffffff) : 50000;
++      m->timerslack = arg2 ? (u64)arg2 : m->timerslack0;
++      return 0;
+     case 47:  // PR_CAP_AMBIENT: none raised; raising, lowering, clearing accepted
++      if (arg4 || arg5 || (arg2 == 4 && arg3)) return einval();  // (CLEAR_ALL takes nothing: LTP prctl02)
+       if (arg2 == 1) return arg3 >= 0 && arg3 <= 40 ? 0 : einval();
+       return arg2 >= 2 && arg2 <= 4 ? 0 : einval();
+     case PR_GET_TSC_LINUX:
+@@ -1398,8 +1410,13 @@ static int SysPrctl(struct Machine *m, int op, i64 arg2, i64 arg3, i64 arg4,
+     case PR_CAPBSET_DROP_LINUX:
+       return prctl(PR_CAPBSET_DROP, arg2, arg3, arg4, arg5);
+ #else
+-    case PR_CAPBSET_DROP_LINUX:  // nothing to drop: accepted for known caps
+-      return arg2 >= 0 && arg2 <= 40 ? 0 : einval();
++    case PR_CAPBSET_DROP_LINUX:  // nothing to drop: accepted for known caps, from root
++      if (!(arg2 >= 0 && arg2 <= 40)) return einval();
++      return ShiroEuid(m) ? eperm() : 0;  // (CAP_SETPCAP: LTP prctl02)
++    case 27:  // PR_GET_SECUREBITS: none
++      return 0;
++    case 28:  // PR_SET_SECUREBITS: root's (CAP_SETPCAP)
++      return ShiroEuid(m) ? eperm() : 0;
+ #endif
+ #if defined(PR_SET_NO_NEW_PRIVS) && !defined(__EMSCRIPTEN__)
+     case PR_SET_NO_NEW_PRIVS_LINUX:
+@@ -1508,12 +1525,13 @@ static int SysMadvise(struct Machine *m, i64 addr, u64 len, int advice) {
+ }
+ 
+ static i64 SysBrk(struct Machine *m, i64 addr) {
+-  i64 rc, size;
++  i64 rc, size, want;
+   long pagesize;
+   BEGIN_NO_PAGE_FAULTS;
+   LOCK(&m->system->mmap_lock);
+   MEM_LOGF("brk(%#" PRIx64 ") currently %#" PRIx64, addr, m->system->brk);
+   pagesize = FLAG_pagesize;
++  want = addr;
+   addr = ROUNDUP(addr, pagesize);
+   if (addr >= kNullSize) {
+     if (addr > m->system->brk) {
+@@ -1553,6 +1571,9 @@ static i64 SysBrk(struct Machine *m, i64 addr) {
+     }
+   }
+   rc = m->system->brk;
++  // Linux keeps the break where it was asked to be, unaligned (LTP brk01)
++  if (want >= kNullSize && ROUNDUP(want, pagesize) == rc) m->system->brkexact = want;
++  if (m->system->brkexact && ROUNDUP(m->system->brkexact, pagesize) == rc) rc = m->system->brkexact;
+   unassert(CheckMemoryInvariants(m->system));
+   UNLOCK(&m->system->mmap_lock);
+   END_NO_PAGE_FAULTS;
+-- 
+2.43.0
+
