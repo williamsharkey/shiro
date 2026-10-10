@@ -190,6 +190,10 @@ const haveTimers = blinkHasTimers && tryBuild('gcc', ['-static', '-O1', '-w', '-
 const sigmodesBin = join(out, 'sigmodes');
 const blinkHasSigmodes = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_sigmodes');
 const haveSigmodes = blinkHasSigmodes && tryBuild('gcc', ['-static', '-O1', '-w', '-o', sigmodesBin, 'sigmodes.c']);
+// Blink 0097/0098: write-only shared pages, and shared kernel-file maps written back before a new map and at exit
+const sharedmapsBin = join(out, 'sharedmaps');
+const blinkHasSharedmaps = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_sharedmaps');
+const haveSharedmaps = blinkHasSharedmaps && tryBuild('gcc', ['-static', '-O1', '-w', '-o', sharedmapsBin, 'sharedmaps.c']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -706,6 +710,12 @@ it.skipIf(!haveSigmodes)('raise of a blocked real-time signal queues each instan
   const { shell } = await setup(readFileSync(sigmodesBin));
   const r = await run(shell, './prog');
   expect(r.output.replace(/\r\n/g, '\n')).toBe('rt 1 1 pending 1 signo 1 third -1 EAGAIN\nmask 0 kill 0 stop 0 usr1 1\nboth -1 EINVAL\ndisable 0 sp 1 size 0 flags 2\n');
+}, 60_000);
+
+it.skipIf(!haveSharedmaps)('MAP_SHARED /dev/shm mappings: write-only pages, a second mapping and a child\'s exit see the bytes (Open POSIX shm_open)', async () => {
+  const { shell } = await setup(readFileSync(sharedmapsBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('second qwerty\nchild from child\n');
 }, 60_000);
 
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
