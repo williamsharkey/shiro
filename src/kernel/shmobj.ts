@@ -172,6 +172,12 @@ export class SharedObjects {
     if (o.sab && o.writeBack) await o.writeBack(new Uint8Array(o.sab, 0, o.size).slice());
   }
 
+  /** The key of the remote object whose buffer is `buf`, if any (a file mapped before its name went). */
+  keyOfBuffer(buf: ArrayBufferLike): string | undefined {
+    for (const o of this.byKey.values()) if (o.sab === buf) return o.key;
+    return undefined;
+  }
+
   /** The live buffer of a remote object (read/write syscalls on its file go here), or null. */
   bufferFor(key: string): SharedArrayBuffer | null {
     return this.byKey.get(key)?.sab ?? null;
