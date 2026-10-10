@@ -635,6 +635,11 @@ export async function unlinkInode(fs: FileSystem, path: string): Promise<void> {
   await ino.flush();
 }
 
+/** Whether `path` (resolved) is open: unlink must then hand its data to the open fds. */
+export function isInodeOpen(fs: FileSystem, path: string): boolean {
+  return !!inodeTables.get(fs)?.has(path);
+}
+
 /** Whether any file of `fs` is open (inodeStat can only answer then). */
 export function hasOpenInodes(fs: FileSystem): boolean {
   return !!inodeTables.get(fs)?.size;
@@ -810,7 +815,9 @@ export class RegularFile implements OpenFile {
     return next;
   }
 
-  async truncate(len: number): Promise<number> {
+  async truncate(len: number): Promise<number> { return this.truncateSync(len); }
+
+  truncateSync(len: number): number {
     if (!canWrite(this.flags)) return -EINVAL;
     if (len < 0) return -EINVAL;
     const ino = this.ino;

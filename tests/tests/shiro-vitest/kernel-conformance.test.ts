@@ -321,6 +321,40 @@ describe('kernel syscalls found by LTP', () => {
     off();
   });
 
+  it('O_CREAT/O_TRUNC/O_EXCL/O_NOFOLLOW opens and unlink are answered synchronously from the cache', async () => {
+    const enc2 = new TextEncoder();
+    const sync = (nr: number, args: number[], path: string) => {
+      const d = new Uint8Array(512);
+      const b = enc2.encode(path);
+      d.set(b);
+      return kernel.syscallSync(proc, nr, nr === A.SYS_unlink ? [b.length] : [A.AT_FDCWD, b.length, ...args], d);
+    };
+    await fs.writeFile('/tmp/kc/old', 'abc');
+    await fs.readFile('/tmp/kc/old'); // cached
+    const fd = sync(A.SYS_openat, [A.O_WRONLY | A.O_CREAT | A.O_TRUNC, 0o640], '/tmp/kc/new');
+    expect(fd).toBeGreaterThanOrEqual(0);
+    expect((await fs.stat('/tmp/kc/new')).size).toBe(0);
+    expect((await fs.stat('/tmp/kc/new')).mode & 0o777).toBe(0o640 & ~proc.umask);
+    expect(sync(A.SYS_openat, [A.O_WRONLY | A.O_CREAT | A.O_EXCL, 0o600], '/tmp/kc/new')).toBe(-A.EEXIST);
+    const t = sync(A.SYS_openat, [A.O_WRONLY | A.O_TRUNC, 0], '/tmp/kc/old');
+    expect(t).toBeGreaterThanOrEqual(0);
+    await call(A.SYS_close, [t]);
+    expect(await fs.readFile('/tmp/kc/old', 'utf8')).toBe('');
+    expect(sync(A.SYS_openat, [A.O_RDONLY, 0], '/tmp/kc/nope')).toBe(-A.ENOENT);
+    await fs.symlink('/tmp/kc/old', '/tmp/kc/ln');
+    await fs.lstat('/tmp/kc/ln');
+    expect(sync(A.SYS_openat, [A.O_RDONLY | A.O_NOFOLLOW, 0], '/tmp/kc/ln')).toBe(-A.ELOOP);
+    // unlink: done in memory unless the file is open (fd is still open: async path)
+    expect(sync(A.SYS_unlink, [], '/tmp/kc/new')).toBe(undefined);
+    await call(A.SYS_close, [fd]);
+    expect(sync(A.SYS_unlink, [], '/tmp/kc/new')).toBe(0);
+    expect(await fs.exists('/tmp/kc/new')).toBe(false);
+    expect(sync(A.SYS_unlink, [], '/tmp/kc/new')).toBe(-A.ENOENT);
+    expect(sync(A.SYS_unlink, [], '/tmp/kc')).toBe(-A.EISDIR);
+    expect(sync(A.SYS_unlink, [], '/tmp/kc/ln')).toBe(0); // the link, not its target
+    expect(await fs.exists('/tmp/kc/old')).toBe(true);
+  });
+
   it('paths below /proc/self/fd/N (and /dev/fd/N) name entries of that open directory', async () => {
     await fs.mkdir('/tmp/kc/pinned', { recursive: true });
     const dfd = await open('/tmp/kc/pinned', A.O_PATH | A.O_DIRECTORY | A.O_NOFOLLOW);
