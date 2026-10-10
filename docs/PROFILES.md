@@ -33,7 +33,7 @@ value forgets it. `?ui=` still overrides the profile's UI mode on its own.
 | `ui` | `terminal` or `desktop` (src/ui-mode.ts) | terminal | desktop |
 | `brand` | name, domain, tagline, description: tab title, desktop wordmark, About, app shell `<title>` and Open Graph tags; `null` keeps the page's own | null | tabcomputer |
 | `banner` | the terminal's startup banner: `hud` (full) or `desktop` (the desktop's compact welcome) | hud | desktop |
-| `preinstall` | installed in the background after boot (`claude-code`: the pinned npm build) | claude-code | claude-code |
+| `preinstall` | installed in the background after boot (`claude-code`: the pinned npm build; other names are `pkg` packages, skipped when installed or when every path the package links already exists) | claude-code, ca-certificates | claude-code, ca-certificates |
 | `shims.claude` | what plain `claude` runs and `claude install` installs: `npm` (the pinned JS build) or `native` (Anthropic's binary, in the x86-64 engine); `--npm`/`--native` or `CLAUDE_NATIVE=0/1` pick the other | npm | native |
 | `shims.claudeInstallSh` | `curl claude.ai/install.sh` returns a stand-in that npm-installs the pinned build | on | on |
 | `shims.tabSsh` | `ssh CODE` is the tab-to-tab ssh over WebRTC (`remote start`); off, every `ssh` is OpenSSH | on | on |

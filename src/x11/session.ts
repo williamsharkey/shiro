@@ -6,6 +6,7 @@
  */
 import { XServer } from './server';
 import { installRender } from './render';
+import { glxServer } from './glx';
 import { Rootless } from './rootless';
 import { ClipboardBridge } from './clipboard';
 import { getWindowHost, type WindowHost } from '../gui/window-host';
@@ -51,6 +52,7 @@ async function create(display: number): Promise<XSession> {
   server.domTextRaster = textMode === 'overlay';
   server.log = (s) => console.warn('[Xshiro]', s);
   installRender(server);
+  glxServer(server);
   const rootless = host ? new Rootless(server, host) : null;
   if (rootless && typeof navigator !== 'undefined' && navigator.clipboard) {
     const clip = new ClipboardBridge(server, navigator.clipboard);

@@ -431,6 +431,120 @@ describe('X11 protocol', () => {
     expect(lookupColor('rgb:ff/80/00')).toBe(0xff8000);
     expect(lookupColor('nosuchcolor')).toBeNull();
   });
+
+  it('GLX: off until glshiro enables it, then QueryVersion 1.4 and the vendor library name; rendering requests are BadRequest', async () => {
+    const glx = await import('@shiro/x11/glx');
+    glx.resetGLX();
+    const { server, c } = await newServer();
+    glx.glxServer(server);
+    const query = async () => { c.send(98, 0, (w) => w.u16(3).u16(0).str('GLX')); const r = await c.reply(); r.skip(8); return [r.u8(), r.u8()]; };
+    expect((await query())[0]).toBe(0);
+    expect(glx.glxEnabled()).toBe(false);
+    glx.enableGLX();
+    expect(glx.glxEnabled()).toBe(true);
+    c.send(98, 0, (w) => w.u16(3).u16(0).str('GLX'));
+    const q = await c.reply(); q.skip(8);
+    const [present, major] = [q.u8(), q.u8()];
+    q.u8();
+    const firstError = q.u8();
+    expect(present).toBe(1);
+    c.send(major, 7, (w) => w.u32(1).u32(4));                  // QueryVersion
+    const v = await c.reply(); v.skip(8);
+    expect([v.u32(), v.u32()]).toEqual([1, 4]);
+    const serverString = async (name: number) => {
+      c.send(major, 19, (w) => w.u32(0).u32(name));            // QueryServerString
+      const r = await c.reply(); r.skip(12);
+      const n = r.u32(); r.skip(16);
+      return r.str(n).replace(/\0$/, '');
+    };
+    expect(await serverString(0x20f6)).toBe('tabcomputer');    // GLX_VENDOR_NAMES_EXT: glvnd loads libGLX_tabcomputer
+    expect(await serverString(2)).toBe('1.4');
+    expect((await serverString(3)).split(' ')).toContain('GLX_EXT_libglvnd');   // without it glvnd loads libGLX_indirect
+    createWindow(c, c.id(1), 0, 0, 120, 90, 0);
+    c.send(major, 29, (w) => w.u32(c.id(1)));                  // GetDrawableAttributes: glvnd finds the drawable's screen
+    const a = await c.reply(); a.skip(8);
+    const n = a.u32(); a.skip(20);
+    const attrs = new Map<number, number>();
+    for (let i = 0; i < n; i++) attrs.set(a.u32(), a.u32());
+    expect([attrs.get(0x800c), attrs.get(0x801d), attrs.get(0x801e)]).toEqual([0, 120, 90]);
+    c.send(major, 29, (w) => w.u32(c.id(77)));
+    await expect(c.reply()).rejects.toThrow(`X error ${firstError + 2} `);   // GLXBadDrawable
+    c.send(major, 20, (w) => w.u32(1).u32(4).u32(0));          // ClientInfo: no reply, no error
+    c.send(major, 3, (w) => w.u32(c.id(9)).u32(0x21).u32(0).u32(0).u8(1).zero(3)); // CreateContext
+    await expect(c.reply()).rejects.toThrow(/X error 1 /);
+    // a display created later gets it too
+    const later = new XServer();
+    glx.glxServer(later);
+    expect(later.extensions.has('GLX')).toBe(true);
+    glx.resetGLX();
+  });
+
+  it('GL surfaces follow their window: position in the toplevel, clipped by ancestors, siblings above and children; unmap, destroy, release', async () => {
+    const { Rootless } = await import('@shiro/x11/rootless');
+    // composed frames (no DOM here)
+    (globalThis as { ImageData?: unknown }).ImageData ??= class { data: Uint8ClampedArray; constructor(readonly width: number, readonly height: number) { this.data = new Uint8ClampedArray(width * height * 4); } };
+    const { server, c } = await newServer();
+    expect(() => server.glSurface(0x12345)).toThrow(/no window/);
+    const cw = {
+      setTitle() {}, setGeometry() {}, position: () => ({ x: 0, y: 0 }), present() {}, show() {}, hide() {}, activate() {},
+      setCursor() {}, onInput() {}, on() {}, destroy() {}, overlay: () => overlay,
+    };
+    const overlay = document.createElement('div');
+    overlay.appendChild(document.createElement('canvas'));   // the window's own pixels
+    const rootless = new Rootless(server, { name: 'test', createCanvasWindow: () => cw, desktopSize: () => ({ width: 1024, height: 768 }) });
+    const top = c.id(1), mid = c.id(2), gl = c.id(3), above = c.id(4), kid = c.id(5);
+    createWindow(c, top, 0, 0, 300, 200, 0);
+    const child = (id: number, parent: number, x: number, y: number, w: number, h: number) =>
+      c.send(1, 0, (q) => q.u32(id).u32(parent).i16(x).i16(y).u16(w).u16(h).u16(0).u16(1).u32(0).u32(0));
+    child(mid, top, 20, 10, 200, 150);       // a container
+    child(gl, mid, 50, 40, 300, 60);         // wider than its parent: clipped at x 200 of mid
+    child(above, mid, 100, 0, 20, 200);      // a sibling stacked above it: a hole at x 100..120
+    for (const id of [above, gl, mid, top]) c.send(8, 0, (w) => w.u32(id));
+    await c.events();
+    const s = server.glSurface(gl);
+    expect(server.glSurface(gl)).toBe(s);
+    rootless.updateGLSurfaces();
+    expect([s.x, s.y, s.width, s.height, s.visible]).toEqual([70, 50, 300, 60, true]);
+    const sorted = () => [...s.clip].sort((a, b) => a.x - b.x || a.y - b.y).map((r) => [r.x, r.y, r.w, r.h]);
+    expect(sorted()).toEqual([[0, 0, 50, 60], [70, 0, 80, 60]]);
+    // the canvas: after the window's own, at its place, clipped to the visible part
+    expect(overlay.children[1]).toBe(s.canvas);
+    expect([s.canvas!.width, s.canvas!.height, s.canvas!.style.left, s.canvas!.style.top, s.canvas!.style.display]).toEqual([300, 60, '70px', '50px', 'block']);
+    let changes = 0;
+    s.onChange(() => changes++);
+    // a child of the GL window covers it too (ClipChildren)
+    child(kid, gl, 0, 0, 10, 10);
+    c.send(8, 0, (w) => w.u32(kid));
+    c.send(12, 0, (w) => w.u32(above).u16(1).u16(0).u32(500));   // move the sibling out of the way
+    await c.events();
+    rootless.updateGLSurfaces();
+    expect(changes).toBe(1);
+    expect(sorted()).toEqual([[0, 10, 150, 50], [10, 0, 140, 10]]);   // the region minus the child's 10×10 corner
+    c.send(10, 0, (w) => w.u32(mid));        // unmap an ancestor: hidden
+    await c.events();
+    rootless.updateGLSurfaces();
+    expect(s.visible).toBe(false);
+    c.send(8, 0, (w) => w.u32(mid));
+    await c.events();
+    rootless.updateGLSurfaces();
+    expect(s.visible).toBe(true);
+    let destroyed = 0;
+    s.onDestroy(() => destroyed++);
+    c.send(4, 0, (w) => w.u32(top));         // DestroyWindow on the toplevel takes its subtree
+    await c.events();
+    expect(destroyed).toBe(1);
+    expect(s.canvas!.parentElement).toBe(null);
+    // released: a new window gets a new surface, released explicitly
+    const top2 = c.id(6);
+    createWindow(c, top2, 0, 0, 50, 50, 0);
+    c.send(8, 0, (w) => w.u32(top2));
+    await c.events();
+    const s2 = server.glSurface(top2);
+    rootless.updateGLSurfaces();
+    expect(s2.clip).toEqual([{ x: 0, y: 0, w: 50, h: 50 }]);
+    s2.release();
+    expect(server.glSurface(top2)).not.toBe(s2);
+  });
 });
 
 const FIX = resolve(__dirname, 'fixtures/x86');

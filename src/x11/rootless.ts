@@ -14,6 +14,7 @@ import { composeTop } from './compose';
 import { isModifierCode, keysymForChar } from './keymap';
 import { ClientMessage } from './proto';
 import type { Rect } from './raster';
+import { GLSurfaceImpl } from './gl-surface';
 
 interface Top {
   win: XWindow;
@@ -43,6 +44,9 @@ export class Rootless {
   /** Keys held down, so a blur can release them. */
   private held = new Set<number>();
   onTitle: ((w: XWindow, title: string) => void) | null = null;
+  /** GL surfaces by window (gl-surface.ts) */
+  private surfaces = new Map<XWindow, GLSurfaceImpl>();
+  private surfaceFrame = 0;
   /** An X toplevel got keyboard focus (the clipboard bridge offers the browser clipboard). */
   onFocusIn: (() => void) | null = null;
 
@@ -76,7 +80,27 @@ export class Rootless {
       },
       cursor: (w, c) => this.tops.get(w)?.cw?.setCursor(cursorCss(c)),
       bell: () => { /* no audio bell; a desktop could flash */ },
+      structure: (w) => {
+        if (!this.surfaces.size) return;
+        if (w.destroyed) { const s = this.surfaces.get(w); if (s) s.destroyed(); }
+        if (!this.surfaceFrame) this.surfaceFrame = raf(() => this.updateGLSurfaces());
+      },
     };
+    const site = { overlay: (top: XWindow) => this.tops.get(top)?.cw?.overlay?.() ?? null, scale: host.scale ?? 1 };
+    server.glSurfaceProvider = (w) => {
+      let s = this.surfaces.get(w);
+      if (!s) { s = new GLSurfaceImpl(w, site, (x) => this.surfaces.delete(x.win)); this.surfaces.set(w, s); }
+      return s;
+    };
+  }
+
+  /** Re-place every GL surface now (after structure changes; tests call it directly). */
+  updateGLSurfaces(): void {
+    this.surfaceFrame = 0;
+    for (const s of [...this.surfaces.values()]) {
+      for (let a: XWindow | null = s.win; a; a = a.parent) if (a.destroyed) { s.destroyed(); break; }
+      s.update();
+    }
   }
 
   private textLayer(w: XWindow): TextLayer | undefined {
@@ -170,6 +194,7 @@ export class Rootless {
     cw.on('blur', () => this.focusOut(w));
     cw.show();
     if (decorated) cw.activate();
+    if (this.surfaces.size) this.updateGLSurfaces();
     this.damage(w, { x: 0, y: 0, w: w.width, h: w.height });
   }
 

@@ -1,0 +1,274 @@
+From 5de8ba05ebaf527bfff6c1a6a78ba1ab9bc901b3 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 12:58:46 +0000
+Subject: [PATCH] Shiro: a page of a file mapping past the file's end is SIGBUS
+
+On Linux a page of a file mapping wholly past the file's end raises
+SIGBUS (BUS_ADRERR) when touched, unless the file has grown over it by
+then; here it read zeros, and a shared mapping wrote them back, growing
+the file (Open POSIX mmap_11-2, and mmap_11-3 for a /dev/shm object).
+
+Such pages are now mapped PROT_NONE, and the mapping is remembered with a
+descriptor of its file (F_DUPFD_CLOEXEC, at 512 or above, out of the
+guest's way). A fault in one looks at the file's size again: past it,
+SIGBUS with the address; within it (the file grew), the page is filled
+from the file (or, for an object's remote pages, made accessible again)
+and the instruction runs again. munmap, MAP_FIXED, exec and exit forget
+them. Write-back of a shared mapping skips pages it can't read.
+
+Exports blink_shiro_sigbus.
+---
+ blink/machine.h |   1 +
+ blink/shiro.inc | 138 ++++++++++++++++++++++++++++++++++++++++++++++--
+ blink/throw.c   |  14 +++++
+ 3 files changed, 149 insertions(+), 4 deletions(-)
+
+diff --git a/blink/machine.h b/blink/machine.h
+index 77ff7b0..61743fc 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -54,6 +54,7 @@
+ #define kMachineSimdException        -9
+ #define kMachineExitTrap             -10
+ #define kMachineFatalSystemSignal    -11
++#define kMachineBusError             -12  // Shiro: a page past the end of a mapped file
+ 
+ #define CR0_PE 0x01        // protected mode enabled
+ #define CR0_MP 0x02        // monitor coprocessor
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 5a2be80..5383de8 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2470,6 +2470,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_itimers(void) { return 1; }
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_othercpuclock(void) { return 1; }
+ // 0507: tkill interrupts another thread's kernel call; the kernel's mask is what every thread blocks
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_threadintr(void) { return 1; }
++// 0508: a page of a file mapping past the file's end is SIGBUS
++EMSCRIPTEN_KEEPALIVE int blink_shiro_sigbus(void) { return 1; }
+ 
+ // the same with the signal's siginfo (the kernel's call 1030, made as `pid`)
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid_info(int pid, int sig, int w0, int w1, int w2,
+@@ -3188,17 +3190,24 @@ static void ShiroWriteBack(struct Machine *m, struct ShiroSharedMap *s, i64 addr
+   u8 *buf = (u8 *)malloc(g_shiro_chunk);
+   i64 lo = MAX(addr, s->addr), hi = MIN(addr + size, s->addr + s->size), o;
+   bool insyscall = m->insyscall;
+-  int rc;
+-  for (o = lo; buf && o < hi; o += g_shiro_chunk) {
+-    int n = MIN(hi - o, (i64)g_shiro_chunk), i, j;
++  int rc, n;
++  for (o = lo; buf && o < hi; o += n) {
++    int i, j;
++    n = MIN(hi - o, (i64)g_shiro_chunk);
+     i64 at = s->off + (o - s->addr);
+     u8 *was = s->shadow ? s->shadow + (o - s->addr) : 0;
+     // without page locks: a syscall's locks last until it returns, and the
+     // munmap this is part of waits for the pages' locks to drain
+     m->insyscall = false;
+     rc = CopyFromUser(m, buf, o, n);
++    // a page past the file's end (PROT_NONE: ShiroBusAdd) has nothing to
++    // write: the chunk's first page alone, and on from the next
++    if (rc == -1 && n > 4096 - (o & 4095)) {
++      n = 4096 - (o & 4095);
++      rc = CopyFromUser(m, buf, o, n);
++    }
+     m->insyscall = insyscall;
+-    if (rc == -1) break;
++    if (rc == -1) continue;
+     if (!was) {
+       ShiroCall(m, 18, A12(s->fd, n, (int)at, (int)(at >> 32)), buf, n, 0, false, false);
+       continue;
+@@ -3247,6 +3256,117 @@ void ShiroExitMaps(struct Machine *m) {
+   if (g_shiro_remote) ShiroRemoteDrop(m, m->system->pid, 0, (i64)1 << 47);
+ }
+ 
++// ── SIGBUS past the end of a mapped file ────────────────────────────────
++//
++// On Linux a page of a file mapping that lies wholly past the file's end
++// raises SIGBUS (BUS_ADRERR) when touched, unless the file has grown over
++// it by then. Such pages are mapped PROT_NONE here, and the mapping is
++// remembered with a descriptor of its file: a fault in one (throw.c) looks
++// at the file's size again, and either fills the page and runs the
++// instruction again, or delivers SIGBUS.
++
++struct ShiroBusMap {
++  struct ShiroBusMap *next;
++  int pid, fd, prot;
++  bool remote;  // an object's remote pages (its bytes are in its buffer)
++  i64 addr, size, off;
++};
++
++static pthread_mutex_t_ g_shiro_bus_lock = PTHREAD_MUTEX_INITIALIZER_;
++static struct ShiroBusMap *g_shiro_bus;
++
++static void ShiroBusAdd(struct Machine *m, i64 addr, u64 size, int prot, int fd,
++                        i64 off, i64 fsize, bool remote) {
++  struct ShiroBusMap *b;
++  i64 valid = fsize > off ? ROUNDUP(fsize - off, 4096) : 0;
++  if (valid >= (i64)size || !(b = (struct ShiroBusMap *)calloc(1, sizeof(*b)))) return;
++  b->pid = m->system->pid, b->prot = prot, b->remote = remote;
++  b->addr = addr, b->size = size, b->off = off;
++  b->fd = KS(m, 72, A12(fd, 1030, 512));  // F_DUPFD_CLOEXEC (out of the guest's way)
++  SysMprotect(m, addr + valid, size - valid, 0);
++  LOCK(&g_shiro_bus_lock);
++  b->next = g_shiro_bus;
++  g_shiro_bus = b;
++  UNLOCK(&g_shiro_bus_lock);
++}
++
++// munmap, or a new mapping over [addr, addr + size)
++static void ShiroBusDrop(struct Machine *m, i64 addr, i64 size) {
++  struct ShiroBusMap **pp, *b, *gone = 0;
++  if (!g_shiro_bus) return;
++  LOCK(&g_shiro_bus_lock);
++  for (pp = &g_shiro_bus; (b = *pp);) {
++    if (b->pid == m->system->pid && b->addr < addr + size && addr < b->addr + b->size) {
++      *pp = b->next;
++      b->next = gone;
++      gone = b;
++    } else {
++      pp = &b->next;
++    }
++  }
++  UNLOCK(&g_shiro_bus_lock);
++  for (; (b = gone); free(b)) {
++    gone = b->next;
++    if (b->fd >= 0) KS(m, 3, A12(b->fd));
++  }
++}
++
++// the process execs or ends: its descriptors go with it
++static void ShiroBusForget(int pid) {
++  struct ShiroBusMap **pp, *b;
++  LOCK(&g_shiro_bus_lock);
++  for (pp = &g_shiro_bus; (b = *pp);) {
++    if (b->pid == pid) {
++      *pp = b->next;
++      free(b);
++    } else {
++      pp = &b->next;
++    }
++  }
++  UNLOCK(&g_shiro_bus_lock);
++}
++
++// A fault at va: 0 not in such a page, 1 SIGBUS, 2 the file has grown over
++// the page (now filled and accessible: run the instruction again)
++int ShiroBusFault(struct Machine *m, i64 va) {
++  struct ShiroBusMap *b, c;
++  u8 st[144], *buf;
++  i64 page = va & -4096, po, fsize, r;
++  if (!g_shiro_bus || !m) return 0;
++  LOCK(&g_shiro_bus_lock);
++  for (b = g_shiro_bus; b; b = b->next) {
++    if (b->pid == m->system->pid && b->addr <= page && page < b->addr + b->size) break;
++  }
++  if (b) c = *b;
++  UNLOCK(&g_shiro_bus_lock);
++  if (!b || !(c.prot & 3)) return 0;  // (PROT_NONE: SIGSEGV first, as on Linux: Open POSIX mmap_6-3)
++  po = c.off + (page - c.addr);
++  if (c.fd < 0 || ShiroStatAt(m, c.fd, 0, 0, 0x1000, st) < 0) return 1;
++  fsize = Read64(st + 48);
++  if (po >= fsize) return 1;
++  if (c.remote) {
++    SysMprotect(m, page, 4096, c.prot);
++    return 2;
++  }
++  SysMprotect(m, page, 4096, c.prot | 3);
++  buf = (u8 *)ShiroAlloc(m, 4096);
++  r = ShiroCall(m, 17, A12(c.fd, (int)MIN(4096, fsize - po), (int)po, (int)(po >> 32)),
++                buf, 0, 4096, false, false);  // pread
++  CopyToUser(m, page, buf, 4096);
++  if ((c.prot & 3) != 3) SysMprotect(m, page, 4096, c.prot);
++  if (r >= 0) {  // (a writable mapping's write-back: these are the file's bytes)
++    struct ShiroSharedMap *s;
++    LOCK(&g_shiro_maps_lock);
++    for (s = g_shiro_maps; s; s = s->next) {
++      if (s->sys == m->system && s->shadow && s->addr <= page && page + 4096 <= s->addr + s->size) {
++        memcpy(s->shadow + (page - s->addr), buf, 4096);
++      }
++    }
++    UNLOCK(&g_shiro_maps_lock);
++  }
++  return 2;
++}
++
+ static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
+                          int flags, int fd, i64 off) {
+   u8 st[144], *buf;
+@@ -3263,6 +3383,9 @@ static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
+   if (r & 010000000) return -EBADF_LINUX;
+   if ((r & 3) == 1 || (shared && (prot & 2) && (r & 3) != 2)) return -EACCES_LINUX;
+   if (shared && (r = ShiroRemoteMapFile(m, virt, size, prot, flags, fd, off)) != SHIRO_NOT_REMOTE) {
++    if (r >= 0 && ShiroStatAt(m, fd, 0, 0, 0x1000, st) >= 0 && (Read32(st + 24) & 0170000) == 0100000) {
++      ShiroBusAdd(m, r, size, prot, fd, off, Read64(st + 48), true);
++    }
+     return r;
+   }
+   // what this instance's writable shared mappings hold goes to the files
+@@ -3303,6 +3426,10 @@ static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
+       UNLOCK(&g_shiro_maps_lock);
+     }
+   }
++  // (after the shadow: it has the whole mapping)
++  if ((Read32(st + 24) & 0170000) == 0100000) {
++    ShiroBusAdd(m, addr, size, prot, fd, off, fsize, false);
++  }
+   return addr;
+ }
+ 
+@@ -3505,6 +3632,7 @@ static void ShiroShmFork(int ppid, int pid) {
+ // the detaches itself)
+ void ShiroShmForget(int pid) {
+   struct ShiroShmAt **pp, *at;
++  ShiroBusForget(pid);  // (and its file mappings' SIGBUS pages)
+   LOCK(&g_shiro_shm_lock);
+   for (pp = &g_shiro_shm_ats; (at = *pp);) {
+     if (at->pid == pid) {
+@@ -4400,10 +4528,12 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+         r = -EINVAL_LINUX;
+         break;
+       }
++      if (d & 0x10) ShiroBusDrop(m, a, b);  // (MAP_FIXED: what it replaces)
+       if ((d & 0x20) || (i64)e < 0) return false;
+       r = ShiroMmapFile(m, a, b, c, d, e, f);  // SysMmap/SysMprotect take mmap_lock
+       break;
+     case 0x00B:                                                       // munmap
++      ShiroBusDrop(m, a, b);
+       if (g_shiro_maps) ShiroSyncMaps(m, a, b, true);
+       if (g_shiro_remote) ShiroRemoteDrop(m, m->system->pid, a, b);
+       return false;
+diff --git a/blink/throw.c b/blink/throw.c
+index c9aa620..df93448 100644
+--- a/blink/throw.c
++++ b/blink/throw.c
+@@ -103,6 +103,10 @@ void HaltMachine(struct Machine *m, int code) {
+     case kMachineExitTrap:
+       RestoreIp(m);
+       break;
++    case kMachineBusError:
++      RestoreIp(m);
++      DeliverSignalToUser(m, SIGBUS_LINUX, BUS_ADRERR_LINUX);
++      break;
+     default:
+       if (code >= 0) {
+         if (!m->metal) {
+@@ -128,6 +132,16 @@ void ThrowProtectionFault(struct Machine *m) {
+ 
+ void ThrowSegmentationFault(struct Machine *m, i64 va) {
+ #ifdef __EMSCRIPTEN__
++  {
++    // a page of a file mapping past the file's end (shiro.inc): SIGBUS, or
++    // run the instruction again if the file has grown over it
++    int ShiroBusFault(struct Machine *, i64), k;
++    if ((k = ShiroBusFault(m, va))) {
++      RestoreIp(m);
++      m->faultaddr = va;
++      HaltMachine(m, k == 2 ? kMachineExitTrap : kMachineBusError);
++    }
++  }
+   if (g_shiro_trace && !g_shiro_fault0) {  // the first fault's history
+     memcpy(g_shiro_ring0, g_shiro_ring, sizeof(g_shiro_ring0));
+     g_shiro_ring0i = g_shiro_ringi;
+-- 
+2.43.0
+

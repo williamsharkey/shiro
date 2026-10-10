@@ -11,6 +11,7 @@ import { posixRegExp, RegexSyntaxError } from './utils/posix-regex';
 import { arrayValues, arrayTop, copyArray, splitRawWords as splitAssignWords, parseAssignWord, splitListWords, type AssignWord } from './shell-arrays';
 import { HeredocStore, extractHeredocs, hasHeredoc } from './shell-heredoc';
 import { FileSystem, addProcInfoSource, setProcSelf } from './filesystem';
+import { processTable, type ShiroProcess } from './process-table';
 import { CommandRegistry, CommandContext, type Command } from './commands/index';
 import type { ShiroTerminal } from './terminal';
 import type { KernelStdio } from './shell-stdio';
@@ -80,6 +81,11 @@ const POSIX_CLASSES: Record<string, string> = {
 
 /** A tilde expansion's text: one field, never globbed, literal in [[ =~ ]] (as if quoted) */
 const tildeText = (dir: string) => `"${protectExpansion(dir)}"`;
+
+/** `cmd` with its quoted parts ('…', "…", \x) dropped: for looking at its unquoted operators */
+function withoutQuoted(cmd: string): string {
+  return cmd.replace(/\\.|'[^']*'|"(?:\\.|[^"\\])*"/gs, '');
+}
 
 /** Does `cmd` end with the `&` operator (not &&, >&, an escaped \& or one in quotes)? */
 function endsWithBackgroundAmp(cmd: string): boolean {
@@ -206,6 +212,9 @@ const SHELL_BUILTIN_NAMES = new Set([':', '.', '[', 'alias', 'bg', 'bind', 'brea
 const PIPELINE_SUBSHELL_BUILTINS = new Set(['cd', 'pushd', 'popd', 'eval', 'source', '.', 'exit', 'export', 'unset',
   'set', 'shift', 'declare', 'typeset', 'local', 'readonly', 'alias', 'unalias', 'trap', 'umask', 'shopt', 'hash']);
 
+/** Signals whose default action doesn't end a process: CHLD, CONT, STOP, TSTP, TTIN, TTOU, URG, WINCH */
+const NONFATAL_SIGNALS = new Set([17, 18, 19, 20, 21, 22, 23, 28]);
+
 /** Signal names by number, as trap and kill use them (0 is EXIT) */
 const SIGNALS = ['EXIT', 'HUP', 'INT', 'QUIT', 'ILL', 'TRAP', 'ABRT', 'BUS', 'FPE', 'KILL', 'USR1', 'SEGV', 'USR2',
   'PIPE', 'ALRM', 'TERM', 'STKFLT', 'CHLD', 'CONT', 'STOP', 'TSTP', 'TTIN', 'TTOU', 'URG', 'XCPU', 'XFSZ',
@@ -269,10 +278,47 @@ let nextInPagePid = 40000;
 
 /** Shells started as their own process (`sh script`, `sh -c`), by $$: `kill PID` reaches them */
 const shellsByPid = new Map<number, WeakRef<Shell>>();
-/** Running in-page background jobs by their made-up pid ($!), for `kill PID` from any shell */
+/** Each in-page command's argv and fd targets, for its /proc/self while it runs */
+const procFdsOf = new WeakMap<CommandContext, () => { argv: string[]; fds: [number, string][] }>();
+
+/** Running in-page background jobs by their pid ($!), for `kill PID` from any shell */
 const inPageJobs = new Map<number, BackgroundJob>();
 export function inPageJobForPid(pid: number): BackgroundJob | undefined {
   return inPageJobs.get(pid);
+}
+/** Signals whose default action doesn't end a process (0, SIGCHLD, SIGCONT, the stops, SIGURG, SIGWINCH) */
+const NON_TERMINATING = new Set([0, 17, 18, 19, 20, 21, 22, 23, 28]);
+/** `kill -SIG` to an in-page job: a terminating signal aborts it and its status becomes 128+SIG */
+export function signalInPageJob(job: BackgroundJob, sig: number): void {
+  if (NON_TERMINATING.has(sig) || job.status !== 'running') return;
+  if (job.ignoresIntQuit && (sig === 2 || sig === 3)) return;
+  job.abortController?.abort();
+  job.status = 'failed';
+  job.exitCode = 128 + sig;
+  job.signal = sig;
+}
+
+// In-page background jobs are processes to ps and kill(2) too (/proc/PID is
+// below): `sleep 30 &` with the builtin sleep is listed, and Debian's kill
+// reaches it through the kernel
+processTable.attachSource({
+  list: () => [...inPageJobs.keys()].map((pid) => inPageJobView(pid)!).filter(Boolean),
+  get: (pid) => inPageJobView(pid),
+  kill: (pid, sig = 15) => {
+    const job = inPageJobs.get(pid);
+    if (!job) return false;
+    signalInPageJob(job, sig);
+    return true;
+  },
+});
+function inPageJobView(pid: number): ShiroProcess | undefined {
+  const job = inPageJobs.get(pid);
+  if (!job) return undefined;
+  return {
+    pid, command: job.command.trim(), status: 'running', exitCode: 0, startTime: job.startMs ?? Date.now(),
+    windowTerminal: null, serverWindow: null, promise: job.promise,
+    kill: () => signalInPageJob(job, 15), abortController: null,
+  };
 }
 
 /** Newlines as `; `, except inside quotes ('…', "…", $'…'), where they are text */
@@ -351,9 +397,30 @@ export function shellForPid(pid: number): Shell | undefined {
 /** The shell that last ran an in-page command: /proc/self for in-page commands */
 let activeShell: WeakRef<Shell> | undefined;
 
+/** A pipe between in-page pipeline segments, as /proc/PID/fd shows it (pipe:[N]) */
+let nextPipeIno = 20000;
+
+/**
+ * The builtin a shell is running, as a process of its own in /proc: its
+ * argv and where its fds 0-2 point (a pipe, a file, /dev/null, the tty). Its
+ * pid is allocated the first time something reads /proc/self, so commands
+ * that never look cost nothing.
+ */
+interface InPageCommandProc { info: () => { argv: string[]; fds: [number, string][] }; pid?: number; startMs?: number }
+
 /** In-page shells in /proc: their own pids, the shell running in-page commands as /proc/self */
 addProcInfoSource({
   get(pid) {
+    const running = activeShell?.deref()?.runningProc;
+    if (running && running.pid === pid) {
+      const sh = activeShell!.deref()!;
+      const { argv, fds } = running.info();
+      const comm = (argv[0] ?? 'sh').slice((argv[0] ?? '').lastIndexOf('/') + 1);
+      return {
+        pid, ppid: sh.shellPid, pgid: sh.shellPid, sid: sh.shellPid, comm, state: 'R', cmdline: argv,
+        cwd: sh.cwd, environ: sh.exportedEnv(), fds, startMs: running.startMs,
+      };
+    }
     const job = inPageJobs.get(pid);
     if (job?.shell) {
       // an in-page background job ($!): its command, run by a child shell
@@ -367,7 +434,8 @@ addProcInfoSource({
     }
     const active = activeShell?.deref();
     const sh = shellForPid(pid) ?? (active?.shellPid === pid ? active : undefined);
-    if (!sh) return undefined;
+    // A shell that is a kernel process: the kernel's table has its argv and fds
+    if (!sh || sh.kernelPid === pid) return undefined;
     const comm = sh.invokedAsSh ? 'sh' : 'bash';
     return {
       pid, ppid: sh.parentPid, pgid: pid, sid: pid, comm, state: sh === active ? 'R' : 'S', cmdline: [comm],
@@ -377,10 +445,21 @@ addProcInfoSource({
   },
   list() {
     const active = activeShell?.deref();
-    return [...shellsByPid.keys(), ...(active ? [active.shellPid] : []), ...inPageJobs.keys()];
+    const running = active?.runningProc?.pid;
+    return [...shellsByPid.keys(), ...(active ? [active.shellPid] : []), ...inPageJobs.keys(), ...(running ? [running] : [])];
   },
 });
-setProcSelf(() => activeShell?.deref()?.shellPid);
+setProcSelf(() => {
+  const sh = activeShell?.deref();
+  if (!sh) return undefined;
+  // a builtin reading /proc/self sees itself; between commands it is the shell
+  const running = sh.runningProc;
+  if (running) {
+    running.startMs ??= Date.now();
+    return running.pid ??= processTable.allocatePid();
+  }
+  return sh.shellPid;
+});
 
 // Env var names whose values should be masked in terminal output
 const SECRET_ENV_KEYS = [
@@ -802,6 +881,8 @@ export class Shell {
    * process's real fds 0-2 (binary-safe, the tty) and stay in its process
    * group, as a real non-interactive sh would do it.
    */
+  /** This shell's $$ is a kernel process (Kernel.forkShell): /proc describes it from the kernel's table */
+  kernelPid?: number;
   kernelHost: { kernel: import('./kernel/kernel').Kernel; proc: import('./kernel/process').Process } | null = null;
   /** File descriptors for `read -u FD` and `exec N< file` */
   fileDescriptors: Map<number, { content: string; offset: number }> = new Map();
@@ -1169,7 +1250,13 @@ export class Shell {
     this.localVars.add('IFS');
     this.parentPid = ppid;
     this.shellPid = pid;
+    this.kernelPid = undefined;
     shellsByPid.set(pid, new WeakRef(this));
+    const own = new AbortController();
+    const outer = this.inheritedAbort?.signal;
+    if (outer?.aborted) own.abort();
+    else outer?.addEventListener('abort', () => own.abort(), { once: true });
+    this.processAbort = this.inheritedAbort = own;
     // A new process starts with no call stack, and getopts at the start (OPTIND=1, not exported)
     this.sourceFile = '';
     this.env['OPTIND'] = '1';
@@ -1267,7 +1354,18 @@ export class Shell {
   /** `kill -SIG $$`: handled before the shell's next command (processSignals) */
   queueSignal(sig: number): void {
     this.pendingSignals.push(sig);
+    // One that ends the shell ends it now, as bash dies while it waits for a
+    // command: the abort stops the wait (Ctrl-C's path), then processSignals
+    // ends the shell with 128+sig
+    if (this.processAbort && this.scriptShell && !this.traps.has(SIGNALS[sig]) && !NONFATAL_SIGNALS.has(sig)) {
+      this.killedMidCommand = true;
+      this.processAbort.abort();
+    }
   }
+  /** A shell process's own abort (startProcess): its parent's aborts reach it, not the reverse */
+  private processAbort?: AbortController;
+  /** A fatal signal aborted the command in progress: the EXIT trap gets a fresh abort */
+  private killedMidCommand = false;
 
   /**
    * Act on signals sent to this shell: run its trap (keeping $?), ignore it
@@ -1350,6 +1448,7 @@ export class Shell {
     child.errexitSuppressed = this.errexitSuppressed;
     child.inheritedReturn = this.canReturn();
     child.kernelHost = this.kernelHost;
+    child.kernelPid = this.kernelPid;
     child.uid = this.uid;
     child.bootGate = this.bootGate;
     return child;
@@ -1422,8 +1521,9 @@ export class Shell {
   ): number {
     const jobId = this.nextJobId++;
     const stderrWriter = writeStderr || writeStdout;
-    // An in-page job has no kernel process; $! and `wait PID` use a made-up pid
-    const pid = nextInPagePid++;
+    // An in-page job has no kernel process; its pid comes from the kernel's
+    // pid space, so it never collides with one (ps, /proc and kill see it)
+    const pid = processTable.allocatePid();
     // `( list ) &`: the job's shell is already the subshell
     const t = command.trim();
     if (t.startsWith('(') && !t.startsWith('((') && t.endsWith(')') && this.parseCompound(t).length === 1 && splitTopLevelPipes(t).length === 1) {
@@ -1436,7 +1536,8 @@ export class Shell {
     // A shell run as the job's only command gets the job's pid as its $$, as if exec'd
     // (in a pipeline $! is its last element: the earlier ones must not start a shell themselves)
     const parts = splitTopLevelPipes(command);
-    if (!/[;&]/.test(command) && parts.slice(0, -1).every((p) => !/^(\S*\/)?(sh|bash)\b|^\$/.test(p.trim()))) {
+    // (one command: a quoted ; or & inside `bash -c '...'` doesn't count)
+    if (!/[;&]/.test(withoutQuoted(command)) && parts.slice(0, -1).every((p) => !/^(\S*\/)?(sh|bash)\b|^\$/.test(p.trim()))) {
       child.execPid = pid;
       child.execPpid = this.bashPid;
     }
@@ -1516,14 +1617,19 @@ export class Shell {
 
   /** The terminal of the execute() in progress (undefined: the shell's own) */
   private activeTerminal: any = undefined;
+  /** The builtin running now, as /proc/self shows it (set by runCommand) */
+  runningProc?: InPageCommandProc;
   /** A builtin (Command.exec) is running: an execute() it makes is its own */
   private inCommand = 0;
 
   /** Run a builtin; execute() calls it makes without a terminal collect their output */
   private async runCommand(cmd: { exec(ctx: CommandContext): Promise<number> }, ctx: CommandContext): Promise<number> {
     this.inCommand++;
-    // /proc/self for an in-page command is this shell (setProcSelf below)
+    // /proc/self for an in-page command is its own entry under this shell (setProcSelf)
     activeShell = new WeakRef(this);
+    const outerProc = this.runningProc;
+    const fds = procFdsOf.get(ctx);
+    if (fds) this.runningProc = { info: fds };
     // Ctrl-C (or a timeout's abort) ends a builtin even if it never looks at the
     // signal (one stuck awaiting something): the shell stops waiting, status 130
     const abort = (this.abortController ?? this.inheritedAbort)?.signal;
@@ -1540,6 +1646,7 @@ export class Shell {
     } finally {
       off();
       this.inCommand--;
+      if (fds) this.runningProc = outerProc;
     }
   }
 
@@ -1605,6 +1712,7 @@ export class Shell {
       if (e instanceof ExitSignal && depth === 0 && this.sourcing === 0) {
         this.executeDepth = 0;
         this.exited = true;
+        if (this.killedMidCommand) this.abortController = new AbortController();
         const code = (await this.runExitTrap(writeStdout, writeStderr || writeStdout, terminalOverride)) ?? e.code;
         this.lastExitCode = code;
         this.env['?'] = String(code);
@@ -2376,6 +2484,8 @@ export class Shell {
 
       // Segments started so far: one that ended early (a builtin's `continue`) left its status in exitCode
       let segCount = 0;
+      const pipeBase = nextPipeIno;
+      nextPipeIno += pipeline.length;
       for (let i = 0; i < pipeline.length; i++) {
         while (pipeExitCodes.length < i) pipeExitCodes.push(exitCode);
         segCount = i + 1;
@@ -4298,6 +4408,14 @@ export class Shell {
           stderrIsTTY: !(terminalOverride || this.terminal)?.captureStderr &&
             stderrIsTty(redirects, i === pipeline.length - 1 && !(terminalOverride || this.terminal)?.captureStdout),
         };
+        // (worked out only if the command reads /proc/self)
+        const segTerm = terminalOverride || this.terminal;
+        const docIn = !!heredocStdin || hereString !== undefined || fromEnclosingPipe;
+        procFdsOf.set(ctx, () => ({
+          argv: [effectiveCmdName, ...cmdArgs],
+          fds: this.segmentProcFds(i === 0 ? null : pipeBase + i - 1, i < pipeline.length - 1 ? pipeBase + i : null,
+            redirects, docIn, segTerm),
+        }));
         if (fromEnclosingPipe) {
           let taken = false;
           let value = '';
@@ -8257,6 +8375,36 @@ export class Shell {
   }
 
   /**
+   * Where an in-page segment's fds 0-2 point, for its /proc/self/fd: the pipe
+   * from the previous segment or to the next one, a redirect's file, a
+   * here-doc's pipe, else what the shell's own fds are (the tty, or a kernel
+   * shell's fds).
+   */
+  private segmentProcFds(pipeIn: number | null, pipeOut: number | null, redirects: Redirect[], docIn: boolean,
+    term: any): [number, string][] {
+    const ks = this.kernelStdio;
+    const own = (n: number): string => {
+      const f = ks?.file(n) as (OpenFile & { pty?: { name: string } }) | undefined;
+      if (f) return f.path ?? f.pty?.name ?? (f.kind === 'pipe' ? `pipe:[${(f as { pipe?: { ino?: number } }).pipe?.ino ?? 0}]` : `anon_inode:[${f.kind}]`);
+      const tty = term?.tty?.pty?.name as string | undefined;
+      if (n === 0) return tty ?? '/dev/null';
+      if ((n === 1 && term?.captureStdout) || (n === 2 && term?.captureStderr)) return `pipe:[${nextPipeIno++}]`;
+      return tty ?? `pipe:[${nextPipeIno++}]`;
+    };
+    const path = (t: string) => this.fs.resolvePath(t, this.cwd);
+    let in0 = pipeIn !== null ? `pipe:[${pipeIn}]` : docIn ? `pipe:[${nextPipeIno++}]` : own(0);
+    let out1 = pipeOut !== null ? `pipe:[${pipeOut}]` : own(1);
+    let err2 = own(2);
+    for (const r of redirects) {
+      if (r.type === '<' && r.fd === undefined) in0 = path(r.target);
+      else if ((r.type === '>' || r.type === '>>') && r.fd === undefined) out1 = path(r.target);
+      else if (r.type === '2>' || r.type === '2>>') err2 = path(r.target);
+      else if (r.type === '2>&1') err2 = out1;
+    }
+    return [[0, in0], [1, out1], [2, err2]];
+  }
+
+  /**
    * Does pipeline segment `i` read this shell's own stdin, fd 0 of the kernel
    * process it runs as (shell-stdio.ts)? Not when a pipe, here-doc, here-string,
    * `<` or an enclosing piped loop gives it a string instead.
@@ -8821,6 +8969,7 @@ export class Shell {
     let exitCode = 0;
     try {
       for (const stmt of groupStatements(stripComments(content))) {
+        if (this.pendingSignals.length) await this.processSignals(writeStdout, writeStderr);
         if (this.abortController?.signal.aborted) { exitCode = 130; break; }
         // set -n (noexec): a non-interactive shell reads the rest without running it
         if (this.options.has('noexec') && !this.interactiveFlag) break;
@@ -8847,6 +8996,7 @@ export class Shell {
     }
     this.lastExitCode = exitCode;
     this.env['?'] = String(exitCode);
+    if (this.killedMidCommand) this.abortController = new AbortController();
     const trapExit = await this.runExitTrap(writeStdout, writeStderr, terminal);
     if (trapExit !== undefined) { exitCode = trapExit; this.env['?'] = String(exitCode); }
     if (this.execOutSubs.length) {

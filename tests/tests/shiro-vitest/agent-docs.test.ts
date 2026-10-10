@@ -54,6 +54,16 @@ describe('agent docs', () => {
     for (const k of KNOWN_ISSUES) expect(md).toContain(k.issue);
   });
 
+  it("js-eval runs an async IIFE's statements once (tabcomputer#17)", async () => {
+    (globalThis as any).__agentDocsRuns = 0;
+    const { output, exitCode } = await run(shell,
+      `js-eval '(async () => { globalThis.__agentDocsRuns++; const x = 6 * 7; return x; })()'`);
+    expect(exitCode).toBe(0);
+    expect(output.trim()).toBe('42');
+    expect((globalThis as any).__agentDocsRuns).toBe(1);
+    delete (globalThis as any).__agentDocsRuns;
+  });
+
   it('an injected boot tells the agent to start with hc outer', () => {
     const md = buildAgentsMd(injected);
     expect(md).toContain('injected into a host page by `seed blob`');

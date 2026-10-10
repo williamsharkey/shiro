@@ -25,6 +25,7 @@ import type { TarEntry } from './utils/tar';
 // utils/tar (~65 KB with its codecs) loads with the first package that needs it
 const readTarball = (bytes: Uint8Array) => import('./utils/tar').then(m => m.readTarball(bytes));
 import builtinIndexJson from './pkg-index.json';
+import { isBuiltinShimFile } from './path-shims';
 import { untar, gunzip, type TarEntry as PkgTarEntry } from './pkg-tar';
 
 // ── Index format ─────────────────────────────────────────────────────
@@ -563,7 +564,9 @@ async function installOne(fs: FileSystem, entry: PkgEntry, opts: PkgOptions): Pr
   const bins: string[] = [];
   for (const [cmd, b] of Object.entries(entry.bin)) {
     const link = `${PKG_BIN_DIR}/${cmd}`;
-    const existing = await lstatSafe(fs, link);
+    let existing = await lstatSafe(fs, link);
+    // Debian mode's shim for the builtin (no package owns it, as dpkg would overwrite it)
+    if (existing?.type === 'file' && await isBuiltinShimFile(fs, link)) { await fs.unlink(link); existing = null; }
     if (existing && existing.type !== 'symlink') {
       log(`warning: not replacing ${link} (a regular file)`);
       continue;
@@ -695,6 +698,27 @@ async function removeFiles(fs: FileSystem, pkg: InstalledPkg): Promise<void> {
   }
   try { await fs.rm(`${PKG_ROOT}/${pkg.name}`, { recursive: true }); } catch { /* gone */ }
   moduleCache.forEach((_, k) => { if (k.startsWith(`${PKG_ROOT}/${pkg.name}/`)) moduleCache.delete(k); });
+}
+
+/**
+ * The profile's preinstalled packages (`preinstall` names that are pkg
+ * packages). Installs those that are neither installed nor already provided:
+ * every path in a package's `links` existing (Debian's ca-certificates has
+ * written /etc/ssl/certs/ca-certificates.crt) counts as provided. Returns the
+ * names installed.
+ */
+export async function preinstallPackages(fs: FileSystem, names: string[], opts: PkgOptions = {}): Promise<string[]> {
+  const index = await loadIndex(fs);
+  const status = await readStatus(fs);
+  const want: string[] = [];
+  for (const name of names) {
+    const entry = index.packages.find(p => p.name === name);
+    if (!entry || status[entry.name]) continue;
+    const links = Object.keys(entry.links || {});
+    if (links.length && (await Promise.all(links.map(l => lstatSafe(fs, l)))).every(Boolean)) continue;
+    want.push(entry.name);
+  }
+  return want.length ? installPackages(fs, index, want, opts) : [];
 }
 
 /** Remove an installed package. Returns false when it wasn't installed. */

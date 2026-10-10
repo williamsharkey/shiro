@@ -15,6 +15,7 @@
  *   EXIT, INT, TERM, HUP, QUIT, USR1, USR2, ERR, DEBUG, RETURN
  */
 import type { Command } from './index';
+import type { BackgroundJob } from '../shell';
 import { parseArgs } from './flags';
 export const trap: Command = {
   name: "trap",
@@ -171,16 +172,8 @@ export const kill: Command = {
     const terminating = sig !== 0 && sig !== sigs.SIGCONT && defaultAction(sig) !== 'stop' && defaultAction(sig) !== 'ign';
     let anyFailed = false;
 
-    const abortInPage = (job: { abortController?: AbortController; status: string; exitCode: number; ignoresIntQuit?: boolean }) => {
-      if (!terminating) return;
-      if (job.ignoresIntQuit && (sig === sigs.SIGINT || sig === sigs.SIGQUIT)) return;
-      if (job.abortController) job.abortController.abort();
-      job.status = 'failed';
-      job.exitCode = 128 + sig;
-      (job as { signal?: number }).signal = sig;
-    };
-
-    const { shellForPid, inPageJobForPid } = await import('../shell');
+    const { shellForPid, inPageJobForPid, signalInPageJob } = await import('../shell');
+    const abortInPage = (job: BackgroundJob) => signalInPageJob(job, sig);
     for (const t of targets) {
       // A shell started as its own process (its $$): handled before its next command
       const target = /^\d+$/.test(t) ? shellForPid(parseInt(t, 10)) : undefined;
@@ -229,7 +222,7 @@ export const kill: Command = {
       const proc = processTable.get(pid);
       if (proc && proc.status === 'running') {
         if (terminating) {
-          processTable.kill(pid);
+          processTable.kill(pid, sig);
           proc.serverWindow?.close();
         }
         continue;

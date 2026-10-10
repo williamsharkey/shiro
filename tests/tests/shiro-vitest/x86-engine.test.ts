@@ -69,6 +69,10 @@ const psemBin = join(out, 'psem');
 const havePsem = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', psemBin, 'psem.c']);
 const shmobjBin = join(out, 'shmobj');
 const haveShmobj = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', shmobjBin, 'shmobj.c']);
+const shmoddBin = join(out, 'shmodd');
+const haveShmodd = tryBuild('gcc', ['-static', '-O1', '-o', shmoddBin, 'shmodd.c']);
+const shmpreadBin = join(out, 'shmpread');
+const haveShmpread = tryBuild('gcc', ['-static', '-O1', '-o', shmpreadBin, 'shmpread.c']);
 const fsidentBin = join(out, 'fsident');
 const haveFsident = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', fsidentBin, 'fsident.c']);
 // musl's libc (native Claude Code's) resolves paths and stats files its own way
@@ -148,12 +152,16 @@ const sse41bBin = join(out, 'sse41b');
 const haveSse41b = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', sse41bBin, 'sse41b.c']);
 const ssefloatBin = join(out, 'ssefloat');
 const haveSsefloat = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', ssefloatBin, 'ssefloat.c', '-lm']);
+const roundingBin = join(out, 'rounding');
+const haveRounding = tryBuild('gcc', ['-static', '-O1', '-frounding-math', '-o', roundingBin, 'rounding.c', '-lm']);
 const cowforkBin = join(out, 'cowfork');
 const haveCowfork = tryBuild('gcc', ['-static', '-O1', '-o', cowforkBin, 'cowfork.c']);
 const siginfochildBin = join(out, 'siginfochild');
 const haveSiginfochild = tryBuild('gcc', ['-static', '-O1', '-o', siginfochildBin, 'siginfochild.c']);
 const memfdBin = join(out, 'memfd');
 const haveMemfd = tryBuild('gcc', ['-static', '-O1', '-o', memfdBin, 'memfd.c']);
+const memfdsealBin = join(out, 'memfdseal');
+const haveMemfdseal = tryBuild('gcc', ['-static', '-O1', '-o', memfdsealBin, 'memfdseal.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -250,6 +258,15 @@ const haveItimers = blinkHasItimers && tryBuild('gcc', ['-static', '-O1', '-w', 
 const othercpuclockBin = join(out, 'othercpuclock');
 const blinkHasOthercpuclock = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_othercpuclock');
 const haveOthercpuclock = blinkHasOthercpuclock && tryBuild('gcc', ['-static', '-O1', '-w', '-o', othercpuclockBin, 'othercpuclock.c']);
+// Blink 0507: pthread_kill of a thread blocked in a kernel call interrupts it; a process
+// signal the main thread blocks reaches a thread that doesn't (the kernel's mask is what all block)
+const threadintrBin = join(out, 'threadintr');
+const blinkHasThreadintr = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_threadintr');
+const haveThreadintr = blinkHasThreadintr && tryBuild('gcc', ['-static', '-O1', '-w', '-o', threadintrBin, 'threadintr.c', '-lpthread', '-lrt']);
+// Blink 0508: a page of a file mapping past the file's end is SIGBUS
+const sigbusBin = join(out, 'sigbus');
+const blinkHasSigbus = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_sigbus');
+const haveSigbus = blinkHasSigbus && tryBuild('gcc', ['-static', '-O1', '-w', '-o', sigbusBin, 'sigbus.c', '-lrt']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -891,6 +908,20 @@ it.skipIf(!haveOthercpuclock)('clock_getcpuclockid of another existing process (
   expect(r.output.replace(/\r\n/g, '\n')).toBe('init 0 read 0 none No such process\n');
 }, 60_000);
 
+it.skipIf(!haveThreadintr)('pthread_kill of a thread blocked in read, mq_timedsend or nanosleep ends the call with EINTR; a process signal the main thread blocks reaches one that does not (Open POSIX mq_timedsend_12-1, pthread_kill_8-1)', async () => {
+  const { shell } = await setup(readFileSync(threadintrBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('read EINTR handled 1\nmq_timedsend EINTR handled 1\nnanosleep EINTR handled 1\nprocess signal blocked by main reached a thread\n');
+}, 60_000);
+
+it.skipIf(!haveSigbus)('a page of a shared file mapping past the end of a file or /dev/shm object is SIGBUS (SIGSEGV if PROT_NONE), until the file grows over it; writes within the file go back (Open POSIX mmap_11-2, mmap_11-3, mmap_6-3)', async () => {
+  const { shell } = await setup(readFileSync(sigbusBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe(
+    'PROT_NONE SIGSEGV\nfile SIGBUS code 2 at page 1\nfile SIGBUS on read\nfile grown: 0 122\nfile wrote back a\n' +
+    'shm SIGBUS code 2 at page 1\nshm SIGBUS on read\nshm grown: 0 0\n');
+}, 60_000);
+
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
 // (busybox picks its applet by it; Debian's redis-server -> redis-check-rdb)
 describe('argv[0] through a symlink', () => {
@@ -1185,6 +1216,16 @@ describe('Blink engine: CPU and syscall fixes', () => {
     expect(r.output.replace(/\r\n/g, '\n')).toBe("write 11 trunc 0 read 11 'hello memfd' map 'hello' cloexec 1 name ok\n");
   }, 60_000);
 
+  // Firefox seals its shared memory (F_SEAL_GROW|F_SEAL_SHRINK): the kernel's
+  // memfds keep the seals, Blink passes the fcntl through (0118)
+  it.skipIf(!haveMemfdseal)('memfd seals: F_ADD_SEALS/F_GET_SEALS, enforced on truncate and write', async () => {
+    const { shell } = await setup(readFileSync(memfdsealBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'seals 0 add 0 seals 6 truncate -1 EPERM grow -1 EPERM overwrite 1 seal 0 again -1 EPERM \n' +
+      'plain seals 1 add -1 EPERM pipe -1 EINVAL \n');
+  }, 60_000);
+
   // Open POSIX sigqueue_1-1: a same-instance child's handler gets the queued value (0110)
   it.skipIf(!haveSiginfochild)('a forked child\'s SA_SIGINFO handler gets sigqueue\'s value (standard and real-time)', async () => {
     const { shell } = await setup(readFileSync(siginfochildBin));
@@ -1205,6 +1246,23 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe('arith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\narith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\narith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\n');
   }, 60_000);
+
+  // fesetround's directed modes (MXCSR.RC), as CGAL checks at startup:
+  // SSE add/sub/mul/div/sqrt and conversions as native, compiled and not (0119)
+  it.skipIf(!haveRounding)('SSE arithmetic follows MXCSR rounding (FE_UPWARD, FE_DOWNWARD, FE_TOWARDZERO) as native', async () => {
+    const { shell } = await setup(readFileSync(roundingBin));
+    const r = await run(shell, './prog; BLINK_WJIT=0 ./prog');
+    const ok =
+      'near add 3ff0000000000000 sub 3ff0000000000000 nsub bff0000000000000 mul 3ff0000000000000 div 3fd5555555555555 ndiv bfd5555555555555 sqrt 3ff6a09e667f3bcd cvt 43b0000000000000 fadd 3f800000 fdiv 3eaaaaab fcvt 3eaaaaab rint 2 pd 3fd5555555555555 bfd5555555555555\n' +
+      'up add 3ff0000000000001 sub 3ff0000000000000 nsub bff0000000000000 mul 3ff0000000000001 div 3fd5555555555556 ndiv bfd5555555555555 sqrt 3ff6a09e667f3bcd cvt 43b0000000000001 fadd 3f800001 fdiv 3eaaaaab fcvt 3eaaaaab rint 3 pd 3fd5555555555556 bfd5555555555555\n' +
+      'down add 3ff0000000000000 sub 3fefffffffffffff nsub bff0000000000001 mul 3fefffffffffffff div 3fd5555555555555 ndiv bfd5555555555556 sqrt 3ff6a09e667f3bcc cvt 43b0000000000000 fadd 3f800000 fdiv 3eaaaaaa fcvt 3eaaaaaa rint 2 pd 3fd5555555555555 bfd5555555555556\n' +
+      'zero add 3ff0000000000000 sub 3fefffffffffffff nsub bff0000000000000 mul 3fefffffffffffff div 3fd5555555555555 ndiv bfd5555555555555 sqrt 3ff6a09e667f3bcc cvt 43b0000000000000 fadd 3f800000 fdiv 3eaaaaaa fcvt 3eaaaaaa rint 2 pd 3fd5555555555555 bfd5555555555555\n' +
+      'near hash 6287a25af9cb224d\n' +
+      'up hash d0ec0b5e73e6adc1\n' +
+      'down hash cd2fd56d81e8f50f\n' +
+      'zero hash 7706c01324077d65\n';
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(ok + ok);
+  }, 120_000);
 
   // compiled rol/ror by constants (SHA-1, hashes): values and flags as native (OF masked where undefined)
   it.skipIf(!haveRotates)('rol/ror by constants in compiled code: values and CF/OF/ZF/SF as native', async () => {
@@ -1361,6 +1419,25 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const { shell } = await setup(readFileSync(shmobjBin));
     const r = await run(shell, './prog 2>/dev/null; BLINK_WJIT=0 ./prog 2>/dev/null');
     const ok = 'child sees "written by the parent"\npongs 50 atomic 4000 locked 4000 text "written by the child" exit 0\n';
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(ok + ok);
+  }, 120_000);
+
+  // Firefox's 242,716-byte memfd:mozilla-ipc region: the last page is partial;
+  // unmapped whole, rounded, in parts and at exit (0117); a /dev/shm object
+  // keeps what was written through its mapping (Open POSIX shm_open_28-1)
+  it.skipIf(!haveShmodd)('shared mappings of a length that isn\'t whole pages unmap and exit; /dev/shm keeps the bytes', async () => {
+    const { shell } = await setup(readFileSync(shmoddBin));
+    const r = await run(shell, './prog; echo rc $?; BLINK_WJIT=0 ./prog; echo rc $?');
+    const ok = "memfd munmap 0\nmemfd sees 'y' munmap rounded 0\nmemfd munmap tail 0 head 0\nanon munmap 0\n" +
+      "anon after fork 'c' munmap rounded 0\nshm after close 'qwerty' mapped 'qwerty'\ndone\nrc 0\n";
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(ok + ok);
+  }, 120_000);
+
+  // The fd and the mapping of a /dev/shm object are one file (conformance's report, Open POSIX shm_open)
+  it.skipIf(!haveShmpread)('a /dev/shm object: pread sees the mapping, the mapping sees pwrite, an fd opened while mapped too', async () => {
+    const { shell } = await setup(readFileSync(shmpreadBin));
+    const r = await run(shell, './prog; echo rc $?; BLINK_WJIT=0 ./prog; echo rc $?');
+    const ok = 'mapped pread a\nmapping sees pwrite w\nreopened while mapped aq\nafter munmap pread a z w q\nreopened pread awq\nrc 0\n';
     expect(r.output.replace(/\r\n/g, '\n')).toBe(ok + ok);
   }, 120_000);
 
