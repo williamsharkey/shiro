@@ -2412,3 +2412,40 @@ counts the `.pack` reads of `git log` on a packed repo: 12 before, 1 after.
 
 A/B (`--suites boot,shell,workloads --rounds 3 --runs 3`): 48 same, no
 regressions.
+
+### unix/perf-fs-shell 18 — second visit with a big home directory
+
+Reopen on a persistent on-disk profile (scratch probe; three reopens per
+step, median; the profile grows step by step):
+
+| home directory | IndexedDB on disk | keys | first prompt | first command | IndexedDB reads before the prompt |
+|---|---:|---:|---:|---:|---|
+| fresh | 0.1 MiB | 160 | 239 ms | 18 ms | 1 `getAllKeys` + 25 `get`, no file contents |
+| + vite app (`npm i`) | 19 MiB | 1,099 | 230 ms | 16 ms | same |
+| + `npm i -g typescript eslint@8` | 42 MiB | 3,228 | 238 ms | 16 ms | same |
+| + `debian install` | 55 MiB | 6,876 | 289 ms | 299 ms | same |
+| + 1 GB in 40 files | 1,055 MiB | 6,917 | 230 ms | 290 ms | same |
+| + 100,000 small files, before | 1,062 MiB | 107,918 | **568–648 ms** | 103–117 ms | same |
+| + 100,000 small files, after | | | **233 ms** | 19 ms (461 ms if run at once) | 32 `get` |
+
+Restore is lazy: boot reads a handful of paths and never reads file
+contents, so data size doesn't matter (1 GB: 230 ms). Two costs grew with
+the home directory:
+
+- **The key index**, every path in the store, which `readdir` and negative
+  lookups use. The first read at boot started loading it, and the prompt
+  waited behind it: ~250 ms per 100k keys. main.ts now holds it until the
+  terminal has started (`FileSystem.holdKeyIndex` / `releaseKeyIndex`, 5 s
+  at most). `readdir` still loads it at once. A command typed within the
+  first ~250 ms waits for it; one typed a second later doesn't.
+- **Debian mode ran bash's builtins as x86 programs.** `true`, `false`,
+  `echo` and `printf` became `/usr/bin` files after `debian install`, at
+  130–200 ms each instead of 1 ms (`command true` too). That is the 290 ms
+  "first command" above, and it hit every `echo` in every script. The
+  shell now keeps bash's builtins; `/usr/bin/echo` still runs the file.
+
+No go layer was available here (`.toolchain-build/layers` isn't built), so
+the go step is missing; its placeholders behave like the Debian rootfs.
+
+A/B against 7ed34ed1 (`--suites boot,shell,workloads,kernel --rounds 3
+--runs 3`): 61 same, 2 changed by <1% (exact values), no regressions.
