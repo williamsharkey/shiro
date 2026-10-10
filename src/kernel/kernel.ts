@@ -1719,7 +1719,7 @@ export class Kernel {
         }
         case A.SYS_close_range: {
           const first = args[0] >>> 0;
-          const last = Math.min(args[1] >>> 0, A.OPEN_MAX - 1);
+          const last = args[1] >>> 0;
           if (first > (args[1] >>> 0)) return -A.EINVAL;
           for (const [fd] of fds.entries()) {
             if (fd < first || fd > last) continue;
@@ -1729,8 +1729,9 @@ export class Kernel {
           return 0;
         }
         case A.SYS_shiro_vfork: {
-          // the child is running code (its engine's), not idle like a builtin that makes no syscalls
-          const child = this.vfork(proc);
+          // the child is running code (its engine's), not idle like a builtin that makes no syscalls;
+          // args[0] CLONE_PARENT: the child is the caller's sibling (its parent's child)
+          const child = this.vfork(proc, (args[0] & A.CLONE_PARENT) !== 0);
           child.syscalls = 1;
           return child.pid;
         }
@@ -2186,6 +2187,27 @@ export class Kernel {
           v.setUint32(104, 1, true); // mem_unit
           return 0;
         }
+        case A.SYS_prlimit64: { // pid, resource, set → data: old {cur, max} (u64s); a new one first when set
+          // RLIMIT_NOFILE only (the fd table's): engines keep the other limits
+          if (args[1] !== A.RLIMIT_NOFILE) return -A.EINVAL;
+          const target = args[0] ? this.procs.get(args[0]) : proc;
+          if (!target) return -A.ESRCH;
+          if (data.length < 16) return -A.EFAULT;
+          const dv = new DataView(data.buffer, data.byteOffset, 16);
+          const t = target.fds;
+          const old = [t.limit, t.hardLimit];
+          if (args[2]) {
+            const big = (o: number) => { const v = dv.getBigUint64(o, true); return v > BigInt(A.NR_OPEN) ? Infinity : Number(v); };
+            const cur = big(0), max = big(8);
+            if (cur > max) return -A.EINVAL;
+            // nothing above fs.nr_open; raising the hard limit takes root
+            if (max > A.NR_OPEN || (max > t.hardLimit && proc.uid !== 0)) return -A.EPERM;
+            t.limit = cur; t.hardLimit = max;
+          }
+          dv.setBigUint64(0, BigInt(old[0]), true);
+          dv.setBigUint64(8, BigInt(old[1]), true);
+          return 0;
+        }
         case A.SYS_uname: { // → struct utsname (engines that report their own machine take the names from here)
           if (data.length < A.UTSNAME_FIELD * 6) return -A.EFAULT;
           const fields = ['Linux', this.hostname, unameRelease(this.hostname), UNAME_VERSION, 'x86_64', '(none)'];
@@ -2341,7 +2363,7 @@ export class Kernel {
 
   /** poll(2) over `nfds` struct pollfd entries at the start of `data`. timeout < 0 waits forever. */
   async poll(proc: Process, data: Uint8Array, nfds: number, timeoutMs: number): Promise<number> {
-    if (nfds < 0 || nfds * A.POLLFD_SIZE > data.length) return -A.EINVAL;
+    if (nfds < 0 || nfds > Math.max(A.OPEN_MAX, proc.fds.limit) || nfds * A.POLLFD_SIZE > data.length) return -A.EINVAL;
     const dv = new DataView(data.buffer, data.byteOffset, nfds * A.POLLFD_SIZE);
     const files: OpenFile[] = [];
     for (let i = 0; i < nfds; i++) {
@@ -2375,7 +2397,7 @@ export class Kernel {
    */
   private async select(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): Promise<number> {
     const nfds = args[0];
-    if (nfds < 0 || nfds > A.OPEN_MAX) return -A.EINVAL;
+    if (nfds < 0 || nfds > Math.max(A.OPEN_MAX, proc.fds.limit)) return -A.EINVAL;
     const setBytes = Math.ceil(nfds / 64) * 8;
     if (setBytes * 3 > data.length) return -A.EINVAL;
     const present = args[1];
@@ -2461,10 +2483,10 @@ export class Kernel {
    * program starts at SYS_shiro_execve; until then the parent's engine makes
    * syscalls on its behalf.
    */
-  vfork(parent: Process): Process {
+  vfork(parent: Process, cloneParent = false): Process {
     const pid = this.allocPid();
     const child = new Process({
-      pid, ppid: parent.pid, pgid: parent.pgid, sid: parent.sid,
+      pid, ppid: cloneParent ? parent.ppid : parent.pid, pgid: parent.pgid, sid: parent.sid,
       path: parent.path, argv: [...parent.argv], env: { ...parent.env }, cwd: parent.cwd,
       fds: parent.fds.fork(), umask: parent.umask,
     });
