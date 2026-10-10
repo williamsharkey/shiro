@@ -172,6 +172,19 @@ function statFor(proc: Process, st: A.KStat): A.KStat {
   return st.uid === 1000 && proc.uid !== 1000 ? { ...st, uid: proc.uid, gid: proc.gid } : st;
 }
 
+/**
+ * open(2)'s permission check on an existing file, which is the caller's own
+ * (see statFor): its owner bits must allow the access mode, unless the
+ * caller is root (Open POSIX shm_open_32-1, 34-1: a 0 or 0400 file reopened
+ * O_RDWR is EACCES).
+ */
+function ownerDenies(proc: Process, mode: number | undefined, flags: number): boolean {
+  if (proc.uid === 0 || mode === undefined) return false;
+  const acc = flags & A.O_ACCMODE;
+  const need = (acc === A.O_WRONLY ? 0 : 4) | (acc === A.O_RDONLY && !(flags & A.O_TRUNC) ? 0 : 2);
+  return ((mode >> 6) & need) !== need;
+}
+
 export class Kernel {
   fs?: FileSystem;
   /** Paths of AF_UNIX socket files (net.ts bind); they stat as sockets. */
@@ -627,8 +640,18 @@ export class Kernel {
     proc.markExited(status);
     this.logTrap(proc, status);
     const parent = this.procs.get(proc.ppid);
-    if (parent && parent.pid !== 1) this.deliver(parent, A.SIGCHLD);
+    if (parent && parent.pid !== 1) {
+      const killed = A.WIFSIGNALED(status);
+      this.deliver(parent, A.SIGCHLD, {
+        signo: A.SIGCHLD, code: !killed ? A.CLD_EXITED : status & 0x80 ? A.CLD_DUMPED : A.CLD_KILLED,
+        pid: proc.pid, uid: proc.ruid ?? proc.uid, status: killed ? A.WTERMSIG(status) : A.WEXITSTATUS(status),
+      });
+    }
     if (proc.ppid === 1) this.scheduleInitReap(proc);
+    // A parent ignoring SIGCHLD or with SA_NOCLDWAIT leaves no zombie: the
+    // child is reaped now, and a wait for it ends in ECHILD (Linux)
+    else if (parent && (parent.dispositions.get(A.SIGCHLD) === 'ignore' ||
+             ((parent.sigactions.get(A.SIGCHLD)?.flags ?? 0) & A.SA_NOCLDWAIT))) this.procs.delete(proc.pid);
     this.notify();
   }
 
@@ -720,7 +743,8 @@ export class Kernel {
         this.stateWaiters.add(onState);
         signal?.addEventListener('abort', onAbort, { once: true });
       });
-      if (!woke) return { pid: -A.EINTR, status: 0 };
+      // (no children left, as when SA_NOCLDWAIT reaped the last: ECHILD before EINTR, as Linux's do_wait)
+      if (!woke) return { pid: this.children(caller, pid).length ? -A.EINTR : -A.ECHILD, status: 0 };
     }
   }
 
@@ -734,17 +758,36 @@ export class Kernel {
     else targets = [...this.procs.values()].filter(p => p.pgid === -pid);
     targets = targets.filter(p => p.state !== 'zombie' || pid > 0);
     if (targets.length === 0) return -A.ESRCH;
+    // the ones the sender may signal; none of several is EPERM as for one
+    targets = targets.filter(p => this.maySignal(sender, p, sig));
+    if (targets.length === 0) return -A.EPERM;
     if (sig === 0) return 0;
     for (const p of targets) this.deliver(p, sig, { signo: sig, code: A.SI_USER, pid: sender.pid, uid: sender.uid });
     return 0;
+  }
+
+  /**
+   * Linux's kill permission: root, or the sender's real or effective uid is the
+   * target's real or saved uid; SIGCONT within a session. init stands in for
+   * Linux's root-owned pid 1 (the kernel's own sends come from it).
+   */
+  maySignal(sender: Process, target: Process, sig: number): boolean {
+    if (sender === this.init || sender.uid === 0 || sender === target) return true;
+    if (target === this.init) return false;
+    if (sig === A.SIGCONT && sender.sid === target.sid) return true;
+    const senderIds = [sender.uid, sender.ruid ?? sender.uid];
+    return [target.ruid ?? target.uid, target.suid ?? target.uid].some((u) => senderIds.includes(u));
   }
 
   /** Deliver one signal: the signal hook (signals.ts) first, then the disposition, then the default action. */
   deliver(proc: Process, sig: number, info: A.SigInfo = { signo: sig, code: A.SI_KERNEL }): void {
     if (proc.state === 'zombie' || proc.exiting || proc.pid === 1) return;
     if (sig === A.SIGKILL) { void this.exit(proc, A.W_TERMSIG(A.SIGKILL)); return; }
-    if (sig === A.SIGSTOP) { proc.markStopped(sig); this.notify(); return; }
-    if (sig === A.SIGCONT) { proc.markContinued(); this.notify(); }
+    if (sig === A.SIGSTOP) { this.stopProcess(proc, sig); return; }
+    if (sig === A.SIGCONT && proc.state === 'stopped') {
+      proc.markContinued(); this.notify();
+      if (!proc.signalHook) this.notifyParentOfStop(proc, 0);
+    }
     if (proc.signalHook) {
       // (job control routes it: signals.ts queues what it carries when it goes pending)
       proc.data.sigInFlight = info;
@@ -769,9 +812,26 @@ export class Kernel {
     }
     switch (A.defaultSignalAction(sig)) {
       case 'term': void this.exit(proc, A.W_TERMSIG(sig)); break;
-      case 'stop': proc.markStopped(sig); this.notify(); break;
+      case 'stop': this.stopProcess(proc, sig); break;
       default: break;
     }
+  }
+
+  private stopProcess(proc: Process, sig: number): void {
+    const was = proc.state;
+    proc.markStopped(sig);
+    this.notify();
+    // (job control's targets have it say so: JobControl.noteStopped)
+    if (was === 'running' && !proc.signalHook) this.notifyParentOfStop(proc, sig);
+  }
+
+  /** SIGCHLD to the parent for a stop (sig) or a continue (0), unless it set SA_NOCLDSTOP */
+  private notifyParentOfStop(proc: Process, sig: number): void {
+    const parent = this.procs.get(proc.ppid);
+    if (!parent || parent.pid === 1 || ((parent.sigactions.get(A.SIGCHLD)?.flags ?? 0) & A.SA_NOCLDSTOP)) return;
+    this.deliver(parent, A.SIGCHLD, {
+      signo: A.SIGCHLD, code: sig ? A.CLD_STOPPED : A.CLD_CONTINUED, pid: proc.pid, uid: proc.ruid ?? proc.uid, status: sig || A.SIGCONT,
+    });
   }
 
   /**
@@ -934,6 +994,7 @@ export class Kernel {
           return new DirFile(fs, await fs.realpath(p), statusFlags);
         }
         if (mustBeDir) return -A.ENOTDIR;
+        if (ownerDenies(proc, st.mode, flags)) return -A.EACCES;
         if (st.isFIFO?.()) return await this.openFifo(proc, await fs.realpath(target), flags);
       }
       const real = await fs.realpath(target);
@@ -1044,6 +1105,7 @@ export class Kernel {
       if ((flags & A.O_CREAT) && (flags & A.O_EXCL)) return -A.EEXIST;
       if (own.node.type !== 'file' || own.node.lazy || own.node.special) return undefined;
       if (flags & A.O_DIRECTORY) return -A.ENOTDIR;
+      if (ownerDenies(proc, own.node.mode, flags)) return -A.EACCES;
       const file = new RegularFile(openInodeSync(fs, own.path, own.node), statusFlags);
       if ((flags & A.O_TRUNC) && canWrite(flags)) file.truncateSync(0);
       return file;
@@ -1837,7 +1899,7 @@ export class Kernel {
           if (!target || (target.state === 'zombie' && signo !== 0)) return -A.ESRCH;
           // only the kernel may claim SI_USER, SI_TKILL or a kernel code for another process's signal
           if ((info.code >= 0 || info.code === A.SI_TKILL) && target !== proc) return -A.EPERM;
-          if (proc.uid !== 0 && target.uid !== proc.uid && target.ruid !== proc.uid && proc.ruid !== target.uid) return -A.EPERM;
+          if (!this.maySignal(proc, target, signo)) return -A.EPERM;
           if (signo === 0) return 0;
           this.deliver(target, signo, { signo, code: info.code, pid: info.pid, uid: info.uid, value: info.value });
           return 0;
@@ -2125,19 +2187,28 @@ export class Kernel {
           const ms = args[0] | 0;
           const end = ms >= 0 ? Date.now() + ms : Infinity;
           let got: number;
-          while (!(got = next())) {
-            const left = end - Date.now();
-            if (left <= 0) return -A.EAGAIN;
-            const wakes = new Set<() => void>();
-            const off = pendingSignalListeners(proc).add(() => { for (const w of [...wakes]) w(); });
-            const timer = end === Infinity ? undefined : setTimeout(() => { for (const w of [...wakes]) w(); }, left);
-            const ok = await abortableWait(wakes, sig);
-            off();
-            if (timer !== undefined) clearTimeout(timer);
-            if (!ok) return -A.EINTR;
+          // While it waits, the set's signals are the wait's even when not
+          // blocked (Linux's real_blocked): they're held, not handled. The
+          // caller's mask comes back after, delivering any others that came.
+          const unblocked = [...want].filter((s) => !proc.sigmask.has(s));
+          if (unblocked.length) for (const s of unblocked) proc.sigmask.add(s);
+          try {
+            while (!(got = next())) {
+              const left = end - Date.now();
+              if (left <= 0) return -A.EAGAIN;
+              const wakes = new Set<() => void>();
+              const off = pendingSignalListeners(proc).add(() => { for (const w of [...wakes]) w(); });
+              const timer = end === Infinity ? undefined : setTimeout(() => { for (const w of [...wakes]) w(); }, left);
+              const ok = await abortableWait(wakes, sig);
+              off();
+              if (timer !== undefined) clearTimeout(timer);
+              if (!ok) return -A.EINTR;
+            }
+            // one instance (a real-time signal may have more queued), with what it carries
+            A.encodeSiginfo(proc.takeSiginfo(got, proc.deferredSignals), data);
+          } finally {
+            if (unblocked.length) { const m = new Set(proc.sigmask); for (const s of unblocked) m.delete(s); this.setSigmask(proc, m); }
           }
-          // one instance (a real-time signal may have more queued), with what it carries
-          A.encodeSiginfo(proc.takeSiginfo(got, proc.deferredSignals), data);
           return got;
         }
         case A.SYS_rt_sigsuspend: {

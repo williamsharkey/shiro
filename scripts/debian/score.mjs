@@ -11,7 +11,8 @@
 // pre-installed Chromium (/opt/pw-browsers/chromium); never `playwright install`.
 import { createRequire } from 'node:module';
 import { spawn, execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const require = createRequire(import.meta.url);
@@ -100,10 +101,24 @@ async function waitFor(url, ms = 30000) {
 
 let chromium;
 try { ({ chromium } = require('playwright-core')); } catch { ({ chromium } = require('playwright')); }
+const LAUNCH = { executablePath: process.env.CHROMIUM || '/opt/pw-browsers/chromium', args: ['--no-sandbox', '--js-flags=--max-old-space-size=8192'] };
+// A machine's profile is replaced once its storage passes this (disk use stays bounded)
+let stopping = false;
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { stopping = true; setTimeout(() => process.exit(130), 3000); });
+const MACHINE_MAX_BYTES = Number(opt('--machine-max-gib', '4')) * 2 ** 30;
 
-/** One Shiro page in Debian mode with fresh storage. */
-async function newMachine(browser, base, log) {
-  const context = await browser.newContext();
+/**
+ * One Shiro page in Debian mode with fresh storage: a persistent profile in a
+ * temporary directory (an incognito context's quota is a fraction of a real
+ * profile's, and big installs ran out of it mid-dpkg), removed by close().
+ */
+async function newMachine(base, log) {
+  const dir = mkdtempSync(join(tmpdir(), 'debian-score-'));
+  const context = await chromium.launchPersistentContext(dir, LAUNCH);
+  const close = async () => {
+    await context.close().catch(() => {});
+    rmSync(dir, { recursive: true, force: true });
+  };
   const page = await context.newPage();
   page.on('pageerror', (e) => log(`[pageerror] ${e.message}`));
   await page.goto(base + '/');
@@ -133,7 +148,7 @@ async function newMachine(browser, base, log) {
   const st = await page.evaluate(() => navigator.storage.estimate()).catch(() => null);
   log(`machine ready: install ${inst.ms} ms, apt-get update ${upd.ms} ms (exit ${upd.code}), storage ${st ? Math.round(st.usage / 2 ** 20) : '?'} MiB`);
   if (upd.code) throw new Error('apt-get update failed: ' + upd.out.slice(-2000));
-  return { context, page, run, bootMs: Date.now() - t0, updateMs: upd.ms };
+  return { context, close, page, run, bootMs: Date.now() - t0, updateMs: upd.ms };
 }
 
 /** Smoke-test an installed package: its programs, libraries, modules. */
@@ -170,7 +185,14 @@ async function smoke(m, pkg) {
       if (r.code === 0 && r.out.trim()) return { ok: true, how: `${bin} ${flagArg}${who(bin)}`, ms: r.ms, sample: r.out.trim().split('\n')[0].slice(0, 100) };
       // Tools without --version print their usage and exit 1 or 2: it ran, which is what we check
       const broken = /error while loading shared libraries|Exec format error|cannot execute|not found|Can't locate|No such file/i.test(r.out);
-      if (r.code > 0 && r.code < 126 && !broken && /usage|version|options|--help/i.test(r.out)) return { ok: true, how: `${bin} ${flagArg} (usage, exit ${r.code})${who(bin)}`, ms: r.ms, sample: r.out.trim().split('\n')[0].slice(0, 100) };
+      // (some return their own negative error: JxrDecApp's -105 is exit 151, not a signal)
+      const crashSig = /terminating due to SIG|Segmentation fault|Illegal instruction|Bus error|core dumped|blink: aborted|SCORE-TIMEOUT/.test(r.out);
+      if (r.code > 0 && r.code !== 124 && r.code !== 126 && r.code !== 127 && !crashSig && !broken && /usage|version|options|--help/i.test(r.out)) return { ok: true, how: `${bin} ${flagArg} (usage, exit ${r.code})${who(bin)}`, ms: r.ms, sample: r.out.trim().split('\n')[0].slice(0, 100) };
+      // A client of a system daemon (udisksctl: udisksd on the system bus) or of hardware's
+      // X extension (vmwarectrl: VMWARE_CTRL) runs but has nothing to talk to, as in a
+      // Debian container or on other hardware
+      const absent = /Error connecting to the \S+ daemon|Failed to connect to (?:the )?bus|Could not connect to (?:D-Bus|the system bus)|Cannot connect to the \S+ daemon|extension "\S+" missing on display/.exec(r.out);
+      if (absent && !crashed) return { ok: true, how: `${bin} ${flagArg} (ran; "${absent[0]}")${who(bin)}`, ms: r.ms };
       if (crashed) return { ok: false, how: `${bin} ${flagArg}`, category: r.code === 124 ? 'timeout' : 'engine-crash', error: firstError(r.out) || `exit ${r.code}` };
       const mod = /Can't locate (\S+\.pm) in @INC/.exec(r.out)?.[1];
       if (mod && !undeclared && !(await m.run(`dpkg -S '*/${mod}' 2>/dev/null`)).out.trim()) undeclared = { bin, mod };
@@ -203,11 +225,19 @@ async function smoke(m, pkg) {
     const r = await m.run(`python3 -c 'import ${py}' 2>&1`, 300);
     return r.code === 0 ? { ok: true, how: `python3 -c 'import ${py}'`, ms: r.ms } : { ok: false, how: `import ${py}`, category: 'smoke-failed', error: firstError(r.out) };
   }
-  const pm = list.map((f) => /^\/usr\/share\/perl5\/(.+)\.pm$/.exec(f)?.[1]).find(Boolean);
+  // The package's top-level module (XML::Twig, not XML::Twig::XPath, which needs an optional one)
+  const pm = list.map((f) => /^\/usr\/share\/perl5\/(.+)\.pm$/.exec(f)?.[1]).filter(Boolean)
+    .sort((a, b) => a.split('/').length - b.split('/').length || a.length - b.length)[0];
   if (pm) {
     const mod = pm.replace(/\//g, '::');
     const r = await m.run(`perl -e 'use ${mod}' 2>&1`, 300);
-    return r.code === 0 ? { ok: true, how: `perl -e 'use ${mod}'`, ms: r.ms } : { ok: false, how: `use ${mod}`, category: 'smoke-failed', error: firstError(r.out) };
+    if (r.code === 0) return { ok: true, how: `perl -e 'use ${mod}'`, ms: r.ms };
+    // a module only a Recommends/Suggests provides, as on Debian
+    const need = /Can't locate (\S+\.pm) in @INC/.exec(r.out)?.[1];
+    if (need && !(await m.run(`dpkg -S '*/${need}' 2>/dev/null`)).out.trim()) {
+      return { ok: true, how: `installed; use ${mod} needs ${need}, which no dependency provides (as on Debian)`, ms: r.ms };
+    }
+    return { ok: false, how: `use ${mod}`, category: 'smoke-failed', error: firstError(r.out) };
   }
   return { ok: true, how: 'installed (data/config only)', ms: 0 };
 }
@@ -293,12 +323,12 @@ async function main() {
       const info = archive.get(p.name);
       if (!info) { results[p.name] = { name: p.name, rank: p.rank, result: 'skip', category: 'not-in-trixie', error: 'no such binary package in trixie amd64 (popcon counts every release and architecture)' }; continue; }
       const prev = results[p.name];
-      if (prev && prev.version === info.version && prev.result !== 'error' && !flag('--rescore')) continue;
+      // harness errors and storage-full (the harness's storage, not the package) are scored again
+      if (prev && prev.version === info.version && prev.result !== 'error' && prev.category !== 'storage-full' && !flag('--rescore')) continue;
       queue.push({ p, info });
     }
     save();
     console.log(`${queue.length} packages to score with ${WORKERS} workers`);
-    const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || '/opt/pw-browsers/chromium', args: ['--no-sandbox', '--js-flags=--max-old-space-size=8192'] });
     const BATCH = Number(opt('--batch', '8'));
     let next = 0;
     await Promise.all(Array.from({ length: Math.min(WORKERS, queue.length) }, async (_, w) => {
@@ -310,22 +340,22 @@ async function main() {
         try {
           // A dpkg left half-configured by an earlier failure fails everything after it
           // ("dpkg was interrupted": its journal, /var/lib/dpkg/updates, isn't empty)
-          // A headless context's storage quota is far below a real profile's: start over before it fills
-          // (dpkg's fsync of a full IndexedDB is EIO)
+          // Start over before storage fills (dpkg's fsync of a full IndexedDB is EIO),
+          // and keep each profile's disk use bounded
           if (m) {
             const st = await m.page.evaluate(() => navigator.storage.estimate()).catch(() => null);
-            if (st && st.quota && st.usage / st.quota > 0.8) {
+            if (st && st.quota && (st.usage / st.quota > 0.8 || st.usage > MACHINE_MAX_BYTES)) {
               log(`storage ${Math.round(st.usage / 2 ** 20)} of ${Math.round(st.quota / 2 ** 20)} MiB; new machine`);
-              await m.context.close().catch(() => {});
+              await m.close();
               m = null;
             }
           }
           if (m && (await m.run('dpkg --audit 2>&1; ls -A /var/lib/dpkg/updates 2>/dev/null')).out.trim()) {
             log('dpkg --audit reports problems (or dpkg was interrupted); new machine');
-            await m.context.close().catch(() => {});
+            await m.close();
             m = null;
           }
-          m ??= await newMachine(browser, base, log);
+          m ??= await newMachine(base, log);
           const broken = await scoreBatch(m, batch, (r) => {
             results[r.name] = r;
             save();
@@ -334,19 +364,20 @@ async function main() {
           // A dpkg that can't recover would fail everything after it: start over
           if (broken) await recover(m);
         } catch (e) {
+          // Stopped (SIGTERM/SIGINT): the browser closing under a batch says nothing about its packages
+          if (stopping) break;
           for (const { p, info } of batch) {
             if (results[p.name]?.at && results[p.name].version === info.version && results[p.name].result !== 'error') continue;
             results[p.name] = { name: p.name, rank: p.rank, version: info.version, result: 'error', category: 'harness', error: String(e?.message ?? e).slice(0, 300) };
           }
           save();
           log(`batch ${batch[0].p.name}..: harness error ${e?.message ?? e}`);
-          if (m) await m.context.close().catch(() => {});
+          if (m) await m.close();
           m = null;
         }
       }
-      if (m) await m.context.close().catch(() => {});
+      if (m) await m.close();
     }));
-    await browser.close();
   } finally {
     srv.kill();
   }
@@ -354,7 +385,7 @@ async function main() {
 }
 
 function report() {
-  const rows = popcon.filter((p) => results[p.name]).map((p) => results[p.name]);
+  const rows = popcon.filter((p) => p.rank <= TOP).map((p) => results[p.name] ?? { name: p.name, rank: p.rank, result: 'unscored', category: 'not-yet-scored' });
   const scored = rows.filter((r) => r.result === 'pass' || r.result === 'fail');
   const pass = rows.filter((r) => r.result === 'pass');
   const byCat = {};
@@ -370,7 +401,7 @@ function report() {
     'a Python or Perl module import, or nothing for data-only packages. Generated by',
     '`npm run debian-score` (scripts/debian/score.mjs); see [DEBIAN.md](DEBIAN.md).',
     '',
-    `Scored: popcon ranks ${Math.min(...ranks)}–${Math.max(...ranks)}: **${pass.length} pass**, ${scored.length - pass.length} fail, ${rows.length - scored.length} skipped or harness errors (of ${rows.length}). Pass rate of scored packages: ${scored.length ? Math.round((100 * pass.length) / scored.length) : 0}%.`,
+    `Scored: popcon ranks ${Math.min(...ranks)}–${Math.max(...ranks)}: **${pass.length} pass**, ${scored.length - pass.length} fail, ${rows.filter((r) => r.result === 'unscored').length} not scored yet, ${rows.length - scored.length - rows.filter((r) => r.result === 'unscored').length} skipped or harness errors (of ${rows.length}). Pass rate of scored packages: ${scored.length ? Math.round((100 * pass.length) / scored.length) : 0}%.`,
     '',
     '## Failure causes',
     '',
@@ -392,7 +423,8 @@ function report() {
 const CAT_MEANING = {
   'blink-lchown': "Blink's lchown follows symlinks, so dpkg can't set the owner of a symlink whose target isn't unpacked yet (reported to unix/perf-blink)",
   'not-in-trixie': 'popcon counts every release and architecture; no such amd64 package in trixie',
-  'storage-full': "the browser's storage quota ran out mid-install (the scoreboard's headless profile has a small one)",
+  'not-yet-scored': 'not reached yet; `npm run debian-score -- --top N` continues from the cached results',
+  'storage-full': "the browser's storage quota ran out mid-install",
   'kernel-netlink': "the program needs an AF_NETLINK socket (nft, and iproute2 beyond -V); Shiro's kernel has none",
   'engine-crash': 'a program died of a signal in Blink (an unimplemented instruction or an emulation bug)',
   'missing-syscall': 'a system call Shiro or Blink does not implement',

@@ -40,12 +40,12 @@ export async function run(h) {
       rssAt.push(m.rendererRss / MB);
       heapAt.push(m.jsHeapUsed / MB);
 
-      if (h.wants('workload.ffmpeg')) {
+      if (h.wantsAny('workload.ffmpeg', 'workload.ffmpeg.first', 'workload.ffmpeg.warm', 'workload.peak_rss.ffmpeg_first', 'workload.peak_rss.ffmpeg_warm')) {
         const f = await run1(h, 'ffmpeg -version', /ffmpeg version/);
         ff.first.push(f.ms); ff.firstPeak.push(f.peak);
         for (let j = 0; j < 2; j++) { const w = await run1(h, 'ffmpeg -version', /ffmpeg version/); ff.warm.push(w.ms); ff.warmPeak.push(w.peak); }
       }
-      if (h.wants('workload.claude_npm')) {
+      if (h.wantsAny('workload.claude_npm', 'workload.claude_npm.first', 'workload.claude_npm.warm', 'workload.peak_rss.claude_npm_first', 'workload.peak_rss.claude_npm_warm')) {
         const c = await run1(h, 'claude --npm --version', /\d+\.\d+\.\d+ \(Claude Code\)/);
         cl.first.push(c.ms); cl.firstPeak.push(c.peak);
         for (let j = 0; j < 2; j++) { const w = await run1(h, 'claude --npm --version', /Claude Code/); cl.warm.push(w.ms); cl.warmPeak.push(w.peak); }

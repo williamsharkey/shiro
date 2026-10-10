@@ -1,0 +1,320 @@
+{
+ "format": 1,
+ "env": {
+  "date": "2026-10-10T03:59:54.228Z",
+  "git": {
+   "sha": "674be53071f2d2df8b7caae4f3d9a199f3d2f0dd",
+   "short": "674be530",
+   "branch": "unix/compat-tools",
+   "dirty": true
+  },
+  "node": "v22.22.0",
+  "chromium": "141.0.7390.37",
+  "os": "Linux 6.18.44-fc-v114 x64",
+  "cpu": {
+   "model": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+   "count": 4
+  },
+  "memoryGiB": 15.7,
+  "quick": false,
+  "runs": 7,
+  "machine": {
+   "id": "c7438dc4bb1e",
+   "label": "4× Intel(R) Xeon(R) Processor @ 2.10GHz, 15.7 GiB, Linux 6.18.44-fc-v114 x64, Chromium 141.0.7390.37"
+  },
+  "durationSec": 54,
+  "netcache": {
+   "hits": 1,
+   "misses": 0,
+   "failed": 0
+  }
+ },
+ "results": [
+  {
+   "name": "node.e1",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 107.6,
+   "p90": 117.1,
+   "min": 105.4,
+   "max": 117.1,
+   "n": 7,
+   "samples": [
+    107.6,
+    117.1,
+    107.1,
+    111.1,
+    105.9,
+    105.4,
+    107.7
+   ],
+   "notes": "`node -e 1`; first run 153 ms"
+  },
+  {
+   "name": "node.repl.first_prompt",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 47.13,
+   "p90": 49.44,
+   "min": 41.77,
+   "max": 49.44,
+   "n": 7,
+   "samples": [
+    44.44,
+    45.68,
+    41.77,
+    49.44,
+    48.88,
+    48.76,
+    47.13
+   ],
+   "notes": "`node` typed at the terminal → the REPL's `> ` prompt on screen; the page's first REPL 55 ms"
+  },
+  {
+   "name": "node.require_builtins",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 106.6,
+   "p90": 115.5,
+   "min": 103.1,
+   "max": 115.5,
+   "n": 7,
+   "samples": [
+    108.7,
+    103.1,
+    106.6,
+    106.2,
+    115.5,
+    106.6,
+    110.2
+   ],
+   "notes": "require fs/path/events/util/stream/crypto/http; first run 107 ms"
+  },
+  {
+   "name": "node.script_file",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 104.7,
+   "p90": 118.7,
+   "min": 102.3,
+   "max": 118.7,
+   "n": 7,
+   "samples": [
+    116.5,
+    102.3,
+    103.2,
+    104.7,
+    118.7,
+    104.9,
+    104.7
+   ],
+   "notes": "`node hello.js` (requires os); first run 113 ms"
+  },
+  {
+   "name": "node.fs_200",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 111.9,
+   "p90": 118.8,
+   "min": 107.4,
+   "max": 118.8,
+   "n": 7,
+   "samples": [
+    118.8,
+    111.9,
+    112.4,
+    112.5,
+    109.5,
+    107.4,
+    111.8
+   ],
+   "notes": "write/read/stat 200 files, readdir, unlink them; first run 115 ms"
+  },
+  {
+   "name": "node.exec_sync_10",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 118.8,
+   "p90": 124.8,
+   "min": 105,
+   "max": 124.8,
+   "n": 7,
+   "samples": [
+    108.9,
+    119.8,
+    124.8,
+    122.2,
+    105,
+    109.5,
+    118.8
+   ],
+   "notes": "10 execSync('echo i') at the top level; first run 115 ms"
+  },
+  {
+   "name": "node.worker.e1",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 64.28,
+   "p90": 66.15,
+   "min": 63.44,
+   "max": 66.15,
+   "n": 7,
+   "samples": [
+    66.15,
+    64.86,
+    65.37,
+    63.98,
+    64.28,
+    63.9,
+    63.44
+   ],
+   "notes": "`node -e 1` as a kernel guest in a Worker; first run 162 ms"
+  },
+  {
+   "name": "node.worker.require_builtins",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 64.22,
+   "p90": 65.42,
+   "min": 63.96,
+   "max": 65.42,
+   "n": 7,
+   "samples": [
+    64.99,
+    64.21,
+    63.96,
+    65.42,
+    64.13,
+    64.57,
+    64.22
+   ],
+   "notes": "require fs/path/events/util/stream/crypto/http, as a guest; first run 70 ms"
+  },
+  {
+   "name": "node.worker.script_file",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 63.52,
+   "p90": 64.04,
+   "min": 63.21,
+   "max": 64.04,
+   "n": 7,
+   "samples": [
+    64.04,
+    63.52,
+    63.21,
+    63.89,
+    63.69,
+    63.44,
+    63.36
+   ],
+   "notes": "`node hello.js` as a guest; first run 67 ms"
+  },
+  {
+   "name": "node.worker.fs_200",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 82.77,
+   "p90": 98.51,
+   "min": 76.06,
+   "max": 98.51,
+   "n": 7,
+   "samples": [
+    83.01,
+    98.51,
+    81.16,
+    77.79,
+    88.43,
+    76.06,
+    82.77
+   ],
+   "notes": "write/read/stat 200 files, readdir, unlink them, as a guest; first run 98 ms"
+  },
+  {
+   "name": "node.worker.exec_sync_10",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 71.96,
+   "p90": 79.67,
+   "min": 71.16,
+   "max": 79.67,
+   "n": 7,
+   "samples": [
+    71.96,
+    71.7,
+    71.16,
+    79.67,
+    71.5,
+    73.6,
+    72.43
+   ],
+   "notes": "10 execSync('echo i') at the top level, really blocking as a guest; first run 83 ms"
+  },
+  {
+   "name": "claude.version",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 899.1,
+   "p90": 934.4,
+   "min": 827.8,
+   "max": 934.4,
+   "n": 7,
+   "samples": [
+    910.9,
+    899.1,
+    934.4,
+    912,
+    853.6,
+    870.2,
+    827.8
+   ],
+   "notes": "`claude --npm --version` (the npm build: loads its cli.js bundle); first run 2080 ms"
+  },
+  {
+   "name": "claude.worker.version",
+   "suite": "node",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 801.4,
+   "p90": 826.6,
+   "min": 747.1,
+   "max": 826.6,
+   "n": 7,
+   "samples": [
+    802.2,
+    788.1,
+    794.4,
+    801.4,
+    815.3,
+    826.6,
+    747.1
+   ],
+   "notes": "`claude --npm --version` with node as a kernel guest in a Worker; first run 1993 ms"
+  }
+ ]
+}

@@ -342,6 +342,29 @@ w.terminate();
     expect(r.out).toBe('fast0,fast1,fast2,fast3,fast4\n');
   }, 60_000);
 
+  it('a worker whose guest ended cleanly runs the next node (warm); a killed one is not reused', async () => {
+    // the realm carries over, as the page's does for in-page node
+    let r = await sh(`node -e 'globalThis.__poolProbe = (globalThis.__poolProbe || 0) + 1; console.log(globalThis.__poolProbe)' < /dev/null; node -e 'console.log(globalThis.__poolProbe)' < /dev/null`);
+    expect(r.out).toBe('1\n1\n'); // the second run saw the first's global: the same worker
+    // a guest killed mid-run: its worker is gone, the next node starts fresh
+    r = await sh(`node -e 'globalThis.__poolKilled = 1; setInterval(() => {}, 1000)' < /dev/null & sleep 0.5; kill -9 %1; wait; node -e 'console.log(String(globalThis.__poolKilled))' < /dev/null`);
+    expect(r.out.trim().split('\n').pop()).toBe('undefined');
+  }, 60_000);
+
+  it("pbcopy from a guest reaches the page's clipboard", async () => {
+    let copied: string | null = null;
+    const nav: any = globalThis.navigator;
+    const had = Object.getOwnPropertyDescriptor(nav, 'clipboard');
+    Object.defineProperty(nav, 'clipboard', { value: { writeText: async (t: string) => { copied = t; } }, configurable: true });
+    try {
+      await sh(`node -e 'const c = require("child_process").spawn("pbcopy"); c.stdin.write("from the guest"); c.stdin.end()' < /dev/null`);
+      for (let i = 0; i < 100 && copied === null; i++) await new Promise((r) => setTimeout(r, 10));
+      expect(copied).toBe('from the guest');
+    } finally {
+      if (had) Object.defineProperty(nav, 'clipboard', had); else delete nav.clipboard;
+    }
+  }, 60_000);
+
   it('stdin from a pipe; async exec', async () => {
     const r = await sh(`printf 'a\\nb\\n' | node -e '
       let t = ""; process.stdin.on("data", (d) => t += d).on("end", () => {

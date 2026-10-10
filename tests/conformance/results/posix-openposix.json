@@ -1,23 +1,14 @@
 {
  "suite": "Open POSIX Test Suite",
  "title": "POSIX: Open POSIX Test Suite under Blink (x86-64)",
- "note": "The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scripts/conformance/build-openposix.sh) run as static x86-64 kernel processes in the Blink engine: signals, pthreads, semaphores, message queues, timers, clocks, mmap, scheduling. A test passes when it exits 0; only tests that pass natively on the build host as uid 1000 are scored (openposix/native-baseline.json). First run: 1173/1448, with Blink 0080\u20130084 built locally (raise(SIGKILL) and sigqueue/AIO fixed from this suite); the gaps are POSIX message queues (mq_*), POSIX timers (timer_*), sigwait/sigtimedwait, sched_* policies and shm_open. \u2192 1326/1448 (kernel POSIX message queues and timers, Blink 0086\u20130092 built locally: mq_*, timer_*, sigtimedwait/sigwait, sched_*; sigqueue waits on siginfo in Blink's handler frames; fork_21-1 and pthread_attr_destroy_1-1 hit a Blink page-lock assertion).",
+ "note": "The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scripts/conformance/build-openposix.sh) run as static x86-64 kernel processes in the Blink engine: signals, pthreads, semaphores, message queues, timers, clocks, mmap, scheduling. A test passes when it exits 0; only tests that pass natively on the build host as uid 1000 are scored (openposix/native-baseline.json). First run: 1173/1448, with Blink 0080–0084 built locally (raise(SIGKILL) and sigqueue/AIO fixed from this suite); the gaps are POSIX message queues (mq_*), POSIX timers (timer_*), sigwait/sigtimedwait, sched_* policies and shm_open. → 1326/1448 (kernel POSIX message queues and timers, Blink 0086–0089 and 0093 built locally: mq_*, timer_*, sigtimedwait/sigwait, sched_*; sigqueue waits on siginfo in Blink's handler frames; fork_21-1 and pthread_attr_destroy_1-1 hit a Blink page-lock assertion, fixed in perf-blink's 0092). → 1353/1448 with perf-blink's Blink 0092 (fork keeps page lock counts) and 0095 (siginfo in SA_SIGINFO frames, real-time signals queue): sigqueue, sigwait/sigwaitinfo, fork_21-1, pthread_attr_destroy_1-1, lio_listio and aio_* now pass. Left: shm_open and mmap of shared objects, mlock*, pthread_cancel and cancellation points, process-shared pthread objects, pthread_kill interrupting another thread's call (mq_timedsend_12-1).",
  "files": {
   "aio_cancel": {
-   "pass": 7,
+   "pass": 9,
    "total": 11,
    "failures": [
     {
-     "name": "aio_cancel_3-1",
-     "reason": "exit 131: "
-    },
-    {
      "name": "aio_cancel_5-1",
-     "reason": "timeout: ",
-     "timeout": true
-    },
-    {
-     "name": "aio_cancel_6-1",
      "reason": "timeout: ",
      "timeout": true
     },
@@ -49,20 +40,12 @@
    "failures": []
   },
   "aio_suspend": {
-   "pass": 1,
+   "pass": 3,
    "total": 4,
    "failures": [
     {
      "name": "aio_suspend_1-1",
      "reason": "UNRESOLVED: aio_suspend/1-1.c Error at write(): No such file or directory"
-    },
-    {
-     "name": "aio_suspend_4-1",
-     "reason": "exit 131: "
-    },
-    {
-     "name": "aio_suspend_9-1",
-     "reason": "exit 131: "
     }
    ]
   },
@@ -127,7 +110,7 @@
    "failures": []
   },
   "fork": {
-   "pass": 10,
+   "pass": 11,
    "total": 16,
    "failures": [
     {
@@ -137,10 +120,6 @@
     {
      "name": "fork_18-1",
      "reason": "UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/18-1.c unresolved: got 22 (Invalid argument) on line 87 (Failed to create a ti"
-    },
-    {
-     "name": "fork_21-1",
-     "reason": "exit 134: \t<blink backtrace unavailable>"
     },
     {
      "name": "fork_22-1",
@@ -188,38 +167,9 @@
    "failures": []
   },
   "lio_listio": {
-   "pass": 8,
+   "pass": 15,
    "total": 15,
-   "failures": [
-    {
-     "name": "lio_listio_10-1",
-     "reason": "exit 131: "
-    },
-    {
-     "name": "lio_listio_14-1",
-     "reason": "exit 131: "
-    },
-    {
-     "name": "lio_listio_15-1",
-     "reason": "exit 131: "
-    },
-    {
-     "name": "lio_listio_2-1",
-     "reason": "exit 132: "
-    },
-    {
-     "name": "lio_listio_3-1",
-     "reason": "exit 131: "
-    },
-    {
-     "name": "lio_listio_4-1",
-     "reason": "exit 132: "
-    },
-    {
-     "name": "lio_listio_7-1",
-     "reason": "exit 131: "
-    }
-   ]
+   "failures": []
   },
   "localtime": {
    "pass": 1,
@@ -399,14 +349,9 @@
    ]
   },
   "pthread_attr_destroy": {
-   "pass": 2,
+   "pass": 3,
    "total": 3,
-   "failures": [
-    {
-     "name": "pthread_attr_destroy_1-1",
-     "reason": "exit 134: "
-    }
-   ]
+   "failures": []
   },
   "pthread_attr_getdetachstate": {
    "pass": 2,
@@ -691,22 +636,13 @@
    "failures": []
   },
   "pthread_create": {
-   "pass": 11,
+   "pass": 13,
    "total": 14,
    "failures": [
-    {
-     "name": "pthread_create_1-3",
-     "reason": "timeout: Test FAILED: Alarm fired while waiting for cancelation",
-     "timeout": true
-    },
     {
      "name": "pthread_create_11-1",
      "reason": "timeout: ",
      "timeout": true
-    },
-    {
-     "name": "pthread_create_3-2",
-     "reason": "UNRESOLVED: )"
     }
    ]
   },
@@ -747,13 +683,9 @@
    "failures": []
   },
   "pthread_join": {
-   "pass": 4,
+   "pass": 5,
    "total": 8,
    "failures": [
-    {
-     "name": "pthread_join_1-2",
-     "reason": "UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/pthread_join/1-2.c unresolved: got 3 (No such process) on line 98 (Failed to create"
-    },
     {
      "name": "pthread_join_3-1",
      "reason": "timeout: ",
@@ -761,11 +693,13 @@
     },
     {
      "name": "pthread_join_4-1",
-     "reason": "UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/pthread_join/4-1.c unresolved: got 3 (No such process) on line 114 (Failed to creat"
+     "reason": "timeout: ",
+     "timeout": true
     },
     {
      "name": "pthread_join_6-3",
-     "reason": "UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/pthread_join/6-3.c unresolved: got 3 (No such process) on line 142 (Failed to creat"
+     "reason": "timeout: ",
+     "timeout": true
     }
    ]
   },
@@ -793,7 +727,8 @@
     },
     {
      "name": "pthread_kill_8-1",
-     "reason": "exit 139: "
+     "reason": "timeout: ",
+     "timeout": true
     }
    ]
   },
@@ -803,14 +738,9 @@
    "failures": []
   },
   "pthread_mutex_getprioceiling": {
-   "pass": 3,
+   "pass": 4,
    "total": 4,
-   "failures": [
-    {
-     "name": "pthread_mutex_getprioceiling_3-3",
-     "reason": "exit 134: The futex facility returned an unexpected error code."
-    }
-   ]
+   "failures": []
   },
   "pthread_mutex_init": {
    "pass": 5,
@@ -946,14 +876,9 @@
    "failures": []
   },
   "pthread_rwlock_timedwrlock": {
-   "pass": 5,
+   "pass": 6,
    "total": 6,
-   "failures": [
-    {
-     "name": "pthread_rwlock_timedwrlock_6-1",
-     "reason": "FAIL: Test FAILED: Timeout was for 5 seconds, but waited for 4.999750 seconds instead"
-    }
-   ]
+   "failures": []
   },
   "pthread_rwlock_tryrdlock": {
    "pass": 1,
@@ -1257,7 +1182,7 @@
    "failures": []
   },
   "sigaction": {
-   "pass": 496,
+   "pass": 497,
    "total": 500,
    "failures": [
     {
@@ -1273,10 +1198,6 @@
     {
      "name": "sigaction_21-1",
      "reason": "FAIL: Test FAILED"
-    },
-    {
-     "name": "sigaction_29-1",
-     "reason": "exit 160: "
     }
    ]
   },
@@ -1355,12 +1276,13 @@
    ]
   },
   "sigqueue": {
-   "pass": 5,
+   "pass": 10,
    "total": 13,
    "failures": [
     {
      "name": "sigqueue_1-1",
-     "reason": "FAIL: Test FAILED"
+     "reason": "timeout: ",
+     "timeout": true
     },
     {
      "name": "sigqueue_12-1",
@@ -1369,26 +1291,6 @@
     {
      "name": "sigqueue_3-1",
      "reason": "FAIL: Test FAILED: sigqueue() succeeded even though this program's user id did not match the recieving process's user id"
-    },
-    {
-     "name": "sigqueue_4-1",
-     "reason": "exit 130: "
-    },
-    {
-     "name": "sigqueue_5-1",
-     "reason": "exit 130: "
-    },
-    {
-     "name": "sigqueue_6-1",
-     "reason": "exit 130: "
-    },
-    {
-     "name": "sigqueue_7-1",
-     "reason": "exit 160: "
-    },
-    {
-     "name": "sigqueue_8-1",
-     "reason": "exit 130: "
     }
    ]
   },
@@ -1413,35 +1315,22 @@
    "failures": []
   },
   "sigwait": {
-   "pass": 6,
+   "pass": 7,
    "total": 8,
    "failures": [
     {
      "name": "sigwait_2-1",
      "reason": "FAIL: Test FAILED"
-    },
-    {
-     "name": "sigwait_6-2",
-     "reason": "FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/sigwait/6-2.c FAILED: Unexpected number of threads awaken"
     }
    ]
   },
   "sigwaitinfo": {
-   "pass": 5,
+   "pass": 7,
    "total": 8,
    "failures": [
     {
      "name": "sigwaitinfo_3-1",
      "reason": "FAIL: Test FAILED"
-    },
-    {
-     "name": "sigwaitinfo_7-1",
-     "reason": "FAIL: Test FAILED: The queued value 0 was dequeued before the queued value 5 even though 5 was queued first."
-    },
-    {
-     "name": "sigwaitinfo_8-1",
-     "reason": "timeout: ",
-     "timeout": true
     }
    ]
   },

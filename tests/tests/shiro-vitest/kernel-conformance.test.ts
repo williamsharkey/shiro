@@ -383,6 +383,155 @@ describe('kernel syscalls found by LTP', () => {
     await kernel.syscall(proc, A.SYS_wait4, [t.pid, 0], new Uint8Array(8));
   });
 
+  it('Open POSIX sigwaitinfo_3-1: a signal the wait names is the wait\'s even when not blocked; the mask comes back', async () => {
+    const t = kernel.vfork(proc);
+    t.dispositions.set(A.SIGUSR1, 0x1234);
+    const d = new Uint8Array(A.SIGINFO_SIZE);
+    new DataView(d.buffer).setUint32(0, 1 << (A.SIGUSR1 - 1), true);
+    const waiting = kernel.syscall(t, A.SYS_rt_sigtimedwait, [2000], d);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(t.sigmask.has(A.SIGUSR1)).toBe(true);
+    expect(kernel.kill(t.pid, A.SIGUSR1, proc)).toBe(0);
+    expect(await waiting).toBe(A.SIGUSR1);
+    expect(A.decodeSiginfo(d)).toMatchObject({ signo: A.SIGUSR1, code: A.SI_USER, pid: proc.pid });
+    // no handler runs, and SIGUSR1 is unblocked again
+    expect(t.pendingSignals.has(A.SIGUSR1)).toBe(false);
+    expect(t.sigmask.has(A.SIGUSR1)).toBe(false);
+    // one that came for the handler after the wait ended goes to it
+    expect(await kernel.syscall(t, A.SYS_rt_sigtimedwait, [0], d)).toBe(-A.EAGAIN);
+    kernel.kill(t.pid, A.SIGUSR1, proc);
+    expect(t.pendingSignals.has(A.SIGUSR1)).toBe(true);
+    kernel.kill(t.pid, A.SIGKILL);
+    await kernel.syscall(proc, A.SYS_wait4, [t.pid, 0], new Uint8Array(8));
+  });
+
+  it('Open POSIX sigaction_21-1: with SA_NOCLDWAIT or SIGCHLD ignored, children leave no zombie and wait is ECHILD', async () => {
+    const z = new Uint8Array(8);
+    for (const how of ['nocldwait', 'ignore'] as const) {
+      const parent = kernel.vfork(proc);
+      const act = new Uint8Array(A.SIGACTION_SIZE * 2);
+      const dv = new DataView(act.buffer);
+      dv.setUint32(0, how === 'ignore' ? A.SIG_IGN : 0x4000, true);
+      dv.setUint32(8, how === 'nocldwait' ? A.SA_NOCLDWAIT : 0, true);
+      expect(await kernel.syscall(parent, A.SYS_rt_sigaction, [A.SIGCHLD, 1, 0], act)).toBe(0);
+      const child = kernel.vfork(parent);
+      const waiting = kernel.syscall(parent, A.SYS_wait4, [-1, 0], z);
+      await new Promise((r) => setTimeout(r, 10));
+      await kernel.exit(child, 0);
+      expect(kernel.procs.has(child.pid)).toBe(false);
+      expect(await waiting).toBe(-A.ECHILD);
+      expect(await kernel.syscall(parent, A.SYS_wait4, [-1, A.WNOHANG], z)).toBe(-A.ECHILD);
+      kernel.kill(parent.pid, A.SIGKILL);
+      await kernel.syscall(proc, A.SYS_wait4, [parent.pid, 0], z);
+    }
+  });
+
+  it('Open POSIX timer_getoverrun_2-3: overruns of a signal discarded at unblock stay reported while the timer runs on', async () => {
+    const t = kernel.vfork(proc);
+    kernel.setSigmask(t, new Set([A.SIGCONT]));
+    const sev = new Uint8Array(24); new DataView(sev.buffer).setInt32(8, A.SIGCONT, true);
+    const id = await kernel.syscall(t, A.SYS_timer_create, [1, 1], sev);
+    const its = new Uint8Array(32); const iv = new DataView(its.buffer);
+    iv.setBigInt64(8, 2_000_000n, true); iv.setBigInt64(24, 2_000_000n, true);
+    expect(await kernel.syscall(t, A.SYS_timer_settime, [id, 0], its)).toBe(0);
+    await new Promise((r) => setTimeout(r, 80));
+    kernel.setSigmask(t, new Set());
+    const first = await kernel.syscall(t, A.SYS_timer_getoverrun, [id], new Uint8Array(8));
+    expect(first).toBeGreaterThan(10);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(await kernel.syscall(t, A.SYS_timer_getoverrun, [id], new Uint8Array(8))).toBe(first);
+    expect(await kernel.syscall(t, A.SYS_timer_delete, [id], new Uint8Array(8))).toBe(0);
+    kernel.kill(t.pid, A.SIGKILL);
+    await kernel.syscall(proc, A.SYS_wait4, [t.pid, 0], new Uint8Array(8));
+  });
+
+  it('Open POSIX sigaction_10-1: SIGCHLD says what happened to the child (CLD_STOPPED, CLD_CONTINUED, CLD_EXITED), with or without job control; SA_NOCLDSTOP', async () => {
+    const z = new Uint8Array(8);
+    const take = async (p: Process) => {
+      const d = new Uint8Array(A.SIGINFO_SIZE);
+      new DataView(d.buffer).setUint32(0, 1 << (A.SIGCHLD - 1), true);
+      const got = await kernel.syscall(p, A.SYS_rt_sigtimedwait, [500], d);
+      const i = A.decodeSiginfo(d);
+      return got < 0 ? got : `${i.code}:${i.status}:${i.pid}`;
+    };
+    for (const jc of [false, true]) {
+      const detach = jc ? attachKernel(kernel, new JobControl()) : () => {};
+      try {
+        const parent = kernel.vfork(proc);
+        kernel.setSigmask(parent, new Set([A.SIGCHLD]));
+        const child = kernel.vfork(parent);
+        kernel.kill(child.pid, A.SIGSTOP, parent);
+        expect(await take(parent)).toBe(`${A.CLD_STOPPED}:${A.SIGSTOP}:${child.pid}`);
+        kernel.kill(child.pid, A.SIGCONT, parent);
+        expect(await take(parent)).toBe(`${A.CLD_CONTINUED}:${A.SIGCONT}:${child.pid}`);
+        // SA_NOCLDSTOP: no report for a stop or a continue, only the exit
+        const act = new Uint8Array(A.SIGACTION_SIZE * 2);
+        new DataView(act.buffer).setUint32(8, A.SA_NOCLDSTOP, true);
+        expect(await kernel.syscall(parent, A.SYS_rt_sigaction, [A.SIGCHLD, 1, 0], act)).toBe(0);
+        kernel.kill(child.pid, A.SIGSTOP, parent);
+        kernel.kill(child.pid, A.SIGCONT, parent);
+        await kernel.exit(child, A.W_EXITCODE(3));
+        expect(await take(parent)).toBe(`${A.CLD_EXITED}:3:${child.pid}`);
+        expect(await take(parent)).toBe(-A.EAGAIN);
+        await kernel.syscall(parent, A.SYS_wait4, [child.pid, 0], z);
+        kernel.kill(parent.pid, A.SIGKILL);
+        await kernel.syscall(proc, A.SYS_wait4, [parent.pid, 0], z);
+      } finally { detach(); }
+    }
+  });
+
+  it('Open POSIX shm_open_32-1/34-1: a file whose owner bits deny the access is EACCES to open (not to root)', async () => {
+    const z = new Uint8Array(8);
+    const op = (p: Process, path: string, flags: number, mode = 0) =>
+      kernel.syscall(p, A.SYS_openat, [A.AT_FDCWD, L(path), flags, mode], enc.encode(path));
+    const name = '/dev/shm/perm_' + Date.now();
+    let fd = await op(proc, name, A.O_RDWR | A.O_CREAT, 0);
+    expect(fd).toBeGreaterThanOrEqual(0); // creating it is allowed whatever its mode
+    await kernel.syscall(proc, A.SYS_close, [fd], z);
+    expect(await op(proc, name, A.O_RDWR)).toBe(-A.EACCES);
+    expect(await op(proc, name, A.O_RDONLY)).toBe(-A.EACCES);
+    await fs.chmod(name, 0o400);
+    fd = await op(proc, name, A.O_RDONLY);
+    expect(fd).toBeGreaterThanOrEqual(0);
+    await kernel.syscall(proc, A.SYS_close, [fd], z);
+    expect(await op(proc, name, A.O_RDWR | A.O_TRUNC)).toBe(-A.EACCES);
+    expect(await op(proc, name, A.O_WRONLY)).toBe(-A.EACCES);
+    // root opens it anyway
+    const root = kernel.vfork(proc);
+    root.uid = 0; root.ruid = 0; root.suid = 0;
+    fd = await op(root, name, A.O_RDWR);
+    expect(fd).toBeGreaterThanOrEqual(0);
+    kernel.kill(root.pid, A.SIGKILL);
+    await kernel.syscall(proc, A.SYS_wait4, [root.pid, 0], z);
+    await fs.unlink(name);
+  });
+
+  it('Open POSIX sigqueue_3-1/12-1, LTP kill05: signalling another user\'s process (or init) is EPERM', async () => {
+    const t = kernel.vfork(proc), other = kernel.vfork(proc);
+    other.uid = 0; other.ruid = 0; other.suid = 0;
+    const z = new Uint8Array(8);
+    const sq = (from: Process, pid: number, signo: number) => {
+      const si = new Uint8Array(A.SIGINFO_SIZE);
+      A.encodeSiginfo({ signo, code: A.SI_QUEUE, pid: from.pid, uid: from.uid }, si);
+      return kernel.syscall(from, A.SYS_rt_sigqueueinfo, [pid, signo], si);
+    };
+    // init stands in for Linux's root-owned pid 1
+    expect(await kernel.syscall(t, A.SYS_kill, [1, 0], z)).toBe(-A.EPERM);
+    expect(await sq(t, 1, 0)).toBe(-A.EPERM);
+    expect(await kernel.syscall(t, A.SYS_kill, [other.pid, 0], z)).toBe(-A.EPERM);
+    expect(await sq(t, other.pid, 0)).toBe(-A.EPERM);
+    // the same user's process, a saved uid that matches, root, and SIGCONT within a session
+    expect(await kernel.syscall(t, A.SYS_kill, [proc.pid, 0], z)).toBe(0);
+    expect(await kernel.syscall(other, A.SYS_kill, [t.pid, 0], z)).toBe(0);
+    other.suid = 1000;
+    expect(await kernel.syscall(t, A.SYS_kill, [other.pid, 0], z)).toBe(0);
+    other.suid = 0;
+    expect(await kernel.syscall(t, A.SYS_kill, [other.pid, A.SIGCONT], z)).toBe(other.sid === t.sid ? 0 : -A.EPERM);
+    // the kernel's own sends (from init) are always allowed
+    expect(kernel.kill(other.pid, 0)).toBe(0);
+    for (const p of [t, other]) { kernel.kill(p.pid, A.SIGKILL); await kernel.syscall(proc, A.SYS_wait4, [p.pid, 0], z); }
+  });
+
   it('signals routed through job control keep their siginfo (sigwaitinfo sees kill as SI_USER, sigqueue values queue)', async () => {
     const jc = new JobControl();
     const detach = attachKernel(kernel, jc);

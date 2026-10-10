@@ -1,0 +1,31 @@
+From 1ae3b95e45625e8040dbc322657b790207e82cc6 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 06:25:26 +0000
+Subject: [PATCH] Shiro: mprotect(PROT_WRITE) leaves the page readable, as mmap
+ does
+
+x86 has no write-only pages, and mmap's Prot2Page gives PROT_WRITE
+PAGE_U; SetProtection (mprotect, and a writable shared mapping of a
+kernel file) gave PAGE_RW alone, so the guest's first write faulted
+(Open POSIX shm_open_1-1: mmap(PROT_WRITE, MAP_SHARED) then strcpy).
+---
+ blink/memorymalloc.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/blink/memorymalloc.c b/blink/memorymalloc.c
+index 98ac836..8da4e5a 100644
+--- a/blink/memorymalloc.c
++++ b/blink/memorymalloc.c
+@@ -1306,7 +1306,8 @@ int GetProtection(u64 key) {
+ u64 SetProtection(int prot) {
+   u64 key = 0;
+   if (prot & PROT_READ) key |= PAGE_U;
+-  if (prot & PROT_WRITE) key |= PAGE_RW;
++  // (x86 has no write-only pages: PROT_WRITE is readable too, as mmap's Prot2Page)
++  if (prot & PROT_WRITE) key |= PAGE_RW | PAGE_U;
+   if (~prot & PROT_EXEC) key |= PAGE_XD;
+   return key;
+ }
+-- 
+2.43.0
+

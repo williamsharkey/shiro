@@ -3515,6 +3515,13 @@ export class Shell {
         if (!_builtinDisabled && effectiveCmdName === 'set') {
           // Check for -- to set positional parameters; the first word that isn't an
           // option (set a b c) starts them too, as does a lone - (set - a b)
+          // Bundled flags are single ones (-euo pipefail = -e -u -o pipefail): each
+          // o takes the next word as its option name, as in bash
+          {
+            const end = cmdArgs.indexOf('--');
+            const head = (end < 0 ? cmdArgs : cmdArgs.slice(0, end)).flatMap((a) => /^[-+][A-Za-z]{2,}$/.test(a) && a.includes('o') ? [...a.slice(1)].map((c) => a[0] + c) : [a]);
+            cmdArgs.splice(0, end < 0 ? cmdArgs.length : end, ...head);
+          }
           let ddIdx = cmdArgs.indexOf('--');
           if (ddIdx < 0) {
             let k = 0;
@@ -7145,8 +7152,10 @@ export class Shell {
   private async execIf(
     input: string, writeStdout: (s: string) => void, writeStderr: (s: string) => void
   ): Promise<number> {
-    // Normalize to semicolons for easier parsing
-    const joined = input.replace(/\r?\n/g, '; ').replace(/;\s*;/g, ';');
+    // Normalize to semicolons for easier parsing: a newline separates commands,
+    // except after a case item's terminator (;; ;& ;;&), which must survive
+    // whole (collapsing `;;` to `;` broke every case with two items in an if)
+    const joined = input.replace(/(;;&?|;&)?[ \t]*\r?\n/g, (_m, term) => (term ? `${term} ` : '; ')).replace(/;\s+;/g, ';');
 
     // Parse if/elif/else/fi with depth tracking for nested if blocks
     interface IfBranch { condition: string; body: string; }

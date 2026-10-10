@@ -11,6 +11,10 @@ import { BufferFile, type OpenFile } from '../kernel/fd';
 import type { Kernel, Runner } from '../kernel/kernel';
 import { attachThread, webWorker, workerRunner, type GuestThread, type GuestWorker } from '../kernel/worker-host';
 import { installNodeWorkerBoot, nodeWorkerFactory, nodeWorkerMode } from './boot';
+import { isStartMessage } from '../kernel/channel';
+
+/** (guest.ts writes it; the value only, so the page doesn't load the guest's code) */
+const EXITING_MARK = 0x45584954;
 import type { Process } from '../kernel/process';
 
 export { setNodeWorkerFactory, nodeWorkerMode } from './boot';
@@ -47,6 +51,10 @@ function wire(w: GuestWorker, proc: Process, kernel: Kernel): void {
     switch (m?.type) {
       case 'node-guest-listen':
         if (typeof m.port === 'number') openPreview(m.port);
+        return;
+      case 'node-guest-clipboard':
+        // (pbcopy, xclip, wl-copy from the guest: the page's clipboard)
+        if (typeof m.text === 'string' && typeof navigator !== 'undefined') navigator.clipboard?.writeText(m.text).catch(() => {});
         return;
       case 'node-guest-watch': {
         // fs.watch in the guest: the filesystem's changes (every process's writes) go to it
@@ -96,10 +104,83 @@ function wire(w: GuestWorker, proc: Process, kernel: Kernel): void {
   });
 }
 
+/**
+ * Finished guests' workers, kept for the next node: a worker that ended its
+ * guest cleanly (exit_group, then back to its event loop: 'node-guest-idle')
+ * runs the next one with its module and transform caches warm (claude's 13 MB
+ * cli.js transforms once, as in the page) and no Worker start-up. One that
+ * was killed, or doesn't come back within a second, is terminated.
+ */
+interface Pooled {
+  w: GuestWorker;
+  lease: Lease | null;
+  /** terminate() came; waiting for the guest to say it's idle */
+  returning: ReturnType<typeof setTimeout> | null;
+}
+interface Lease { msg: ((m: unknown) => void)[]; err: ((e: unknown) => void)[]; exit: ((c: number) => void)[] }
+const idle: Pooled[] = [];
+const MAX_IDLE = 2;
+
+function discard(p: Pooled): void {
+  if (p.returning) clearTimeout(p.returning);
+  p.returning = null;
+  p.lease = null;
+  const i = idle.indexOf(p);
+  if (i >= 0) idle.splice(i, 1);
+  try { void p.w.terminate(); } catch { /* gone */ }
+}
+
+function pooledWorker(): Pooled {
+  const reused = idle.pop();
+  if (reused) return reused;
+  const p: Pooled = { w: createNodeWorker(), lease: null, returning: null };
+  const giveBack = () => {
+    if (p.returning) clearTimeout(p.returning);
+    p.returning = null;
+    if (idle.includes(p)) return;
+    if (idle.length < MAX_IDLE) idle.push(p); else discard(p);
+  };
+  p.w.onMessage((m: any) => {
+    if (m?.type === 'node-guest-idle') { if (p.returning) giveBack(); return; }
+    p.lease?.msg.forEach((cb) => cb(m));
+  });
+  p.w.onError((e) => { const l = p.lease; discard(p); l?.err.forEach((cb) => cb(e)); });
+  p.w.onExit?.((c) => { const l = p.lease; discard(p); l?.exit.forEach((cb) => cb(c)); });
+  return p;
+}
+
+/** Terminate the idle workers (tests swapping the worker factory) */
+export function drainNodeWorkerPool(): void {
+  for (const p of [...idle]) discard(p);
+}
+
+/** One process's use of a pooled worker, as the GuestWorker workerRunner drives */
+function lease(p: Pooled): GuestWorker {
+  const l: Lease = { msg: [], err: [], exit: [] };
+  p.lease = l;
+  let sab: SharedArrayBuffer | null = null;
+  return {
+    postMessage: (m) => { if (isStartMessage(m)) sab = m.sab; p.w.postMessage(m); },
+    onMessage: (cb) => { l.msg.push(cb); },
+    onError: (cb) => { l.err.push(cb); },
+    onExit: (cb) => { l.exit.push(cb); },
+    // The process is over: back to the pool if the guest ended itself, else gone
+    terminate: () => {
+      if (p.lease !== l) return;
+      p.lease = null;
+      // A guest that ended itself (its mark in the channel) is back at its event loop in a moment
+      // and takes the next start message then: lend it at once. Any other waits for 'idle', or goes.
+      const w = sab ? new Int32Array(sab) : null;
+      if (w && Atomics.load(w, w.length - 1) === EXITING_MARK) { if (idle.length < MAX_IDLE) idle.push(p); else discard(p); return; }
+      p.returning = setTimeout(() => discard(p), 1000);
+    },
+  };
+}
+
 /** The kernel Runner: the process's program is a node guest worker */
 export function nodeWorkerRunner(): Runner {
   return (proc, kernel) => workerRunner((p) => {
-    const w = createNodeWorker();
+    const w = lease(pooledWorker());
     wire(w, p, kernel);
     return w;
   }, { dataSize: 1 << 20 })(proc, kernel);
