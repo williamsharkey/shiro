@@ -173,6 +173,60 @@ describe.skipIf(!existsSync(CHROME))('GL on WebGL2 in Chromium', () => {
       expect(px(f, W - 5, H / 2)).toEqual([0, 0, 0, 255]);
     });
 
+    it('draws client-memory vertex arrays and indices the guest uploads before each draw', async () => {
+      const id = await start();
+      const bytes = (a: ArrayBufferView) => new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+      // two triangles' worth of vertices: a left quad (0-3) and a right quad (4-7), interleaved xy + rgba bytes
+      const quad = (x0: number, x1: number) => [[x0, -1], [x1, -1], [x1, 1], [x0, 1]];
+      const xy = new Float32Array([...quad(-1, 0), ...quad(0, 1)].flat());
+      const rgba = new Uint8Array([...Array(4).fill([255, 0, 255, 255]), ...Array(4).fill([0, 255, 255, 255])].flat());
+      const CLIENT = 0x10000; // a guest address: meaningless to the page
+      await run(id, 1, [
+        ['glClear', 0x4000],
+        ['glEnableClientState', 0x8074], ['glEnableClientState', 0x8076], // VERTEX_ARRAY, COLOR_ARRAY
+        ['glVertexPointer', 2, 0x1406, 0, CLIENT], ['glColorPointer', 4, 0x1401, 0, CLIENT],
+        // the right quad by glDrawArrays(first 4): only vertices 4-7 come, at their offsets
+        ['glClientUploadArray', 0x8074, 0, 4 * 8, bytes(xy.subarray(8))], ['glClientUploadArray', 0x8076, 0, 4 * 4, rgba.subarray(16)],
+        ['glDrawArrays', 6 /* TRIANGLE_FAN */, 4, 4],
+        // the left quad by client indices, as GL_QUADS (rewritten on the page)
+        ['glClientUploadArray', 0x8074, 0, 0, bytes(xy.subarray(0, 8))], ['glClientUploadArray', 0x8076, 0, 0, rgba.subarray(0, 16)],
+        ['glClientUploadArray', 0x8893, 0, 0, bytes(new Uint16Array([0, 1, 2, 3]))],
+        ['glDrawElements', 7 /* QUADS */, 4, 0x1403 /* UNSIGNED_SHORT */, 0],
+      ]);
+      const f = await swap(id);
+      expect(px(f, 4, H / 2)).toEqual([255, 0, 255, 255]);
+      expect(px(f, W - 5, H / 2)).toEqual([0, 255, 255, 255]);
+      // a display list keeps the vertices it was compiled with
+      await run(id, 1, [
+        ['glClear', 0x4000], ['glGenLists', 1, 3], ['glNewList', 3, 0x1300],
+        ['glClientUploadArray', 0x8074, 0, 0, bytes(xy.subarray(0, 8))], ['glClientUploadArray', 0x8076, 0, 0, rgba.subarray(16)],
+        ['glDrawArrays', 6, 0, 4], ['glEndList'],
+        ['glClientUploadArray', 0x8074, 0, 0, bytes(new Float32Array(8))], // overwritten after compiling
+        ['glCallList', 3],
+      ]);
+      const g = await swap(id, 2);
+      expect(px(g, 4, H / 2)).toEqual([0, 255, 255, 255]);
+      expect(px(g, W - 5, H / 2)).toEqual([0, 0, 0, 0]);
+    });
+
+    it('reads frames back asynchronously and acks each once its pixels are delivered', async () => {
+      const id = await page.evaluate(([w, h]) => (globalThis as any).glTest.execOpen(w, h, 'async-pixels') as number, [W, H] as const);
+      await run(id, 0, [['tcCreateContext', 1, 0, 2, 1, 0], ['tcMakeCurrent', 1, WIN, WIN, 0x100]]);
+      const r = await run(id, 1, [
+        ['glClearColor', 0, 0, 1, 1], ['glClear', 0x4000], ['tcSwapBuffers', WIN, 1],
+        ['glClearColor', 1, 1, 0, 1], ['glClear', 0x4000], ['tcSwapBuffers', WIN, 2],
+      ]);
+      const got = { frames: [...r.frames], out: [...r.out] };
+      for (let i = 0; i < 100 && got.frames.length < 2; i++) {
+        await new Promise((res) => setTimeout(res, 20));
+        const more = await page.evaluate((i) => (globalThis as any).glTest.execFrames(i), id) as typeof r;
+        got.frames.push(...more.frames); got.out.push(...more.out);
+      }
+      expect(got.frames.map((f) => px(f, 3, 3))).toEqual([[0, 0, 255, 255], [255, 255, 0, 255]]);
+      const acks = messages(got.out.map((o) => new Uint8Array(o))).filter((m) => m.kind === MSG_FRAME);
+      expect(acks.map((m) => new DataView(m.payload.buffer).getUint32(0, true))).toEqual([1, 2]);
+    });
+
     it('runs a legacy GLSL program with gl_Vertex and gl_FragColor', async () => {
       const id = await start();
       const enc = (s: string) => new TextEncoder().encode(s);

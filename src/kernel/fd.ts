@@ -698,6 +698,21 @@ export async function flushInode(fs: FileSystem, path: string): Promise<void> {
   await inodeTables.get(fs)?.get(path)?.flush();
 }
 
+/**
+ * A shared object's final bytes (shmobj.ts) go to `path`: into its open
+ * inode, if any, which fds read and which writes them back (writing the
+ * FileSystem behind it would be overwritten by its next write-back); only
+ * the bytes within the file's size. False when no inode is open.
+ */
+export function writeInodeBytes(fs: FileSystem, path: string, bytes: Uint8Array): boolean {
+  const ino = inodeTables.get(fs)?.get(path);
+  if (!ino || ino.unlinked) return false;
+  const n = Math.min(bytes.length, ino.size);
+  ino.data.set(bytes.subarray(0, n));
+  ino.touch();
+  return true;
+}
+
 /** chmod of `path`: an open inode reports (inodeStat) the new mode. */
 export function setInodeMode(fs: FileSystem, path: string, mode: number): void {
   const ino = inodeTables.get(fs)?.get(path);

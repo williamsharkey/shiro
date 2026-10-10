@@ -36,8 +36,12 @@ export interface ExecHost {
   drawableSize(xid: number): { width: number; height: number } | null;
   /** A finished frame for an X drawable. */
   present(xid: number, frame: Present): void;
-  /** How the host wants frames: pixels (readback) or bitmap (OffscreenCanvas). */
-  presentMode: 'pixels' | 'bitmap';
+  /**
+   * How the host wants frames: pixels (readback), async-pixels (readback into
+   * a pixel-pack buffer, delivered and acked when the GPU is done, so the
+   * page isn't blocked on the frame) or bitmap (OffscreenCanvas).
+   */
+  presentMode: 'pixels' | 'async-pixels' | 'bitmap';
   log?(msg: string): void;
 }
 
@@ -75,10 +79,11 @@ interface Drawable {
 }
 interface FBConfig { depth: boolean; stencil: boolean; samples: number; alpha: boolean; doublebuffer: boolean }
 
-interface ClientArray { enabled: boolean; size: number; type: number; normalized: boolean; stride: number; offset: number; buffer: number; integer: boolean; divisor: number }
+/** client: the pointer is guest memory; each draw's vertices come in glClientUploadArray first */
+interface ClientArray { enabled: boolean; size: number; type: number; normalized: boolean; stride: number; offset: number; buffer: number; integer: boolean; divisor: number; client: boolean }
 interface Vao { vao: WebGLVertexArrayObject | null; element: number; attribs: ClientArray[] }
 
-const newArray = (): ClientArray => ({ enabled: false, size: 4, type: E.FLOAT, normalized: false, stride: 0, offset: 0, buffer: 0, integer: false, divisor: 0 });
+const newArray = (): ClientArray => ({ enabled: false, size: 4, type: E.FLOAT, normalized: false, stride: 0, offset: 0, buffer: 0, integer: false, divisor: 0, client: false });
 
 /** WebGL2 capabilities glEnable passes straight through. */
 const WEBGL_CAPS = new Set([E.BLEND, E.CULL_FACE, E.DEPTH_TEST, E.DITHER, E.POLYGON_OFFSET_FILL, E.SAMPLE_ALPHA_TO_COVERAGE,
@@ -92,7 +97,8 @@ const NOT_IN_LISTS = new Set(['glNewList', 'glEndList', 'glGenLists', 'glDeleteL
   'glGenBuffers', 'glDeleteBuffers', 'glBindBuffer', 'glBufferData', 'glBufferSubData', 'glMapBuffer', 'glUnmapBuffer',
   'glCreateShader', 'glCreateProgram', 'glShaderSource', 'glCompileShader', 'glLinkProgram', 'glDeleteShader', 'glDeleteProgram',
   'glAttachShader', 'glDetachShader', 'glGenFramebuffers', 'glGenRenderbuffers', 'glGenQueries', 'glGenVertexArrays', 'glBindVertexArray',
-  'glFenceSync', 'glDeleteSync', 'glGetError', 'glGetString', 'glGetStringi', 'glGetProgramInfo', 'glGetShaderInfo', 'glClientUploadArray']);
+  'glFenceSync', 'glDeleteSync', 'glGetError', 'glGetString', 'glGetStringi', 'glGetProgramInfo', 'glGetShaderInfo']);
+// glClientUploadArray is recorded: GL reads client arrays when a list is compiled, so a list keeps its copy
 
 class Ctx {
   ff = new FFState();
@@ -176,10 +182,18 @@ export class Executor {
   private warned = new Set<string>();
   private immBuffer: WebGLBuffer;
   private immIndex: WebGLBuffer;
+  /** copies of client arrays, per attribute slot, and of client indices (glClientUploadArray) */
+  private streams: ({ buf: WebGLBuffer; size: number } | undefined)[] = [];
+  private streamIndex: { buf: WebGLBuffer; size: number } | null = null;
+  private streamIndexReady = false;
   private immVao: WebGLVertexArrayObject;
   private blitFbo: WebGLFramebuffer;
   readonly ext: Record<string, unknown> = {};
   frames = 0;
+  /** async-pixels frames on the GPU: read back into `pbo`, delivered when `sync` signals */
+  private inflight: { xid: number; frame: number; width: number; height: number; pbo: WebGLBuffer; sync: WebGLSync }[] = [];
+  private spare: { pbo: WebGLBuffer; size: number }[] = [];
+  private pumping = false;
   /** commands executed (for tests and stats) */
   executed = 0;
 
@@ -602,9 +616,12 @@ export class Executor {
 
   tcSwapBuffers(xid: number, frame: number) {
     const d = this.drawables.get(xid);
-    if (d) this.present(d);
     this.frames++;
-    this.host.send(message(MSG_FRAME, u32s(frame)));
+    if (d && this.host.presentMode === 'async-pixels') this.presentAsync(d, frame);
+    else {
+      if (d) this.present(d);
+      this.host.send(message(MSG_FRAME, u32s(frame)));
+    }
     // follow the window's size, as DRI does at swap
     if (d) {
       const size = this.host.drawableSize(xid);
@@ -645,6 +662,49 @@ export class Executor {
     gl.blitFramebuffer(0, 0, d.width, d.height, 0, 0, d.width, d.height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
     if (this.cur?.caps.has(E.SCISSOR_TEST)) gl.enable(gl.SCISSOR_TEST);
     return d.resolveFbo!;
+  }
+
+  /** Starts reading the frame back into a pixel-pack buffer; pump() delivers it (and its ack) when the GPU is done. */
+  private presentAsync(d: Drawable, frame: number) {
+    const gl = this.gl;
+    const size = d.width * d.height * 4;
+    const i = this.spare.findIndex((s) => s.size === size);
+    const pbo = i >= 0 ? this.spare.splice(i, 1)[0].pbo : gl.createBuffer()!;
+    const src = this.resolved(d);
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, src);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbo);
+    if (i < 0) gl.bufferData(gl.PIXEL_PACK_BUFFER, size, gl.STREAM_READ);
+    gl.readPixels(0, 0, d.width, d.height, gl.RGBA, gl.UNSIGNED_BYTE, 0);
+    const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0)!;
+    gl.flush();
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.cur ? this.bufObj(this.cur.pixelPack) : null);
+    if (this.cur) { this.bindDrawFb(this.cur); this.bindReadFb(this.cur); }
+    this.inflight.push({ xid: d.xid, frame, width: d.width, height: d.height, pbo, sync });
+    this.pump();
+  }
+  /** Delivers the frames whose readback finished, in order; polls again while some are on the GPU. */
+  private pump() {
+    const gl = this.gl;
+    while (this.inflight.length) {
+      const f = this.inflight[0];
+      const status = gl.clientWaitSync(f.sync, 0, 0);
+      if (status === gl.WAIT_FAILED || gl.isContextLost()) { this.inflight = []; return; } // the connection closed
+      if (status !== gl.ALREADY_SIGNALED && status !== gl.CONDITION_SATISFIED) break;
+      this.inflight.shift();
+      gl.deleteSync(f.sync);
+      const pixels = new Uint8Array(f.width * f.height * 4);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, f.pbo);
+      gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, pixels);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.cur ? this.bufObj(this.cur.pixelPack) : null);
+      this.spare.push({ pbo: f.pbo, size: pixels.length });
+      if (this.spare.length > 3) gl.deleteBuffer(this.spare.shift()!.pbo);
+      if (this.host.drawableSize(f.xid)) this.host.present(f.xid, { pixels, width: f.width, height: f.height });
+      this.host.send(message(MSG_FRAME, u32s(f.frame)));
+    }
+    if (this.inflight.length && !this.pumping) {
+      this.pumping = true;
+      setTimeout(() => { this.pumping = false; this.pump(); }, 2);
+    }
   }
 
   private present(d: Drawable) {
@@ -1786,8 +1846,8 @@ export class Executor {
     const c = this.cur; if (!c) return;
     if (index >= 16) { this.error(E.INVALID_VALUE); return; }
     const a = c.vao.attribs[index];
-    Object.assign(a, { size, type, normalized, stride, offset, buffer: c.arrayBuffer, integer });
-    if (!c.arrayBuffer) { this.warnOnce('client-side vertex arrays are not supported yet'); return; }
+    Object.assign(a, { size, type, normalized, stride, offset, buffer: c.arrayBuffer, integer, client: !c.arrayBuffer });
+    if (!c.arrayBuffer) return; // pointed at its copy when the vertices come (glClientUploadArray)
     if (type === E.DOUBLE) { this.warnOnce('double vertex attributes are not supported'); return; }
     if (integer) this.gl.vertexAttribIPointer(index, size, type, stride, offset);
     else this.gl.vertexAttribPointer(index, size, type, normalized, stride, offset);
@@ -1807,6 +1867,42 @@ export class Executor {
       case E.TEXTURE_COORD_ARRAY: return ATTR.TexCoord0 + Math.min(c.ff.clientActiveTexture, FF_TEXTURE_UNITS - 1);
     }
     return -1;
+  }
+  /**
+   * Vertices a draw reads from client memory (or its client indices), sent
+   * just before it: `which` is a generic attribute (< 16), a client array
+   * (GL_VERTEX_ARRAY…, `unit` for texture coordinates) or
+   * GL_ELEMENT_ARRAY_BUFFER. The bytes go at `offset` in a stream buffer, so
+   * vertex i is at i × stride as in guest memory.
+   */
+  glClientUploadArray(which: number, unit: number, offset: number, data: Uint8Array | null) {
+    const c = this.cur; if (!c || !data) return;
+    const gl = this.gl;
+    const grow = (s: { buf: WebGLBuffer; size: number } | null | undefined, target: number) => {
+      const need = offset + data.length;
+      if (!s) s = { buf: gl.createBuffer()!, size: 0 };
+      gl.bindBuffer(target, s.buf);
+      if (s.size < need) { s.size = Math.max(need, s.size * 2, 4096); gl.bufferData(target, s.size, gl.STREAM_DRAW); }
+      gl.bufferSubData(target, offset, data);
+      return s;
+    };
+    if (which === E.ELEMENT_ARRAY_BUFFER) {
+      // bound for the next draw only (drawElements puts the VAO's own back)
+      this.streamIndex = grow(this.streamIndex, gl.ELEMENT_ARRAY_BUFFER);
+      this.streamIndexReady = true;
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.bufObj(c.vao.element)); // VAO state: the draw binds the copy itself
+      return;
+    }
+    let slot = which < 16 ? which : this.clientSlot(which);
+    if (which === E.TEXTURE_COORD_ARRAY) slot = ATTR.TexCoord0 + Math.min(unit, FF_TEXTURE_UNITS - 1);
+    if (slot < 0 || slot >= 16) return;
+    const a = c.vao.attribs[slot];
+    if (!a.client) return;
+    this.streams[slot] = grow(this.streams[slot], gl.ARRAY_BUFFER);
+    if (a.type === E.DOUBLE) this.warnOnce('double vertex attributes are not supported');
+    else if (a.integer) gl.vertexAttribIPointer(slot, a.size, a.type, a.stride, 0);
+    else gl.vertexAttribPointer(slot, a.size === E.BGRA ? 4 : a.size, a.type, a.normalized, a.stride, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.bufObj(c.arrayBuffer));
   }
   glVertexAttribDivisor(i: number, d: number) { const c = this.cur; if (!c) return; c.vao.attribs[i].divisor = d; this.gl.vertexAttribDivisor(i, d); }
 
@@ -1842,9 +1938,19 @@ export class Executor {
   glDrawRangeElements(mode: number, _s: number, _e: number, count: number, type: number, offset: number) { this.drawElements(mode, count, type, offset, 0, 0); }
   glDrawRangeElementsBaseVertex(mode: number, _s: number, _e: number, count: number, type: number, offset: number, base: number) { this.drawElements(mode, count, type, offset, 0, base); }
   private drawElements(mode: number, count: number, type: number, offset: number, instances: number, baseVertex: number) {
+    const streamed = this.streamIndexReady;
+    this.streamIndexReady = false;
     const c = this.cur; if (!c || count <= 0) return;
     const gl = this.gl;
-    if (!c.vao.element) { this.warnOnce('glDrawElements with client-side indices is not supported yet'); return; }
+    if (streamed) offset = 0; // the indices are in streamIndex, bound by glClientUploadArray
+    else if (!c.vao.element) { this.warnOnce('glDrawElements without indices'); return; }
+    if (streamed) gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.streamIndex!.buf);
+    try { this.drawElementsBound(c, mode, count, type, offset, instances, baseVertex); } finally {
+      if (streamed) gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.bufObj(c.vao.element));
+    }
+  }
+  private drawElementsBound(c: Ctx, mode: number, count: number, type: number, offset: number, instances: number, baseVertex: number) {
+    const gl = this.gl;
     const native = mode <= E.TRIANGLE_FAN && !(c.polygonMode[0] !== E.FILL && mode >= E.TRIANGLES);
     const restartFix = c.primitiveRestart && c.restartIndex !== maxIndex(type);
     this.setConstantAttribs(c);
