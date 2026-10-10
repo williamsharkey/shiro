@@ -51,7 +51,7 @@ export interface Profile {
   brand: Brand | null;
   /** The terminal's startup banner: the full HUD, or the desktop's compact welcome */
   banner: 'hud' | 'desktop';
-  /** Installed in the background after boot ('claude-code': the pinned npm build) */
+  /** Installed in the background after boot ('claude-code': the pinned npm build; other names are pkg packages) */
   preinstall: string[];
   shims: ProfileShims;
 }

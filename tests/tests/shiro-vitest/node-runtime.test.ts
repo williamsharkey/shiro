@@ -455,6 +455,22 @@ describe('Node Runtime (jseval.ts)', () => {
       expect(ctx.stdout).toContain('stdout:false');
     });
 
+    // tabcomputer#16: FORCE_COLOR makes chalk colour even into a pipe
+    it('gets no FORCE_COLOR from the shell; an exported one passes through', async () => {
+      const probe = ['-e', 'require("fs").writeFileSync("/tmp/fc", String(process.env.FORCE_COLOR))'];
+      const read = async () => String(await os.fs.readFile('/tmp/fc', 'utf8'));
+      await nodeCmd.exec({ ...createCtx(os.shell, os.fs, probe, os.terminal), stdoutIsTTY: false });
+      expect(await read()).toBe('undefined');
+      await nodeCmd.exec({ ...createCtx(os.shell, os.fs, probe, os.terminal), stdoutIsTTY: false, env: { ...os.shell.env, FORCE_COLOR: '1' } });
+      expect(await read()).toBe('1');
+    });
+
+    it('a piped node through the shell sees no FORCE_COLOR', async () => {
+      let out = '';
+      await os.shell.execute('node -p "String(process.env.FORCE_COLOR)" | cat', s => { out += s; });
+      expect(out.replace(/\r/g, '').trim()).toBe('undefined');
+    });
+
     it('should provide terminal dimensions via stdout.columns/rows', async () => {
       const ctx = createCtx(os.shell, os.fs, ['-p', 'process.stdout.columns + "x" + process.stdout.rows'], os.terminal);
       const exitCode = await nodeCmd.exec(ctx);

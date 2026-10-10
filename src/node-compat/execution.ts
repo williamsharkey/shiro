@@ -137,6 +137,7 @@ export async function executeNodeScript(
     exitCode: 0,
     exitCalled: false,
     stdoutToTerminal: !!ctx.terminal && ctx.stdoutIsTTY !== false,
+    stderrToTerminal: !!ctx.terminal && ctx.stderrIsTTY !== false,
     streamedToTerminal: false,
     streamedStderr: false,
     isInteractiveMode: false,
@@ -169,12 +170,13 @@ export async function executeNodeScript(
     // Deferred exit: resolves when process.exit is called from async code
     const deferredExitPromise = new Promise<number>((resolve) => { _st.deferredExitResolve = resolve; });
 
-    // Without a terminal, output goes on as it is produced where something takes it
-    // (a pipe's reader, like an agent running an npm script, sees it now, not at exit):
-    // a spawned child's pipes (ctx.stdoutBytes), the shell's fds as a kernel process
-    // (ctx.streamStdout), or a kernel guest's fds 1 and 2
+    // Output that isn't the terminal's goes on as it is produced where something takes it
+    // (a pipe's reader, like an agent running an npm script, sees it now, not at exit;
+    // a server's `> log` gets its lines): a spawned child's pipes (ctx.stdoutBytes), the
+    // shell's fds as a kernel process or a redirect's file (ctx.streamStdout), or a kernel
+    // guest's fds 1 and 2. Stderr on the terminal goes there as it comes (console.error too).
     const writeOut = nodeGuestOf(ctx)?.writeOut;
-    if (!ctx.terminal) {
+    {
       const enc = new TextEncoder();
       const writerFor = (bytes: ((b: Uint8Array) => void) | undefined, text: ((s: string) => void) | undefined, fd: 1 | 2) =>
         bytes ? (s: string) => bytes(enc.encode(s)) : text ?? (writeOut ? (s: string) => writeOut(fd, s) : undefined);
@@ -187,8 +189,11 @@ export async function executeNodeScript(
           return keep ? Array.prototype.push.apply(buf, items) : buf.length;
         };
       };
-      stream(stdoutBuf, writerFor(ctx.stdoutBytes, ctx.streamStdout, 1), !ctx.stdoutBytes, () => { _st.streamedToTerminal = true; });
-      stream(stderrBuf, writerFor(ctx.stderrBytes, ctx.streamStderr, 2), !ctx.stderrBytes, () => { _st.streamedStderr = true; });
+      // \n is \r\n on a terminal (libuv keeps ONLCR even in raw mode)
+      const toTerminal = (s: string) => ctx.terminal!.writeOutput(s.replace(/\r?\n/g, '\r\n'));
+      if (!_st.stdoutToTerminal) stream(stdoutBuf, writerFor(ctx.stdoutBytes, ctx.streamStdout, 1), !ctx.stdoutBytes, () => { _st.streamedToTerminal = true; });
+      stream(stderrBuf, _st.stderrToTerminal ? toTerminal : writerFor(ctx.stderrBytes, ctx.streamStderr, 2),
+        !ctx.stderrBytes, () => { _st.streamedStderr = true; });
     }
 
     // Console and process

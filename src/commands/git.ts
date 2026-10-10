@@ -132,7 +132,7 @@ async function gitMain(ctx: CommandContext): Promise<number> {
           const defaultBranch = (branchFlag > 0 && ctx.args[branchFlag + 1])
             || (await readGlobalConfig(ctx))['init.defaultbranch'] || 'main';
           await git.init({ fs, dir: targetDir, defaultBranch });
-          ctx.stdout = `Initialized empty Git repository in ${targetDir}/.git/\n`;
+          if (!ctx.args.includes('-q') && !ctx.args.includes('--quiet')) ctx.stdout = `Initialized empty Git repository in ${targetDir}/.git/\n`;
           break;
         }
 

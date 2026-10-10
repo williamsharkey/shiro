@@ -16,6 +16,7 @@ import type { AppContext } from './index';
 import type { DesktopWindow } from './wm';
 import { iframeServer } from '../iframe-server';
 import { previewUrl } from '../preview-sw-host';
+import { PAGE_SET_TIMEOUT } from '../node-compat/page-globals';
 
 function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -145,7 +146,9 @@ export function notifyListening(ctx: AppContext, port: number, title?: string): 
   });
   offered.set(port, close);
   ctx.wm.root.appendChild(t);
-  setTimeout(close, 20_000);
+  // (the page's timer: the global one, while an in-page node script runs, is the
+  // script's and counted as its activity; its server stayed up 20 s before returning)
+  PAGE_SET_TIMEOUT(close, 20_000);
 }
 
 /** For tests: the ports with a Preview window, and those offered */

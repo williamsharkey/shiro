@@ -55,8 +55,16 @@ function bootSection(ctx: ShiroRuntimeContext, name: string): string {
  */
 export const KNOWN_ISSUES: { issue: string; workaround?: string }[] = [
   {
-    issue: "The shell ignores `< /dev/null` on `eval` (tabcomputer#12). Claude Code's Bash tool runs every command as `eval '<command>' < /dev/null`, so commands inherit an open stdin that never ends, and anything that reads stdin (`cat`, `node`, `npx`, `claude --npm`) hangs until the tool's timeout.",
+    issue: "Claude Code's Bash tool adds `< /dev/null` only to commands without a `<` of their own, so a command with a here-doc or input redirect inherits the tool's stdin, which never ends; anything else in it that reads stdin (`cat`, `node`, `npx`, `claude --npm`) hangs until the tool's timeout.",
     workaround: 'Wrap a command that may read stdin as `{ cmd; } </dev/null`; a group\'s redirect works.',
+  },
+  {
+    issue: 'Once a `node` has been killed by `timeout`, the tab can wedge so that `node -e CODE`, `node file.js`, `esbuild` and `claude --npm` print nothing and hang, whatever their stdin (tabcomputer#13). `node -v`, `npm init` and `python3` still work.',
+    workaround: 'Reload the tab (this ends running agents, including you), or do node work such as `vitest` and `esbuild` in a checkout outside the tab.',
+  },
+  {
+    issue: "In the page's own shell (the terminal's, and commands it runs in the page), `/proc/self/fd/N` links read `/dev/pts/0` even when the fd is redirected to a pipe or file, `stat -L` on them gives the redirect's type, and `/proc/self/cmdline` is just `bash`. Kernel processes' `/proc/PID/fd` are right.",
+    workaround: 'Ask `[ -t N ]` whether an fd is a terminal rather than reading the link.',
   },
   {
     issue: "Images can't be pasted into Claude Code: `xclip` and `xsel` here are text only.",
@@ -65,10 +73,6 @@ export const KNOWN_ISSUES: { issue: string; workaround?: string }[] = [
   {
     issue: "In Debian mode, dpkg-deb's `.xz` decompression sometimes crashes or reports corrupt data under the x86-64 emulator, so `apt install` stops with a dpkg error.",
     workaround: 'Run the install again.',
-  },
-  {
-    issue: 'The shell sets `FORCE_COLOR=3`, so Node tools print color codes even into pipes and files.',
-    workaround: 'Prefix commands whose output you parse with `NO_COLOR=1 FORCE_COLOR=0`.',
   },
   {
     issue: '`gh issue view --comments` is not implemented (an unknown-flag error).',
@@ -199,10 +203,10 @@ ${bootSection(ctx, name)}
 - A command that hangs: press Ctrl-C at the terminal. Linux and WASM programs are
   kernel processes: \`ps\` lists them, \`kill PID\` (or \`kill -9 PID\`) stops
   them. Builtins (including \`node\` and the Pyodide
-  \`python3\`) run inside the page, not as kernel processes: their \`$!\` has no
-  \`/proc\` entry and \`ps\` doesn't list them. In the shell that started one in
-  the background, \`jobs -l\` shows its PID and \`kill PID\` stops it; from
-  anywhere else, a reload is the only way.
+  \`python3\`) run inside the page, not as kernel processes. Started in the
+  background, one still has a PID (\`$!\`, \`jobs -l\`): \`ps\` lists it, it has a
+  \`/proc/PID\`, and \`kill PID\` stops it from any shell. A builtin in the
+  foreground has none: Ctrl-C it, or reload.
 - \`console -g PATTERN\` searches the page's console log (\`--prev\` includes the
   load before the last reload).
 - Report bugs at ${source}/issues (\`gh issue create\` works here): the command,

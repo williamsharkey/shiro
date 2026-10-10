@@ -223,6 +223,26 @@ Where the time went, and what changed:
 - `display.ts`: `Xshiro :N`, a kernel process (it shows in `ps`) listening on
   `/tmp/.X11-unix/XN` and on the abstract name libxcb tries first; started at
   boot, ~1 KB. `session.ts` creates the server on the first connection.
+- GL (docs/research/GL.md, fast GL through WebGL2): `glx.ts` is the GLX
+  extension libglvnd needs when every GL call goes to glshiro: present,
+  QueryVersion 1.4, QueryServerString naming the vendor (`tabcomputer`,
+  also for GLX_VENDOR_NAMES_EXT) and the extension `GLX_EXT_libglvnd` (else
+  glvnd never asks for vendor names and loads libGLX_indirect),
+  GetDrawableAttributes (screen, width, height: glvnd routes drawable calls
+  by screen), ClientInfo accepted, rendering requests BadRequest. It's off until glshiro calls `enableGLX()` on a page with
+  WebGL2: with GLX advertised and no usable vendor, glvnd would fall back to
+  Mesa, whose first GLX request would be an X error that Xlib exits on.
+  While it's on, apps whose package set has libglvnd (`libglx0`) get
+  `libGLX_tabcomputer.so.0` in `/usr/lib/x86_64-linux-gnu/` and
+  `__GLX_VENDOR_LIBRARY_NAME=tabcomputer` (`glEnv` in `src/gui/apps.ts`).
+  `server.glSurface(xid)` (`gl-surface.ts`) is a canvas over an X window in
+  its desktop window: at the window's place in the toplevel, sized 1:1 in
+  device pixels, clipped to its visible part (inside its ancestors, minus
+  siblings stacked above it or an ancestor, minus its own children; a CSS
+  `clip-path`), above the window's pixels and below DOM text, with no
+  pointer events. It follows configure, map, unmap, restack and destroy
+  (the `structure` hook, coalesced to one update per frame), reattaches
+  when the toplevel is mapped again, and reports `onChange`/`onDestroy`.
 
 ### DOM text (experimental)
 
@@ -351,8 +371,10 @@ deviceScaleFactor 2 and 3, before and after.)
 
 ## Known gaps and next steps
 
-0. **OpenGL**: there is no GLX in Xshiro, so no GL app gets a context
-   (Blender stops there). Options and estimates: docs/research/GL.md.
+0. **OpenGL**: the approved route is GL forwarded to WebGL2 (unix/gl,
+   docs/research/GL.md). Xshiro's side is in place (GLX entry, GL surfaces,
+   the app environment; above) and stays off until glshiro enables it.
+   Blender stops at "OpenGL 3.3 required" until then.
 
 1. ~~A D-Bus session bus~~: done. The launcher starts Debian's `dbus-daemon`
    (manifest entry `dbus-session`) with the first app and gives apps its
@@ -368,7 +390,7 @@ deviceScaleFactor 2 and 3, before and after.)
    with the page yet), XKEYBOARD (toolkits fall back to the core keymap),
    XInputExtension 2 (core input only: no smooth scrolling or touch),
    RANDR (one fixed screen = the work area when the server starts), XFIXES,
-   DAMAGE, Composite, GLX.
+   DAMAGE, Composite. GLX only as far as glvnd needs it (above).
 5. **HiDPI** follow-ups: rescale when devicePixelRatio changes (browser
    zoom, a window moved to another monitor) via RANDR + XSETTINGS; scale
    fixed-size Xaw apps.

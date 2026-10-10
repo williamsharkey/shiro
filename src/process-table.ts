@@ -24,7 +24,8 @@ export interface ShiroProcess {
 export interface ProcessSource {
   list(): ShiroProcess[];
   get(pid: number): ShiroProcess | undefined;
-  kill(pid: number): boolean;
+  /** Send `sig` (default SIGTERM); false when the pid isn't this source's */
+  kill(pid: number, sig?: number): boolean;
 }
 
 class ProcessTable {
@@ -60,9 +61,9 @@ class ProcessTable {
     return proc;
   }
 
-  kill(pid: number): boolean {
+  kill(pid: number, sig?: number): boolean {
     const proc = this.processes.get(pid);
-    if (!proc) return this.sources.some(s => s.kill(pid));
+    if (!proc) return this.sources.some(s => s.kill(pid, sig));
     if (proc.status !== 'running') return false;
     if (proc.abortController) proc.abortController.abort();
     proc.kill();

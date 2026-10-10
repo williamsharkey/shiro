@@ -158,10 +158,12 @@ export async function realGit(ctx: CommandContext, argv: string[], cwd: string):
   const { quoteArgsForShell } = await import('../shell');
   const out = (s: string) => { ctx.stdout += s.replace(/\r\n/g, '\n'); };
   const err = (s: string) => { ctx.stderr += s.replace(/\r\n/g, '\n'); };
-  if (!(await ctx.fs.exists('/usr/bin/git'))) {
+  // In Debian mode /usr/bin/git can be the builtin's shim: running it would come back here
+  const { isBuiltinShimFile } = await import('../path-shims');
+  if (!(await ctx.fs.exists('/usr/bin/git')) || await isBuiltinShimFile(ctx.fs, '/usr/bin/git')) {
     let quiet = '';
     const code = await shell.execute('pkg install git', () => {}, (s) => { quiet += s; });
-    if (code !== 0 || !(await ctx.fs.exists('/usr/bin/git'))) return null;
+    if (code !== 0 || !(await ctx.fs.exists('/usr/bin/git')) || await isBuiltinShimFile(ctx.fs, '/usr/bin/git')) return null;
     err('(git: installed the full git for this; `pkg remove git` goes back to the built-in)\n');
   }
   return shell.execute(`( cd ${quoteArgsForShell([cwd])} && /usr/bin/git ${quoteArgsForShell(argv)} )`, out, err);

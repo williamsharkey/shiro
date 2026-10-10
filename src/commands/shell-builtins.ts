@@ -6,6 +6,7 @@
  */
 import { Command, type CommandContext } from './index';
 import { parseShellArgs } from '../shell-args';
+import { terminalForCommand } from '../shell';
 import { grepCmd, egrepCmd, fgrepCmd } from './grep';
 import { sedCmd } from './sed';
 import { diffCmd } from './diff';
@@ -477,13 +478,16 @@ async function runShell(ctx: CommandContext, invokedAs: 'sh' | 'bash'): Promise<
     const fromStdin = !commandMode && (rest.length === 0 || parsed.stdin);
     if (!ctx.liveStdin && !fromStdin) child.setInjectedStdin(ctx.stdin || '');
     else if (ctx.liveStdin && fromStdin) child.kernelStdinLive = false;
+    // (programs in it don't write on the terminal what sh's redirects or pipe take:
+    // `bash -c 'node x.js' > f` printed on the screen and left f empty)
+    const term = ctx.terminal && terminalForCommand(ctx.terminal, ctx);
     // Output goes out as each command finishes where nothing captures it
     if (ctx.streamStdout && ctx.streamStderr) {
-      return child.runScriptText(script, ctx.terminal, ctx.streamStdout, ctx.streamStderr);
+      return child.runScriptText(script, term, ctx.streamStdout, ctx.streamStderr);
     }
     let stdout = '';
     let stderr = '';
-    const code = await child.runScriptText(script, ctx.terminal, (s) => { stdout += s; }, (s) => { stderr += s; });
+    const code = await child.runScriptText(script, term, (s) => { stdout += s; }, (s) => { stderr += s; });
     return out(code, stdout, stderr);
   }
 }

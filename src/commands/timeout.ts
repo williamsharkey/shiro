@@ -1,5 +1,5 @@
 import type { Command } from './index';
-import { quoteArgsForShell, capturingStdout } from '../shell';
+import { quoteArgsForShell, terminalForCommand } from '../shell';
 import { signalNumber, signalName } from '../kernel/signals';
 
 /** Seconds after the signal before SIGKILL when there is no -k (GNU timeout waits forever) */
@@ -75,7 +75,7 @@ export const timeout: Command = {
     else outer?.signal.addEventListener('abort', () => own.abort(), { once: true });
     child.inheritedAbort = own;
     // Piped or redirected: programs keep the tty for input, their stdout comes back here
-    if (ctx.terminal) child.setTerminal((ctx.stdoutIsTTY === false ? capturingStdout(ctx.terminal) : ctx.terminal) as any);
+    if (ctx.terminal) child.setTerminal(terminalForCommand(ctx.terminal, ctx) as any);
     child.cwd = ctx.cwd;
     let out = '';
     let err = '';
