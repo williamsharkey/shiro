@@ -901,6 +901,9 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    - read()/write() on a memfd go through the buffer while it's remote
      (perf-kernel's side). A /dev/shm file's don't yet.
    - SysV shm between instances still uses a copy per instance.
+113. SHIRO_BLINK_MMLOG=3's write lines name the fd's file, as the kernel's
+   /proc/self/fd link gives it (fds get reused; debian's PostgreSQL WAL
+   hunt needed to know which file a write went to).
 0500. unix/conformance's mlock/munlock/mlockall and mmap argument errors
    (Open POSIX mlock_8-1, munlock_10-1, mlockall_13-1, mmap_21-1, 23-1,
    24-2). Numbered from 0500 so the two branches never renumber each
