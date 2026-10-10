@@ -1,7 +1,7 @@
 import { CommandContext } from './index';
 import { ghApi, parseFlags, getRepoFromFlags, detectRepo, isDryRun } from './gh';
 
-const VALUE_FLAGS = ['repo', 'R', 'color', 'description', 'L', 'limit'];
+const VALUE_FLAGS = ['repo', 'R', 'color', 'description', 'L', 'limit', 'json'];
 
 export async function ghLabelHandler(ctx: CommandContext, token: string): Promise<number> {
   const sub = ctx.args[1];
@@ -36,6 +36,7 @@ Commands:
         ctx.stderr = `error: API returned ${status}: ${data?.message || ''}\n`;
         return 1;
       }
+      if (flags['json']) { ctx.stdout = JSON.stringify(data ?? []) + '\n'; return 0; }
       if (!data || data.length === 0) {
         ctx.stdout = 'No labels found\n';
         return 0;

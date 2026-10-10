@@ -379,6 +379,8 @@ Commands:
 }
 
 function outputJson(ctx: CommandContext, data: any, fields: string): number {
+  // "*": the API's objects whole (gh-cli.ts maps them to gh's fields)
+  if (fields === '*') { ctx.stdout = JSON.stringify(data) + '\n'; return 0; }
   const fieldList = fields.split(',').map(f => f.trim());
   if (Array.isArray(data)) {
     ctx.stdout = JSON.stringify(data.map(item => pickFields(item, fieldList)), null, 2) + '\n';
