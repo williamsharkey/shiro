@@ -919,6 +919,28 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    they're gone instead: host.mjs polls blink_shiro_others, then posts
    blink-quiet, at most 0.5 s. go_nethttp 751 → 583 ms (BENCHMARKS.md,
    perf-blink 14).
+116. Compiled code does SSE float arithmetic itself instead of calling
+   Blink's handlers, computed as the interpreter computes it:
+   - add/sub/mul/div/min/max/sqrt in ss, sd, ps and pd forms. min/max
+     keep x86's operand order (pmin/pmax(src, dst) for packed,
+     compare-and-select for scalars).
+   - ucomis/comis set ZF/PF/CF and clear OF/SF/AF. An unordered comis goes
+     to the interpreter, which raises MXCSR.IE.
+   - movd/movq between xmm and general registers or memory, F3 0F 7E and
+     66 0F D6 movq.
+   - leave.
+
+   In a libc-heavy run (snprintf/strtod/qsort) these were the top handler
+   calls from compiled code: comisd 1.7 M, movd/movq 0.9 M, leave 0.3 M,
+   addsd and the like 0.3 M. They were also in unix/gui's GUI startup
+   profiles. shld/shrd, x87 and the F7 group are still calls.
+
+   NaN results: their sign and payload are the engine's choice in wasm.
+   x86 picks one by rule, and Blink's interpreter didn't match it either.
+   Ordinary values match native bit for bit.
+
+   Test: fixtures/x86/fpjit.c (special values through compiled loops,
+   against native's hash).
 0500. unix/conformance's mlock/munlock/mlockall and mmap argument errors
    (Open POSIX mlock_8-1, munlock_10-1, mlockall_13-1, mmap_21-1, 23-1,
    24-2). Numbered from 0500 so the two branches never renumber each

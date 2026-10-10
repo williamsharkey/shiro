@@ -87,8 +87,7 @@ async function sh(shell: Shell, cmd: string) {
   return { out: out.replace(/\r\n/g, '\n'), err: err.replace(/\r\n/g, '\n'), exitCode };
 }
 
-/** Without colour codes: Shiro's shell exports FORCE_COLOR, so chalk and
- *  supports-color colour even into a pipe */
+/** Without colour codes (a program that colours anyway) */
 const plain = (t: string) => t.replace(/\x1b\[[0-9;]*m/g, '');
 
 /** A download pinned by sha256, cached in tests/.pkg-cache. */

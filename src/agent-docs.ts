@@ -55,7 +55,7 @@ function bootSection(ctx: ShiroRuntimeContext, name: string): string {
  */
 export const KNOWN_ISSUES: { issue: string; workaround?: string }[] = [
   {
-    issue: "The shell ignores `< /dev/null` on `eval` (tabcomputer#12). Claude Code's Bash tool runs every command as `eval '<command>' < /dev/null`, so commands inherit an open stdin that never ends, and anything that reads stdin (`cat`, `node`, `npx`, `claude --npm`) hangs until the tool's timeout.",
+    issue: "Claude Code's Bash tool adds `< /dev/null` only to commands without a `<` of their own, so a command with a here-doc or input redirect inherits the tool's stdin, which never ends; anything else in it that reads stdin (`cat`, `node`, `npx`, `claude --npm`) hangs until the tool's timeout.",
     workaround: 'Wrap a command that may read stdin as `{ cmd; } </dev/null`; a group\'s redirect works.',
   },
   {
