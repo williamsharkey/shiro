@@ -28,7 +28,8 @@ SKIP = set('''debconf perl-base dpkg init-system-helpers libc-bin tar coreutils 
 adduser passwd login systemd systemd-sysv dbus dbus-daemon dbus-system-bus-common dbus-session-bus-common dbus-bin
 dbus-user-session libpam-systemd perl perl-modules-5.36 libperl5.36 python3 python3.11 python3-minimal
 python3.11-minimal libpython3.11-stdlib libpython3.11-minimal ucf sensible-utils debianutils base-files bash
-dconf-service xdg-user-dirs ncurses-base mount util-linux procps libpam-modules libpam-runtime'''.split())
+dconf-service xdg-user-dirs ncurses-base mount util-linux procps libpam-modules libpam-runtime
+libreoffice-core-nogui'''.split())  # (the GUI-less build of libreoffice-core: its files would shadow the real ones here)
 
 APPS = {
     # name: (packages, binaries, plugin globs, extra packages, description, category)

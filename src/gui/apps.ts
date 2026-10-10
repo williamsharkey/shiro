@@ -223,13 +223,15 @@ async function unpack(fs: FileSystem, entries: TarEntry[], ownBins: Set<string>)
  * `dir`, unless all of them are `covered` (packages whose result ships as an
  * overlay: gen-apps.py).
  */
-const TRIGGERS: { dir: string; argv: string[]; covered?: string[] }[] = [
+const TRIGGERS: { dir: string; argv?: string[]; run?: (fs: FileSystem) => Promise<unknown>; covered?: string[] }[] = [
   {
     dir: '/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/',
     argv: ['/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders', '--update-cache'],
     covered: ['libgdk-pixbuf-2.0-0', 'librsvg2-common'],
   },
   { dir: '/usr/share/glib-2.0/schemas/', argv: ['/usr/bin/glib-compile-schemas', '/usr/share/glib-2.0/schemas'] },
+  // gtk-update-icon-cache, written here (icon-cache.ts): without it GTK stats all of hicolor at every start
+  { dir: '/usr/share/icons/hicolor/', run: async (fs) => (await import('./icon-cache')).updateIconCache(fs, '/usr/share/icons/hicolor') },
 ];
 
 /** The triggers a package's files set off. */
@@ -249,8 +251,12 @@ async function runTriggers(fs: FileSystem, kernel: Kernel, which: Set<number>, l
   // independent of each other: each is its own Blink worker
   await Promise.all([...which].map(async (i) => {
     const t = TRIGGERS[i];
-    if (!(await fs.exists(t.argv[0]).catch(() => false))) return;
     const t0 = Date.now();
+    if (t.run) {
+      await t.run(fs).then(() => log(`trigger ${t.dir}: ${Date.now() - t0} ms`), (e) => log(`trigger ${t.dir}: ${(e as Error).message}`));
+      return;
+    }
+    if (!t.argv || !(await fs.exists(t.argv[0]).catch(() => false))) return;
     const status = await runQuiet(kernel, t.argv, {});
     log(`trigger ${t.argv[0].split('/').pop()}: status ${status >> 8} in ${Date.now() - t0} ms`);
   }));

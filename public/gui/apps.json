@@ -3182,16 +3182,13 @@
   },
   "libreoffice-writer": {
    "bin": "/usr/lib/libreoffice/program/soffice.bin",
-   "closureSize": 194754536,
+   "closureSize": 165995352,
    "description": "Word processor (LibreOffice)",
    "dropped": [
     "gcc-12-base",
     "fontconfig",
     "dconf-gsettings-backend",
-    "libcups2",
-    "libavahi-common3",
     "libavahi-common-data",
-    "libavahi-client3",
     "libcolord2",
     "libudev1",
     "gtk-update-icon-cache",
@@ -3214,8 +3211,7 @@
     "gpg",
     "gpg-wks-client",
     "dirmngr",
-    "gnupg-utils",
-    "libreoffice-core-nogui"
+    "gnupg-utils"
    ],
    "packages": [
     "librsvg2-common",
@@ -3298,6 +3294,7 @@
     "libwayland-cursor0",
     "libwayland-client0",
     "libepoxy0",
+    "libcups2",
     "libgssapi-krb5-2",
     "libkrb5support0",
     "libkrb5-3",
@@ -3313,6 +3310,8 @@
     "libidn2-0",
     "libhogweed6",
     "libgmp10",
+    "libavahi-common3",
+    "libavahi-client3",
     "libdbus-1-3",
     "libsystemd0",
     "liblz4-1",
@@ -3405,7 +3404,7 @@
     "libreoffice-base-core"
    ],
    "pkg": "libreoffice-writer",
-   "size": 154755636,
+   "size": 155088684,
    "toolkit": "gtk3"
   },
   "lximage-qt": {
