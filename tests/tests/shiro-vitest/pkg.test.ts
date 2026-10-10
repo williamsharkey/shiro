@@ -570,10 +570,10 @@ describe('real packages as kernel processes', () => {
         term: null,
       };
     }
-    const until = async (cond: () => boolean, ms = 10_000) => {
+    const until = async (cond: () => boolean, ms = 10_000, show?: () => string) => {
       const t0 = Date.now();
       while (!cond()) {
-        if (Date.now() - t0 > ms) throw new Error('timed out');
+        if (Date.now() - t0 > ms) throw new Error(`timed out${show ? `: ${JSON.stringify(show())}` : ""}`);
         await new Promise(r => setTimeout(r, 5));
       }
     };
@@ -599,6 +599,31 @@ describe('real packages as kernel processes', () => {
       expect(await r).toBe(0);
       expect((await sh(shell, `cd /home/user && sqlite3 repl.db 'select count(*) from t;'`)).out).toBe('1\n');
     }, 60_000);
+
+    // irb needed io-console (a stub: no raw mode in WASI), so it reads the cooked tty
+    it('irb and python3 REPLs: prompt, multi-line input, ^D exits', async () => {
+      await sh(shell, 'pkg install ruby python3');
+      let term = fakeTerminal();
+      let r = shell.execute('irb', () => {}, () => {}, false, term);
+      await until(() => term.tty.jobInForeground && term.screen().includes('irb(main):001> '), 60_000);
+      term.tty.pty.input('def f(x)\r');
+      await until(() => term.screen().includes('irb(main):002* '), 30_000);
+      term.tty.pty.input('x + 1\rend\rf(41)\r');
+      await until(() => /=> (\x1b\[[\d;]*m)*42/.test(term.screen()), 30_000);
+      term.tty.pty.input('\x04');
+      expect(await r).toBe(0);
+
+      term = fakeTerminal();
+      r = shell.execute('python3', () => {}, () => {}, false, term);
+      await until(() => term.tty.jobInForeground && term.screen().includes('>>> '), 60_000);
+      term.tty.pty.input('for i in range(2):\r');
+      await until(() => term.screen().includes('... '), 30_000, term.screen);
+      term.tty.pty.input('  print(i * 21)\r\r');
+      await until(() => term.screen().includes('21'), 30_000, term.screen);
+      term.tty.pty.input('\x04');
+      expect(await r).toBe(0);
+      expect(term.screen()).toMatch(/Python 3\.\d+/);
+    }, 240_000);
   });
 });
 

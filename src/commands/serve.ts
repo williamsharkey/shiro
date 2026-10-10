@@ -5,7 +5,9 @@ import { Command, CommandContext } from './index';
 import { iframeServer, createStaticServer, VirtualRequest, VirtualResponse } from '../iframe-server';
 import { previewStreamsScript } from '../preview-streams';
 import { createServerWindow, findServerWindow, ServerWindow } from '../server-window';
+import { previewUrl } from '../preview-sw-host';
 import { createSplitView, closeSplitView, getActiveSplit } from '../split-view';
+import { previewUI } from '../preview-ui';
 
 // Track active servers and their cleanup functions
 const activeServers = new Map<number, {
@@ -96,6 +98,13 @@ async function openInIframe(ctx: CommandContext, port: number, path: string = '/
     ctx.stderr = `serve: no server on port ${port}\n`;
     return 1;
   }
+  // The desktop: a Preview window
+  const ui = previewUI();
+  if (ui) {
+    await ui.open(port, path, activeServers.get(port)?.directory);
+    ctx.stdout = `Opened port ${port} in a window\nPath: ${path}\n`;
+    return 0;
+  }
 
   // Check if window already exists for this port
   const existing = findServerWindow(port);
@@ -134,6 +143,18 @@ async function openInIframe(ctx: CommandContext, port: number, path: string = '/
         });
       },
     });
+
+    // A real document where service workers work (ES modules, vite), else srcdoc
+    const swUrl = await previewUrl(port, path);
+    if (swUrl) {
+      serverWindow.iframe.removeAttribute('srcdoc');
+      serverWindow.iframe.src = swUrl;
+      serverWindow.iframe.setAttribute('data-preview-sw', '');
+      const server = iframeServer.getServer(port);
+      if (server) (server as any).iframe = serverWindow.iframe;
+      ctx.stdout = `Opened port ${port} in window\nPath: ${path}\n`;
+      return 0;
+    }
 
     // Fetch content and set up iframe
     const response = await iframeServer.fetch(port, path);
@@ -212,6 +233,13 @@ async function openInSplit(ctx: CommandContext, port: number, path: string = '/'
     ctx.stderr = `serve: no server on port ${port}\n`;
     return 1;
   }
+  // The desktop has no split: a Preview window, tiled beside the Terminal
+  const ui = previewUI();
+  if (ui) {
+    await ui.open(port, path, activeServers.get(port)?.directory);
+    ctx.stdout = `Opened port ${port} in a window\n`;
+    return 0;
+  }
 
   const serverInfo = activeServers.get(port);
   const directory = serverInfo?.directory;
@@ -220,6 +248,16 @@ async function openInSplit(ctx: CommandContext, port: number, path: string = '/'
   const split = createSplitView({ port, direction, title });
 
   try {
+    const swUrl = await previewUrl(port, path);
+    if (swUrl) {
+      split.iframe.src = swUrl;
+      split.iframe.setAttribute('data-preview-sw', '');
+      split.iframe.setAttribute('data-virtual-path', path);
+      const server = iframeServer.getServer(port);
+      if (server) (server as any).iframe = split.iframe;
+      ctx.stdout = `Opened port ${port} in split (${direction})\n`;
+      return 0;
+    }
     const response = await iframeServer.fetch(port, path);
     let html: string;
 

@@ -18,12 +18,41 @@ export const ownPages = true;
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
+const GO_HTTP = `package main
+
+import (
+\t"fmt"
+\t"io"
+\t"net"
+\t"net/http"
+)
+
+func main() {
+\tln, err := net.Listen("tcp", "127.0.0.1:0")
+\tif err != nil {
+\t\tpanic(err)
+\t}
+\tgo http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "ok from net/http") }))
+\tres, err := http.Get("http://" + ln.Addr().String() + "/")
+\tif err != nil {
+\t\tpanic(err)
+\t}
+\tb, _ := io.ReadAll(res.Body)
+\tfmt.Println(string(b))
+}
+`;
+
 const USE = {
   c: { cmd: "printf '#include <stdio.h>\\nint main(void){puts(\"hello\");return 0;}\\n' > /tmp/hello.c && cd /tmp && gcc hello.c && ./a.out", ok: /^hello$/m, what: '`gcc hello.c && ./a.out`' },
   python: { cmd: "python3 -c 'import json; print(json.dumps([1]))'", ok: /^\[1\]$/m, what: "`python3 -c 'import json; ...'`" },
   node: { cmd: "/usr/bin/node -e 'console.log(6*7)'", ok: /42/, what: "`/usr/bin/node -e` (Debian's nodejs)" },
   java: { cmd: "printf 'class Hello { public static void main(String[] a) { System.out.println(\"hello\"); } }\\n' > /tmp/Hello.java && cd /tmp && javac Hello.java && java Hello", ok: /^hello$/m, what: '`javac Hello.java && java Hello`' },
   classic: { cmd: "printf 'program h\\nprint *, \"hello\"\\nend program h\\n' > /tmp/h.f90 && cd /tmp && gfortran h.f90 -o hf && ./hf", ok: /hello/, what: '`gfortran h.f90 && ./hf`' },
+  go: {
+    cmd: "printf 'package main\\nimport \"fmt\"\\nfunc main(){fmt.Println(\"hello\")}\\n' > /tmp/hello.go && cd /tmp && go run hello.go", ok: /^hello$/m, what: '`go run hello.go`',
+    // net/http server and client in one program, over loopback
+    extra: { name: 'nethttp', cmd: `echo ${Buffer.from(GO_HTTP).toString('base64')} | base64 -d > /tmp/srv.go && cd /tmp && go build -o srv srv.go && ./srv`, ok: /ok from net\/http/, what: '`go build` and run of a net/http server + client over loopback' },
+  },
   tex: { cmd: "printf '\\\\documentclass{article}\\\\begin{document}Hello, \\\\LaTeX.\\\\end{document}\\n' > /tmp/t.tex && cd /tmp && pdflatex -interaction=nonstopmode t.tex && test -s t.pdf && echo pdf-ok", ok: /pdf-ok/, what: '`pdflatex` on a one-line article' },
 };
 
@@ -60,6 +89,7 @@ export async function run(h) {
           add('install', inst.ms); add('install_peak', inst.peak);
           add('first', first.ms); add('first_peak', first.peak);
           add('warm', warm.ms);
+          if (use.extra) { const x = await timed(h, use.extra.cmd, 1800, use.extra.ok); add('extra', x.ms); add('extra_peak', x.peak); }
           add('to_working', deb.ms + inst.ms + first.ms);
           add('storage', (await h.eval(async () => (await navigator.storage.estimate()).usage)) / MB);
         } catch (e) {
@@ -73,6 +103,10 @@ export async function run(h) {
       S('install', 'install', 'ms', how);
       S('first_use', 'first', 'ms', `first ${use.what} after the install (fetches the programs' chunks)`);
       S('warm', 'warm', 'ms', `second ${use.what}`);
+      if (use.extra) {
+        S(use.extra.name, 'extra', 'ms', `then ${use.extra.what}`);
+        S(`peak_rss_${use.extra.name}`, 'extra_peak', 'MiB', `renderer RSS peak above the pre-run level, ${use.extra.name}`);
+      }
       S('peak_rss_install', 'install_peak', 'MiB', 'renderer RSS peak above the pre-run level, install');
       S('peak_rss_first_use', 'first_peak', 'MiB', 'renderer RSS peak above the pre-run level, first use');
       S('storage', 'storage', 'MiB', 'navigator.storage.estimate().usage at the end');

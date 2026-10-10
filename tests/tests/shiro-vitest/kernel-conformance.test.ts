@@ -9,6 +9,7 @@ import { Kernel } from '@shiro/kernel/kernel';
 import type { Process } from '@shiro/kernel/process';
 import * as A from '@shiro/kernel/abi';
 import { NetStack, installNet, encodeSockaddr } from '@shiro/kernel/net';
+import { JobControl, attachKernel } from '@shiro/kernel/signals';
 
 describe('kernel syscalls found by LTP', () => {
   let fs: FileSystem;
@@ -71,6 +72,37 @@ describe('kernel syscalls found by LTP', () => {
     const dup = await call(A.SYS_dup, [fd]);
     expect(await call(A.SYS_read, [dup, 4])).toBe(-A.EBADF);
     expect((await call(A.SYS_fcntl, [dup, A.F_GETFL])) & A.O_PATH).toBe(A.O_PATH);
+    // accept03: socket calls on it are EBADF, not ENOTSOCK
+    expect(await call(A.SYS_accept, [fd, 0, 0])).toBe(-A.EBADF);
+    expect(await call(A.SYS_accept4, [fd, 0, 0, 0])).toBe(-A.EBADF);
+    expect(await call(A.SYS_listen, [fd, 1])).toBe(-A.EBADF);
+  });
+
+  it('epoll_wait06: a pipe is writable again only once a read empties a page, not after a partial read', async () => {
+    const [r, w] = await pipe(A.O_NONBLOCK);
+    expect(await call(A.SYS_fcntl, [w, A.F_SETPIPE_SZ, 4096])).toBe(4096);
+    expect(await kernel.syscall(proc, A.SYS_write, [w, 4096], new Uint8Array(4096))).toBe(4096);
+    const pollOut = async () => {
+      const pfd = new Uint8Array(8);
+      new DataView(pfd.buffer).setInt32(0, w, true);
+      new DataView(pfd.buffer).setInt16(4, A.POLLOUT, true);
+      await kernel.syscall(proc, A.SYS_poll, [1, 0], pfd);
+      return new DataView(pfd.buffer).getInt16(6, true) & A.POLLOUT;
+    };
+    expect(await pollOut()).toBe(0);
+    // an edge-triggered reader isn't woken by a read making room (only data arriving arms it)
+    const ep = await call(A.SYS_epoll_create1, [0]);
+    expect(await call(A.SYS_epoll_ctl, [ep, A.EPOLL_CTL_ADD, r, A.POLLIN | A.EPOLLET, r, 0])).toBe(0);
+    expect(await call(A.SYS_epoll_ctl, [ep, A.EPOLL_CTL_ADD, w, A.POLLOUT | A.EPOLLET, w, 0])).toBe(0);
+    const evs = new Uint8Array(64);
+    expect(await kernel.syscall(proc, A.SYS_epoll_wait, [ep, 4, 0], evs)).toBe(1); // the reader: data
+    expect(await kernel.syscall(proc, A.SYS_read, [r, 2048], new Uint8Array(2048))).toBe(2048);
+    expect(await pollOut()).toBe(0);
+    expect(await kernel.syscall(proc, A.SYS_epoll_wait, [ep, 4, 0], evs)).toBe(0);
+    expect(await kernel.syscall(proc, A.SYS_read, [r, 2048], new Uint8Array(2048))).toBe(2048);
+    expect(await pollOut()).toBe(A.POLLOUT);
+    expect(await kernel.syscall(proc, A.SYS_epoll_wait, [ep, 4, 0], evs)).toBe(1); // the writer: a page is free
+    for (const fd of [r, w, ep]) await call(A.SYS_close, [fd]);
   });
 
   it('fcntl30/37: F_GETPIPE_SZ and F_SETPIPE_SZ resize a pipe (pipe-max-size 1 MiB)', async () => {
@@ -164,11 +196,237 @@ describe('kernel syscalls found by LTP', () => {
     expect(await call(A.SYS_socketpair, [A.AF_INET, 2, 17])).toBe(-A.EOPNOTSUPP); // UDP
     const s = await call(A.SYS_socket, [A.AF_INET, A.SOCK_STREAM, 0]);
     expect(s).toBeGreaterThanOrEqual(0);
+    // sendfile07: a socket is O_RDWR to F_GETFL (Blink checks sendfile's out fd by it)
+    expect((await call(A.SYS_fcntl, [s, A.F_GETFL])) & A.O_ACCMODE).toBe(A.O_RDWR);
     const sun = new Uint8Array(110);
     sun[0] = A.AF_UNIX;
     sun.set(enc.encode('.'), 2);
     expect(await kernel.syscall(proc, A.SYS_bind, [s, 110], sun)).toBe(-A.EAFNOSUPPORT);
     await call(A.SYS_close, [s]);
+    off();
+  });
+
+  it('dup06/pipe07/creat05: RLIMIT_NOFILE is the fd table\'s (prlimit64), and clone(CLONE_PARENT) makes a sibling (clone08)', async () => {
+    const lim = new Uint8Array(16);
+    const dv = new DataView(lim.buffer);
+    expect(await kernel.syscall(proc, A.SYS_prlimit64, [0, A.RLIMIT_NOFILE, 0], lim)).toBe(0);
+    expect([dv.getBigUint64(0, true), dv.getBigUint64(8, true)]).toEqual([1024n, 1048576n]);
+    // lower the soft limit: fds stop below it, and F_DUPFD past it is EINVAL
+    const child = kernel.vfork(proc);
+    const set = (cur: bigint, max: bigint) => { dv.setBigUint64(0, cur, true); dv.setBigUint64(8, max, true); return kernel.syscall(child, A.SYS_prlimit64, [0, A.RLIMIT_NOFILE, 1], lim); };
+    const openFile = () => kernel.syscall(child, A.SYS_openat, [A.AT_FDCWD, L('file'), A.O_RDONLY, 0], enc.encode('file'));
+    const first = await openFile();
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(await set(BigInt(first + 3), 1048576n)).toBe(0);
+    const fds: number[] = [first];
+    for (let fd; (fd = await openFile()) >= 0;) fds.push(fd);
+    expect(Math.max(...fds)).toBe(first + 2);
+    expect(await openFile()).toBe(-A.EMFILE);
+    expect(await kernel.syscall(child, A.SYS_fcntl, [first, A.F_DUPFD, first + 3], new Uint8Array(8))).toBe(-A.EINVAL);
+    // soft above hard is EINVAL; raising the hard limit takes root, and nothing goes past fs.nr_open
+    expect(await set(16n, 8n)).toBe(-A.EINVAL);
+    expect(await set(8n, 1048577n)).toBe(-A.EPERM);
+    // a fork keeps the limit
+    const grandchild = kernel.vfork(child);
+    expect(grandchild.fds.limit).toBe(first + 3);
+    // CLONE_PARENT: the new process is the caller's sibling
+    const sib = await kernel.syscall(child, A.SYS_shiro_vfork, [A.CLONE_PARENT], new Uint8Array(8));
+    expect(kernel.procs.get(sib)!.ppid).toBe(proc.pid);
+    for (const pid of [grandchild.pid, sib, child.pid]) kernel.kill(pid, A.SIGKILL);
+    for (const pid of [sib, child.pid]) await kernel.syscall(proc, A.SYS_wait4, [pid, 0], new Uint8Array(8));
+  });
+
+  it('memfd_create: an in-memory regular file that seeks, truncates, and epoll refuses (epoll_ctl06 /proc/self/maps)', async () => {
+    const fd = await call(A.SYS_memfd_create, [L('maps'), A.MFD_CLOEXEC], 'maps');
+    expect(fd).toBeGreaterThanOrEqual(0);
+    expect(await kernel.syscall(proc, A.SYS_write, [fd, 5], enc.encode('hello'))).toBe(5);
+    expect(await call(A.SYS_lseek, [fd, 1, 0, A.SEEK_SET])).toBe(1);
+    const buf = new Uint8Array(8);
+    expect(await kernel.syscall(proc, A.SYS_read, [fd, 8], buf)).toBe(4);
+    expect(new TextDecoder().decode(buf.subarray(0, 4))).toBe('ello');
+    expect((await fstatMode(fd)) & A.S_IFMT).toBe(A.S_IFREG);
+    expect(await call(A.SYS_ftruncate, [fd, 2, 0])).toBe(0);
+    expect(await kernel.syscall(proc, A.SYS_pread64, [fd, 8, 0, 0], buf)).toBe(2);
+    const ep = await call(A.SYS_epoll_create1, [0]);
+    expect(await call(A.SYS_epoll_ctl, [ep, A.EPOLL_CTL_ADD, fd, A.POLLIN, 0, 0])).toBe(-A.EPERM);
+    expect(await call(A.SYS_memfd_create, [L('x'), 8], 'x')).toBe(-A.EINVAL);
+    for (const f of [fd, ep]) await call(A.SYS_close, [f]);
+  });
+
+  it('Open POSIX mq_*: POSIX message queues by priority, full/empty, timeouts, attributes, notify', async () => {
+    const attr = (maxmsg: number, msgsize: number) => {
+      const b = new Uint8Array(32); const v = new DataView(b.buffer);
+      v.setBigInt64(8, BigInt(maxmsg), true); v.setBigInt64(16, BigInt(msgsize), true);
+      return b;
+    };
+    const open = (name: string, oflag: number, a?: Uint8Array) => {
+      const d = new Uint8Array(512); d.set(enc.encode(name)); if (a) d.set(a, name.length);
+      return kernel.syscall(proc, A.SYS_mq_open, [name.length, oflag, 0o600, a ? 1 : 0], d);
+    };
+    const send = (fd: number, text: string, prio: number) => kernel.syscall(proc, A.SYS_mq_timedsend, [fd, text.length, prio, 0], enc.encode(text));
+    const recv = async (fd: number, len = 64, ts?: [number, number]) => {
+      const d = new Uint8Array(8 + len);
+      if (ts) { const v = new DataView(d.buffer); v.setBigInt64(0, BigInt(ts[0]), true); v.setBigInt64(8, BigInt(ts[1]), true); }
+      const n = await kernel.syscall(proc, A.SYS_mq_timedreceive, [fd, len, ts ? 1 : 0], d);
+      return n < 0 ? n : `${new DataView(d.buffer).getUint32(0, true)}:${new TextDecoder().decode(d.subarray(8, 8 + n))}`;
+    };
+    const fd = await open('q1', A.O_RDWR | A.O_CREAT | A.O_NONBLOCK, attr(3, 64));
+    expect(fd).toBeGreaterThanOrEqual(0);
+    expect(await open('q1', A.O_RDWR | A.O_CREAT | A.O_EXCL)).toBe(-A.EEXIST);
+    expect(await open('nope', A.O_RDONLY)).toBe(-A.ENOENT);
+    expect(await open('big', A.O_RDWR | A.O_CREAT, attr(11, 64))).toBe(-A.EINVAL); // past msg_max, unprivileged
+    expect(await send(fd, 'low', 1)).toBe(0);
+    expect(await send(fd, 'high', 9)).toBe(0);
+    expect(await send(fd, 'low2', 1)).toBe(0);
+    expect(await send(fd, 'full', 1)).toBe(-A.EAGAIN);
+    expect(await send(fd, 'x'.repeat(65), 1)).toBe(-A.EMSGSIZE);
+    expect(await recv(fd, 8)).toBe(-A.EMSGSIZE); // the buffer must hold mq_msgsize
+    expect([await recv(fd), await recv(fd), await recv(fd)]).toEqual(['9:high', '1:low', '1:low2']);
+    expect(await recv(fd)).toBe(-A.EAGAIN);
+    // attributes: clear O_NONBLOCK, then a receive times out at its absolute deadline
+    const ga = new Uint8Array(32);
+    expect(await kernel.syscall(proc, A.SYS_mq_getsetattr, [fd, 1], ga)).toBe(0);
+    expect(Number(new DataView(ga.buffer).getBigInt64(8, true))).toBe(3);
+    const t = Date.now() + 50;
+    expect(await recv(fd, 64, [Math.floor(t / 1000), (t % 1000) * 1e6])).toBe(-A.ETIMEDOUT);
+    // mq_notify: a message to the empty queue sends the signal, once
+    const sev = new Uint8Array(16); new DataView(sev.buffer).setInt32(8, A.SIGUSR1, true);
+    expect(await kernel.syscall(proc, A.SYS_mq_notify, [fd, 1], sev)).toBe(0);
+    expect(await kernel.syscall(proc, A.SYS_mq_notify, [fd, 1], sev)).toBe(-A.EBUSY);
+    const got: number[] = [];
+    const old = kernel.deliver.bind(kernel);
+    kernel.deliver = (p, sig) => { if (p === proc) got.push(sig); else old(p, sig); };
+    expect(await send(fd, 'ping', 0)).toBe(0);
+    kernel.deliver = old;
+    expect(got).toEqual([A.SIGUSR1]);
+    const un = enc.encode('q1');
+    expect(await kernel.syscall(proc, A.SYS_mq_unlink, [2], un)).toBe(0);
+    expect(await kernel.syscall(proc, A.SYS_mq_unlink, [2], un)).toBe(-A.ENOENT);
+    expect(await recv(fd)).toBe('0:ping'); // still open after the unlink
+    await call(A.SYS_close, [fd]);
+  });
+
+  it('Open POSIX timer_*: POSIX timers send their signal and count overruns while it is held', async () => {
+    const t = kernel.vfork(proc);
+    kernel.setSigmask(t, new Set([A.SIGUSR1]));
+    const sev = new Uint8Array(24);
+    new DataView(sev.buffer).setInt32(8, A.SIGUSR1, true); // SIGEV_SIGNAL
+    const id = await kernel.syscall(t, A.SYS_timer_create, [1 /* CLOCK_MONOTONIC */, 1], sev);
+    expect(id).toBe(0);
+    expect(await kernel.syscall(t, A.SYS_timer_create, [77, 0], new Uint8Array(24))).toBe(-A.EINVAL);
+    const its = (intervalMs: number, valueMs: number) => {
+      const b = new Uint8Array(32); const v = new DataView(b.buffer);
+      v.setBigInt64(8, BigInt(intervalMs * 1e6), true); v.setBigInt64(24, BigInt(valueMs * 1e6), true);
+      return b;
+    };
+    // every 20 ms from 20 ms; the signal is blocked, so expiries after the first are overruns
+    expect(await kernel.syscall(t, A.SYS_timer_settime, [id, 0], its(20, 20))).toBe(0);
+    const cur = new Uint8Array(32);
+    expect(await kernel.syscall(t, A.SYS_timer_gettime, [id], cur)).toBe(0);
+    expect(Number(new DataView(cur.buffer).getBigInt64(8, true))).toBe(20e6);
+    await new Promise((r) => setTimeout(r, 130));
+    expect(t.deferredSignals.has(A.SIGUSR1)).toBe(true);
+    // once the held signal is taken (sigwait), the overruns of that one are reported
+    t.deferredSignals.delete(A.SIGUSR1);
+    expect(await kernel.syscall(t, A.SYS_timer_getoverrun, [id], new Uint8Array(8))).toBeGreaterThanOrEqual(3);
+    expect(await kernel.syscall(t, A.SYS_timer_delete, [id], new Uint8Array(8))).toBe(0);
+    expect(await kernel.syscall(t, A.SYS_timer_delete, [id], new Uint8Array(8))).toBe(-A.EINVAL);
+    kernel.kill(t.pid, A.SIGKILL);
+    await kernel.syscall(proc, A.SYS_wait4, [t.pid, 0], new Uint8Array(8));
+  });
+
+  it('Open POSIX sigqueue/sigwaitinfo: real-time signals queue with their values; siginfo for handlers and sigwait', async () => {
+    const t = kernel.vfork(proc);
+    const RT = A.SIGRTMIN + 2;
+    kernel.setSigmask(t, new Set([RT, A.SIGUSR1]));
+    const queue = (target: number, signo: number, value: number, code = A.SI_QUEUE, from = t) => {
+      const si = new Uint8Array(A.SIGINFO_SIZE);
+      A.encodeSiginfo({ signo, code, pid: from.pid, uid: from.uid, value: BigInt(value) }, si);
+      return kernel.syscall(from, A.SYS_rt_sigqueueinfo, [target, signo], si);
+    };
+    // three of a real-time signal queue, in order, with their values; a standard one coalesces
+    for (const v of [5, 6, 7]) expect(await queue(t.pid, RT, v)).toBe(0);
+    for (const v of [1, 2]) expect(await queue(t.pid, A.SIGUSR1, v)).toBe(0);
+    const take = async (signo: number) => {
+      const d = new Uint8Array(A.SIGINFO_SIZE);
+      new DataView(d.buffer).setUint32(signo > 32 ? 4 : 0, 1 << ((signo - 1) % 32), true);
+      const got = await kernel.syscall(t, A.SYS_rt_sigtimedwait, [0], d);
+      return got < 0 ? got : `${got}:${A.decodeSiginfo(d).code}:${A.decodeSiginfo(d).value}`;
+    };
+    expect([await take(RT), await take(RT), await take(RT), await take(RT)]).toEqual([`${RT}:-1:5`, `${RT}:-1:6`, `${RT}:-1:7`, -A.EAGAIN]);
+    expect([await take(A.SIGUSR1), await take(A.SIGUSR1)]).toEqual([`${A.SIGUSR1}:-1:1`, -A.EAGAIN]);
+    // SI_USER (or any code >= 0) to another process is the kernel's to claim; signal 0 probes
+    expect(await queue(proc.pid, A.SIGUSR2, 1, A.SI_USER)).toBe(-A.EPERM);
+    expect(await queue(t.pid, 0, 0)).toBe(0);
+    expect(await queue(99999, A.SIGUSR2, 1)).toBe(-A.ESRCH);
+    // a handler's signal: the guest takes it from the channel, then asks for its siginfo
+    t.dispositions.set(A.SIGUSR2, 0x1234);
+    expect(await queue(t.pid, A.SIGUSR2, 42)).toBe(0);
+    expect(kernel.takeSignal(t)).toBe(A.SIGUSR2);
+    const si = new Uint8Array(A.SIGINFO_SIZE);
+    expect(await kernel.syscall(t, A.SYS_shiro_siginfo, [A.SIGUSR2], si)).toBe(0);
+    expect(A.decodeSiginfo(si)).toMatchObject({ signo: A.SIGUSR2, code: A.SI_QUEUE, pid: t.pid, value: 42n });
+    expect(await kernel.syscall(t, A.SYS_shiro_siginfo, [A.SIGHUP], si)).toBe(-A.ENOENT);
+    // a timer's signal says so, with its id and sigev_value
+    const sev = new Uint8Array(24); const sv = new DataView(sev.buffer);
+    sv.setBigInt64(0, 77n, true); sv.setInt32(8, RT, true);
+    const id = await kernel.syscall(t, A.SYS_timer_create, [1, 1], sev);
+    const its = new Uint8Array(32); new DataView(its.buffer).setBigInt64(24, 5_000_000n, true);
+    expect(await kernel.syscall(t, A.SYS_timer_settime, [id, 0], its)).toBe(0);
+    await new Promise((r) => setTimeout(r, 40));
+    const d = new Uint8Array(A.SIGINFO_SIZE);
+    new DataView(d.buffer).setUint32(4, 1 << ((RT - 1) % 32), true);
+    expect(await kernel.syscall(t, A.SYS_rt_sigtimedwait, [0], d)).toBe(RT);
+    const ti = new DataView(d.buffer);
+    expect([ti.getInt32(8, true), ti.getInt32(16, true), ti.getBigInt64(24, true)]).toEqual([A.SI_TIMER, id, 77n]);
+    kernel.kill(t.pid, A.SIGKILL);
+    await kernel.syscall(proc, A.SYS_wait4, [t.pid, 0], new Uint8Array(8));
+  });
+
+  it('signals routed through job control keep their siginfo (sigwaitinfo sees kill as SI_USER, sigqueue values queue)', async () => {
+    const jc = new JobControl();
+    const detach = attachKernel(kernel, jc);
+    try {
+      const t = kernel.vfork(proc);
+      expect(t.signalHook).toBeTruthy();
+      const RT = A.SIGRTMIN + 3;
+      kernel.setSigmask(t, new Set([RT, A.SIGUSR1]));
+      expect(await kernel.syscall(t, A.SYS_kill, [t.pid, A.SIGUSR1], new Uint8Array(8))).toBe(0);
+      for (const v of [8, 9]) {
+        const si = new Uint8Array(A.SIGINFO_SIZE);
+        A.encodeSiginfo({ signo: RT, code: A.SI_QUEUE, pid: t.pid, uid: t.uid, value: BigInt(v) }, si);
+        expect(await kernel.syscall(t, A.SYS_rt_sigqueueinfo, [t.pid, RT], si)).toBe(0);
+      }
+      const take = async (signo: number) => {
+        const d = new Uint8Array(A.SIGINFO_SIZE);
+        new DataView(d.buffer).setUint32(signo > 32 ? 4 : 0, 1 << ((signo - 1) % 32), true);
+        const got = await kernel.syscall(t, A.SYS_rt_sigtimedwait, [0], d);
+        return got < 0 ? got : `${got}:${A.decodeSiginfo(d).code}:${A.decodeSiginfo(d).pid === t.pid}:${A.decodeSiginfo(d).value}`;
+      };
+      expect(await take(A.SIGUSR1)).toBe(`${A.SIGUSR1}:0:true:0`);
+      expect([await take(RT), await take(RT), await take(RT)]).toEqual([`${RT}:-1:true:8`, `${RT}:-1:true:9`, -A.EAGAIN]);
+      kernel.kill(t.pid, A.SIGKILL);
+      await kernel.syscall(proc, A.SYS_wait4, [t.pid, 0], new Uint8Array(8));
+    } finally { detach(); }
+  });
+
+  it('connect03: connecting to an AF_UNIX socket file takes write permission on it', async () => {
+    const stack = new NetStack();
+    stack.configure({ relayUrl: null, tokenUrl: null, dohUrl: null, portHost: null });
+    const off = installNet(kernel, stack);
+    const sun = new Uint8Array(110);
+    sun[0] = A.AF_UNIX;
+    sun.set(enc.encode('/tmp/kc/c03.sock'), 2);
+    const srv = await call(A.SYS_socket, [A.AF_UNIX, A.SOCK_STREAM, 0]);
+    expect(await kernel.syscall(proc, A.SYS_bind, [srv, 110], sun)).toBe(0);
+    expect(await call(A.SYS_listen, [srv, 5])).toBe(0);
+    const cli = await call(A.SYS_socket, [A.AF_UNIX, A.SOCK_STREAM, 0]);
+    expect(proc.uid).not.toBe(0);
+    await fs.chmod('/tmp/kc/c03.sock', 0o500);
+    expect(await kernel.syscall(proc, A.SYS_connect, [cli, 110], sun)).toBe(-A.EACCES);
+    await fs.chmod('/tmp/kc/c03.sock', 0o700);
+    expect(await kernel.syscall(proc, A.SYS_connect, [cli, 110], sun)).toBe(0);
+    for (const fd of [cli, srv]) await call(A.SYS_close, [fd]);
     off();
   });
 
@@ -295,6 +553,40 @@ describe('kernel syscalls found by LTP', () => {
     expect(await kernel.syscall(proc, A.SYS_connect, [st, 110], sun)).toBe(-A.EPROTOTYPE);
     for (const fd of [a, b, s, c, st]) await call(A.SYS_close, [fd]);
     off();
+  });
+
+  it('O_CREAT/O_TRUNC/O_EXCL/O_NOFOLLOW opens and unlink are answered synchronously from the cache', async () => {
+    const enc2 = new TextEncoder();
+    const sync = (nr: number, args: number[], path: string) => {
+      const d = new Uint8Array(512);
+      const b = enc2.encode(path);
+      d.set(b);
+      return kernel.syscallSync(proc, nr, nr === A.SYS_unlink ? [b.length] : [A.AT_FDCWD, b.length, ...args], d);
+    };
+    await fs.writeFile('/tmp/kc/old', 'abc');
+    await fs.readFile('/tmp/kc/old'); // cached
+    const fd = sync(A.SYS_openat, [A.O_WRONLY | A.O_CREAT | A.O_TRUNC, 0o640], '/tmp/kc/new');
+    expect(fd).toBeGreaterThanOrEqual(0);
+    expect((await fs.stat('/tmp/kc/new')).size).toBe(0);
+    expect((await fs.stat('/tmp/kc/new')).mode & 0o777).toBe(0o640 & ~proc.umask);
+    expect(sync(A.SYS_openat, [A.O_WRONLY | A.O_CREAT | A.O_EXCL, 0o600], '/tmp/kc/new')).toBe(-A.EEXIST);
+    const t = sync(A.SYS_openat, [A.O_WRONLY | A.O_TRUNC, 0], '/tmp/kc/old');
+    expect(t).toBeGreaterThanOrEqual(0);
+    await call(A.SYS_close, [t]);
+    expect(await fs.readFile('/tmp/kc/old', 'utf8')).toBe('');
+    expect(sync(A.SYS_openat, [A.O_RDONLY, 0], '/tmp/kc/nope')).toBe(-A.ENOENT);
+    await fs.symlink('/tmp/kc/old', '/tmp/kc/ln');
+    await fs.lstat('/tmp/kc/ln');
+    expect(sync(A.SYS_openat, [A.O_RDONLY | A.O_NOFOLLOW, 0], '/tmp/kc/ln')).toBe(-A.ELOOP);
+    // unlink: done in memory unless the file is open (fd is still open: async path)
+    expect(sync(A.SYS_unlink, [], '/tmp/kc/new')).toBe(undefined);
+    await call(A.SYS_close, [fd]);
+    expect(sync(A.SYS_unlink, [], '/tmp/kc/new')).toBe(0);
+    expect(await fs.exists('/tmp/kc/new')).toBe(false);
+    expect(sync(A.SYS_unlink, [], '/tmp/kc/new')).toBe(-A.ENOENT);
+    expect(sync(A.SYS_unlink, [], '/tmp/kc')).toBe(-A.EISDIR);
+    expect(sync(A.SYS_unlink, [], '/tmp/kc/ln')).toBe(0); // the link, not its target
+    expect(await fs.exists('/tmp/kc/old')).toBe(true);
   });
 
   it('paths below /proc/self/fd/N (and /dev/fd/N) name entries of that open directory', async () => {

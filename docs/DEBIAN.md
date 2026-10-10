@@ -163,6 +163,7 @@ toolchain install c --apt        # the same packages through apt instead
 | `java` | default-jdk-headless | 11 | 156 MB (306 MB unpacked) |
 | `classic` | gfortran, gnucobol, fp-compiler, fp-units-rtl, gnat | 61 | 142 MB (415 MB unpacked) |
 | `tex` | texlive-latex-recommended, latexmk | 65 | 86 MB (235 MB unpacked) |
+| `go` | golang-go, plus std compiled into the build cache | 4 | 116 MB (414 MB unpacked, 163 MB of it the cache) |
 
 Sizes are from `.toolchain-build/layers/index.json` (build of 2026-10-09). Nothing is
 downloaded at install time beyond the layer's index. A program's chunks are
@@ -188,6 +189,28 @@ index holds:
   auto-installed marks), debconf's `*.dat`, `/var/lib/dpkg/diversions`,
   `statoverride` and `triggers/*`, and `/etc/passwd`, `group`, `shadow`,
   `gshadow` and `shells`.
+
+A set can also name `prepare` commands, which run in the chroot after apt
+and are part of the recipe. `go` uses this to run `go build std` with
+`HOME=/home/user` and `CGO_ENABLED=0`, so the layer carries the standard
+library already compiled in the tab user's default build cache
+(`~/.cache/go-build`, unowned files). The tab's `go` has the same GOROOT
+and compiler. The layer also sets `CGO_ENABLED=0` and `GOFLAGS=-p=1` in `~/.config/go/env`,
+the file `go env -w` writes; it is merged key by key, so a user's own
+setting wins. Without that, `go` would find tabcomputer's `cc` (a WASM-only
+compiler) on PATH, turn cgo on for `net` and fail. With it, `go build`
+and `go run` hit the cache and compile only the user's packages.
+One build job at a time costs nothing under Blink, which runs one guest thread at a time. It also avoids a Blink bug: its vfork emulation can take Go's preemption signal (SIGURG) during parallel forks and wedge `go`, leaving its other children as zombies (with perf-blink). `go env -u CGO_ENABLED` turns cgo back on, for example with the `c` set
+installed; the cgo packages then compile once.
+
+Go deletes cache entries whose mtime is more than 5 days old (once a day,
+recorded in `trim.txt`), and it ignores a `trim.txt` dated in the future.
+The layer's times are the snapshot's, so the first `go` command used to trim
+every shipped entry, and the next build compiled std again under Blink. The
+cache entries are therefore dated 2100 (a `touch` in the set's `prepare`).
+build-layers.sh clamps times after the snapshot, except ones beyond 2096, so
+those stay. Go never trims or re-touches them. `go clean -cache` empties the
+cache.
 
 Chunks are the base rootfs's format (gzip, named by the sha256 of their
 bytes). Each package gets its own chunks, so a package two sets share (gcc-14

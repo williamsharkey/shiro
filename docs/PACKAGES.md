@@ -86,7 +86,8 @@ and v3.
 
 URLs starting with `/` are served by the tabcomputer origin (`public/pkg/` in this
 repo, copied to `dist/` by vite); outside a tabcomputer page they resolve against
-`https://shiro.computer`, or `$TABCOMPUTER_PKG_MIRROR`.
+`https://tabcomputer.com` (`DEFAULT_MIRROR`; shiro.computer no longer serves `/pkg/`), or
+`$TABCOMPUTER_PKG_MIRROR`.
 
 ## Kernel features and gating
 
@@ -134,7 +135,7 @@ works everywhere and the interactive mode needs a page that can block.
 | figlet, chkfont (+57 fonts) | 0.0.1 (FIGlet 2.2.5) | Wasmer | preview1 | ok |
 | uuid | 0.3.0 | Wasmer | preview1 | ok |
 | wabt (wat2wasm, wasm2wat, ...) | 1.0.37 | Wasmer | preview1 | ok |
-| ruby (ruby, irb, gem, rake, bundle) | 3.4.1 | ruby.wasm release, repacked, `ruby.sh` | preview1 + mounts | ok; no sockets or threads (stubs); irb needs blocking stdin |
+| ruby (ruby, irb, gem, rake, bundle) | 3.4.1 | ruby.wasm release, repacked, `ruby.sh` | preview1 + mounts | ok; no sockets or threads (stubs); irb reads the cooked tty (io/console stub) |
 | fortune, lolcat, brotli, qr2text, viu | | Wasmer | wasi_unstable | ok |
 | openssl-wasm (openssl) | 0.2.0 (OpenSSL 1.1) | Wasmer | wasi_unstable | ok (no s_client: sockets). The `openssl` package is now OpenSSL 3.5 as an x86-64 build ([COMPAT.md](COMPAT.md)) |
 | quickjs (qjs) | 0.0.3 | Wasmer | wasi_unstable | partial: REPL |

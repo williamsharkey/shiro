@@ -1,0 +1,55 @@
+From 03de69d985888fe00a81df70b75cc0f09ba7b252 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 02:21:10 +0000
+Subject: [PATCH] Shiro: rt_sigqueueinfo and rt_tgsigqueueinfo go to the kernel
+ as kill
+
+Conformance (Open POSIX aio_*, sigqueue): sigqueue(2) and POSIX AIO's
+completion notice (glibc queues signal 0 for an all-zero sigevent) got
+ENOSYS, which glibc's AIO then stored as the request's error (aio_error
+said ENOSYS after a write that had happened). The kernel delivers them as
+kill(2): signal 0 checks the target, a signal is delivered; the queued
+si_value doesn't reach the handler yet (signals carry no siginfo). An
+si_code of SI_USER or above for another process is EPERM, as on Linux.
+---
+ blink/shiro.inc | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index ef073f1..c8f6a00 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2188,6 +2188,8 @@ static void ShiroDropKid(struct System *s) {
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_conformance(void) { return 1; }
+ // 0083: raise(SIGKILL/SIGSTOP) is the kernel's
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_raise_kill(void) { return 1; }
++// 0084: rt_sigqueueinfo is the kernel's (sigqueue, POSIX AIO)
++EMSCRIPTEN_KEEPALIVE int blink_shiro_sigqueue(void) { return 1; }
+ 
+ // the kernel signalled hosted child `pid` (host.mjs routes by pid)
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid(int pid, int sig) {
+@@ -2782,6 +2784,21 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       if (r >= 0 && old && CopyToUserWrite(m, old, lim, 16) == -1) r = -EFAULT_LINUX;
+       break;
+     }
++    case 0x081: case 0x129: {                                         // rt_sigqueueinfo, rt_tgsigqueueinfo
++      // The kernel delivers it as kill(2) does (signal 0 checks the target
++      // exists): glibc's sigqueue, and POSIX AIO's completion notice (an
++      // all-zero sigevent is SIGEV_SIGNAL with signal 0), work; the queued
++      // si_value doesn't reach the handler (signals carry no siginfo yet)
++      u8 si[128];
++      int pid = (int)a, sig = nr == 0x081 ? (int)b : (int)c;
++      i64 info = nr == 0x081 ? (i64)c : (i64)d;
++      if (sig < 0 || sig > 64) { r = -EINVAL_LINUX; break; }
++      if (CopyFromUserRead(m, si, info, sizeof(si)) == -1) { r = -EFAULT_LINUX; break; }
++      // only the kernel may claim SI_USER or a kernel si_code for another process (Linux)
++      if ((i32)Read32(si + 8) >= 0 && pid != m->system->pid) { r = -EPERM_LINUX; break; }
++      r = KS(m, 62, A12(pid, sig));                                   // kill
++      break;
++    }
+     case 0x0C8: case 0x0EA: {                                         // tkill, tgkill
+       // SIGKILL or SIGSTOP to the calling thread (raise) is the kernel's to
+       // act on: Blink would raise it on the host, where nothing ends or
+-- 
+2.43.0
+

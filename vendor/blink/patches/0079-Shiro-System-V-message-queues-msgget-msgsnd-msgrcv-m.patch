@@ -1,0 +1,74 @@
+From f00028393b575c4d06f037206c93839f2aa426b5 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 02:09:01 +0000
+Subject: [PATCH 79/82] Shiro: System V message queues (msgget, msgsnd, msgrcv,
+ msgctl)
+
+Forwarded to the kernel's queues (unix/perf-kernel): msgsnd copies
+mtype + text in, msgrcv copies mtype + the text it got out (msgtyp, a
+long, in two halves); both block in the kernel. msgctl copies the
+msqid_ds (IPC_STAT, MSG_STAT, MSG_STAT_ANY, IPC_SET) and msginfo.
+---
+ blink/shiro.inc | 39 +++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 39 insertions(+)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index fc611db..657798e 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2766,6 +2766,41 @@ static i64 ShiroSemctl(struct Machine *m, int semid, int semnum, int cmd, u64 ar
+   }
+ }
+ 
++// ── System V message queues ──────────────────────────────────────────────
++// The kernel's (unix/perf-kernel): msgsnd and msgrcv block there.
++
++static i64 ShiroMsgsnd(struct Machine *m, int id, i64 msgp, u64 sz, int flg) {
++  u8 *buf;
++  if ((i64)sz < 0) return -EINVAL_LINUX;
++  if (sz + 8 > (u64)g_shiro_chunk) return -EINVAL_LINUX;
++  if (!(buf = (u8 *)ShiroAlloc(m, sz + 8))) return -ENOMEM_LINUX;
++  if (CopyFromUserRead(m, buf, msgp, sz + 8) == -1) return -EFAULT_LINUX;
++  return ShiroCall(m, 69, A12(id, (int)sz, flg), buf, sz + 8, 0, false, true);
++}
++
++static i64 ShiroMsgrcv(struct Machine *m, int id, i64 msgp, u64 sz, i64 typ, int flg) {
++  u8 *buf;
++  i64 r;
++  if ((i64)sz < 0) return -EINVAL_LINUX;
++  if (sz + 8 > (u64)g_shiro_chunk) sz = g_shiro_chunk - 8;
++  if (!(buf = (u8 *)ShiroAlloc(m, sz + 8))) return -ENOMEM_LINUX;
++  r = ShiroCall(m, 70, A12(id, (int)sz, (int)typ, (int)(typ >> 32), flg), buf, 0, sz + 8,
++                false, true);
++  if (r >= 0 && CopyToUserWrite(m, msgp, buf, r + 8) == -1) return -EFAULT_LINUX;
++  return r;
++}
++
++static i64 ShiroMsgctl(struct Machine *m, int id, int cmd, i64 buf) {
++  u8 d[120] = {0};
++  i64 r;
++  int c = cmd & ~0x100;  // IPC_64
++  int out = (c == 2 || c == 11 || c == 13) ? 120 : (c == 3 || c == 12) ? 32 : 0;
++  if (c == 1 && CopyFromUserRead(m, d, buf, 120) == -1) return -EFAULT_LINUX;  // IPC_SET
++  r = ShiroCall(m, 71, A12(id, c), d, c == 1 ? 120 : 0, out, false, false);
++  if (r >= 0 && out && CopyToUserWrite(m, buf, d, out) == -1) return -EFAULT_LINUX;
++  return r;
++}
++
+ // ── the dispatcher ───────────────────────────────────────────────────────
+ 
+ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+@@ -3294,6 +3329,10 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+     case 0x041: r = ShiroSemop(m, a, b, c, 0); break;                 // semop
+     case 0x0DC: r = ShiroSemop(m, a, b, c, d); break;                 // semtimedop
+     case 0x042: r = ShiroSemctl(m, a, b, c, d); break;                // semctl
++    case 0x044: r = KS(m, 68, A12((int)a, (int)b)); break;            // msgget
++    case 0x045: r = ShiroMsgsnd(m, a, b, c, d); break;                // msgsnd
++    case 0x046: r = ShiroMsgrcv(m, a, b, c, d, e); break;             // msgrcv
++    case 0x047: r = ShiroMsgctl(m, a, b, c); break;                   // msgctl
+     default:
+       return false;
+   }
+-- 
+2.43.0
+

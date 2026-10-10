@@ -1,0 +1,46 @@
+From 906c0d24408bd330c94f170c74fd30454984223f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 02:10:58 +0000
+Subject: [PATCH] Shiro: raise(SIGKILL) and raise(SIGSTOP) go to the kernel
+
+Conformance (Open POSIX sigaction_4-*, signal tests): tkill/tgkill of
+SIGKILL or SIGSTOP to the calling thread raised it on the host, where
+nothing ended or stopped the guest process and its parent's wait never
+returned; it is kill(getpid(), sig) in the kernel now, which ends (or
+stops) the process, hosted fork children included.
+---
+ blink/shiro.inc | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 86a3e93..ef073f1 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2186,6 +2186,8 @@ static void ShiroDropKid(struct System *s) {
+ // Which conformance patches this engine has (tests skip what it lacks): 1 =
+ // 0081 (record locks, pipe sizes and RLIMIT_NOFILE from the kernel, EFAULT)
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_conformance(void) { return 1; }
++// 0083: raise(SIGKILL/SIGSTOP) is the kernel's
++EMSCRIPTEN_KEEPALIVE int blink_shiro_raise_kill(void) { return 1; }
+ 
+ // the kernel signalled hosted child `pid` (host.mjs routes by pid)
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid(int pid, int sig) {
+@@ -2780,6 +2782,15 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       if (r >= 0 && old && CopyToUserWrite(m, old, lim, 16) == -1) r = -EFAULT_LINUX;
+       break;
+     }
++    case 0x0C8: case 0x0EA: {                                         // tkill, tgkill
++      // SIGKILL or SIGSTOP to the calling thread (raise) is the kernel's to
++      // act on: Blink would raise it on the host, where nothing ends or
++      // stops the guest process and its parent's wait never returns
++      int tid = nr == 0x0C8 ? (int)a : (int)b, sig = nr == 0x0C8 ? (int)b : (int)c;
++      if ((sig != 9 && sig != 19) || tid != m->tid || (nr == 0x0EA && (int)a != m->system->pid)) return false;
++      r = KS(m, 62, A12(m->system->pid, sig));                       // kill
++      break;
++    }
+     case 0x07F: {                                                     // rt_sigpending
+       // the kernel holds the signals the guest blocked (ShiroSyncMask), so
+       // they are pending there; Blink's own pending ones count too
+-- 
+2.43.0
+

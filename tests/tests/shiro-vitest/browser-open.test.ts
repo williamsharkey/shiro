@@ -127,6 +127,8 @@ describe('claude login', () => {
     expect(loginArgs(['login'])).toEqual(['auth', 'login']);
     expect(loginArgs(['/login', '--console'])).toEqual(['auth', 'login', '--console']);
     expect(loginArgs(['-p', 'hi'])).toEqual(['-p', 'hi']);
+    // the npm build's auth login has no paste prompt; its in-session /login does
+    expect(loginArgs(['login'], 'npm')).toEqual(['/login']);
   });
 });
 

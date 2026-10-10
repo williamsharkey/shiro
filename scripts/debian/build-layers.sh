@@ -91,7 +91,7 @@ in_root() { chroot "$ROOT" /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HO
 
 for id in "${IDS[@]}"; do
   pkgs=$(node -e 'const l = require(process.argv[1]).layers[process.argv[2]]; if (!l) { console.error("no layer " + process.argv[2]); process.exit(1); } console.log(l.packages.join(" "))' "$SPEC" "$id")
-  recipe=$( { echo "$BASE_ID $SNAPSHOT $MIRROR $pkgs"; cat "$0" "$HERE/pack-layer.mjs"; } | sha256sum | cut -c1-16)
+  recipe=$( { echo "$BASE_ID $SNAPSHOT $MIRROR $pkgs"; node -e 'console.log(JSON.stringify(require(process.argv[1]).layers[process.argv[2]].prepare || []))' "$SPEC" "$id"; cat "$0" "$HERE/pack-layer.mjs"; } | sha256sum | cut -c1-16)
   if [ -z "${FORCE:-}" ] && [ -f "$OUT/$id/layer.json" ] && grep -q "\"recipe\": \"$recipe\"" "$OUT/$id/layer.json"; then
     echo "== $id: up to date ($recipe)"; continue
   fi
@@ -152,6 +152,14 @@ EOF
   # shellcheck disable=SC2086
   in_root apt-get "${APT_OPTS[@]}" -o APT::Keep-Downloaded-Packages=true install -y $pkgs
   in_root ldconfig
+  # The set's own preparation (toolchains.json "prepare"), e.g. Go's std
+  # compiled into the build cache so the tab doesn't compile it under Blink
+  prepare=$(node -e 'console.log((require(process.argv[1]).layers[process.argv[2]].prepare || []).join("\n"))' "$SPEC" "$id")
+  if [ -n "$prepare" ]; then
+    printf '%s\n' "$prepare" > "$ROOT/tmp/tc-prepare.sh"
+    in_root sh -e /tmp/tc-prepare.sh
+    rm -f "$ROOT/tmp/tc-prepare.sh"
+  fi
 
   # Back to the base's configuration and the overlay's stubs
   rm -f "$ROOT/etc/apt/build-ca.crt"
@@ -168,7 +176,9 @@ EOF
   find "$ROOT/var/log" -type f -delete
   rm -f "$ROOT/var/cache/debconf/"*-old "$ROOT/var/lib/dpkg/"*-old
   rm -rf "$ROOT/tmp/"* "$ROOT/var/tmp/"* "$ROOT/root/".bash_history "$ROOT/root/.cache"
-  find "$ROOT" -xdev -newermt "@$SOURCE_DATE_EPOCH" -print0 | xargs -0r touch --no-dereference --date="@$SOURCE_DATE_EPOCH"
+  # Times after the snapshot are clamped to it, except ones a prepare step set
+  # far in the future on purpose (Go's cache entries: see toolchains.json)
+  find "$ROOT" -xdev -newermt "@$SOURCE_DATE_EPOCH" ! -newermt "@4000000000" -print0 | xargs -0r touch --no-dereference --date="@$SOURCE_DATE_EPOCH"
 
   node "$HERE/pack-layer.mjs" "$BASEDIR" "$ROOT" "$OUT" --id "$id" --spec "$SPEC" --base-id "$BASE_ID" --snapshot "$SNAPSHOT" --recipe "$recipe"
   # Each finished layer is served right away

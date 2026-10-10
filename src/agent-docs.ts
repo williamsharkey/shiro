@@ -129,14 +129,10 @@ ${bootSection(ctx, name)}
   45 s) and \`sudo apt install -y NAME\` (Debian's own apt and dpkg, x86-64 in the
   emulator: about a minute for a small package, python3 about 4 minutes). 496 of
   popcon's top 500 packages pass a smoke test.
-- Debian toolchains in seconds: \`toolchain install c\` (gcc, g++, make, cmake, gdb),
-  \`python\`, \`node\`, \`java\`, \`classic\` (gfortran, gnucobol, fpc, gnat) or \`tex\`
-  applies a prebuilt set of Debian packages (dpkg knows them; apt works on top).
-  \`toolchain list\` shows them. It runs \`debian install\` first if needed.
 - Whole toolchains: \`toolchain install c\` (gcc, g++, make, gdb, cmake), \`python\`,
-  \`tex\`, \`classic\` (Fortran, COBOL, Pascal, Ada), \`node\` or \`java\` puts the
-  Debian packages in place in seconds instead of apt's minutes; dpkg knows them, so
-  apt keeps working. \`toolchain list\` shows the sets. The first run of each program
+  \`go\` (std precompiled), \`tex\`, \`classic\` (Fortran, COBOL, Pascal, Ada), \`node\`
+  or \`java\` puts the Debian packages in place in seconds instead of apt's minutes;
+  dpkg knows them, so apt keeps working. \`toolchain list\` shows the sets. The first run of each program
   downloads it (gcc's hello world takes about 9 s from a fresh tab).
 - Prebuilt: \`pkg install NAME\` installs one of ${name}'s 72 prebuilt programs
   (WebAssembly or static x86-64: vim, htop, git, python3, jq, curl, make, clang,
@@ -152,6 +148,8 @@ ${bootSection(ctx, name)}
 
 ## Useful here
 
+- Web apps: \`npm create vite@latest app -- --template react\`, \`npm i\`, \`npm run dev\`,
+  then \`serve open 5173\` shows it in a preview window with hot reload.
 - \`serve DIR\` serves a folder in a preview window; a program that \`listen()\`s on
   a port is served the same way. Both are reachable only from this tab.
 - \`page :PORT text|click|input|eval ...\` drives that page, so you can test a UI
@@ -160,8 +158,8 @@ ${bootSection(ctx, name)}
 
 ## What doesn't work
 
-- File watching: \`fs.watch\` never fires and inotify is ENOSYS, so watch modes
-  and hot reload don't react to edits. Re-run commands instead.
+- inotify is ENOSYS for Linux programs (entr, inotifywait). Node's \`fs.watch\`
+  works, so nodemon, vite's hot reload and jest --watch do.
 - \`time\` reports no user/sys CPU time.
 - Docker, VMs, kernel modules, GPU access, a D-Bus session bus.
 - \`systemctl\` is a small built-in service manager, not systemd.

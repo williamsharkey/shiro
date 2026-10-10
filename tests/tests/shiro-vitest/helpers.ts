@@ -52,6 +52,9 @@ import { sudoCmd } from '@shiro/commands/sudo';
 import { debianCmd, shiroAlternativesCmd, shiroAptCmd, shiroAptMethodCmd } from '@shiro/commands/debian';
 import { toolchainCmd } from '@shiro/commands/toolchain';
 
+/** Variables every createTestShell() shell starts with (node-worker-suites.test.ts sets TABCOMPUTER_NODE_WORKER) */
+export const testShellEnv: Record<string, string> = {};
+
 export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell }> {
   const fs = new FileSystem();
   await fs.init();
@@ -130,6 +133,7 @@ export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell 
   commands.registerAll([sudoCmd, debianCmd, shiroAlternativesCmd, shiroAptCmd, shiroAptMethodCmd, toolchainCmd]);
 
   const shell = new Shell(fs, commands);
+  Object.assign(shell.env, testShellEnv);
   return { fs, shell };
 }
 

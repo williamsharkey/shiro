@@ -79,6 +79,7 @@ export const SYS_symlink = 88;
 export const SYS_chmod = 90;
 export const SYS_fchmod = 91;
 export const SYS_rt_sigpending = 127;
+export const SYS_rt_sigtimedwait = 128;
 export const SYS_rt_sigsuspend = 130;
 export const SYS_sigaltstack = 131;
 export const SYS_gettid = 186;
@@ -177,6 +178,8 @@ export const SYS_getenv = 1001;
  * for it. Returns the child pid.
  */
 export const SYS_shiro_vfork = 1010;
+/** clone(2) flag: the child's parent is the caller's parent (SYS_shiro_vfork takes it in args[0]) */
+export const CLONE_PARENT = 0x8000;
 /**
  * Shiro: execve. Data area: JSON `{ path, argv, env: ["K=V", ...], inproc? }`.
  * For a SYS_shiro_vfork child the program starts in it and the result is 0.
@@ -195,6 +198,10 @@ export const SYS_shiro_sleeping = 1012;
 /** SysV shm attach/detach bookkeeping (the engine maps the memory; src/kernel/sysvshm.ts). */
 export const SYS_shiro_shmat = 1013;
 export const SYS_shiro_shmdt = 1014;
+/** Shared objects across engine instances (src/kernel/shmobj.ts, docs/research/SHARED_MAPPINGS.md) */
+export const SYS_shiro_shmobj_map = 1020;
+export const SYS_shiro_shmobj_unmap = 1021;
+export const SYS_shiro_shmobj_published = 1022;
 export const SYS_shmget = 29;
 export const SYS_shmat = 30;
 export const SYS_shmctl = 31;
@@ -204,6 +211,11 @@ export const SYS_semget = 64;
 export const SYS_semop = 65;
 export const SYS_semctl = 66;
 export const SYS_semtimedop = 220;
+/** SysV message queues (src/kernel/sysvmsg.ts) */
+export const SYS_msgget = 68;
+export const SYS_msgsnd = 69;
+export const SYS_msgrcv = 70;
+export const SYS_msgctl = 71;
 
 // ── errno (Linux) ──────────────────────────────────────────────────────────
 export const EPERM = 1;
@@ -236,6 +248,7 @@ export const ESPIPE = 29;
 export const EROFS = 30;
 export const EPIPE = 32;
 export const ERANGE = 34;
+export const ENOMSG = 42;
 export const EIDRM = 43;
 export const ENAMETOOLONG = 36;
 export const ENOSYS = 38;
@@ -418,6 +431,56 @@ export const SIGTERM = 15;
 export const SIGCHLD = 17;
 export const SIGCONT = 18;
 export const SIGSTOP = 19;
+/** sizeof(siginfo_t) */
+export const SIGINFO_SIZE = 128;
+/** si_code values (the kernel's own signals are SI_KERNEL) */
+export const SI_USER = 0;
+export const SI_KERNEL = 0x80;
+export const SI_QUEUE = -1;
+export const SI_TIMER = -2;
+export const SI_MESGQ = -3;
+export const SI_TKILL = -6;
+/** What a signal carries (struct siginfo's fields that apply to it) */
+export interface SigInfo {
+  signo: number;
+  code: number;
+  pid?: number;
+  uid?: number;
+  /** sigval: sival_int / sival_ptr, 64 bits */
+  value?: bigint;
+  timerid?: number;
+  overrun?: number;
+  status?: number;
+}
+/** `info` into `out` as the x86-64 Linux struct siginfo (128 bytes) */
+export function encodeSiginfo(info: SigInfo, out: Uint8Array): void {
+  const dv = new DataView(out.buffer, out.byteOffset, SIGINFO_SIZE);
+  out.fill(0, 0, SIGINFO_SIZE);
+  dv.setInt32(0, info.signo, true);
+  dv.setInt32(8, info.code, true);
+  if (info.code === SI_TIMER) {
+    dv.setInt32(16, info.timerid ?? 0, true); // si_tid
+    dv.setInt32(20, info.overrun ?? 0, true); // si_overrun
+    dv.setBigInt64(24, info.value ?? 0n, true); // si_value
+  } else {
+    dv.setInt32(16, info.pid ?? 0, true); // si_pid
+    dv.setUint32(20, info.uid ?? 0, true); // si_uid
+    if (info.status !== undefined) dv.setInt32(24, info.status, true); // si_status (SIGCHLD)
+    else dv.setBigInt64(24, info.value ?? 0n, true); // si_value
+  }
+}
+/** The fields of a struct siginfo in `data` */
+export function decodeSiginfo(data: Uint8Array): SigInfo {
+  const dv = new DataView(data.buffer, data.byteOffset, SIGINFO_SIZE);
+  return { signo: dv.getInt32(0, true), code: dv.getInt32(8, true), pid: dv.getInt32(16, true), uid: dv.getUint32(20, true), value: dv.getBigInt64(24, true) };
+}
+/** The siginfo of the signal a guest handler was last given (SYS_shiro_siginfo 1030: signo → struct siginfo) */
+export const SYS_shiro_siginfo = 1030;
+export const SYS_rt_sigqueueinfo = 129;
+export const SYS_rt_tgsigqueueinfo = 297;
+/** Real-time signals (and how many of one may be queued) */
+export const SIGRTMIN = 32;
+export const SIGQUEUE_MAX = 1024;
 export const SIGTSTP = 20;
 export const SIGTTIN = 21;
 export const SIGTTOU = 22;
@@ -513,6 +576,7 @@ export const SOL_SOCKET = 1;
 export const IPPROTO_IP = 0;
 export const IPPROTO_TCP = 6;
 export const IPPROTO_UDP = 17;
+export const IPPROTO_UDPLITE = 136;
 export const IPPROTO_IPV6 = 41;
 export const SO_DEBUG = 1;
 export const SO_REUSEADDR = 2;
@@ -584,6 +648,26 @@ export const PIPE_CAPACITY = 65536;
 
 /** Most fds a process may hold. */
 export const OPEN_MAX = 1024;
+/** fs.nr_open: the most fds RLIMIT_NOFILE can allow (Linux's default) */
+export const NR_OPEN = 1048576;
+export const RLIMIT_NOFILE = 7;
+export const SYS_prlimit64 = 302;
+export const SYS_memfd_create = 319;
+/** POSIX message queues (src/kernel/mqueue.ts) */
+export const SYS_mq_open = 240;
+export const SYS_mq_unlink = 241;
+export const SYS_mq_timedsend = 242;
+export const SYS_mq_timedreceive = 243;
+export const SYS_mq_notify = 244;
+export const SYS_mq_getsetattr = 245;
+/** POSIX timers (src/kernel/posixtimers.ts) */
+export const SYS_timer_create = 222;
+export const SYS_timer_settime = 223;
+export const SYS_timer_gettime = 224;
+export const SYS_timer_getoverrun = 225;
+export const SYS_timer_delete = 226;
+export const MFD_CLOEXEC = 1;
+export const MFD_ALLOW_SEALING = 2;
 
 // ── struct stat ─────────────────────────────────────────────────────────────
 export interface KStat {

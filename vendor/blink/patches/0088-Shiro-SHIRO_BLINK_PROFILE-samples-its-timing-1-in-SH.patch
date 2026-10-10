@@ -1,0 +1,93 @@
+From 3b0f5b11e2caec520d7d6ebc50f46fbc966f049a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 02:58:17 +0000
+Subject: [PATCH 88/88] Shiro: SHIRO_BLINK_PROFILE samples its timing (1 in
+ SHIRO_BLINK_PROFILE_EVERY, default 64)
+
+---
+ blink/shiro.inc | 38 ++++++++++++++++++++++++--------------
+ 1 file changed, 24 insertions(+), 14 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 606e36d..31ebee4 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -1038,8 +1038,12 @@ static bool g_shiro_prof_stdin, g_shiro_prof_tty, g_shiro_prof_epoll;
+ struct ShiroProfThr {
+   int tid;
+   double since, run, gilwait, sys, futex, jitrun;
+-  long blocks, interp;
++  long blocks, interp, wjn, stepn;
+ };
++// SHIRO_BLINK_PROFILE_EVERY: 1 in N compiled entries is timed, and 1 in N
++// interpreted instructions goes in the address and opcode tables, scaled by
++// N when printed (timing every entry slowed native Claude's startup 55%)
++static int g_shiro_prof_every = 64;
+ static struct ShiroProfThr g_shiro_prof_thr[64], g_shiro_prof_thr_rest;
+ static _Atomic(int) g_shiro_prof_nthr;
+ static _Thread_local struct ShiroProfThr *t_shiro_prof;
+@@ -1100,13 +1104,15 @@ static int ShiroProfSlot(u64 ip) {
+ }
+ 
+ // after each compiled block (at `ip`) or interpreted instruction
+-// a compiled-code entry, timed (its compile, if it compiles now, included:
+-// the JIT's own total is subtracted when printed)
++// a compiled-code entry, timed 1 in g_shiro_prof_every times
+ int ShiroProfWj(struct Machine *m) {
+   struct ShiroProfThr *t = ShiroProfThr();
+-  double t0 = emscripten_get_now();
+-  int r = WjExecute(m);
+-  t->jitrun += emscripten_get_now() - t0;
++  double t0;
++  int r;
++  if (++t->wjn % g_shiro_prof_every) return WjExecute(m);
++  t0 = emscripten_get_now() - g_shiro_prof_jit;  // its compile, if any, left out
++  r = WjExecute(m);
++  t->jitrun += (emscripten_get_now() - g_shiro_prof_jit - t0) * g_shiro_prof_every;
+   return r;
+ }
+ 
+@@ -1123,12 +1129,14 @@ void ShiroProfStep(struct Machine *m, u64 ip, bool jit, bool tried) {
+     int op = Mopcode(m->xedd->op.rde) & 4095;
+     ++t->interp;
+     if (!tried) ++g_shiro_prof_seq;
+-    ++g_shiro_prof_op[op];
+-    if ((i = ShiroProfSlot(ip)) >= 0) {
+-      ++g_shiro_prof_hot[i].n;
+-      g_shiro_prof_hot[i].op = op;
+-    } else {
+-      ++g_shiro_prof_lost_n;
++    if (!(++t->stepn % g_shiro_prof_every)) {
++      g_shiro_prof_op[op] += g_shiro_prof_every;
++      if ((i = ShiroProfSlot(ip)) >= 0) {
++        g_shiro_prof_hot[i].n += g_shiro_prof_every;
++        g_shiro_prof_hot[i].op = op;
++      } else {
++        g_shiro_prof_lost_n += g_shiro_prof_every;
++      }
+     }
+   }
+   if (!(++t_shiro_prof_tick & 31) && (now = emscripten_get_now()) - t_shiro_prof_sample >= 1) {
+@@ -1176,8 +1184,9 @@ static int ShiroProfDumpMore(char *b, int n, int cap, double now) {
+   n += snprintf(b + n, cap - n, "total: %ld compiled blocks run, %ld instructions interpreted, %ld 1-ms samples"
+                                  " (not in the address table: %ld instructions, %ld samples)\n",
+                 blocks, interp, samples + g_shiro_prof_lost_samples, g_shiro_prof_lost_n, g_shiro_prof_lost_samples);
+-  n += snprintf(b + n, cap - n, "samples: %ld in compiled code, %ld interpreting; jit compiles %.0f ms\n",
+-                g_shiro_prof_samples[0], g_shiro_prof_samples[1], g_shiro_prof_jit);
++  n += snprintf(b + n, cap - n, "samples: %ld in compiled code, %ld interpreting; jit compiles %.0f ms;"
++                                 " compiled time and the address/opcode counts from 1 in %d (SHIRO_BLINK_PROFILE_EVERY)\n",
++                g_shiro_prof_samples[0], g_shiro_prof_samples[1], g_shiro_prof_jit, g_shiro_prof_every);
+   n += snprintf(b + n, cap - n, "interpreted because: %ld not at a branch target, %ld first visit, %ld below the"
+                                  " compile threshold, %ld compile failed before, %ld compile failed now\n",
+                 g_shiro_prof_seq, g_wj_miss[0], g_wj_miss[1], g_wj_miss[2], g_wj_miss[3]);
+@@ -1211,6 +1220,7 @@ static void ShiroProfInit(void) {
+   const char *e = getenv("SHIRO_BLINK_PROFILE");
+   if (!e || !*e || strlen(e) >= sizeof(g_shiro_prof_path)) return;
+   strcpy(g_shiro_prof_path, e);
++  if ((e = getenv("SHIRO_BLINK_PROFILE_EVERY")) && atoi(e) > 0) g_shiro_prof_every = atoi(e);
+   g_shiro_prof_t0 = g_shiro_prof_last = emscripten_get_now();
+   g_shiro_prof = true;
+ }
+-- 
+2.43.0
+

@@ -101,6 +101,7 @@ import {
 import { getShiroOrigin } from './utils/shiro-origin';
 import { logIsolationStatus } from './utils/isolation';
 import { requestPersistentStorage, setActiveFileSystem, storageInfo } from './storage';
+import { installNodeWorkerBoot } from './node-worker/boot';
 
 /**
  * Register a command in both the CommandRegistry (for execution) and
@@ -513,6 +514,10 @@ async function main() {
     () => import('./commands/base-utils').then(m => m.pingCmd)), 'src/commands/base-utils.ts');
   registerCommand(commands, lazyCommand('strace', "Trace a kernel program's system calls",
     () => import('./commands/base-utils').then(m => m.straceCmd)), 'src/commands/base-utils.ts');
+  registerCommand(commands, lazyCommand('ipcs', 'Show System V IPC objects (message queues, shared memory, semaphores)',
+    () => import('./commands/ipcs').then(m => m.ipcsCmd)), 'src/commands/ipcs.ts');
+  registerCommand(commands, lazyCommand('ipcrm', 'Remove System V IPC objects (by id or key)',
+    () => import('./commands/ipcs').then(m => m.ipcrmCmd)), 'src/commands/ipcs.ts');
   registerCommand(commands, lazyCommand('doctor', 'Check this tab (deploy, browser, engine, network, sign-ins, storage) for a bug report',
     () => import('./commands/doctor').then(m => m.doctorCmd)), 'src/commands/doctor.ts');
   registerCommand(commands, lazyCommand('tabinfo', 'Same as doctor',
@@ -556,6 +561,9 @@ async function main() {
   installNet(kernel); // socket syscalls (src/kernel/net.ts, docs/NETWORKING.md)
   // kernel.spawn() of an x86-64 ELF runs it in Blink when the page can (src/x86-engine)
   void import('./x86-engine/blink').then(m => m.registerBlinkLoader(kernel));
+  // TABCOMPUTER_NODE_WORKER=1: node the kernel starts (sh -c, #! scripts) runs as a guest
+  // (src/node-worker; the rest of it loads only for a process with the flag)
+  installNodeWorkerBoot(kernel);
   // Signals and job control for kernel processes; /dev/ptmx and /dev/pts/N
   attachKernelTty(kernel);
   // X11 display :0 (src/x11, docs/GUI.md): `Xshiro :0` listens on /tmp/.X11-unix/X0 now;

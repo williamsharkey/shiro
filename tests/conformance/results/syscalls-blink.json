@@ -1,19 +1,15 @@
 {
  "suite": "LTP syscalls",
  "title": "Syscalls: LTP under Blink (x86-64)",
- "note": "Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel processes in the Blink engine; only tests that pass natively on the build host as an unprivileged user (uid 1000, like tabcomputer) are scored. Blink forks within one instance by default (patch 0048), so the child shares MAP_SHARED pages, where LTP keeps its result counts and checkpoints; with BLINK_SAME_INSTANCE_FORK=0 (snapshot fork) they are not shared, so when the Summary reads all zeros the TPASS/TFAIL/TBROK lines are counted instead (tests/conformance/lib/ltp.mjs). Trend: 146 (first run) → 172 → 148 (TBROK/TFAIL lines counted, snapshot fork) → 197 (same-instance fork opt-in, A/B against 155 without it) → 222 (same-instance fork the default, Blink 0034–0048, kernel O_PATH/locks/pipe sizes/epoll/errno fixes) → 229 (AF_UNIX DGRAM/SEQPACKET sockets, timeouts that never end early, unlinkat/wait4 errnos; bind04 now reaches its abstract-name cases, which Blink truncates) → 237 (Blink 0050–0054: same-instance children no longer stall each other, sleeps show S and end on signals, abstract AF_UNIX names keep their length).",
+ "note": "Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel processes in the Blink engine; only tests that pass natively on the build host as an unprivileged user (uid 1000, like tabcomputer) are scored. Blink forks within one instance by default (patch 0048), so the child shares MAP_SHARED pages, where LTP keeps its result counts and checkpoints; with BLINK_SAME_INSTANCE_FORK=0 (snapshot fork) they are not shared, so when the Summary reads all zeros the TPASS/TFAIL/TBROK lines are counted instead (tests/conformance/lib/ltp.mjs). Trend: 146 (first run) \u2192 172 \u2192 148 (TBROK/TFAIL lines counted, snapshot fork) \u2192 197 (same-instance fork opt-in, A/B against 155 without it) \u2192 222 (same-instance fork the default, Blink 0034\u20130048, kernel O_PATH/locks/pipe sizes/epoll/errno fixes) \u2192 229 (AF_UNIX DGRAM/SEQPACKET sockets, timeouts that never end early, unlinkat/wait4 errnos; bind04 now reaches its abstract-name cases, which Blink truncates) \u2192 237 (Blink 0050\u20130054: same-instance children no longer stall each other, sleeps show S and end on signals, abstract AF_UNIX names keep their length) \u2192 240/322 (Blink 0058\u20130070 and signalfd01/02 added to the scored set: nanosleep04 and signalfd pass; UDP over loopback, AF_UNIX datagram backpressure and socket errnos fix bind05, sendfile07, connect03, accept03 and epoll_wait05; ppoll01 and waitpid08/10 newly fail, both Blink regressions reported to perf-blink) \u2192 272/322 (Blink 0080/0081, built locally until perf-blink folds them into its build: record locks, pipe sizes and RLIMIT_NOFILE are the kernel's, read-only output buffers are EFAULT, LTP errnos for clocks, rlimits, iovs, waitid, sendfile, O_PATH fds, personality; waitpid13 fails like waitpid08/10) \u2192 280/322 (measured on integration a8bf453, perf-blink's build with 0080\u20130082 and its 0075\u20130077: ppoll takes its sigmask, a futex wake is no longer counted twice (waitpid08/10/13), /proc/self/maps is a memfd, pipes are writable by the page, nanosleep writes rem before the signal frame; futex_cmp_requeue01 now crashes the test worker).",
  "files": {
   "accept": {
-   "pass": 1,
+   "pass": 2,
    "total": 3,
    "failures": [
     {
      "name": "accept02",
      "reason": "accept02.c:116: TBROK: ioctl(3,SIOCGIFINDEX,...) failed: ENOTTY (25)"
-    },
-    {
-     "name": "accept03",
-     "reason": "accept03.c:46: TFAIL: accept() on O_PATH file expected EBADF: ENOTSOCK (88)"
     }
    ]
   },
@@ -23,14 +19,9 @@
    "failures": []
   },
   "bind": {
-   "pass": 3,
+   "pass": 4,
    "total": 4,
-   "failures": [
-    {
-     "name": "bind05",
-     "reason": "bind05.c:106: TBROK: write(5,0x80801214,4) failed: ENETUNREACH (101)"
-    }
-   ]
+   "failures": []
   },
   "chdir": {
    "pass": 2,
@@ -43,24 +34,14 @@
    "failures": []
   },
   "clock_gettime": {
-   "pass": 0,
+   "pass": 1,
    "total": 1,
-   "failures": [
-    {
-     "name": "clock_gettime04",
-     "reason": "clock_gettime04.c:161: TFAIL: CLOCK_REALTIME: Time travelled backwards (3): -917937 ns"
-    }
-   ]
+   "failures": []
   },
   "clock_nanosleep": {
-   "pass": 2,
+   "pass": 3,
    "total": 3,
-   "failures": [
-    {
-     "name": "clock_nanosleep01",
-     "reason": "clock_nanosleep01.c:212: TFAIL: returned 0, expected -1, expected errno: EINVAL (22): SUCCESS (0)"
-    }
-   ]
+   "failures": []
   },
   "clone": {
    "pass": 7,
@@ -68,7 +49,7 @@
    "failures": [
     {
      "name": "clone08",
-     "reason": "clone08.c:85: TBROK: CLONE_PARENT clone() failed: EINVAL (22)"
+     "reason": "clone08.c:85: TBROK: CLONE_PARENT_SETTID clone() failed: EINVAL (22)"
     }
    ]
   },
@@ -78,48 +59,24 @@
    "failures": []
   },
   "connect": {
-   "pass": 1,
+   "pass": 2,
    "total": 2,
-   "failures": [
-    {
-     "name": "connect03",
-     "reason": "connect03.c:89: TFAIL: write permission is denied on the socket file succeeded"
-    }
-   ]
+   "failures": []
   },
   "creat": {
-   "pass": 2,
+   "pass": 3,
    "total": 3,
-   "failures": [
-    {
-     "name": "creat05",
-     "reason": "creat05.c:55: TBROK: creat(creat05_1020,0666) failed: EMFILE (24)"
-    }
-   ]
+   "failures": []
   },
   "dup": {
-   "pass": 5,
+   "pass": 7,
    "total": 7,
-   "failures": [
-    {
-     "name": "dup03",
-     "reason": "dup03.c:36: TBROK: dup(3) failed: EMFILE (24)"
-    },
-    {
-     "name": "dup06",
-     "reason": "dup06.c:58: TFAIL: Not enough files duped"
-    }
-   ]
+   "failures": []
   },
   "dup2": {
-   "pass": 6,
+   "pass": 7,
    "total": 7,
-   "failures": [
-    {
-     "name": "dup205",
-     "reason": "dup205.c:53: TFAIL: Not enough files duped"
-    }
-   ]
+   "failures": []
   },
   "dup3": {
    "pass": 2,
@@ -137,38 +94,17 @@
    "failures": []
   },
   "epoll_ctl": {
-   "pass": 5,
+   "pass": 7,
    "total": 7,
-   "failures": [
-    {
-     "name": "epoll_ctl02",
-     "reason": "epoll_ctl02.c:85: TFAIL: epoll_ctl(...) if events is NULL succeeded"
-    },
-    {
-     "name": "epoll_ctl06",
-     "reason": "epoll_ctl06.c:69: TFAIL: epoll_ctl() on /proc/self/maps succeeded"
-    }
-   ]
+   "failures": []
   },
   "epoll_wait": {
-   "pass": 11,
+   "pass": 14,
    "total": 15,
    "failures": [
     {
      "name": "epoll_wait02",
      "reason": "tst_timer_test.c:314: TFAIL: epoll_wait() slept for too long"
-    },
-    {
-     "name": "epoll_wait03",
-     "reason": "epoll_wait03.c:63: TFAIL: epoll_wait() events has no write permissions invalid retval 1: SUCCESS (0)"
-    },
-    {
-     "name": "epoll_wait05",
-     "reason": "epoll_wait05.c:81: TFAIL: Wrong number of events reported 0"
-    },
-    {
-     "name": "epoll_wait06",
-     "reason": "epoll_wait06.c:78: TFAIL: write() failed invalid retval 4096: SUCCESS (0)"
     }
    ]
   },
@@ -202,32 +138,18 @@
    "failures": []
   },
   "fcntl": {
-   "pass": 16,
+   "pass": 26,
    "total": 36,
    "failures": [
     {
-     "name": "fcntl13",
-     "reason": "fcntl13.c:45: TFAIL: fcntl(1, F_SETLK, flock) succeeded"
-    },
-    {
-     "name": "fcntl13_64",
-     "reason": "fcntl13.c:45: TFAIL: fcntl(1, F_SETLK, flock) succeeded"
-    },
-    {
      "name": "fcntl14",
-     "reason": "fcntl14.c:74: TFAIL: flock.l_pid (0) != parent_pid (153)"
+     "reason": "no summary",
+     "timeout": true
     },
     {
      "name": "fcntl14_64",
-     "reason": "fcntl14.c:74: TFAIL: flock.l_pid (0) != parent_pid (160)"
-    },
-    {
-     "name": "fcntl15",
-     "reason": "fcntl15.c:88: TFAIL: Succeeded to lock already locked region one"
-    },
-    {
-     "name": "fcntl15_64",
-     "reason": "fcntl15.c:88: TFAIL: Succeeded to lock already locked region one"
+     "reason": "no summary",
+     "timeout": true
     },
     {
      "name": "fcntl27",
@@ -236,30 +158,6 @@
     {
      "name": "fcntl27_64",
      "reason": "fcntl27.c:37: TFAIL: fcntl(fd, F_SETLEASE, F_RDLCK) expected EAGAIN/EWOULDBLOCK: EINVAL (22)"
-    },
-    {
-     "name": "fcntl30",
-     "reason": "fcntl30.c:27: TFAIL: Expect: new pipe size (65536) >= requested size (1048576)"
-    },
-    {
-     "name": "fcntl30_64",
-     "reason": "fcntl30.c:27: TFAIL: Expect: new pipe size (65536) >= requested size (1048576)"
-    },
-    {
-     "name": "fcntl34",
-     "reason": "fcntl34.c:99: TBROK: Short read(3,0x4fffffffe880,4096) returned only 0"
-    },
-    {
-     "name": "fcntl34_64",
-     "reason": "fcntl34.c:99: TBROK: Short read(3,0x4fffffffe870,4096) returned only 0"
-    },
-    {
-     "name": "fcntl37",
-     "reason": "fcntl37.c:45: TFAIL: F_SETPIPE_SZ succeed and return 65536"
-    },
-    {
-     "name": "fcntl37_64",
-     "reason": "fcntl37.c:45: TFAIL: F_SETPIPE_SZ succeed and return 65536"
     },
     {
      "name": "fcntl38",
@@ -315,7 +213,8 @@
    "failures": [
     {
      "name": "futex_cmp_requeue01",
-     "reason": "futex_cmp_requeue01.c:163: TFAIL: requeued 0 waiters, expected range: (7, 7)"
+     "reason": "skipped: hangs tabcomputer",
+     "timeout": true
     },
     {
      "name": "futex_cmp_requeue02",
@@ -344,7 +243,7 @@
     },
     {
      "name": "futex_wake02",
-     "reason": "futex_wake02.c:79: TFAIL: futex_wake() woken up 7 threads, expected 10: SUCCESS (0)"
+     "reason": "futex_wake02.c:79: TFAIL: futex_wake() woken up 3 threads, expected 10: SUCCESS (0)"
     },
     {
      "name": "futex_wake03",
@@ -373,14 +272,9 @@
    "failures": []
   },
   "getrlimit": {
-   "pass": 2,
+   "pass": 3,
    "total": 3,
-   "failures": [
-    {
-     "name": "getrlimit02",
-     "reason": "getrlimit02.c:36: TFAIL: getrlimit() with invalid resource type succeeded"
-    }
-   ]
+   "failures": []
   },
   "gettimeofday": {
    "pass": 2,
@@ -422,24 +316,14 @@
    ]
   },
   "nanosleep": {
-   "pass": 2,
+   "pass": 3,
    "total": 3,
-   "failures": [
-    {
-     "name": "nanosleep04",
-     "reason": "nanosleep04.c:30: TFAIL: nanosleep() returned 0, expected -1"
-    }
-   ]
+   "failures": []
   },
   "open": {
-   "pass": 7,
+   "pass": 8,
    "total": 8,
-   "failures": [
-    {
-     "name": "open13",
-     "reason": "open13.c:76: TFAIL: fchown() on original FD succeeded"
-    }
-   ]
+   "failures": []
   },
   "openat": {
    "pass": 1,
@@ -452,36 +336,19 @@
    "failures": []
   },
   "pipe": {
-   "pass": 8,
+   "pass": 11,
    "total": 12,
    "failures": [
     {
-     "name": "pipe06",
-     "reason": "pipe06.c:29: TBROK: pipe({1022,1023}) failed: EMFILE (24)"
-    },
-    {
-     "name": "pipe07",
-     "reason": "pipe07.c:76: TFAIL: exp_num_pipes (4092) != num_pipe_fds (1020)"
-    },
-    {
      "name": "pipe13",
      "reason": "tst_test.c:1969: TBROK: Test killed! (timeout?)"
-    },
-    {
-     "name": "pipe15",
-     "reason": "pipe15.c:72: TBROK: pipe({0,0}) failed: EMFILE (24)"
     }
    ]
   },
   "pipe2": {
-   "pass": 1,
+   "pass": 2,
    "total": 2,
-   "failures": [
-    {
-     "name": "pipe2_04",
-     "reason": "pipe2_04.c:82: TFAIL: Pipe size (65536) must be page size (4096)"
-    }
-   ]
+   "failures": []
   },
   "poll": {
    "pass": 3,
@@ -504,11 +371,15 @@
    "failures": []
   },
   "pselect": {
-   "pass": 5,
+   "pass": 4,
    "total": 6,
    "failures": [
     {
      "name": "pselect01",
+     "reason": "tst_timer_test.c:314: TFAIL: pselect() slept for too long"
+    },
+    {
+     "name": "pselect01_64",
      "reason": "tst_timer_test.c:314: TFAIL: pselect() slept for too long"
     }
    ]
@@ -530,14 +401,9 @@
    "failures": []
   },
   "readv": {
-   "pass": 1,
+   "pass": 2,
    "total": 2,
-   "failures": [
-    {
-     "name": "readv02",
-     "reason": "readv02.c:72: TFAIL: readv(3, 0x5371c0, 1) succeeded"
-    }
-   ]
+   "failures": []
   },
   "rmdir": {
    "pass": 1,
@@ -555,37 +421,13 @@
    ]
   },
   "sendfile": {
-   "pass": 7,
+   "pass": 13,
    "total": 16,
    "failures": [
     {
      "name": "sendfile02_64",
      "reason": "skipped: hangs tabcomputer",
      "timeout": true
-    },
-    {
-     "name": "sendfile03",
-     "reason": "sendfile03.c:51: TFAIL: sendfile(..) with out_fd=-1 succeeded"
-    },
-    {
-     "name": "sendfile03_64",
-     "reason": "sendfile03.c:51: TFAIL: sendfile(..) with out_fd=-1 succeeded"
-    },
-    {
-     "name": "sendfile04",
-     "reason": "sendfile04.c:60: TFAIL: sendfile(..) with pass_mapped_buffer, protection=1 succeeded"
-    },
-    {
-     "name": "sendfile04_64",
-     "reason": "sendfile04.c:60: TFAIL: sendfile(..) with pass_mapped_buffer, protection=1 succeeded"
-    },
-    {
-     "name": "sendfile05",
-     "reason": "sendfile05.c:39: TFAIL: sendfile(out, in, &offset, ..) with offset=-1 succeeded"
-    },
-    {
-     "name": "sendfile05_64",
-     "reason": "sendfile05.c:39: TFAIL: sendfile(out, in, &offset, ..) with offset=-1 succeeded"
     },
     {
      "name": "sendfile09",
@@ -610,6 +452,11 @@
   "signal": {
    "pass": 5,
    "total": 5,
+   "failures": []
+  },
+  "signalfd": {
+   "pass": 2,
+   "total": 2,
    "failures": []
   },
   "socket": {
@@ -648,14 +495,9 @@
    "failures": []
   },
   "uname": {
-   "pass": 2,
+   "pass": 3,
    "total": 3,
-   "failures": [
-    {
-     "name": "uname04",
-     "reason": "uname04.c:72: TBROK: persona(131072) failed: ENOSYS (38)"
-    }
-   ]
+   "failures": []
   },
   "unlink": {
    "pass": 2,
@@ -668,14 +510,9 @@
    "failures": []
   },
   "vfork": {
-   "pass": 1,
+   "pass": 2,
    "total": 2,
-   "failures": [
-    {
-     "name": "vfork02",
-     "reason": "vfork02.c:26: TFAIL: sigismember(&signal, SIGUSR1) (1) != 0 (0)"
-    }
-   ]
+   "failures": []
   },
   "wait4": {
    "pass": 3,
@@ -683,14 +520,9 @@
    "failures": []
   },
   "waitid": {
-   "pass": 10,
+   "pass": 11,
    "total": 11,
-   "failures": [
-    {
-     "name": "waitid02",
-     "reason": "waitid02.c:19: TFAIL: waitid(P_ALL, 0, infop, WNOHANG) expected EINVAL: ECHILD (10)"
-    }
-   ]
+   "failures": []
   },
   "waitpid": {
    "pass": 8,
@@ -719,14 +551,9 @@
    "failures": []
   },
   "writev": {
-   "pass": 1,
+   "pass": 2,
    "total": 2,
-   "failures": [
-    {
-     "name": "writev01",
-     "reason": "writev01.c:124: TFAIL: invalid iov_len, expected: -1 (EINVAL), got: 127 (SUCCESS)"
-    }
-   ]
+   "failures": []
   }
  }
 }

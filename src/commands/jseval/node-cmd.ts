@@ -1,5 +1,5 @@
 import { Command, CommandContext } from '../index';
-import { executeNodeScript } from '../../node-compat/execution';
+import { runNode } from './node-run';
 
 /**
  * node: A Node.js-like command that executes JS files from the virtual filesystem.
@@ -18,74 +18,11 @@ export const nodeCmd: Command = {
   name: 'node',
   description: 'Execute JavaScript files (browser JS VM)',
   async exec(ctx: CommandContext): Promise<number> {
-    let code = '';
-    let printResult = false;
-
-    // Parse args — once we see a script file, everything after is script args
-    const fileArgs: string[] = [];
-    let foundScript = false;
-    for (let i = 0; i < ctx.args.length; i++) {
-      if (foundScript) {
-        fileArgs.push(ctx.args[i]);
-      } else if (ctx.args[i] === '-e' || ctx.args[i] === '--eval') {
-        code = ctx.args[++i] || '';
-      } else if (ctx.args[i] === '-p' || ctx.args[i] === '--print') {
-        code = ctx.args[++i] || '';
-        printResult = true;
-      } else if (ctx.args[i] === '--version' || ctx.args[i] === '-v') {
-        // The version the runtime reports (process.version), as node prints it
-        ctx.stdout += 'v22.12.0\n';
-        return 0;
-      } else if (ctx.args[i] === '--help' || ctx.args[i] === '-h') {
-        ctx.stdout += 'Usage: node [options] [script.js] [arguments]\n';
-        ctx.stdout += '  -e, --eval <code>   Evaluate code\n';
-        ctx.stdout += '  -p, --print <code>  Evaluate and print result\n';
-        ctx.stdout += '\nNote: Runs in browser JS VM, not real Node.js.\n';
-        ctx.stdout += 'Full DOM/browser API access available.\n';
-        return 0;
-      } else {
-        fileArgs.push(ctx.args[i]);
-        foundScript = true;
-      }
+    // TABCOMPUTER_NODE_WORKER=1: as a kernel guest in a Worker (src/node-worker), unless this is that guest
+    if (ctx.env.TABCOMPUTER_NODE_WORKER === '1' && !(ctx as any).nodeGuest) {
+      const host = await import('../../node-worker/host');
+      if (host.nodeWorkerMode(ctx.env)) return host.runNodeInWorker(ctx);
     }
-
-    // If no -e flag, read from file
-    let scriptPath = '';
-    if (!code && fileArgs.length > 0) {
-      scriptPath = ctx.fs.resolvePath(fileArgs[0], ctx.cwd);
-      // If no extension given, probe .js, .ts, .tsx, .jsx
-      let found = false;
-      try {
-        code = await ctx.fs.readFile(scriptPath, 'utf8') as string;
-        found = true;
-      } catch {
-        if (!/\.\w+$/.test(scriptPath)) {
-          for (const ext of ['.js', '.ts', '.tsx', '.jsx']) {
-            try {
-              code = await ctx.fs.readFile(scriptPath + ext, 'utf8') as string;
-              scriptPath = scriptPath + ext;
-              found = true;
-              break;
-            } catch { /* try next */ }
-          }
-        }
-      }
-      if (!found) {
-        ctx.stderr += `node: Cannot find module '${fileArgs[0]}'\n`;
-        return 1;
-      }
-    }
-
-    // If no file and no -e, read from stdin
-    if (!code && ctx.stdin) {
-      code = ctx.stdin;
-    }
-
-    if (!code) {
-      ctx.stderr += 'node: no input provided\n';
-      return 1;
-    }
-
-    return executeNodeScript(ctx, code, scriptPath, fileArgs, printResult);
+    return runNode(ctx);
   },
 };

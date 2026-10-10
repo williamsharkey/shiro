@@ -1,0 +1,222 @@
+From 19d681438dc2ced7ba0db244b18c2652c1fe2ea5 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 00:54:01 +0000
+Subject: [PATCH 80/82] Shiro: LTP errnos: clock ids, getrlimit, iov lengths,
+ waitid options, fchown on O_PATH, personality, CLONE_PARENT, sigpending
+
+Conformance (LTP syscalls):
+- The coarse, raw, boot and TAI clocks read the nearest emscripten clock
+  instead of EINVAL (clock_gettime04); clock_nanosleep on the thread CPU
+  clock is EOPNOTSUPP and an unwritable rem EFAULT (clock_nanosleep01).
+- getrlimit of an unknown resource is EINVAL (getrlimit02).
+- readv/writev with a length past ssize_t are EINVAL (readv02, writev01).
+- waitid with unknown options, or none of WEXITED/WSTOPPED/WCONTINUED, is
+  EINVAL (waitid02).
+- fchown on an O_PATH descriptor is EBADF (open13).
+- personality(2) is kept per process and inherited; UNAME26 makes uname
+  report a 2.6 release (uname04).
+- clone(CLONE_PARENT) forks a sibling: the kernel's fork call takes the
+  flag (a kernel without it makes a child, as before) (clone08).
+- rt_sigpending includes the signals the kernel holds for the blocked
+  mask (0063), so a blocked self-kill is pending (vfork02).
+---
+ blink/machine.h |  1 +
+ blink/shiro.inc | 43 +++++++++++++++++++++++++++++++++++++++----
+ blink/syscall.c | 13 +++++++++++--
+ blink/xlat.c    | 11 +++++++++++
+ 4 files changed, 62 insertions(+), 6 deletions(-)
+
+diff --git a/blink/machine.h b/blink/machine.h
+index b6e48dd..fe8bab8 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -306,6 +306,7 @@ struct System {
+   u64 blinksigs;  // signals blink itself handles
+   struct rlimit_linux rlim[RLIM_NLIMITS_LINUX];
+   int nice;  // getpriority/setpriority (Shiro: nothing is scheduled by it)
++  u32 persona;  // personality(2) (Shiro: UNAME26 changes uname's release)
+   bool kmask_ok;  // Shiro: the kernel has this process's signal mask...
+   u64 kmask;      // ...this one (the main thread's)
+ #ifdef HAVE_THREADS
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 657798e..1b536e6 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -398,7 +398,12 @@ static i64 ShiroIov(struct Machine *m, bool write, int fd, i64 iovaddr,
+   if (iovcnt < 0 || iovcnt > 1024) return -EINVAL_LINUX;
+   if (!iovcnt) return 0;
+   if (!(iov = (const u8 *)SchlepR(m, iovaddr, iovcnt * 16))) return -EFAULT_LINUX;
+-  for (i = 0; i < iovcnt; ++i) total += Read64(iov + i * 16 + 8);
++  for (i = 0; i < iovcnt; ++i) {
++    // a length that doesn't fit ssize_t, or a sum past it, is EINVAL (Linux)
++    len = Read64(iov + i * 16 + 8);
++    if ((i64)len < 0 || (i64)(total + len) < 0) return -EINVAL_LINUX;
++    total += len;
++  }
+   if (total > (u64)g_shiro_chunk) total = g_shiro_chunk;
+   buf = (u8 *)ShiroAlloc(m, total);
+   if (write) {
+@@ -1588,6 +1593,9 @@ static i64 ShiroWaitid(struct Machine *m, int idtype, int id, i64 info,
+     case 2: pid = id ? -id : 0; break;  // P_PGID
+     default: return -EINVAL_LINUX;
+   }
++  // as Linux: unknown option bits, or none of WEXITED/WSTOPPED/WCONTINUED, are EINVAL
++  if (options & ~(1 | 2 | 4 | 8 | 0x01000000 | 0x20000000 | 0x40000000 | 0x80000000)) return -EINVAL_LINUX;
++  if (!(options & (2 | 4 | 8))) return -EINVAL_LINUX;
+   // WEXITED is implied; WSTOPPED is WUNTRACED; WNOHANG, WCONTINUED, WNOWAIT pass
+   options = (options & (1 | 8 | 0x01000000)) | (options & 2 ? 2 : 0);
+   memset(buf, 0, sizeof(buf));
+@@ -1802,6 +1810,7 @@ struct ShiroForkHeader {
+   u64 blinksigs;
+   struct rlimit_linux rlim[RLIM_NLIMITS_LINUX];
+   int nice;
++  u32 persona;
+   i64 elfbase, at_base, at_phdr, at_phent, at_entry, at_phnum;
+   u8 rng[16];
+   u32 proglen, execfnlen, interplen;
+@@ -1972,6 +1981,7 @@ static int ShiroSnapshot(struct Machine *m, u64 flags, i64 stack, i64 ctid,
+   h.blinksigs = s->blinksigs;
+   memcpy(h.rlim, s->rlim, sizeof(h.rlim));
+   h.nice = s->nice;
++  h.persona = s->persona;
+   h.elfbase = s->elf.base;
+   h.at_base = s->elf.at_base, h.at_phdr = s->elf.at_phdr, h.at_phent = s->elf.at_phent;
+   h.at_entry = s->elf.at_entry, h.at_phnum = s->elf.at_phnum;
+@@ -2007,7 +2017,7 @@ static i64 ShiroForkReal(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
+   struct ShiroBuf b;
+   i64 pid;
+   int rc;
+-  if ((pid = KS(m, K_SYS_vfork, A12(0))) < 0) return pid;
++  if ((pid = KS(m, K_SYS_vfork, A12((int)(flags & 0x8000)))) < 0) return pid;
+   if ((rc = ShiroSnapshot(m, flags, stack, ctid, &b)) < 0) {
+     KS(m, 62, A12(pid, 9));
+     return rc;
+@@ -2110,6 +2120,7 @@ static void ShiroRestoreFrom(struct Machine *m, const u8 *p, size_t len) {
+   s->blinksigs = h.blinksigs;
+   memcpy(s->rlim, h.rlim, sizeof(h.rlim));
+   s->nice = h.nice;
++  s->persona = h.persona;
+   memcpy(m->beg, h.regs, sizeof(h.regs));
+   memcpy(m->xmm, h.xmm, sizeof(h.xmm));
+   m->ip = h.ip;
+@@ -2343,7 +2354,7 @@ static i64 ShiroForkSame(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
+   i64 pid;
+   int i, rc;
+   if (!(c = (struct ShiroChildStart *)calloc(1, sizeof(*c)))) return -ENOMEM_LINUX;
+-  if ((pid = KS(m, K_SYS_vfork, A12(0))) < 0) {
++  if ((pid = KS(m, K_SYS_vfork, A12((int)(flags & 0x8000)))) < 0) {  // CLONE_PARENT
+     free(c);
+     return pid;
+   }
+@@ -2854,8 +2865,28 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+           }
+ #undef SHIRO_UTS
+         }
++        // UNAME26: a 2.6 release for old software, as Linux makes it
++        if (!r && (m->system->persona & 0x0020000)) {
++          char rel[65] = "2.6.61";
++          if (CopyToUserWrite(m, a + offsetof(struct utsname_linux, release), rel, sizeof(rel)) == -1) r = -EFAULT_LINUX;
++        }
+       }
+       break;
++    case 0x07F: {                                                     // rt_sigpending
++      // the kernel holds the signals the guest blocked (ShiroSyncMask), so
++      // they are pending there; Blink's own pending ones count too
++      u8 k[8] = {0}, w[8];
++      if ((u64)b != 8) { r = -EINVAL_LINUX; break; }
++      if (ShiroCall(m, 127, A12(8), k, 0, 8, false, false) < 0) memset(k, 0, 8);
++      Write64(w, Read64(k) | m->signals);
++      r = CopyToUserWrite(m, a, w, 8) == -1 ? -EFAULT_LINUX : 0;
++      break;
++    }
++    case 0x087:                                                       // personality
++      // kept per process (fork inherits it); 0xffffffff only reads it
++      r = m->system->persona;
++      if ((u32)a != 0xffffffff) m->system->persona = (u32)a;
++      break;
+     case 0x0E4:                                                       // clock_gettime
+       // CLOCK_BOOTTIME counts from the kernel's boot (procps' uptime and
+       // process start times, like /proc); CLOCK_REALTIME gets sub-ms
+@@ -3024,7 +3055,11 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+     // links before their targets exist)
+     case 0x05C: r = ShiroStatAt(m, -100, a, 0, 0, 0); break;           // chown
+     case 0x05E: r = ShiroStatAt(m, -100, a, 0, 0x100, 0); break;       // lchown
+-    case 0x05D: r = KS(m, 72, A12(a, 1, 0)) < 0 ? -EBADF_LINUX : 0; break;  // fchown
++    case 0x05D:                                                       // fchown
++      // a bad fd, or an O_PATH one (it only names the file), is EBADF
++      r = KS(m, 72, A12(a, 3, 0));                                    // F_GETFL
++      r = r < 0 || (r & 010000000) ? -EBADF_LINUX : 0;
++      break;
+     case 0x104:                                                       // fchownat
+       if (!b) { r = -EFAULT_LINUX; break; }
+       r = ShiroStatAt(m, a, b, 0, e & (0x100 | 0x1000), 0);
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 29d76c3..2870ff0 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -632,7 +632,8 @@ static int SysSpawn(struct Machine *m, u64 flags, u64 stack, u64 ptid, u64 ctid,
+ #endif
+ 
+ static bool IsForkOrVfork(u64 flags) {
+-  u64 supported = CLONE_CHILD_SETTID_LINUX | CLONE_CHILD_CLEARTID_LINUX;
++  // (Shiro: CLONE_PARENT too, 0x8000: the kernel makes the child its caller's sibling)
++  u64 supported = CLONE_CHILD_SETTID_LINUX | CLONE_CHILD_CLEARTID_LINUX | 0x8000;
+   return (flags & ~supported) == SIGCHLD_LINUX ||
+          (flags & ~supported) ==
+              (CLONE_VM_LINUX | CLONE_VFORK_LINUX | SIGCHLD_LINUX);
+@@ -4008,6 +4009,8 @@ static int SysGetrlimit(struct Machine *m, i32 resource, i64 rlimitaddr) {
+     GetResourceLimit_(m, resource, &lux);
+     return CopyToUserWrite(m, rlimitaddr, &lux, sizeof(lux));
+   }
++  // an unknown resource is EINVAL (getrlimit(-1) passed as the host's)
++  if (XlatResource(resource) == -1) return -1;
+   if ((rc = getrlimit(XlatResource(resource), &rlim)) != -1) {
+     XlatRlimitToLinux(&lux, &rlim);
+     if (CopyToUserWrite(m, rlimitaddr, &lux, sizeof(lux)) == -1) rc = -1;
+@@ -4321,6 +4324,8 @@ static int SysClockNanosleep(struct Machine *m, int clock, int flags,
+   struct timespec req, rem;
+   struct timespec_linux gtimespec;
+   if (XlatClock(clock, &sysclock) == -1) return -1;
++  // as Linux: a thread's CPU clock can't be slept on
++  if (clock == CLOCK_THREAD_CPUTIME_ID_LINUX) return eopnotsupp();
+   if (flags & ~TIMER_ABSTIME_LINUX) return einval();
+   if (CopyFromUserRead(m, &gtimespec, reqaddr, sizeof(gtimespec)) == -1) {
+     return -1;
+@@ -4376,7 +4381,11 @@ static int SysClockNanosleep(struct Machine *m, int clock, int flags,
+           rem = SubtractTime(deadline, now);
+           Write64(gtimespec.sec, rem.tv_sec);
+           Write64(gtimespec.nsec, rem.tv_nsec);
+-          CopyToUserWrite(m, remaddr, &gtimespec, sizeof(gtimespec));
++          // an unwritable rem is EFAULT, as Linux reports it
++          if (CopyToUserWrite(m, remaddr, &gtimespec, sizeof(gtimespec)) == -1) {
++            rc = -1;
++            break;
++          }
+         }
+         errno = EINTR;
+         rc = -1;
+diff --git a/blink/xlat.c b/blink/xlat.c
+index 37f82e8..2b118af 100644
+--- a/blink/xlat.c
++++ b/blink/xlat.c
+@@ -756,6 +756,17 @@ int XlatWait(int x) {
+ int XlatClock(int x, clock_t *clock) {
+   // Haiku defines CLOCK_REALTIME as -1
+   clock_t res;
++#ifdef __EMSCRIPTEN__
++  // Shiro: emscripten's clock_gettime knows only the POSIX clocks; the
++  // coarse, raw and boot clocks read the nearest one (nothing here
++  // suspends, so boot time is monotonic time) instead of failing EINVAL
++  if (x == CLOCK_REALTIME_COARSE_LINUX || x == CLOCK_TAI_LINUX) {
++    x = CLOCK_REALTIME_LINUX;
++  } else if (x == CLOCK_MONOTONIC_COARSE_LINUX || x == CLOCK_MONOTONIC_RAW_LINUX ||
++             x == CLOCK_BOOTTIME_LINUX) {
++    x = CLOCK_MONOTONIC_LINUX;
++  }
++#endif
+   switch (x) {
+     CASE(CLOCK_REALTIME_LINUX, res = CLOCK_REALTIME);
+     CASE(CLOCK_MONOTONIC_LINUX, res = CLOCK_MONOTONIC);
+-- 
+2.43.0
+

@@ -13,7 +13,7 @@ import {
   ECONNREFUSED, EDQUOT, EHOSTUNREACH, ENOTCONN, EISCONN, decodeSockaddr, encodeSockaddr, parseHttpResponse,
   type PortHost, type VirtualHttpRequest, type VirtualHttpResponse,
 } from '@shiro/kernel/net';
-import { MSG_PEEK, MSG_TRUNC } from '@shiro/kernel/abi';
+import { EADDRINUSE, MSG_DONTWAIT, MSG_PEEK, MSG_TRUNC, POLLRDHUP, SHUT_RD } from '@shiro/kernel/abi';
 
 interface Ports { echoPort: number; firehosePort: number; relayA: number; relayB: number; relayC: number; relayD: number; relayE: number; relayF: number; proxyLogPort: number; mainPort: number; origin: string }
 
@@ -193,6 +193,30 @@ describe('kernel sockets over the TCP relay', () => {
     await a.close();
     expect(await b.read(buf)).toBe(0);
     await b.close();
+  });
+
+  it('shutdown(SHUT_RD) makes the socket report POLLRDHUP and POLLIN (LTP epoll_wait05)', async () => {
+    const stack = stackFor(P.relayA);
+    const [a, b] = stack.socketpair(SOCK_STREAM) as [KSocket, KSocket];
+    expect(a.poll(POLLIN | POLLRDHUP)).toBe(0);
+    expect(a.shutdown(SHUT_RD)).toBe(0);
+    expect(a.poll(POLLIN | POLLRDHUP)).toBe(POLLIN | POLLRDHUP);
+    await a.close(); await b.close();
+  });
+
+  it('AF_UNIX datagram socketpairs fill up after a few hundred tiny messages, as on Linux (LTP sendfile07)', async () => {
+    const stack = stackFor(P.relayA);
+    const [a, b] = stack.socketpair(SOCK_DGRAM) as [KSocket, KSocket];
+    let sent = 0;
+    while (sent < 5000 && (await a.send(enc.encode('a'), MSG_DONTWAIT)) === 1) sent++;
+    expect(sent).toBeGreaterThan(100);
+    expect(sent).toBeLessThan(1000);
+    expect(await a.send(enc.encode('a'), MSG_DONTWAIT)).toBe(-EAGAIN);
+    expect(a.poll(POLLOUT)).toBe(0);
+    expect(await b.recv(new Uint8Array(4), 0)).toBe(1);
+    expect(a.poll(POLLOUT)).toBe(POLLOUT);
+    expect(await a.send(enc.encode('a'), MSG_DONTWAIT)).toBe(1);
+    await a.close(); await b.close();
   });
 
   it('AF_UNIX message sockets: MSG_TRUNC gives the whole length, MSG_PEEK keeps the message, SCM_RIGHTS stay with their message', async () => {
@@ -504,6 +528,55 @@ describe('kernel loopback and listening sockets', () => {
     expect(iframeServer.isPortInUse(8099)).toBe(false);
   });
 
+  it('streams a body still being written (server-sent events, chunked, close-delimited) to the page', async () => {
+    let handler: ((r: VirtualHttpRequest) => Promise<VirtualHttpResponse>) | null = null;
+    const host: PortHost = { serve: (_p, h) => { handler = h; return () => { handler = null; }; } };
+    const stack = localStack(host);
+    const l = stream(stack);
+    l.bind(v4('0.0.0.0', 8091));
+    l.listen(16);
+    await new Promise((r) => setTimeout(r, 0));
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    /** Accept one request; answer with a head, then `parts` 150 ms apart */
+    const slowly = async (head: string, parts: string[]) => {
+      const c = await l.accept() as KSocket;
+      const buf = new Uint8Array(4096);
+      let req = '';
+      while (!req.includes('\r\n\r\n')) { const n = await c.read(buf); if (n <= 0) break; req += dec.decode(buf.subarray(0, n)); }
+      await c.write(enc.encode(head));
+      for (const p of parts) { await sleep(150); await c.write(enc.encode(p)); }
+      await c.close();
+    };
+    const readAll = async (body: ReadableStream<Uint8Array>, t0: number) => {
+      const r = body.getReader(), got: [string, boolean][] = [];
+      for (;;) { const { value, done } = await r.read(); if (done) break; got.push([dec.decode(value), Date.now() - t0 < 250]); }
+      return got;
+    };
+    // chunked server-sent events: the first event arrives long before the last
+    let served = slowly('HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n',
+      ['b\r\ndata: one\n\n\r\n', 'b\r\ndata: two\n\n\r\n', '0\r\n\r\n']);
+    let t0 = Date.now();
+    let res = await handler!({ method: 'GET', path: '/events' });
+    expect(res.status).toBe(200);
+    expect(res.headers!['content-type']).toBe('text/event-stream');
+    expect(res.headers!['transfer-encoding']).toBeUndefined();
+    expect(res.body).toBeInstanceOf(ReadableStream);
+    expect(await readAll(res.body as ReadableStream<Uint8Array>, t0)).toEqual([['data: one\n\n', true], ['data: two\n\n', false]]);
+    await served;
+    // close-delimited (no length): streamed to the end of the connection
+    served = slowly('HTTP/1.0 200 OK\r\n\r\nfirst ', ['second']);
+    t0 = Date.now();
+    res = await handler!({ method: 'GET', path: '/poll' });
+    expect((await readAll(res.body as ReadableStream<Uint8Array>, t0)).map(([s]) => s).join('')).toBe('first second');
+    await served;
+    // a whole response is still a whole body
+    served = serveOnce(l);
+    res = await handler!({ method: 'GET', path: '/whole' });
+    await served;
+    expect(dec.decode(res.body as Uint8Array)).toBe('you asked for /whole');
+    await l.close();
+  });
+
   it('parses Content-Length and close-delimited responses', () => {
     const r1 = parseHttpResponse(enc.encode('HTTP/1.1 404 Not Found\r\nContent-Length: 3\r\n\r\nabcEXTRA'), false);
     expect(r1.complete).toBe(true);
@@ -524,6 +597,42 @@ describe('kernel loopback and listening sockets', () => {
     expect(decodeSockaddr(encodeSockaddr(v4('93.184.215.14', 443)))).toEqual(v4('93.184.215.14', 443));
     const six = { family: AF_INET6, address: '2606:2800:220:1::1', port: 22 };
     expect(decodeSockaddr(encodeSockaddr(six))).toEqual(six);
+  });
+
+  it('UDP over loopback: bound sockets get datagrams with the sender address; ECONNREFUSED with nobody there (LTP bind05)', async () => {
+    const stack = new NetStack();
+    stack.configure({ relayUrl: null, tokenUrl: null, portHost: null, dohUrl: null });
+    const srv = stack.socket(AF_INET, SOCK_DGRAM) as KDatagramSocket;
+    expect(srv.bind(v4('0.0.0.0', 0))).toBe(0);
+    const port = srv.getsockname().port;
+    expect(port).toBeGreaterThan(0);
+    // a second bind of the port is EADDRINUSE
+    const dup = stack.socket(AF_INET, SOCK_DGRAM) as KDatagramSocket;
+    expect(dup.bind(v4('127.0.0.1', port))).toBe(-EADDRINUSE);
+    // a connected client: write, and the reply comes back to it
+    const cli = stack.socket(AF_INET, SOCK_DGRAM) as KDatagramSocket;
+    expect(cli.connect(v4('127.0.0.1', port))).toBe(0);
+    expect(await cli.write(enc.encode('ping'))).toBe(4);
+    const buf = new Uint8Array(16);
+    const r = await srv.recvfrom(buf, 0) as { n: number; from: { address: string; port: number } };
+    expect(dec.decode(buf.subarray(0, r.n))).toBe('ping');
+    expect(r.from).toEqual(expect.objectContaining({ address: '127.0.0.1', port: cli.getsockname().port }));
+    expect(await srv.sendto(enc.encode('pong'), 0, r.from as never)).toBe(4);
+    expect(dec.decode(buf.subarray(0, await cli.read(buf)))).toBe('pong');
+    // an IPv6 socket on [::] gets IPv4 datagrams v4-mapped
+    const six = stack.socket(AF_INET6, SOCK_DGRAM) as KDatagramSocket;
+    expect(six.bind({ family: AF_INET6, address: '::', port: 0 })).toBe(0);
+    expect(await dup.sendto(enc.encode('x'), 0, v4('127.0.0.1', six.getsockname().port))).toBe(1);
+    const r6 = await six.recvfrom(buf, 0) as { from: { address: string } };
+    expect(r6.from.address).toBe('::ffff:127.0.0.1');
+    // nobody bound: the send succeeds, the connected socket then reads ECONNREFUSED
+    await srv.close();
+    expect(await cli.write(enc.encode('again'))).toBe(5);
+    expect(await cli.read(buf)).toBe(-ECONNREFUSED);
+    // and the closed socket's port is free again
+    const re = stack.socket(AF_INET, SOCK_DGRAM) as KDatagramSocket;
+    expect(re.bind(v4('127.0.0.1', port))).toBe(0);
+    for (const s of [dup, cli, six, re]) await s.close();
   });
 
   it('answers UDP DNS queries over DoH', async () => {

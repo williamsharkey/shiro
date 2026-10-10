@@ -157,7 +157,7 @@ Known failures, not fixed here:
 | App | What happens | Where it has to be fixed |
 |---|---|---|
 | blender | past OpenCV's CPU check now (engine fix: CPUID family 6); glibc aborts: "The futex facility returned an unexpected error code" — PI-mutex futex ops (LOCK_PI, UNLOCK_PI…) and REQUEUE/WAKE_OP return EINVAL | x86 engine (reported) |
-| libreoffice-writer | loads; an uncaught UNO `RuntimeException` at startup (release build: no SAL_LOG detail), then it hangs | not diagnosed |
+| libreoffice-writer | loads; an uncaught UNO `RuntimeException` at startup (release build: no SAL_LOG detail), then it hangs. LibreOffice headless (`soffice --headless --convert-to pdf`, libreoffice-writer-nogui) works (verified 2026-10-10) | not diagnosed |
 | firefox-esr | its window opens after ~4 min and stays blank; content processes die with SIGSEGV | not diagnosed |
 | audacity | "Unable to create shared memory segment": SysV shared memory is in now (engine), semaphores are in the kernel, the engine doesn't forward them yet | x86 engine (in progress) |
 | vlc | quits right after its window appears: its main thread's `sigwait()` returns ENOSYS (`rt_sigtimedwait`) | x86 engine (reported) |

@@ -756,6 +756,85 @@ console.log(JSON.stringify(out));`)).toBe('[true,true,true,true,"entry","yes",7,
       .toBe('object number undefined undefined\n');
   }, 60_000);
 
+  it('what vite 8 needs: Buffer#write encodings on a view, stdin read only when asked, IPv6 literals in long form', async () => {
+    // es-module-lexer (vite's import analysis) writes the source as utf16le into WebAssembly memory
+    expect(await node(`const ab = new ArrayBuffer(8);
+const b = Buffer.from(ab, 2, 6);
+const n = b.write('ab', 'utf16le');
+const c = Buffer.alloc(6); c.write('ffee', 1, 'hex'); c.write('hi', 4);
+console.log(n, Array.from(new Uint16Array(ab)).join(), c.toString('hex'))`)).toBe('4 0,97,98,0 00ffee006869\n');
+    // An 'end' listener alone doesn't read piped input (vite exits on stdin 'end'); a 'data' listener does
+    await fs.writeFile('/home/user/m/end.js', `process.stdin.on('end', () => console.log('ended')); setTimeout(() => console.log('alive'), 100)`);
+    expect((await sh(shell, 'cd /home/user/m && echo x | node end.js')).out).toBe('alive\n');
+    await fs.writeFile('/home/user/m/data.js', `process.stdin.on('end', () => console.log('ended')); process.stdin.on('data', (d) => console.log('data', String(d).trim()))`);
+    expect((await sh(shell, 'cd /home/user/m && echo x | node data.js')).out).toBe('data x\nended\n');
+    // vite probes its port on '0000:0000:0000:0000:0000:0000:0000:0000' too
+    expect(await node(`const net = require('net');
+const s = net.createServer().listen(5199, '0000:0000:0000:0000:0000:0000:0000:0000', () => {
+  console.log(JSON.stringify(s.address())); s.close();
+});
+s.on('error', (e) => console.log('error', e.code));`)).toBe('{"address":"::","family":"IPv6","port":5199}\n');
+  }, 60_000);
+
+  it("esbuild-wasm's bin compiles its .wasm asynchronously (a page's main thread refuses a sync compile over 8 MB)", async () => {
+    const { patchPackageSource } = await import('@shiro/node-compat/source-patches');
+    const src = `function instantiate(bytes, importObject) {
+  // comment
+  const module = new WebAssembly.Module(bytes);
+  const instance = new WebAssembly.Instance(module, importObject);
+  return Promise.resolve({ instance, module });
+}`;
+    for (const path of ['/p/node_modules/esbuild/bin/esbuild', '/p/node_modules/esbuild-wasm/bin/esbuild']) {
+      expect(patchPackageSource(path, src)).toContain('return WebAssembly.instantiate(bytes, importObject);');
+      expect(patchPackageSource(path, src)).not.toContain('new WebAssembly.Module');
+    }
+    expect(patchPackageSource('/p/other/bin/esbuild', src)).toBe(src);
+    // Go's go.exit (process.exit from its own event loop) doesn't throw out of it
+    const bin = patchPackageSource('/p/node_modules/esbuild/bin/esbuild', "const code = fs.readFileSync(wasm_exec_node, 'utf8');\nreturn code;");
+    const code = new Function('fs', 'wasm_exec_node', bin)({ readFileSync: () => 'go.exit = process.exit;' }, '');
+    const exit = new Function('process', `const go = {}; ${code} return go.exit;`)({ exit: (c: number) => { throw new Error(`process.exit(${c})`); } });
+    expect(() => exit(0)).not.toThrow();
+  });
+
+  it("a node child's stdio are live pipes: the parent talks to it while it runs (esbuild's service)", async () => {
+    // The child answers each line as it comes, from fs.read(0) (as Go does), with raw bytes on fd 1
+    await fs.writeFile('/home/user/m/echo-child.js', `const fs = require('fs');
+const buf = Buffer.alloc(64);
+function next() {
+  fs.read(0, buf, 0, buf.length, null, (e, n) => {
+    if (e || n === 0) return;
+    const line = buf.slice(0, n).toString();
+    fs.writeSync(1, Buffer.concat([Buffer.from([0xff, 0x00]), Buffer.from(line.toUpperCase())]));
+    next();
+  });
+}
+next();`);
+    expect(await node(`const { spawn } = require('child_process');
+const c = spawn(process.execPath, ['echo-child.js'], { stdio: ['pipe', 'pipe', 'inherit'] });
+const got = [];
+let i = 0;
+const words = ['one', 'two', 'three'];
+c.stdout.on('data', (d) => {
+  got.push([...d.slice(0, 2)].join(',') + ':' + d.slice(2).toString());
+  if (++i < words.length) c.stdin.write(words[i]); else c.stdin.end();
+});
+c.on('exit', (code) => console.log(JSON.stringify(got), code));
+c.stdin.write(words[0]);`)).toBe('["255,0:ONE","255,0:TWO","255,0:THREE"] 0\n');
+    // An unref()'d child that never ends doesn't keep its parent alive (esbuild's service); it sees EOF when the parent goes
+    await fs.writeFile('/home/user/m/forever-child.js', `process.stdin.on('data', () => {}); process.stdin.on('end', () => require('fs').writeFileSync('/home/user/m/child-saw-eof', 'yes'));`);
+    expect(await node(`const c = require('child_process').spawn('node', ['forever-child.js'], { stdio: ['pipe', 'pipe', 'inherit'] });
+c.unref(); c.stdin.write('x'); console.log('parent done')`)).toBe('parent done\n');
+    await new Promise((r) => setTimeout(r, 300));
+    expect(await fs.readFile('/home/user/m/child-saw-eof', 'utf8')).toBe('yes');
+    // Piped input through fs.readSync(0) and fs.read(0)
+    let r = await sh(shell, 'cd /home/user/m && echo hello | node -e "const b = Buffer.alloc(16); setTimeout(() => console.log(require(\'fs\').readSync(0, b, 0, 16, null), String(b.slice(0, 6))), 10)"');
+    expect(r.out).toBe('6 hello\n\n');
+    r = await sh(shell, 'cd /home/user/m && echo hi | node -e "const b = Buffer.alloc(16); require(\'fs\').read(0, b, 0, 16, null, (e, n) => console.log(e, n, JSON.stringify(String(b.slice(0, n)))))"');
+    expect(r.out).toBe('null 3 "hi\\n"\n');
+    r = await sh(shell, 'cd /home/user/m && printf \'{"a":1}\' | node -e "console.log(JSON.parse(require(\'fs\').readFileSync(0, \'utf8\')).a, require(\'fs\').readFileSync(\'/dev/stdin\').length)"');
+    expect(r.out).toBe('1 0\n');
+  }, 60_000);
+
   it('path follows Node (relative paths stay relative)', async () => {
     expect(await node(`const p = require('path');
 console.log(JSON.stringify([p.dirname('a'), p.dirname('/a'), p.dirname('a/b/'), p.join('a', '../b', './c'), p.join(''), p.normalize('./x/../y/'),
@@ -1116,6 +1195,15 @@ describe('node: real npm packages', () => {
     const r = await sh(shell, 'cd /home/user/app && npm init -y > /dev/null && npm install commander@12.1.0 chalk@4.1.2 dayjs@1.11.13 uuid@10.0.0 mocha@10.8.2 typescript@5.6.3 prettier@3.3.3');
     expect(r.exitCode).toBe(0);
   }, 300_000);
+
+  it('npm install in a directory without package.json starts one, as npm does', async () => {
+    const r = await sh(shell, 'mkdir -p /home/user/nopkg && cd /home/user/nopkg && npm install dayjs@1.11.13 > /dev/null; echo "e=$?"; cat package.json; node -e "console.log(typeof require(\'dayjs\'))"; npm install; echo "f=$?"');
+    expect(r.out).toContain('e=0');
+    expect(JSON.parse(r.out.slice(r.out.indexOf('{'), r.out.lastIndexOf('}') + 1))).toEqual({ dependencies: { dayjs: '1.11.13' } });
+    expect(r.out).toContain('function\n');
+    expect(r.out).toContain('f=0');
+    expect((await sh(shell, 'mkdir -p /home/user/nopkg2 && cd /home/user/nopkg2 && npm install; echo "g=$?"; ls')).out).toBe('up to date, audited 0 packages\ng=0\n');
+  }, 120_000);
 
   it('pnpm: add into the virtual store, require through its symlinks, run scripts, exec bins', async () => {
     let r = await sh(shell, 'mkdir -p /home/user/pn && cd /home/user/pn && npm init -y > /dev/null && npm install pnpm@9.12.3 > /dev/null; echo $?');
@@ -1627,12 +1715,13 @@ describe('npm install: the node_modules tree (npm-tree.ts)', () => {
 
   it('installs peers, leaves out native builds but takes wasm32 ones, and the WebAssembly esbuild and rollup', async () => {
     const t = await buildTree([{ name: 'vite', range: '^5.0.0' }, { name: 'plugin', range: '1' }], registry({
-      vite: { '5.4.10': { dependencies: { esbuild: '^0.21.3', rollup: '^4.20.0' }, optionalDependencies: { fsevents: '~2.3.3', '@x/binding-linux-x64-gnu': '1', '@x/binding-wasm32-wasi': '1' } } },
+      vite: { '5.4.10': { dependencies: { esbuild: '^0.21.3', rollup: '^4.20.0', lightningcss: '^1.33.0' }, optionalDependencies: { fsevents: '~2.3.3', '@x/binding-linux-x64-gnu': '1', '@x/binding-wasm32-wasi': '1' } } },
       '@x/binding-linux-x64-gnu': { '1.0.0': { os: ['linux'], cpu: ['x64'] } },
       '@x/binding-wasm32-wasi': { '1.0.0': { cpu: ['wasm32'] } },
       'esbuild-wasm': { '0.21.5': { bin: { esbuild: 'bin/esbuild' } } },
       '@rollup/wasm-node': { '4.24.0': { dependencies: { '@types/estree': '1.0.6' }, bin: { rollup: 'dist/bin/rollup' } } },
       '@types/estree': { '1.0.6': {} },
+      'lightningcss-wasm': { '1.33.0': {} },
       fsevents: { '2.3.3': { os: ['darwin'] } },
       plugin: { '1.0.0': { peerDependencies: { vite: '^5.0.0', missing: '*' }, peerDependenciesMeta: { missing: { optional: true } } } },
     }));
@@ -1640,6 +1729,7 @@ describe('npm install: the node_modules tree (npm-tree.ts)', () => {
       'node_modules/vite': '5.4.10', 'node_modules/plugin': '1.0.0',
       'node_modules/esbuild': 'esbuild-wasm@0.21.5', 'node_modules/rollup': '@rollup/wasm-node@4.24.0',
       'node_modules/@types/estree': '1.0.6', 'node_modules/@x/binding-wasm32-wasi': '1.0.0',
+      'node_modules/lightningcss': 'lightningcss-wasm@1.33.0',
     });
     expect(t.skipped.sort()).toEqual(['@x/binding-linux-x64-gnu@1.0.0', 'fsevents@2.3.3']);
     expect(t.warnings).toEqual([]);
@@ -1661,7 +1751,7 @@ import { transformESModules } from '@shiro/commands/jseval/module-transform';
 describe('ES module transform: minified imports, and import text in strings left alone', () => {
   it('rewrites import{a as b}from"x", import t from"y", import i,{s as a}from"z", and keeps template text', () => {
     const src = 'import{createRequire as e}from"node:module";import t from"node:fs";import i,{styleText as a}from"node:util";import"./side.js";'
-      + 'const tpl=`import react from \'@vitejs/plugin-react\'\nexport default defineConfig({})`;export{tpl as x,e};export default 1;';
+      + 'const tpl=`import react from \'@vitejs/plugin-react\'\nexport default defineConfig({})`;export{tpl as x,e};export{e as "module.exports"};export default 1;';
     const out = transformESModules(src);
     expect(out).toContain('const {createRequire: e} = __shiro_require("node:module");');
     expect(out).toContain('const t = __shiro_require("node:fs");');
@@ -1670,6 +1760,7 @@ describe('ES module transform: minified imports, and import text in strings left
     expect(out).toContain("`import react from '@vitejs/plugin-react'\nexport default defineConfig({})`");
     expect(out).toContain('__shiro_module.exports.x = tpl; __shiro_module.exports.e = e;');
     expect(out).toContain('__shiro_module.exports = 1;');
+    expect(out).toContain('__shiro_module.exports["module.exports"] = e;');
   });
 });
 
