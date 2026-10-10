@@ -148,3 +148,194 @@ back five pixels and compares them with the same shader evaluated on the CPU.
    just slowly, and stays useful as the fallback for anything B can't do.
 3. **B later**, as the speed path for the apps people actually use with GL.
    It's a separate, larger project whose GL-feature coverage grows per app.
+
+## Addendum: option B design (unix/gl, 2026-10-10)
+
+Status: proposal, sent to the coordinator before building. Owner: unix/gl.
+Xshiro's GLX side and app scoring: unix/gui.
+
+```
+ guest (Blink worker)                         page
+ ┌──────────────────────────┐   AF_UNIX    ┌────────────────────────────────┐
+ │ app → libGL.so.1 (glvnd) │   stream     │ glshiro (kernel process, main) │
+ │   → libGLX_tabcomputer   │ ──batches──▶ │   → GL Worker (WebGL2 context, │
+ │     encoder, per-thread  │ ◀─replies─── │     OffscreenCanvas)           │
+ │     command buffer       │              │   → bitmaprenderer canvas over │
+ └──────────────────────────┘              │     the X window (Xshiro)      │
+                                           └────────────────────────────────┘
+```
+
+### Guest side: a glvnd vendor library
+
+- Debian's apps link libglvnd (`libGL.so.1`, `libGLX.so.0`, `libOpenGL.so.0`),
+  which loads a vendor library per screen. Ours is
+  `libGLX_tabcomputer.so.0`, picked with `__GLX_VENDOR_LIBRARY_NAME=tabcomputer`
+  (set by `gui` for apps). It implements glvnd's vendor ABI (`__glx_Main`,
+  ABI 1.x as in bookworm's libglvnd 1.6) and every GLX entry point, and hands
+  glvnd a GL function for each name it asks for.
+- Why a vendor and not our own `libGL.so.1`: Debian's packages keep their
+  files, glvnd's dispatch already covers `libGL`/`libOpenGL`/`libGLX` and
+  `dlopen` users (epoxy, Qt), and unsetting the variable falls back to Mesa
+  (option A) for comparison. EGL later the same way:
+  `libEGL_tabcomputer.so.0` through `__EGL_VENDOR_LIBRARY_FILENAMES`
+  (GTK4 and Qt use EGL on X11).
+- Built like the text hook: C, gcc on the host, glibc ≤ 2.36 symbols
+  checked, shipped in `public/gui/lib/`, source in `scripts/gl/`.
+- GLX is answered on the client side. FBConfigs and visuals are computed
+  from the server's own visuals (`XGetVisualInfo`: TrueColor 24, ARGB 32),
+  each offered with double buffer, depth 24/stencil 8, and 0 or 4 samples.
+  GLX drawables are the X window ids. No GL command crosses the X
+  connection, so Xshiro needs only `GLX` in QueryExtension (glvnd's own
+  `glXQueryExtension` asks the server) and QueryVersion.
+
+### Transport: a socket, not the shared-memory ring
+
+- Each process opens one AF_UNIX stream connection to
+  `/tmp/.tabcomputer-gl/0`, served by `glshiro`, a kernel process like
+  Xshiro. It's the same path X11 traffic takes, with no new kernel or Blink
+  work.
+- Every thread encodes into its own buffer (256 KB) in private memory, so
+  encoding runs at JIT speed. A flush is one `write()` of the batch, which
+  the kernel copies out of guest memory in bulk. Flushes happen when the
+  buffer fills, at `glXSwapBuffers`/`glFlush`/`glFinish`, at
+  `glXMakeCurrent`, and before any call that needs a reply. A process-wide
+  lock covers the socket only.
+- Why not a ring in a shmobj mapping (Blink 0112): remote pages are kept
+  out of the JIT and the TLB, and every access takes the object's lock
+  lease. That's right for semaphores and wrong for megabytes of vertex
+  data per second. The ring stays possible later for one thing: a small
+  shared word with the page's completed-frame counter, if the swap throttle
+  below costs too much as a read.
+- Measured in stage 2: bytes/s and flushes/s from Blink through the socket
+  to the page. If a socket write turns out to cost more than ~50 µs, batches
+  grow.
+
+### Wire format
+
+- Little endian, 4-byte aligned. A command is `u32 op | (words << 16)` and
+  its payload; `words` (header included) 0 means a `u32 bytes` length
+  follows, for uploads. A batch is `u32 magic, u32 context, u32 bytes` and
+  its commands; the context id saves a MakeCurrent per batch for threads.
+- The opcode table is generated from one list (`src/gl/commands.ts`):
+  name, argument types, and whether the call returns something. The guest
+  encoder (C) and the page decoder (TypeScript) are both generated from it,
+  so they can't disagree. A test checks the generated C is up to date.
+- Client memory is copied into the command where GL reads it at call
+  time: `glTexImage*`, `glBufferData`, `glUniform*v`, and client-side vertex
+  arrays at draw time (the encoder computes the index range for
+  `glDrawElements` with client indices).
+
+### Sync points: as few as possible
+
+| Call | Handling |
+|---|---|
+| `glGen*`, `glCreateShader/Program` | Names chosen in the guest; the page maps them. No round trip. |
+| `glGetError` | Errors the guest can detect are kept there; errors the page hits come back with the next reply. `TABCOMPUTER_GL_SYNC=1` makes every `glGetError` a round trip, for debugging. |
+| `glGet*` state, `glIsEnabled` | Shadow state in the guest; limits (`MAX_TEXTURE_SIZE`, ...) fetched once per context. |
+| Shader compile/link status, logs, uniform and attribute locations | One round trip per `glLinkProgram`'s first query, returning everything; locations are then answered locally. |
+| `glReadPixels`, `glGetTexImage`, `glGetBufferSubData`, `glMapBuffer*` for reading | Round trip (unavoidable). Into a `PIXEL_PACK_BUFFER`: no round trip until mapped. |
+| `glMapBuffer*` for writing | Guest-side shadow memory; unmap sends the written (or flushed) range. |
+| `glFenceSync`/`glClientWaitSync` | Commands run in order on the page, so a fence is signalled once the page has its batch: `glClientWaitSync` flushes and returns `ALREADY_SIGNALED` without a round trip. Queries (`GL_QUERY_RESULT`) round-trip. |
+| `glFinish` | Round trip. |
+| `glXSwapBuffers` | Flush. Blocks only when the page is 2 frames behind (the page acks each presented frame on the socket; the guest reads acks without blocking otherwise). |
+
+### Page side
+
+- `glshiro` (`src/gl/server.ts`) accepts connections and forwards batches
+  (transferred ArrayBuffers) to one Worker per connection
+  (`src/gl/worker.ts`) that owns a WebGL2 context on an OffscreenCanvas.
+  Without OffscreenCanvas WebGL2 the same executor runs on the main thread.
+- One WebGL2 context per connection holds every GL context of that
+  process. Share groups are name maps; each GL context's state is shadowed
+  and re-applied on a context switch. This makes `glXCreateContext` with
+  `shareList` free and avoids WebGL's limit of ~16 live contexts.
+- A GL window's buffers are a framebuffer object of the window's size
+  (color, depth/stencil, MSAA when the FBConfig asks). `glXSwapBuffers`
+  blits (resolving) to the canvas and `transferToImageBitmap()` goes to a
+  `bitmaprenderer` canvas that sits over the X window in the desktop window:
+  no readback, no copy through Xshiro's pixmaps. Front-buffer drawing, and
+  `glReadPixels` from either buffer, work because both are FBOs. The FBO
+  follows the window's size at the next swap or MakeCurrent, as DRI does.
+- Fallback present (and `XGetImage` on a GL window): read the front FBO
+  back into the window's pixmap, so Xshiro composes it like any drawing.
+- Fixed function (GL 1.x/2.1 compat: glxgears, OpenSCAD, FreeCAD/Coin3D,
+  KiCad): matrices, lighting (8 lights, materials, color material), texture
+  environment, fog, alpha test, clip planes, point size, flat shading, are
+  state on the page. Shaders are generated per state key and cached. Immediate
+  mode (`glBegin`..`glEnd`, `GL_QUADS`, `GL_POLYGON`) is assembled into
+  vertex arrays on the page; display lists are recorded and replayed on the
+  page, so glxgears sends a few hundred bytes per frame.
+
+### Shader translation: our own GLSL front end in TypeScript
+
+- Desktop GLSL 110–330 to GLSL ES 3.00, in `src/gl/glsl/`: preprocessor,
+  parser, a type checker for the built-in function set, and a printer.
+  The checker is there for what ES forbids and desktop GLSL ≥ 1.20 allows:
+  implicit int→float/vecN conversions, which get explicit constructors.
+  The rest is rewriting: `attribute`/`varying`, `texture2D`/`shadow2D`/...,
+  `gl_FragColor`/`gl_FragData`, the compatibility built-ins (`gl_Vertex`,
+  `gl_ModelViewMatrix`, `gl_LightSource[]`, `ftransform()`) mapped to the
+  fixed-function state uniforms the page already keeps, default precision,
+  `#extension` lines.
+- Why not glslang → SPIR-V → SPIRV-Cross in wasm: ~3 MB to download,
+  emsdk in the build, and SPIR-V can't carry the compatibility profile
+  (`gl_Vertex` and friends), which GL 2.1 apps use most; loose uniforms
+  need relaxed-mode workarounds. The geometry-shader and texture-buffer
+  emulation below also need source-level rewriting, which our AST gives.
+  If the front end's coverage hits a wall, glslang+SPIRV-Cross is the
+  fallback for core-profile shaders only.
+- Translated shaders are cached by source hash (IndexedDB), like Mesa's disk
+  cache.
+
+### GL 3.3 core gaps on WebGL2
+
+| Gap | Plan |
+|---|---|
+| Geometry shaders (Blender 3.4: wide lines, overlays) | Two passes. The vertex shader runs with transform feedback into a buffer (rasterizer discarded), copied to a texture. A generated vertex shader then runs the geometry shader's body per output vertex: `gl_VertexID` gives the primitive and the vertex k, it fetches the primitive's inputs with `texelFetch`, runs the body counting `EmitVertex()` and keeps the k-th vertex; strips become triangle lists by index; unemitted slots are culled. Needs a bounded `max_vertices` (Blender's are 4–6). Stage 4. |
+| Texture buffers (`samplerBuffer`) | A 2D texture 4096 wide fed from the buffer on the GPU (`PIXEL_UNPACK_BUFFER`) when it changed; `texelFetch(b, i)` rewritten to 2D coordinates. |
+| `glPolygonMode(GL_LINE/POINT)` | Index buffer of edges/points built on the page (cached per buffer). |
+| `glDrawElementsBaseVertex`, `glDrawArrays` with `first` on client arrays | Re-point attributes by `baseVertex × stride`; the base-vertex extension when present. |
+| Persistent mapping (GL 4.4) | Not in 3.3; `glMapBufferRange` as above. |
+| `glReadPixels` | Round trip; into a pack buffer, async. |
+| `GL_CLAMP_TO_BORDER`, 1D textures, rectangle textures, BGRA uploads, `UNSIGNED_INT_8_8_8_8_REV`, `glGetTexImage` | Emulated: border → edge (approximate), 1D/rect → 2D (+ coordinate rewrite for rect), format conversion on upload, render-and-read for get. |
+| Wide lines, `glLineStipple`, `glLogicOp`, `GL_POLYGON_SMOOTH` | Width 1 (WebGL's limit) at first; wide lines as quads later if an app needs it. LogicOp: XOR only, via blending where possible. |
+| `gl_ClipDistance`, depth clamp, dual-source blend, S3TC, timer queries, float targets | WebGL2 extensions where the browser has them (`WEBGL_clip_cull_distance`, `EXT_depth_clamp`, `WEBGL_blend_func_extended`, `WEBGL_compressed_texture_s3tc`, `EXT_disjoint_timer_query_webgl2`, `EXT_color_buffer_float`); advertised to the app only when present. |
+| Primitive restart with any index | WebGL2 always restarts at the type's max; other indices are rewritten. |
+
+Version strings: a compatibility context reports `2.1` (raised to 3.0 when
+it covers it), a core context `3.3`, GLSL `1.20`/`3.30`; renderer
+`tabcomputer WebGL2 (<browser's renderer>)`.
+
+### What gui provides (Xshiro)
+
+1. `GLX` in QueryExtension, with QueryVersion (1.4). Other GLX requests
+   can answer `BadRequest` for now; our vendor sends none.
+2. An in-page API for a GL window, roughly
+   `server.glSurface(xid) → { canvas, width, height, onChange(cb), onDestroy(cb), release() }`:
+   a `bitmaprenderer` canvas at the window's position in its toplevel,
+   clipped and stacked like the window (child windows included: KiCad's 3D
+   canvas, wxGLCanvas), kept in place across moves, resizes, map and unmap.
+   Until it lands, `src/gl/present.ts` uses the readback fallback.
+3. The app environment: `__GLX_VENDOR_LIBRARY_NAME=tabcomputer` and
+   `libGLX_tabcomputer.so.0` installed for apps that pull libglvnd.
+
+### Tests and measurement
+
+- vitest: wire format round trips, the generated encoder in sync, the
+  GLSL translator (a corpus of shaders from glxgears to Blender's, each
+  checked by its output compiling in ANGLE's ES 3.00 validator: Chromium in
+  the browser tests), fixed-function shader keys.
+- Blink under Node: the vendor library with a recording `glshiro`
+  (`tests/tests/shiro-vitest/gl-guest.test.ts`): glxinfo's strings and
+  glxgears' command stream.
+- Browser (`tests/browser/gl.mjs`): glxgears' pixels compared against a
+  reference, FPS for glxgears and the stage-3 app; A/B through
+  `bench/ab.mjs`.
+
+### Stages (as agreed)
+
+1. This addendum.
+2. First light: glxinfo and glxgears on the page; transport numbers.
+3. A GL 2.1 app (OpenSCAD or SuperTuxKart) with FPS.
+4. GL 3.3 core for Blender, geometry shaders as above.
+5. Breadth with gui; a GL column in docs/GUI_SCORE.md.

@@ -721,6 +721,23 @@ composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts,
 a few MiB each. The terminal UI's +19 KiB is /dom, the sign-in hook and the
 other integration changes since db9f698, not desktop code.
 
+### unix/shell-stdio 12 — tty, setsid, script; test -t; no global FORCE_COLOR
+
+`node bench/ab.mjs HEAD~1 HEAD --suites shell,kernel --quick` (c8dd058 →
+8973854): 23 unchanged; isolated:shell.ls_la_1000 improved 10.4 → 7.28 ms
+(-32%, every round). ls -la into the benchmark's sink no longer colours its
+output now that FORCE_COLOR isn't exported.
+
+### unix/shell-stdio 11 — the shell's builtins read the kernel's /proc
+
+`node bench/ab.mjs 41265dd2~1 41265dd2 --suites shell,kernel --quick`: all 24
+unchanged.
+
+### unix/shell-stdio 10 — terminal restored after a TUI dies; timeout signals and waits
+
+`node bench/ab.mjs HEAD~1 HEAD --suites shell,kernel --quick` (2e51dd4 →
+ba9aefe): all 24 unchanged.
+
 ### unix/shell-stdio 9 — autoconf configure: case in subshells, trap comments, compound dups
 
 `node bench/ab.mjs HEAD~1 HEAD --suites shell,kernel --quick` (7c7f147 →
@@ -822,6 +839,51 @@ medians 1240 and 1215 proc/s, base 1200. One of those passes stalled at
 ≈10 proc/s for its last 11 samples and did not recur in two more; worth
 watching if it shows up on other branches.
 
+### unix/perf-blink 15 — SSE float arithmetic in compiled code
+
+Blink patch 0116: compiled code computes SSE float arithmetic (ss/sd/ps/pd),
+ucomis/comis, movd/movq and leave itself instead of calling Blink's handlers.
+In a libc-heavy test (snprintf, strtod, qsort) those calls went from ~3.2 M
+per run to 0 (comisd 1.7 M, movd/movq 0.9 M, leave 0.3 M, addsd etc. 0.3 M);
+wall time 1.63–1.83 → 1.61–1.78 s (Node, small).
+
+`node bench/ab.mjs HEAD --suites x86 --only 'x86\.blink\.' --rounds 3`,
+twice:
+- First run: everything "same" except go_nethttp 535 → 665 ms flagged
+  "regressed".
+- Second run: everything "same", go_nethttp 623 → 695 ms (+11.5%, not
+  significant).
+- Alternated engine swaps on one tree (0115 vs 0116 emulator, 9 runs each)
+  overlap: 558–616 vs 474–646 ms.
+
+So go_nethttp's spread is wider than these runs can separate; nothing in
+the suite is float-heavy.
+
+### unix/perf-blink 14 — exit doesn't wait for the other threads
+
+Blink patch 0115. unix/bench bisected go_nethttp's +35% to patch 0053's
+emulator (pre-0053 450–520 ms, 0053 665–723 ms; engine-swap.sh, today's tree
+and host.mjs). 0053 made exit_group wait, up to 0.5 s, for the guest's other
+threads to leave Blink before the kernel heard of the exit. The point was a
+quick Worker termination in Chromium. In Chromium that wait took ~200 ms of
+a Go net/http run, whose many threads are parked in the netpoller, futexes
+and sleeps. Under Node it is 1–3 ms.
+
+The exit now reaches the kernel at once (the shell has its prompt). Then
+host.mjs polls `blink_shiro_others` (up to 0.5 s) and posts `blink-quiet`,
+and the page terminates the worker only then. A kill (SIGKILL) still
+terminates at once.
+
+`node bench/ab.mjs HEAD --suites x86 --only 'x86\.blink\.' --rounds 3`:
+
+| metric (isolated) | base | new | shift | verdict |
+|---|---:|---:|---:|---|
+| x86.blink.go_nethttp | 751 ms | 583 ms | -21.7% | improved (p=7e-4, CI −30.5…−2.6%) |
+| everything else in the x86 suite | | | | same |
+
+The rest of 0053's cost, ~100 ms against pre-0053's ~470 ms here, isn't the
+exit and isn't nanosleep's 10 ms slices (unsliced: 771 ms).
+
 ### unix/perf-blink 13 — the branch end to end
 
 `node bench/ab.mjs cc8539ed --suites x86 --only 'x86\.blink\.' --rounds 2`,
@@ -841,26 +903,11 @@ from before the wasm JIT (cc8539ed) to Blink patch 0111 (b2834b1c):
 | x86.blink.vim_defaults | — | 1803 ms | | new |
 | x86.blink.vim_startup | — | 4079 ms | | new |
 
-go_nethttp's regression is not in Blink. ab.mjs builds each side's whole tree,
-kernel included. On today's tree, with only `public/engines/blink` swapped
-(`TABCOMPUTER_BLINK_ASSETS`, 6–8 runs each):
-
-| go_nethttp, today's kernel and page | median |
-|---|---:|
-| cc8539ed's blink.wasm + host.mjs | 662 ms |
-| cc8539ed's blink.wasm + today's host.mjs | 788 ms |
-| today's blink.wasm, shared Module (default), 4 alternated rounds | 645–668 ms |
-| today's blink.wasm, per-worker compile, same rounds | 647–738 ms |
-
-- Single runs of the same assets spread 620–880 ms. A bisect of host.mjs
-  with the old wasm pointed at aa07d367 (shared Module, entry 8), but
-  alternated rounds with today's wasm show no cost from it.
-- Bisect builds of the patch series at four points from 0051 onwards all
-  measure 750–800 ms, the same as the head.
-- So most of the ~180 ms comes from changes elsewhere in the tree between
-  cc8539ed and b2834b1c (kernel, merged branches). In the head's profile
-  the main thread waits ~120 ms in futexes and ~95 ms in other syscalls,
-  against ~210 ms running guest code.
+go_nethttp's regression is in Blink: patch 0053 (unix/bench bisected it
+with bench/engine-swap.sh), fixed in perf-blink 14 below. My first look
+(an emulator-swap table that put it outside Blink) was wrong:
+`TABCOMPUTER_BLINK_ASSETS` only applies under Node, so in Chromium every arm
+of it ran the same emulator.
 - gh_version: the fixture wasn't available in this container.
 
 ### unix/perf-blink 12 — fork is copy-on-write
