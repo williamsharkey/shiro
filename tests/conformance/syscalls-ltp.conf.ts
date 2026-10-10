@@ -17,6 +17,7 @@ import { getKernel } from '@shiro/kernel/kernel';
 import { createTestShell } from '../tests/shiro-vitest/helpers';
 // @ts-ignore plain JS module shared with the native baseline script
 import { judgeLtp } from './lib/ltp.mjs';
+import { startWatchdog } from './lib/watchdog.mjs';
 
 const CONF = resolve(__dirname, 'ltp');
 const BIN = resolve(__dirname, '.cache/ltp-bin');
@@ -63,11 +64,14 @@ async function runAll(): Promise<{ files: Record<string, AreaResult>; detail: Re
     if (ok) res.pass++; else res.failures.push({ name, ...f });
     if (!done.has(name)) appendFileSync(journal, JSON.stringify({ name, ok, ...f }) + '\n');
   };
+  const watchdog = startWatchdog({ journal, detailDir: join(RESULTS, 'detail', 'ltp') });
+  mkdirSync(join(RESULTS, 'detail', 'ltp'), { recursive: true });
   for (const name of names) {
     const prev = done.get(name);
     if (prev) { record(name, prev.ok, { ...(prev.reason ? { reason: prev.reason } : {}), ...(prev.timeout ? { timeout: true } : {}) }); continue; }
     if (hangs.includes(name)) { record(name, false, { reason: 'skipped: hangs tabcomputer', timeout: true }); continue; }
     progress(name);
+    watchdog.arm(name, TEST_TIMEOUT);
     const dir = `/tmp/ltp/${name}`;
     await fs.mkdir(dir, { recursive: true });
     const shell = new Shell(fs, base.commands);
@@ -101,7 +105,9 @@ async function runAll(): Promise<{ files: Record<string, AreaResult>; detail: Re
     mkdirSync(join(RESULTS, 'detail', 'ltp'), { recursive: true });
     writeFileSync(join(RESULTS, 'detail', 'ltp', `${name}.txt`), text);
     record(name, j.ok, j.ok ? {} : { reason: j.reason || 'no summary', ...(!finished && !j.summary ? { timeout: true } : {}) });
+    watchdog.disarm();
   }
+  watchdog.stop();
   return { files, detail };
 }
 
