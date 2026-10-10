@@ -173,6 +173,20 @@ async function debianCheck(ctx: CommandContext): Promise<Check> {
   }
 }
 
+/** Installed prebuilt packages against the index (no network: the index is local) */
+export async function packagesCheck(ctx: CommandContext): Promise<Check> {
+  const { readStatus, outdatedPackages } = await import('../pkg-manager');
+  const installed = Object.keys(await readStatus(ctx.fs)).length;
+  if (!installed) return { label: 'packages', status: 'INFO', detail: 'no prebuilt packages installed (pkg available)' };
+  const out = await outdatedPackages(ctx.fs);
+  if (!out.length) return { label: 'packages', status: 'OK', detail: `${installed} installed, all at the index versions` };
+  const broken = out.filter((o) => o.broken).length;
+  return {
+    label: 'packages', status: 'WARN',
+    detail: `${out.length} upgradable (pkg upgrade): ${out.map((o) => `${o.name} ${o.installed} → ${o.available}`).join(', ')}${broken ? ` · ${broken} known broken, upgraded at boot` : ''}`,
+  };
+}
+
 async function storageCheck(): Promise<Check> {
   const st = g.navigator?.storage;
   if (!st?.estimate) return { label: 'storage', status: 'INFO', detail: 'StorageManager unavailable' };
@@ -206,6 +220,7 @@ export async function runDoctorChecks(ctx: CommandContext): Promise<Check[]> {
     guard('relay', () => relayChecks(ctx), 15_000),
     guard('sign-in', () => signInChecks(ctx)),
     guard('debian', () => debianCheck(ctx)),
+    guard('packages', () => packagesCheck(ctx)),
     guard('storage', storageCheck),
     guard('kernel', () => kernelCheck(ctx)),
     guard('agents', async () => {
@@ -226,7 +241,7 @@ export const doctorCmd: Command = {
   description: 'Check this tab (deploy, browser, engine, network, sign-ins, storage) for a bug report',
   async exec(ctx) {
     if (ctx.args[0] === '--help' || ctx.args[0] === '-h') {
-      ctx.stdout = 'Usage: doctor [--agents]\n\nPrints the deploy, browser, x86 engine, internet relay, sign-ins, Debian,\nstorage, kernel and agent-readiness state, one OK/WARN/FAIL line each, to\npaste into a bug report. No tokens or secrets are printed. Also: tabinfo\n\n--agents: what agent CLIs (Claude Code, Codex) need, step by step, through\nboth runtimes: a native x86-64 probe under Blink and the Node runtime\n(mkdir -p 0700, O_EXCL + rename, stat/lstat/fstat, realpath, a child\nsh -c with output to a file), and the native claude binary\'s --version.\n';
+      ctx.stdout = 'Usage: doctor [--agents]\n\nPrints the deploy, browser, x86 engine, internet relay, sign-ins, Debian,\nprebuilt packages, storage, kernel and agent-readiness state, one OK/WARN/FAIL line each, to\npaste into a bug report. No tokens or secrets are printed. Also: tabinfo\n\n--agents: what agent CLIs (Claude Code, Codex) need, step by step, through\nboth runtimes: a native x86-64 probe under Blink and the Node runtime\n(mkdir -p 0700, O_EXCL + rename, stat/lstat/fstat, realpath, a child\nsh -c with output to a file), and the native claude binary\'s --version.\n';
       return 0;
     }
     if (ctx.args.includes('--agents')) {
