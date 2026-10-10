@@ -1,3 +1,4 @@
+import { createReadline } from './readline';
 import { createZlibModule } from './zlib';
 import { createAssertModule } from './assert';
 import type { CommandContext } from '../../commands/index';
@@ -421,24 +422,9 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
         if (cb) cb();
         return true;
       },
-      createInterface: (opts: any) => {
-        const events: Record<string, Function[]> = {};
-        const iface: any = {
-          on: (ev: string, fn: Function) => { (events[ev] ??= []).push(fn); return iface; },
-          once: (ev: string, fn: Function) => iface.on(ev, fn),
-          off: (ev: string, fn: Function) => { events[ev] = (events[ev] || []).filter(f => f !== fn); return iface; },
-          removeListener: (ev: string, fn: Function) => iface.off(ev, fn),
-          removeAllListeners: () => { Object.keys(events).forEach(k => delete events[k]); return iface; },
-          close: () => { (events['close'] || []).forEach(f => f()); },
-          question: (q: string, cb: Function) => cb(''),
-          write: () => {},
-          setPrompt: () => {},
-          prompt: () => {},
-          [Symbol.asyncIterator]: async function*() {},
-        };
-        return iface;
-      },
-      Interface: class Interface {},
+      // a real line reader on the input stream (readline.ts)
+      ...(() => { const rl = createReadline(false); return { createInterface: rl.createInterface, Interface: rl.Interface }; })(),
+      promises: createReadline(true),
       emitKeypressEvents: (stream: any) => {
         // ink calls this to enable keypress events on stdin
         // Parse raw input into keypress events, handling ANSI escape sequences
@@ -523,20 +509,7 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
 
     case 'readline/promises':
     case 'node:readline/promises': {
-      const rlp: any = {
-        createInterface: (opts: any) => {
-          const events: Record<string, Function[]> = {};
-          const iface: any = {
-            on: (ev: string, fn: Function) => { (events[ev] ??= []).push(fn); return iface; },
-            once: (ev: string, fn: Function) => iface.on(ev, fn),
-            off: (ev: string, fn: Function) => { events[ev] = (events[ev] || []).filter(f => f !== fn); return iface; },
-            close: () => { (events['close'] || []).forEach(f => f()); },
-            question: async (_q: string) => '',
-            [Symbol.asyncIterator]: async function*() {},
-          };
-          return iface;
-        },
-      };
+      const rlp: any = createReadline(true);
       return rlp;
     }
 

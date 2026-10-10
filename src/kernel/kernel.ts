@@ -28,6 +28,8 @@ import type { PtyFile } from './pty';
 import { LockTable, F_RDLCK, F_WRLCK, F_UNLCK } from './locks';
 import { Process } from './process';
 import { SysvShm } from './sysvshm';
+import { SysvSem } from './sysvsem';
+import { SysvMsg } from './sysvmsg';
 import { EpollFile, waitReady } from './epoll';
 import { SignalFile, notifySignalPending } from './signalfd';
 import { EventFile, TimerFile } from './fd';
@@ -135,6 +137,7 @@ function fileKey(f: object): number {
 const OPATH_FD_ARG: Record<number, number> = {
   0: 0, 1: 0, 16: 0, 17: 0, 18: 0, 19: 0, 20: 0, 74: 0, 75: 0, 77: 0, 91: 0, 93: 0, // read write ioctl pread pwrite readv writev fsync fdatasync ftruncate fchmod fchown
   190: 0, 193: 0, 196: 0, 199: 0, 217: 0, 285: 0, 233: 2, // f*xattr getdents64 fallocate epoll_ctl
+  42: 0, 43: 0, 44: 0, 45: 0, 46: 0, 47: 0, 48: 0, 49: 0, 50: 0, 51: 0, 52: 0, 54: 0, 55: 0, 288: 0, // the socket calls
 };
 
 /** An O_PATH description over `f`: same file and stat, no I/O */
@@ -187,6 +190,10 @@ export class Kernel {
   readonly procfs = new ProcFs(this);
   /** System V shared memory segments (the engine maps them). */
   readonly shm = new SysvShm();
+  /** SysV semaphore sets (semget, semop, semctl) */
+  readonly sem = new SysvSem();
+  /** SysV message queues (msgget, msgsnd, msgrcv, msgctl) */
+  readonly msg = new SysvMsg();
   /** fcntl record locks (F_SETLK, F_OFD_SETLK) */
   readonly locks = new LockTable();
   private detachTable?: () => void;
@@ -265,6 +272,12 @@ export class Kernel {
   addLoader(loader: Loader): void {
     this.loaders.unshift(loader);
   }
+
+  /**
+   * Builtins that `sh -c 'NAME args'` should exec in place (findProgram)
+   * rather than run in the forked shell, when `claim(NAME, process)` says so.
+   */
+  readonly execDirect: ((name: string, proc: Process) => boolean)[] = [];
 
   registerDevice(path: string, opener: DeviceOpener): void {
     this.devices.set(path, opener);
@@ -433,6 +446,8 @@ export class Kernel {
       if (typeof p === 'string' && (await this.fs?.exists(p))) path = p;
     } else if (this.fs && this.shell?.commands.get(name) && packageShadows(this.fs).has(name)) {
       path = `${PKG_BIN_DIR}/${name}`; // an installed package replaces the builtin
+    } else if (this.shell?.commands.get(name) && this.execDirect.some(f => f(name, probe))) {
+      path = name; // a loader runs this builtin as the process itself (node as a guest)
     } else if (!this.shell?.commands.get(name)) {
       for (const dir of (probe.env.PATH ?? '/usr/local/bin:/usr/bin:/bin').split(':')) {
         if (!dir) continue;
@@ -577,6 +592,7 @@ export class Kernel {
     await proc.fds.closeAll();
     this.locks.release(proc.pid);
     this.shm.detachAll(proc);
+    this.sem.exited(proc);
     for (const child of this.procs.values()) {
       if (child.ppid === proc.pid) {
         child.ppid = 1;
@@ -1628,6 +1644,19 @@ export class Kernel {
         case A.SYS_shmctl: return this.shm.shmctl(proc, args[0], args[1], data);
         case A.SYS_shiro_shmat: return this.shm.attach(proc, args[0], args[1], data);
         case A.SYS_shiro_shmdt: return this.shm.detach(proc, args[0]);
+        case A.SYS_semget: return this.sem.semget(proc, args[0], args[1], args[2]);
+        case A.SYS_semop: return await this.sem.semop(proc, args[0], args[1], data, -1, sig);
+        case A.SYS_semtimedop: {
+          // (semid, nsops, hasTimeout, tv_sec, tv_nsec): no timeout is semop
+          if (!args[2]) return await this.sem.semop(proc, args[0], args[1], data, -1, sig);
+          if (args[3] < 0 || args[4] < 0 || args[4] >= 1e9) return -A.EINVAL;
+          return await this.sem.semop(proc, args[0], args[1], data, args[3] * 1000 + Math.floor(args[4] / 1e6), sig);
+        }
+        case A.SYS_semctl: return this.sem.semctl(proc, args[0], args[1], args[2], args[3], data);
+        case A.SYS_msgget: return this.msg.msgget(proc, args[0], args[1]);
+        case A.SYS_msgsnd: return await this.msg.msgsnd(proc, args[0], args[1], args[2], data, sig);
+        case A.SYS_msgrcv: return await this.msg.msgrcv(proc, args[0], args[1], i64(args[2], args[3]), args[4], data, sig);
+        case A.SYS_msgctl: return this.msg.msgctl(proc, args[0], args[1], data);
         case A.SYS_setuid: case A.SYS_setgid: case A.SYS_setreuid: case A.SYS_setregid:
         case A.SYS_setresuid: case A.SYS_setresgid: case A.SYS_getresuid: case A.SYS_getresgid:
         case A.SYS_getgroups: case A.SYS_setgroups: case A.SYS_setfsuid: case A.SYS_setfsgid:
@@ -1690,7 +1719,7 @@ export class Kernel {
         }
         case A.SYS_close_range: {
           const first = args[0] >>> 0;
-          const last = Math.min(args[1] >>> 0, A.OPEN_MAX - 1);
+          const last = args[1] >>> 0;
           if (first > (args[1] >>> 0)) return -A.EINVAL;
           for (const [fd] of fds.entries()) {
             if (fd < first || fd > last) continue;
@@ -1700,8 +1729,9 @@ export class Kernel {
           return 0;
         }
         case A.SYS_shiro_vfork: {
-          // the child is running code (its engine's), not idle like a builtin that makes no syscalls
-          const child = this.vfork(proc);
+          // the child is running code (its engine's), not idle like a builtin that makes no syscalls;
+          // args[0] CLONE_PARENT: the child is the caller's sibling (its parent's child)
+          const child = this.vfork(proc, (args[0] & A.CLONE_PARENT) !== 0);
           child.syscalls = 1;
           return child.pid;
         }
@@ -2157,6 +2187,27 @@ export class Kernel {
           v.setUint32(104, 1, true); // mem_unit
           return 0;
         }
+        case A.SYS_prlimit64: { // pid, resource, set → data: old {cur, max} (u64s); a new one first when set
+          // RLIMIT_NOFILE only (the fd table's): engines keep the other limits
+          if (args[1] !== A.RLIMIT_NOFILE) return -A.EINVAL;
+          const target = args[0] ? this.procs.get(args[0]) : proc;
+          if (!target) return -A.ESRCH;
+          if (data.length < 16) return -A.EFAULT;
+          const dv = new DataView(data.buffer, data.byteOffset, 16);
+          const t = target.fds;
+          const old = [t.limit, t.hardLimit];
+          if (args[2]) {
+            const big = (o: number) => { const v = dv.getBigUint64(o, true); return v > BigInt(A.NR_OPEN) ? Infinity : Number(v); };
+            const cur = big(0), max = big(8);
+            if (cur > max) return -A.EINVAL;
+            // nothing above fs.nr_open; raising the hard limit takes root
+            if (max > A.NR_OPEN || (max > t.hardLimit && proc.uid !== 0)) return -A.EPERM;
+            t.limit = cur; t.hardLimit = max;
+          }
+          dv.setBigUint64(0, BigInt(old[0]), true);
+          dv.setBigUint64(8, BigInt(old[1]), true);
+          return 0;
+        }
         case A.SYS_uname: { // → struct utsname (engines that report their own machine take the names from here)
           if (data.length < A.UTSNAME_FIELD * 6) return -A.EFAULT;
           const fields = ['Linux', this.hostname, unameRelease(this.hostname), UNAME_VERSION, 'x86_64', '(none)'];
@@ -2291,7 +2342,8 @@ export class Kernel {
       case A.F_DUPFD_CLOEXEC: return fds.dup(fd, arg, true);
       case A.F_GETFD: return fds.getCloexec(fd) ? A.FD_CLOEXEC : 0;
       case A.F_SETFD: return fds.setCloexec(fd, !!(arg & A.FD_CLOEXEC));
-      case A.F_GETFL: return f.flags;
+      // a socket is open for reading and writing (Linux reports O_RDWR)
+      case A.F_GETFL: return f.kind === 'socket' ? (f.flags & ~A.O_ACCMODE) | A.O_RDWR : f.flags;
       case A.F_SETFL: {
         const mask = A.O_NONBLOCK | A.O_APPEND;
         f.flags = (f.flags & ~mask) | (arg & mask);
@@ -2312,7 +2364,7 @@ export class Kernel {
 
   /** poll(2) over `nfds` struct pollfd entries at the start of `data`. timeout < 0 waits forever. */
   async poll(proc: Process, data: Uint8Array, nfds: number, timeoutMs: number): Promise<number> {
-    if (nfds < 0 || nfds * A.POLLFD_SIZE > data.length) return -A.EINVAL;
+    if (nfds < 0 || nfds > Math.max(A.OPEN_MAX, proc.fds.limit) || nfds * A.POLLFD_SIZE > data.length) return -A.EINVAL;
     const dv = new DataView(data.buffer, data.byteOffset, nfds * A.POLLFD_SIZE);
     const files: OpenFile[] = [];
     for (let i = 0; i < nfds; i++) {
@@ -2346,7 +2398,7 @@ export class Kernel {
    */
   private async select(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): Promise<number> {
     const nfds = args[0];
-    if (nfds < 0 || nfds > A.OPEN_MAX) return -A.EINVAL;
+    if (nfds < 0 || nfds > Math.max(A.OPEN_MAX, proc.fds.limit)) return -A.EINVAL;
     const setBytes = Math.ceil(nfds / 64) * 8;
     if (setBytes * 3 > data.length) return -A.EINVAL;
     const present = args[1];
@@ -2432,10 +2484,10 @@ export class Kernel {
    * program starts at SYS_shiro_execve; until then the parent's engine makes
    * syscalls on its behalf.
    */
-  vfork(parent: Process): Process {
+  vfork(parent: Process, cloneParent = false): Process {
     const pid = this.allocPid();
     const child = new Process({
-      pid, ppid: parent.pid, pgid: parent.pgid, sid: parent.sid,
+      pid, ppid: cloneParent ? parent.ppid : parent.pid, pgid: parent.pgid, sid: parent.sid,
       path: parent.path, argv: [...parent.argv], env: { ...parent.env }, cwd: parent.cwd,
       fds: parent.fds.fork(), umask: parent.umask,
     });
@@ -2444,6 +2496,7 @@ export class Kernel {
     child.gid = parent.gid;
     copyCredentials(parent, child);
     this.shm.forked(parent, child);
+    this.sem.forked(parent, child);
     child.data.embryo = true;
     child.data.forkParent = parent.pid; // startForkChild: the parent may have exited (and the child been reparented) by then
     this.procs.set(pid, child);

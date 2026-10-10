@@ -71,6 +71,10 @@ describe('kernel syscalls found by LTP', () => {
     const dup = await call(A.SYS_dup, [fd]);
     expect(await call(A.SYS_read, [dup, 4])).toBe(-A.EBADF);
     expect((await call(A.SYS_fcntl, [dup, A.F_GETFL])) & A.O_PATH).toBe(A.O_PATH);
+    // accept03: socket calls on it are EBADF, not ENOTSOCK
+    expect(await call(A.SYS_accept, [fd, 0, 0])).toBe(-A.EBADF);
+    expect(await call(A.SYS_accept4, [fd, 0, 0, 0])).toBe(-A.EBADF);
+    expect(await call(A.SYS_listen, [fd, 1])).toBe(-A.EBADF);
   });
 
   it('fcntl30/37: F_GETPIPE_SZ and F_SETPIPE_SZ resize a pipe (pipe-max-size 1 MiB)', async () => {
@@ -164,11 +168,63 @@ describe('kernel syscalls found by LTP', () => {
     expect(await call(A.SYS_socketpair, [A.AF_INET, 2, 17])).toBe(-A.EOPNOTSUPP); // UDP
     const s = await call(A.SYS_socket, [A.AF_INET, A.SOCK_STREAM, 0]);
     expect(s).toBeGreaterThanOrEqual(0);
+    // sendfile07: a socket is O_RDWR to F_GETFL (Blink checks sendfile's out fd by it)
+    expect((await call(A.SYS_fcntl, [s, A.F_GETFL])) & A.O_ACCMODE).toBe(A.O_RDWR);
     const sun = new Uint8Array(110);
     sun[0] = A.AF_UNIX;
     sun.set(enc.encode('.'), 2);
     expect(await kernel.syscall(proc, A.SYS_bind, [s, 110], sun)).toBe(-A.EAFNOSUPPORT);
     await call(A.SYS_close, [s]);
+    off();
+  });
+
+  it('dup06/pipe07/creat05: RLIMIT_NOFILE is the fd table\'s (prlimit64), and clone(CLONE_PARENT) makes a sibling (clone08)', async () => {
+    const lim = new Uint8Array(16);
+    const dv = new DataView(lim.buffer);
+    expect(await kernel.syscall(proc, A.SYS_prlimit64, [0, A.RLIMIT_NOFILE, 0], lim)).toBe(0);
+    expect([dv.getBigUint64(0, true), dv.getBigUint64(8, true)]).toEqual([1024n, 1048576n]);
+    // lower the soft limit: fds stop below it, and F_DUPFD past it is EINVAL
+    const child = kernel.vfork(proc);
+    const set = (cur: bigint, max: bigint) => { dv.setBigUint64(0, cur, true); dv.setBigUint64(8, max, true); return kernel.syscall(child, A.SYS_prlimit64, [0, A.RLIMIT_NOFILE, 1], lim); };
+    const openFile = () => kernel.syscall(child, A.SYS_openat, [A.AT_FDCWD, L('file'), A.O_RDONLY, 0], enc.encode('file'));
+    const first = await openFile();
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(await set(BigInt(first + 3), 1048576n)).toBe(0);
+    const fds: number[] = [first];
+    for (let fd; (fd = await openFile()) >= 0;) fds.push(fd);
+    expect(Math.max(...fds)).toBe(first + 2);
+    expect(await openFile()).toBe(-A.EMFILE);
+    expect(await kernel.syscall(child, A.SYS_fcntl, [first, A.F_DUPFD, first + 3], new Uint8Array(8))).toBe(-A.EINVAL);
+    // soft above hard is EINVAL; raising the hard limit takes root, and nothing goes past fs.nr_open
+    expect(await set(16n, 8n)).toBe(-A.EINVAL);
+    expect(await set(8n, 1048577n)).toBe(-A.EPERM);
+    // a fork keeps the limit
+    const grandchild = kernel.vfork(child);
+    expect(grandchild.fds.limit).toBe(first + 3);
+    // CLONE_PARENT: the new process is the caller's sibling
+    const sib = await kernel.syscall(child, A.SYS_shiro_vfork, [A.CLONE_PARENT], new Uint8Array(8));
+    expect(kernel.procs.get(sib)!.ppid).toBe(proc.pid);
+    for (const pid of [grandchild.pid, sib, child.pid]) kernel.kill(pid, A.SIGKILL);
+    for (const pid of [sib, child.pid]) await kernel.syscall(proc, A.SYS_wait4, [pid, 0], new Uint8Array(8));
+  });
+
+  it('connect03: connecting to an AF_UNIX socket file takes write permission on it', async () => {
+    const stack = new NetStack();
+    stack.configure({ relayUrl: null, tokenUrl: null, dohUrl: null, portHost: null });
+    const off = installNet(kernel, stack);
+    const sun = new Uint8Array(110);
+    sun[0] = A.AF_UNIX;
+    sun.set(enc.encode('/tmp/kc/c03.sock'), 2);
+    const srv = await call(A.SYS_socket, [A.AF_UNIX, A.SOCK_STREAM, 0]);
+    expect(await kernel.syscall(proc, A.SYS_bind, [srv, 110], sun)).toBe(0);
+    expect(await call(A.SYS_listen, [srv, 5])).toBe(0);
+    const cli = await call(A.SYS_socket, [A.AF_UNIX, A.SOCK_STREAM, 0]);
+    expect(proc.uid).not.toBe(0);
+    await fs.chmod('/tmp/kc/c03.sock', 0o500);
+    expect(await kernel.syscall(proc, A.SYS_connect, [cli, 110], sun)).toBe(-A.EACCES);
+    await fs.chmod('/tmp/kc/c03.sock', 0o700);
+    expect(await kernel.syscall(proc, A.SYS_connect, [cli, 110], sun)).toBe(0);
+    for (const fd of [cli, srv]) await call(A.SYS_close, [fd]);
     off();
   });
 

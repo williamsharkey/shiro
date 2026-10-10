@@ -10,7 +10,7 @@
 import type { FileSystem } from '../filesystem';
 import {
   type KStat, EBADF, EMFILE, EINVAL, EISDIR, ESPIPE, ENOTTY, EAGAIN, EINTR,
-  O_ACCMODE, O_RDONLY, O_WRONLY, O_APPEND, O_NONBLOCK, O_DSYNC, OPEN_MAX,
+  O_ACCMODE, O_RDONLY, O_WRONLY, O_APPEND, O_NONBLOCK, O_DSYNC, OPEN_MAX, NR_OPEN,
   POLLIN, POLLOUT, SEEK_SET, SEEK_CUR, SEEK_END,
   S_IFCHR, S_IFREG, S_IFDIR, S_IFIFO, FIONREAD, errnoFromError,
 } from './abi';
@@ -115,6 +115,9 @@ interface FdEntry { file: OpenFile; cloexec: boolean }
 
 export class FdTable {
   private fds = new Map<number, FdEntry>();
+  /** RLIMIT_NOFILE: fds are below `limit` (the soft limit); `hardLimit` caps raising it (prlimit64) */
+  limit = OPEN_MAX;
+  hardLimit = NR_OPEN;
 
   get(fd: number): OpenFile | undefined {
     return this.fds.get(fd)?.file;
@@ -126,7 +129,8 @@ export class FdTable {
 
   /** Lowest free fd ≥ minFd, or -EMFILE. Takes a reference to `file`. */
   alloc(file: OpenFile, minFd = 0, cloexec = false): number {
-    for (let fd = minFd; fd < OPEN_MAX; fd++) {
+    if (minFd >= this.limit) return -EINVAL; // F_DUPFD past RLIMIT_NOFILE
+    for (let fd = minFd; fd < this.limit; fd++) {
       if (!this.fds.has(fd)) {
         this.fds.set(fd, { file: retain(file), cloexec });
         return fd;
@@ -137,7 +141,7 @@ export class FdTable {
 
   /** Install `file` at exactly `fd`, closing what was there. */
   async set(fd: number, file: OpenFile, cloexec = false): Promise<number> {
-    if (fd < 0 || fd >= OPEN_MAX) return -EBADF;
+    if (fd < 0 || fd >= this.limit) return -EBADF;
     retain(file);
     const old = this.fds.get(fd);
     this.fds.set(fd, { file, cloexec });
@@ -155,7 +159,7 @@ export class FdTable {
   async dup2(oldFd: number, newFd: number, cloexec = false): Promise<number> {
     const e = this.fds.get(oldFd);
     if (!e) return -EBADF;
-    if (newFd < 0 || newFd >= OPEN_MAX) return -EBADF;
+    if (newFd < 0 || newFd >= this.limit) return -EBADF;
     if (oldFd === newFd) return newFd;
     return this.set(newFd, e.file, cloexec);
   }
@@ -192,6 +196,7 @@ export class FdTable {
   /** A copy sharing every open file description (fork). */
   fork(): FdTable {
     const t = new FdTable();
+    t.limit = this.limit; t.hardLimit = this.hardLimit;
     for (const [fd, e] of this.fds) t.fds.set(fd, { file: retain(e.file), cloexec: e.cloexec });
     return t;
   }
@@ -203,6 +208,7 @@ export class FdTable {
    */
   inherit(overrides: Record<number, OpenFile> = {}): FdTable {
     const t = new FdTable();
+    t.limit = this.limit; t.hardLimit = this.hardLimit;
     for (const [fd, e] of this.fds) {
       if (!e.cloexec && !(fd in overrides)) t.fds.set(fd, { file: retain(e.file), cloexec: false });
     }

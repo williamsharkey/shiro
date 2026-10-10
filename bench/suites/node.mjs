@@ -35,6 +35,38 @@ export async function run(h) {
     h.sample('node.script_file', r.ms, 'ms', { notes: `\`node hello.js\` (requires os); first run ${Math.round(r.first)} ms` });
   });
 
+  // node as a kernel guest in a Worker (TABCOMPUTER_NODE_WORKER=1, src/node-worker): the same
+  // programs, plus file I/O and a blocking child process, against the page's node
+  const FS_SCRIPT = "const fs = require('fs'); fs.mkdirSync('/tmp/bench-nfs', { recursive: true }); for (let i = 0; i < 200; i++) { const p = '/tmp/bench-nfs/f' + i; fs.writeFileSync(p, 'x'.repeat(100) + i); fs.readFileSync(p, 'utf8'); fs.statSync(p); } const n = fs.readdirSync('/tmp/bench-nfs').length; for (let i = 0; i < 200; i++) fs.unlinkSync('/tmp/bench-nfs/f' + i); console.log('files', n);\n";
+  const EXEC_SCRIPT = "const cp = require('child_process'); let out = ''; for (let i = 0; i < 10; i++) out += String(cp.execSync('echo ' + i)); console.log('exec', out.split('\\n').length - 1);\n";
+  if (!h.quick) {
+    await h.eval(([a, b]) => Promise.all([window.__bench.writeFile('/tmp/bench-nfs.js', a), window.__bench.writeFile('/tmp/bench-nexec.js', b)]), [FS_SCRIPT, EXEC_SCRIPT]);
+    for (const [mode, prefix] of [['', ''], ['.worker', 'TABCOMPUTER_NODE_WORKER=1 ']]) {
+      if (mode) {
+        await h.try(`node${mode}.e1`, 'ms', async () => {
+          const r = await timed(h, `${prefix}node -e 1`, n);
+          h.sample(`node${mode}.e1`, r.ms, 'ms', { notes: `\`node -e 1\` as a kernel guest in a Worker; first run ${Math.round(r.first)} ms` });
+        });
+        await h.try(`node${mode}.require_builtins`, 'ms', async () => {
+          const r = await timed(h, `${prefix}node -e "for (const m of ['fs','path','events','util','stream','crypto','http']) require(m); console.log('ok')" > /tmp/node.out`, n, /ok/);
+          h.sample(`node${mode}.require_builtins`, r.ms, 'ms', { notes: `require fs/path/events/util/stream/crypto/http, as a guest; first run ${Math.round(r.first)} ms` });
+        });
+        await h.try(`node${mode}.script_file`, 'ms', async () => {
+          const r = await timed(h, `${prefix}node /tmp/bench-hello.js > /tmp/node.out`, n, /hello/);
+          h.sample(`node${mode}.script_file`, r.ms, 'ms', { notes: `\`node hello.js\` as a guest; first run ${Math.round(r.first)} ms` });
+        });
+      }
+      await h.try(`node${mode}.fs_200`, 'ms', async () => {
+        const r = await timed(h, `${prefix}node /tmp/bench-nfs.js > /tmp/node.out`, n, /files 200/);
+        h.sample(`node${mode}.fs_200`, r.ms, 'ms', { notes: `write/read/stat 200 files, readdir, unlink them${mode ? ', as a guest' : ''}; first run ${Math.round(r.first)} ms` });
+      });
+      await h.try(`node${mode}.exec_sync_10`, 'ms', async () => {
+        const r = await timed(h, `${prefix}node /tmp/bench-nexec.js > /tmp/node.out`, n, /exec 10/);
+        h.sample(`node${mode}.exec_sync_10`, r.ms, 'ms', { notes: `10 execSync('echo i') at the top level${mode ? ', really blocking as a guest' : ''}; first run ${Math.round(r.first)} ms` });
+      });
+    }
+  }
+
   await h.try('npm.install_small', 'ms', async () => {
     const pkgs = 'ms chalk@4 is-number';
     const ms = [];
