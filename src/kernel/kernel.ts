@@ -737,6 +737,12 @@ export class Kernel {
     targets = targets.filter(p => p.state !== 'zombie' || pid > 0);
     if (targets.length === 0) return -A.ESRCH;
     if (sig === 0) return 0;
+    // Group signals are rare and hard to trace afterwards (a program killpg'ing
+    // its own foreground job): say who sent what to whom
+    if (pid <= 0 && sender !== this.init) {
+      const to = pid === 0 ? `its own process group ${sender.pgid}` : pid === -1 ? 'every process' : `process group ${-pid}`;
+      klog.logRatelimited(LOG_INFO, `signal: ${sender.comm}[${sender.pid}] sent ${sigName(sig)} to ${to} (${targets.length} process${targets.length === 1 ? '' : 'es'})`);
+    }
     for (const p of targets) this.deliver(p, sig, { signo: sig, code: A.SI_USER, pid: sender.pid, uid: sender.uid });
     return 0;
   }
@@ -771,7 +777,9 @@ export class Kernel {
     }
     switch (A.defaultSignalAction(sig)) {
       case 'term': void this.exit(proc, A.W_TERMSIG(sig)); break;
-      case 'stop': proc.markStopped(sig); this.notify(); break;
+      case 'stop':
+        klog.logRatelimited(LOG_INFO, `signal: ${proc.comm}[${proc.pid}] stopped by ${sigName(sig)}`);
+        proc.markStopped(sig); this.notify(); break;
       default: break;
     }
   }
@@ -3095,4 +3103,11 @@ function setCredentials(proc: Process, nr: number, args: ArrayLike<number>, data
     case A.SYS_setfsgid: return g.e;
   }
   return -A.ENOSYS;
+}
+
+const SIG_NAMES = ['', 'HUP', 'INT', 'QUIT', 'ILL', 'TRAP', 'ABRT', 'BUS', 'FPE', 'KILL', 'USR1', 'SEGV', 'USR2', 'PIPE', 'ALRM', 'TERM',
+  'STKFLT', 'CHLD', 'CONT', 'STOP', 'TSTP', 'TTIN', 'TTOU', 'URG', 'XCPU', 'XFSZ', 'VTALRM', 'PROF', 'WINCH', 'IO', 'PWR', 'SYS'];
+/** SIGINT, SIGRTMIN+3, … for log lines */
+function sigName(sig: number): string {
+  return SIG_NAMES[sig] ? `SIG${SIG_NAMES[sig]}` : sig >= 32 ? `SIGRTMIN+${sig - 32}` : `signal ${sig}`;
 }
