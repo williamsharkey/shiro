@@ -32,7 +32,7 @@ import { SysvSem } from './sysvsem';
 import { SysvMsg } from './sysvmsg';
 import { EpollFile, waitReady } from './epoll';
 import { SignalFile, notifySignalPending } from './signalfd';
-import { EventFile, TimerFile } from './fd';
+import { EventFile, MemFile, TimerFile } from './fd';
 import { activeProfile, unameRelease, UNAME_VERSION } from '../profile';
 import { memoryInfo } from '../utils/sysinfo';
 
@@ -2186,6 +2186,12 @@ export class Kernel {
           v.setUint16(80, Math.min(0xffff, this.procs.size), true); // procs
           v.setUint32(104, 1, true); // mem_unit
           return 0;
+        }
+        case A.SYS_memfd_create: { // nameLen, flags; data = name → an fd on an anonymous in-memory file
+          const name = str(0, args[0]);
+          if (name.length > 249) return -A.EINVAL;
+          if (args[1] & ~(A.MFD_CLOEXEC | A.MFD_ALLOW_SEALING)) return -A.EINVAL;
+          return fds.alloc(new MemFile(`/memfd:${name} (deleted)`), 0, (args[1] & A.MFD_CLOEXEC) !== 0);
         }
         case A.SYS_prlimit64: { // pid, resource, set → data: old {cur, max} (u64s); a new one first when set
           // RLIMIT_NOFILE only (the fd table's): engines keep the other limits
