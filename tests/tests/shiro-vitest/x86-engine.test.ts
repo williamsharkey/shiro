@@ -71,6 +71,8 @@ const shmobjBin = join(out, 'shmobj');
 const haveShmobj = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', shmobjBin, 'shmobj.c']);
 const shmoddBin = join(out, 'shmodd');
 const haveShmodd = tryBuild('gcc', ['-static', '-O1', '-o', shmoddBin, 'shmodd.c']);
+const shmpreadBin = join(out, 'shmpread');
+const haveShmpread = tryBuild('gcc', ['-static', '-O1', '-o', shmpreadBin, 'shmpread.c']);
 const fsidentBin = join(out, 'fsident');
 const haveFsident = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', fsidentBin, 'fsident.c']);
 // musl's libc (native Claude Code's) resolves paths and stats files its own way
@@ -259,6 +261,15 @@ const haveItimers = blinkHasItimers && tryBuild('gcc', ['-static', '-O1', '-w', 
 const othercpuclockBin = join(out, 'othercpuclock');
 const blinkHasOthercpuclock = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_othercpuclock');
 const haveOthercpuclock = blinkHasOthercpuclock && tryBuild('gcc', ['-static', '-O1', '-w', '-o', othercpuclockBin, 'othercpuclock.c']);
+// Blink 0507: pthread_kill of a thread blocked in a kernel call interrupts it; a process
+// signal the main thread blocks reaches a thread that doesn't (the kernel's mask is what all block)
+const threadintrBin = join(out, 'threadintr');
+const blinkHasThreadintr = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_threadintr');
+const haveThreadintr = blinkHasThreadintr && tryBuild('gcc', ['-static', '-O1', '-w', '-o', threadintrBin, 'threadintr.c', '-lpthread', '-lrt']);
+// Blink 0508: a page of a file mapping past the file's end is SIGBUS
+const sigbusBin = join(out, 'sigbus');
+const blinkHasSigbus = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_sigbus');
+const haveSigbus = blinkHasSigbus && tryBuild('gcc', ['-static', '-O1', '-w', '-o', sigbusBin, 'sigbus.c', '-lrt']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -913,6 +924,20 @@ it.skipIf(!haveOthercpuclock)('clock_getcpuclockid of another existing process (
   expect(r.output.replace(/\r\n/g, '\n')).toBe('init 0 read 0 none No such process\n');
 }, 60_000);
 
+it.skipIf(!haveThreadintr)('pthread_kill of a thread blocked in read, mq_timedsend or nanosleep ends the call with EINTR; a process signal the main thread blocks reaches one that does not (Open POSIX mq_timedsend_12-1, pthread_kill_8-1)', async () => {
+  const { shell } = await setup(readFileSync(threadintrBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('read EINTR handled 1\nmq_timedsend EINTR handled 1\nnanosleep EINTR handled 1\nprocess signal blocked by main reached a thread\n');
+}, 60_000);
+
+it.skipIf(!haveSigbus)('a page of a shared file mapping past the end of a file or /dev/shm object is SIGBUS (SIGSEGV if PROT_NONE), until the file grows over it; writes within the file go back (Open POSIX mmap_11-2, mmap_11-3, mmap_6-3)', async () => {
+  const { shell } = await setup(readFileSync(sigbusBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe(
+    'PROT_NONE SIGSEGV\nfile SIGBUS code 2 at page 1\nfile SIGBUS on read\nfile grown: 0 122\nfile wrote back a\n' +
+    'shm SIGBUS code 2 at page 1\nshm SIGBUS on read\nshm grown: 0 0\n');
+}, 60_000);
+
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
 // (busybox picks its applet by it; Debian's redis-server -> redis-check-rdb)
 describe('argv[0] through a symlink', () => {
@@ -1421,6 +1446,14 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const r = await run(shell, './prog; echo rc $?; BLINK_WJIT=0 ./prog; echo rc $?');
     const ok = "memfd munmap 0\nmemfd sees 'y' munmap rounded 0\nmemfd munmap tail 0 head 0\nanon munmap 0\n" +
       "anon after fork 'c' munmap rounded 0\nshm after close 'qwerty' mapped 'qwerty'\ndone\nrc 0\n";
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(ok + ok);
+  }, 120_000);
+
+  // The fd and the mapping of a /dev/shm object are one file (conformance's report, Open POSIX shm_open)
+  it.skipIf(!haveShmpread)('a /dev/shm object: pread sees the mapping, the mapping sees pwrite, an fd opened while mapped too', async () => {
+    const { shell } = await setup(readFileSync(shmpreadBin));
+    const r = await run(shell, './prog; echo rc $?; BLINK_WJIT=0 ./prog; echo rc $?');
+    const ok = 'mapped pread a\nmapping sees pwrite w\nreopened while mapped aq\nafter munmap pread a z w q\nreopened pread awq\nrc 0\n';
     expect(r.output.replace(/\r\n/g, '\n')).toBe(ok + ok);
   }, 120_000);
 

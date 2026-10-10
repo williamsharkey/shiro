@@ -3196,7 +3196,8 @@ describe('Shell Advanced', () => {
     it('cat /proc/self/status shows process info', async () => {
       const { output, exitCode } = await run(shell, 'cat /proc/self/status');
       expect(exitCode).toBe(0);
-      expect(output).toMatch(/^Name:\t(sh|bash)\r?$/m);
+      // (the process reading it: cat, as on Linux)
+      expect(output).toMatch(/^Name:\tcat\r?$/m);
       expect(output).toMatch(/^Pid:\t\d+\r?$/m);
     });
 

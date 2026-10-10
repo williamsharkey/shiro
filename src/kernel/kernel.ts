@@ -22,7 +22,7 @@ import { elfInterpreter } from '../elf-interp';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
   RegularFile, DirFile, abortableWait, openInode, openInodeSync, isInodeOpen, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
-  shareInodeNumber, forgetInodeNumber, renameLinkName, linkCount, writeBackAll,
+  shareInodeNumber, forgetInodeNumber, renameLinkName, linkCount, writeBackAll, attachInodeShared,
 } from './fd';
 import { createPipe, Pipe, PipeEnd, FifoRdWr } from './pipe';
 import type { PtyFile } from './pty';
@@ -2053,7 +2053,9 @@ export class Kernel {
               const b = await fs.readFile(path);
               return typeof b === 'string' ? new TextEncoder().encode(b) : b;
             };
-            writeBack = async (b) => { if (!writeInodeBytes(fs, path, b) && await fs.exists(path)) await fs.writeFile(path, b); };
+            // While remote, the file's fds read and write the buffer (not the control page)
+            onRemote = (sab) => attachInodeShared(fs, path, sab, sab.byteLength - CONTROL_BYTES);
+            writeBack = async (b) => { if (!(await writeInodeBytes(fs, path, b)) && await fs.exists(path)) await fs.writeFile(path, b); };
           } else if (kind === 1) {
             const seg = this.shm.list().find((x) => x.id === args[0]);
             if (!seg) return -A.EINVAL;
@@ -2240,7 +2242,15 @@ export class Kernel {
             else if (args[0] === A.SIG_UNBLOCK) set.forEach(s => next.delete(s));
             else if (args[0] === A.SIG_SETMASK) { next.clear(); set.forEach(s => next.add(s)); }
             else return -A.EINVAL;
+            // Blink (patch 0507) sends what all its threads block with
+            // args[3] = 1, and keeps their handlers' masks itself: a signal
+            // handed over meanwhile (takeSignal's frame, until host.mjs's
+            // rt_sigreturn) must not bring back the mask from before. (A
+            // signal this unblocks can be taken within setSigmask, adding
+            // itself to the mask until that rt_sigreturn: copy it first.)
+            const mask = args[3] & 1 ? [...next] : null;
             this.setSigmask(proc, next);
+            if (mask) proc.signalFrames = proc.signalFrames.map(() => new Set(mask));
           }
           if (args[2]) {
             const dv = new DataView(data.buffer, data.byteOffset + 8, 8);
