@@ -331,6 +331,44 @@ describe('git commands', () => {
       }
     });
 
+    it("Debian mode's /usr/bin/git builtin shim isn't the full git (it ran the built-in again, without end)", async () => {
+      await setup();
+      await sh('cd /tmp/o && git commit -qm init');
+      const { builtinShim } = await import('@shiro/debian/overlay');
+      await fs.mkdir('/usr/bin', { recursive: true });
+      await fs.writeFile('/usr/bin/git', builtinShim('git'), { mode: 0o755 });
+      const installs: string[] = [];
+      const pkgBefore = shell.commands.get('pkg');
+      try {
+        // the full git can't be had (offline): the built-in's own error, at once
+        shell.commands.register({ name: 'pkg', description: 'offline', async exec(ctx) { installs.push(ctx.args.join(' ')); return 1; } });
+        const off = await sh('cd /tmp/o && git fetch --depth 1 --no-tags origin');
+        expect(installs).toEqual(['install git']);
+        expect(off.code).toBe(129);
+        expect(off.err).toContain("unknown option `depth'");
+        // it can: `pkg install git` replaces the shim, and that runs
+        shell.commands.register({
+          name: 'pkg', description: 'stand-in',
+          async exec(ctx) {
+            installs.push(ctx.args.join(' '));
+            await ctx.fs.writeFile('/usr/bin/git', '#!/bin/sh\necho "full git: $*"\n', { mode: 0o755 });
+            return 0;
+          },
+        });
+        const r = await sh('cd /tmp/o && git fetch --depth 1 --no-tags origin');
+        expect(installs).toEqual(['install git', 'install git']);
+        expect(r.out).toBe('full git: fetch --depth 1 --no-tags origin\n');
+      } finally {
+        await fs.unlink('/usr/bin/git').catch(() => {});
+        shell.commands.register(pkgBefore ?? { name: 'pkg', description: 'offline', exec: async () => 1 });
+      }
+    }, 30000);
+
+    it('init -q prints nothing', async () => {
+      const r = await sh('mkdir -p /tmp/q && cd /tmp/q && git init -q && git init --quiet');
+      expect([r.code, r.out]).toEqual([0, '']);
+    });
+
     it('unknown options and subcommands are errors, not ignored', async () => {
       await setup();
       const u = await sh('cd /tmp/o && git commit --bogus -m x');
