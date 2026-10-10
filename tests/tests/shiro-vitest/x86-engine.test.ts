@@ -152,6 +152,8 @@ const sse41bBin = join(out, 'sse41b');
 const haveSse41b = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', sse41bBin, 'sse41b.c']);
 const ssefloatBin = join(out, 'ssefloat');
 const haveSsefloat = tryBuild('gcc', ['-static', '-O1', '-msse4.1', '-o', ssefloatBin, 'ssefloat.c', '-lm']);
+const shmunlinkedBin = join(out, 'shmunlinked');
+const haveShmunlinked = tryBuild('gcc', ['-static', '-O1', '-o', shmunlinkedBin, 'shmunlinked.c']);
 const shmremoteBin = join(out, 'shmremote');
 const haveShmremote = tryBuild('gcc', ['-static', '-O1', '-o', shmremoteBin, 'shmremote.c']);
 const sharedmapBin = join(out, 'sharedmap');
@@ -1296,6 +1298,14 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const { shell } = await setup(readFileSync(ssefloatBin));
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe('arith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\narith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\narith eed21c69e00391d6 flags 26e847fc95974f53 conv 591355aeff2dce87\n');
+  }, 60_000);
+
+  // Open POSIX mmap_7-4: the object is unlinked before it's mapped, so its
+  // fd's inode is no longer the path's; the fd still reads the mapping
+  it.skipIf(!haveShmunlinked)('an unlinked /dev/shm object: a fork child\'s private map and pread see the parent\'s shared store', async () => {
+    const { shell } = await setup(readFileSync(shmunlinkedBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe("child private map 'a' pread 'a'\n");
   }, 60_000);
 
   // a /dev/shm object as remote pages (0112): stores to more pages than a

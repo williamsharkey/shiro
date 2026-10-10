@@ -2060,7 +2060,7 @@ export class Kernel {
               return typeof b === 'string' ? new TextEncoder().encode(b) : b;
             };
             // While remote, the file's fds read and write the buffer (not the control page)
-            onRemote = (sab) => attachInodeShared(fs, path, sab, sab.byteLength - CONTROL_BYTES);
+            onRemote = (sab) => attachInodeShared(fs, path, sab, sab.byteLength - CONTROL_BYTES, f);
             writeBack = async (b) => { if (!(await writeInodeBytes(fs, path, b)) && await fs.exists(path)) await fs.writeFile(path, b); };
           } else if (kind === 1) {
             const seg = this.shm.list().find((x) => x.id === args[0]);
