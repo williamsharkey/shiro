@@ -9,8 +9,7 @@ export const less: Command = {
     const { flags, positional } = parseArgs(ctx.args);
 
     try {
-      const { content, files } = await readInput(
-        positional, ctx.stdin, ctx.fs, ctx.cwd, ctx.fs.resolvePath
+      const { content, files } = await readInput(positional, () => ctx.stdin, ctx.fs, ctx.cwd, ctx.fs.resolvePath
       );
 
       const showNumbers = !!(flags.N || flags.n);

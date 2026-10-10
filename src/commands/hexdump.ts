@@ -13,9 +13,7 @@ export const hexdump: Command = {
     const skip = values.s ? parseInt(values.s) : 0;
 
     try {
-      const { content } = await readInput(
-        positional,
-        ctx.stdin,
+      const { content } = await readInput(positional, () => ctx.stdin,
         ctx.fs,
         ctx.cwd,
         ctx.fs.resolvePath

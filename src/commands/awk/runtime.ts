@@ -226,7 +226,8 @@ export class Runtime {
     C: (a: AwkVal, b: AwkVal) => number; K: (v: AwkVal) => string;
   };
 
-  constructor(public ctx: CommandContext, private stdinText: string = ctx.stdin) {
+  /** stdin's text, or a function giving it: read when the program first reads stdin (BEGIN-only programs never do) */
+  constructor(public ctx: CommandContext, private stdinText: string | (() => string) = () => ctx.stdin) {
     this.srandInit(0);
     const S = (v: AwkVal) => this.S(v);
     this.h = {
@@ -430,7 +431,7 @@ export class Runtime {
   // ---- input ----
 
   private stdin(): Source {
-    if (!this.stdinSrc) this.stdinSrc = new Source(this.stdinText);
+    if (!this.stdinSrc) this.stdinSrc = new Source(typeof this.stdinText === 'function' ? this.stdinText() : this.stdinText);
     return this.stdinSrc;
   }
 

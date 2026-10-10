@@ -116,6 +116,8 @@ describe.skipIf(!haveRootfs)('Debian rootfs', () => {
     const cfg = await fs.readFile('/etc/dpkg/dpkg.cfg.d/90shiro-slim', 'utf8') as string;
     expect(cfg).toMatch(/path-exclude \/usr\/share\/man\/\*\npath-include \/usr\/share\/man\/man\[1-9\]\*\/\*\n/);
     expect(cfg).toContain('path-exclude /usr/share/doc/*');
+    // update-alternatives' man-page slave links need the section directories (openjdk's postinst)
+    for (const n of [1, 5, 8]) expect(await fs.exists(`/usr/share/man/man${n}`)).toBe(true);
     expect(await fs.exists('/etc/apt/apt.conf.d/91shiro-engine')).toBe(false);
     // Maintainer scripts don't start services (invoke-rc.d asks policy-rc.d)
     expect((await run(shell, '/usr/sbin/policy-rc.d ssh start; echo "rc=$?"')).output).toContain('rc=101');

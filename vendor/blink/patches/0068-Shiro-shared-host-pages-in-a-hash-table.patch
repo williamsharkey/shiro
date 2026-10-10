@@ -1,0 +1,133 @@
+From e80ea9d3be1e1173e1d4b3f4a11dc54ae798523c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 23:08:36 +0000
+Subject: [PATCH 68/69] Shiro: shared host pages in a hash table
+
+The registry of host pages several processes map (MAP_SHARED across a
+same-instance fork) was an array searched end to end at every share and
+unshare: PostgreSQL's 128 MiB of shared buffers are 32768 pages, shared
+again at each fork, ~5e8 comparisons. Open addressing on the page address,
+with backward-shift deletion.
+---
+ blink/machine.h      |  1 +
+ blink/memorymalloc.c | 77 +++++++++++++++++++++++++++++++-------------
+ 2 files changed, 56 insertions(+), 22 deletions(-)
+
+diff --git a/blink/machine.h b/blink/machine.h
+index 3486d2b..2df9cfe 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -566,6 +566,7 @@ int ProtectVirtual(struct System *, i64, i64, int, bool);
+ bool IsFullyMapped(struct System *, i64, i64);
+ bool IsFullyUnmapped(struct System *, i64, i64);
+ void ShareHostPage(u8 *);
++long UnshareHostPage(u8 *);
+ int GetProtection(u64);
+ u64 SetProtection(int);
+ int ClassifyOp(u64) pureconst;
+diff --git a/blink/memorymalloc.c b/blink/memorymalloc.c
+index 24e193e..4be848a 100644
+--- a/blink/memorymalloc.c
++++ b/blink/memorymalloc.c
+@@ -116,43 +116,76 @@ static bool ReleaseMugPage(u8 *page) {
+ // memory across a same-instance fork, shiro.inc): their PTEs carry
+ // PAGE_GROW (unused otherwise) and the page is freed by its last unmapper.
+ static pthread_mutex_t_ g_shared_lock = PTHREAD_MUTEX_INITIALIZER_;
++// open addressing on the page address (0 = empty): PostgreSQL's 128 MiB of
++// shared buffers are 32768 pages, shared again at every fork
+ static struct {
+-  u8 **page;
++  uintptr_t *key;
+   long *refs;
+-  long n, c;
++  long n, c;  // c: a power of two
+ } g_shared;
+ 
++static long SharedSlot(uintptr_t k) {
++  return (long)((((u64)k >> 12) * 0x9E3779B97F4A7C15ull) >> 20) & (g_shared.c - 1);
++}
++
++static void SharedGrow(void) {
++  uintptr_t *key = g_shared.key;
++  long *refs = g_shared.refs, c = g_shared.c, i, j;
++  g_shared.c = c ? c * 2 : 1024;
++  unassert((g_shared.key = (uintptr_t *)calloc(g_shared.c, sizeof(*g_shared.key))));
++  unassert((g_shared.refs = (long *)calloc(g_shared.c, sizeof(*g_shared.refs))));
++  for (i = 0; i < c; ++i) {
++    if (!key[i]) continue;
++    for (j = SharedSlot(key[i]); g_shared.key[j]; j = (j + 1) & (g_shared.c - 1)) {
++    }
++    g_shared.key[j] = key[i];
++    g_shared.refs[j] = refs[i];
++  }
++  free(key);
++  free(refs);
++}
++
+ void ShareHostPage(u8 *page) {
++  uintptr_t k = (uintptr_t)page;
+   long i;
+   LOCK(&g_shared_lock);
+-  for (i = 0; i < g_shared.n; ++i) {
+-    if (g_shared.page[i] == page) {
+-      ++g_shared.refs[i];
+-      UNLOCK(&g_shared_lock);
+-      return;
+-    }
++  if ((g_shared.n + 1) * 2 > g_shared.c) SharedGrow();
++  for (i = SharedSlot(k); g_shared.key[i] && g_shared.key[i] != k; i = (i + 1) & (g_shared.c - 1)) {
+   }
+-  if (g_shared.n == g_shared.c) {
+-    g_shared.c = g_shared.c ? g_shared.c * 2 : 64;
+-    unassert((g_shared.page = (u8 **)realloc(g_shared.page, g_shared.c * sizeof(*g_shared.page))));
+-    unassert((g_shared.refs = (long *)realloc(g_shared.refs, g_shared.c * sizeof(*g_shared.refs))));
++  if (g_shared.key[i]) {
++    ++g_shared.refs[i];
++  } else {
++    g_shared.key[i] = k;
++    g_shared.refs[i] = 1;
++    ++g_shared.n;
+   }
+-  g_shared.page[g_shared.n] = page;
+-  g_shared.refs[g_shared.n++] = 1;
+   UNLOCK(&g_shared_lock);
+ }
+ 
+ // drops a reference; returns how many remain
+-static long UnshareHostPage(u8 *page) {
+-  long i, r = 0;
++long UnshareHostPage(u8 *page) {
++  uintptr_t k = (uintptr_t)page;
++  long i, j, h, r = 0, mask;
+   LOCK(&g_shared_lock);
+-  for (i = 0; i < g_shared.n; ++i) {
+-    if (g_shared.page[i] == page) {
+-      if (!(r = --g_shared.refs[i])) {
+-        g_shared.page[i] = g_shared.page[--g_shared.n];
+-        g_shared.refs[i] = g_shared.refs[g_shared.n];
++  if (g_shared.c) {
++    mask = g_shared.c - 1;
++    for (i = SharedSlot(k); g_shared.key[i] && g_shared.key[i] != k; i = (i + 1) & mask) {
++    }
++    if (g_shared.key[i] && !(r = --g_shared.refs[i])) {
++      // delete, shifting back the entries that probed past this slot
++      for (j = i;;) {
++        j = (j + 1) & mask;
++        if (!g_shared.key[j]) break;
++        h = SharedSlot(g_shared.key[j]);
++        if (((j - h) & mask) >= ((j - i) & mask)) {
++          g_shared.key[i] = g_shared.key[j];
++          g_shared.refs[i] = g_shared.refs[j];
++          i = j;
++        }
+       }
+-      break;
++      g_shared.key[i] = 0;
++      g_shared.refs[i] = 0;
++      --g_shared.n;
+     }
+   }
+   UNLOCK(&g_shared_lock);
+-- 
+2.43.0
+

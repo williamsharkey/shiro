@@ -110,7 +110,7 @@ export const awk: Command = {
       throw e;
     }
 
-    const rt = new Runtime(ctx, stdinUsedForProgram ? '' : ctx.stdin);
+    const rt = new Runtime(ctx, stdinUsedForProgram ? '' : () => ctx.stdin);
     const out = ctx;
     let factory: (...a: unknown[]) => { begin: () => Promise<void>; main: () => Promise<void>; end: () => Promise<void>; hasMain: boolean; hasEnd: boolean };
     try {
