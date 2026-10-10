@@ -496,6 +496,7 @@ class Inode {
     if (!this.dirty) this.dirtySince = now;
     this.dirty = true;
     this.mtimeMs = this.lastWrite = now;
+    this.ctimeMs = now; // (a write changes st_ctime too: Open POSIX mmap_14-1's msync)
     this.mtimeNs = 0;
     // Each flush writes the whole file: wait for a burst of writes to pause (a
     // program writing 64 KiB at a time used to store the file after every write)
@@ -1077,7 +1078,7 @@ let nextMemIno = 1;
  */
 export class MemFile implements OpenFile {
   kind: OpenFileKind = 'file';
-  private data = new Uint8Array(0);
+  private data: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
   private len = 0;
   private pos = 0;
   private ino = nextMemIno++;
@@ -1085,6 +1086,32 @@ export class MemFile implements OpenFile {
   private listeners = new ReadyListeners();
 
   constructor(public path: string, public flags = O_RDWR) {}
+
+  /** Shared-object key (shmobj.ts): unique per memfd */
+  get shareKey(): string { return `memfd:${this.ino}`; }
+
+  /** A copy of the contents */
+  bytes(): Uint8Array { return this.data.slice(0, this.len); }
+
+  /**
+   * The memfd turned remote (mapped by two Blink instances): its bytes live
+   * in `sab` from now on, so read/write and the mappings stay coherent.
+   * Growing past the buffer (ftruncate while mapped) leaves it, as the
+   * mappings can't grow either.
+   */
+  attachShared(sab: SharedArrayBuffer, length = sab.byteLength): void {
+    if (length < this.len) return;
+    const view = new Uint8Array(sab, 0, length);
+    view.set(this.data.subarray(0, this.len));
+    this.data = view;
+  }
+
+  /** The last mapping went: back to private memory with the final bytes */
+  detachShared(bytes: Uint8Array): void {
+    if (!(this.data.buffer instanceof SharedArrayBuffer)) return;
+    this.data = bytes.slice(0, Math.max(this.len, 0));
+    if (this.data.length < this.len) this.grow(this.len);
+  }
 
   private grow(n: number): void {
     if (n <= this.data.length) return;

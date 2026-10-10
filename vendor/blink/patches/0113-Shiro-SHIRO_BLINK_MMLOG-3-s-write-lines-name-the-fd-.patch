@@ -1,0 +1,42 @@
+From 67af343ef89d6a76e0f51fd68e91d3abda21b55e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 09:25:01 +0000
+Subject: [PATCH] Shiro: SHIRO_BLINK_MMLOG=3's write lines name the fd's file
+
+---
+ blink/shiro.inc | 16 +++++++++++-----
+ 1 file changed, 11 insertions(+), 5 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index e38a6b7..6fe9bbe 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -397,14 +397,20 @@ static i64 ShiroWrite(struct Machine *m, int fd, i64 addr, u64 len) {
+   return done;
+ }
+ 
+-// SHIRO_BLINK_MMLOG=3: each write's fd, source, length, offset and first
+-// bytes as Blink gathered them, to stderr (is a file's data lost before or
++// SHIRO_BLINK_MMLOG=3: each write's fd (and its file), source, length,
++// offset and first bytes as Blink gathered them, to stderr (is a file's data lost before or
+ // after it leaves Blink?)
+ static void ShiroWriteLog(struct Machine *m, int fd, i64 addr, const u8 *buf, u64 n, i64 off) {
+-  char b[200];
+-  int k, i;
++  char b[400], path[160];
++  int k, i, pn;
++  i64 r;
+   if (g_shiro_mmlog != 3 || fd <= 2) return;
+-  k = snprintf(b, sizeof(b), "wr %d fd %d %#" PRIx64 " len %#" PRIx64 " off %" PRId64 ":", m->tid, fd, addr, n, off);
++  // which file the fd is (fds get reused): the kernel's /proc/self/fd link
++  pn = snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
++  r = ShiroCall(m, 267, A12(-100, pn, (int)sizeof(path) - 1), path, pn, sizeof(path) - 1, false, false);
++  path[r > 0 ? MIN(r, (i64)sizeof(path) - 1) : 0] = 0;
++  k = snprintf(b, sizeof(b), "wr %d fd %d %s %#" PRIx64 " len %#" PRIx64 " off %" PRId64 ":", m->tid, fd,
++               r > 0 ? path : "?", addr, n, off);
+   for (i = 0; i < 16 && (u64)i < n; ++i) k += snprintf(b + k, sizeof(b) - k, " %02x", buf[i]);
+   b[k++] = '\n';
+   ShiroCall(m, 1, A12(2, k), b, k, 0, false, false);
+-- 
+2.43.0
+

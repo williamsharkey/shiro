@@ -63,6 +63,12 @@ export interface Command {
    * apt's transport methods). Used when the kernel starts the command.
    */
   program?: (proc: import('../kernel/process').Process, kernel: import('../kernel/kernel').Kernel) => Promise<number>;
+  /**
+   * Run this builtin for these arguments (expanded, without the command name)
+   * even when an installed package provides the command: `git clone` of an
+   * http(s) URL stays the built-in git's with the full git installed (git.ts).
+   */
+  keepOverPackage?: (args: string[]) => boolean;
 }
 
 export class CommandRegistry {

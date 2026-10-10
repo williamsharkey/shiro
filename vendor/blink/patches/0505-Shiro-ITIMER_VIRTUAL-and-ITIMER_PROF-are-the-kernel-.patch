@@ -1,0 +1,54 @@
+From 45a8c5b6cbba1dccdbd55b1fc5e84fba14f329cc Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 09:48:14 +0000
+Subject: [PATCH] Shiro: ITIMER_VIRTUAL and ITIMER_PROF are the kernel's, per
+ process
+
+Blink kept ITIMER_VIRTUAL/ITIMER_PROF in the host's timers, shared by
+every process of the instance, so a same-instance fork child kept its
+parent's (Open POSIX fork_13-1). The kernel keeps them per process now
+(Blink's own on a kernel with ITIMER_REAL only).
+
+Exports blink_shiro_itimers.
+---
+ blink/shiro.inc | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 43af334..5db2212 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2407,6 +2407,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_cpuclockids(void) { return 1; }
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_tkill0(void) { return 1; }
+ // 0504: setting another user's process's scheduling is EPERM
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_schedperm(void) { return 1; }
++// 0505: ITIMER_VIRTUAL/PROF are the kernel's, per process
++EMSCRIPTEN_KEEPALIVE int blink_shiro_itimers(void) { return 1; }
+ 
+ // the same with the signal's siginfo (the kernel's call 1030, made as `pid`)
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid_info(int pid, int sig, int w0, int w1, int w2,
+@@ -3747,15 +3749,17 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+                      (c && CopyToUserWrite(m, c, id + 8, 4) == -1))) r = -EFAULT_LINUX;
+       break;
+     }
+-    // ITIMER_REAL and alarm live in the kernel, per process (Blink's used
+-    // the host's one timer, shared by every process in this instance)
++    // The interval timers and alarm live in the kernel, per process (Blink's
++    // used the host's timers, shared by every process in this instance, so
++    // a same-instance fork child kept its parent's: Open POSIX fork_13-1)
+     case 0x025: r = KS(m, 37, A12((int)a)); break;                   // alarm
+     case 0x024: case 0x026: {                                         // getitimer, setitimer
+       u8 it[32] = {0};
+       i64 out = nr == 0x024 ? b : c;
+-      if ((int)a != 0) return false;  // ITIMER_VIRTUAL/PROF stay Blink's
++      if ((int)a < 0 || (int)a > 2) return false;
+       if (nr == 0x026 && b && CopyFromUser(m, it, b, 32) == -1) { r = -EFAULT_LINUX; break; }
+-      r = ShiroCall(m, nr == 0x024 ? 36 : 38, A12(0), it, nr == 0x026 ? 32 : 0, 32, false, false);
++      r = ShiroCall(m, nr == 0x024 ? 36 : 38, A12((int)a), it, nr == 0x026 ? 32 : 0, 32, false, false);
++      if (r == -EINVAL_LINUX && (int)a) return false;  // (a kernel with ITIMER_REAL only)
+       if (r >= 0 && out && CopyToUserWrite(m, out, it, 32) == -1) r = -EFAULT_LINUX;
+       break;
+     }
+-- 
+2.43.0
+

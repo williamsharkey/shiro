@@ -1,4 +1,4 @@
-import git from 'isomorphic-git';
+import git from './git-cached';
 import { CommandContext } from './index';
 import { ghApi, parseFlags, getRepoFromFlags, detectRepo, timeAgo, isDryRun } from './gh';
 
