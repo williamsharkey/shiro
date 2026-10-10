@@ -4279,7 +4279,10 @@ export class Shell {
         }
         // A package installed with `pkg install` provides the real program in
         // place of a builtin of the same name (lua, sqlite3, jq, ...)
+        // (never bash's own builtins: bash runs its echo, true, printf, test, ...
+        // even with /usr/bin/echo there, and each would be an x86 process)
         let pkgShadowed = !_builtinDisabled && this.pkgShadowBypass !== effectiveCmdName &&
+          !SHELL_BUILTIN_NAMES.has(effectiveCmdName) &&
           !!this.commands.get(effectiveCmdName) &&
           packageShadows(this.fs).has(effectiveCmdName);
         // A Debian program that is gone (apt remove) no longer shadows the builtin
