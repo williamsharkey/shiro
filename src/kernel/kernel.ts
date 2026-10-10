@@ -1306,6 +1306,15 @@ export class Kernel {
       try { return await f.stat(); } finally { if (f !== proc.ctty) await f.close(); }
     }
     if (p === '/proc' || p.startsWith('/proc/')) {
+      // /proc/PID/fd/N followed is the open file itself (a pipe is a FIFO, a socket a socket), as on Linux
+      const fdm = follow ? /^\/proc\/(\d+|self|thread-self)\/fd\/(\d+)$/.exec(p) : null;
+      if (fdm) {
+        const owner = /^\d+$/.test(fdm[1]) ? this.procs.get(Number(fdm[1])) : proc;
+        if (owner) {
+          const f = owner.fds.get(Number(fdm[2]));
+          return f ? await f.stat() : -A.ENOENT;
+        }
+      }
       const pst = this.procfs.stat(proc, p, follow);
       if (pst !== undefined) return pst;
       const link = follow ? this.procfs.linkTarget(proc, p) : undefined;

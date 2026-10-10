@@ -194,3 +194,52 @@ describe('tabcomputer#14: /proc/$$ of a shell that is a kernel process', () => {
     expect(lines[2]).not.toBe('/dev/pts/0');
   });
 });
+
+describe('a builtin run as a kernel process with stdin left open', () => {
+  let shell: Shell;
+  let kernel: Kernel;
+  beforeAll(async () => {
+    ({ shell } = await createTestShell());
+    await run(shell, 'mkdir -p /tmp/gbf && cd /tmp/gbf && git init -q && git config user.email a@b && git config user.name a && echo x > f && git add f && git commit -qm one');
+  });
+  beforeEach(() => { kernel = new Kernel({ shell }); });
+  afterEach(() => kernel.dispose());
+
+  // (copying the command's ctx read its lazy stdin: it waited for the writer to close)
+  it('git branch --format ends without reading stdin', async () => {
+    const { SinkFile } = await import('@shiro/wasi/stdio');
+    const { createPipe } = await import('@shiro/kernel/pipe');
+    const [r, w] = createPipe(); // the writer stays open, as an agent's spawn keeps it
+    let out = '';
+    const sink = new SinkFile((t: string) => { out += t; });
+    const p = kernel.spawn({ path: 'git', argv: ['git', 'branch', '--format=%(refname:short)'], cwd: '/tmp/gbf', fds: { 0: r, 1: sink, 2: sink } });
+    const status = await Promise.race([p.wait(), new Promise((res) => setTimeout(() => res('hung'), 3000))]);
+    await w.close();
+    expect(status).toBe(0);
+    expect(out.trim()).toMatch(/^(main|master)$/);
+  });
+});
+
+describe('stat(2) of /proc/PID/fd/N', () => {
+  let shell: Shell;
+  let kernel: Kernel;
+  beforeAll(async () => { ({ shell } = await createTestShell()); });
+  beforeEach(() => { kernel = new Kernel({ shell }); });
+  afterEach(() => kernel.dispose());
+
+  it('follows to the open file: a pipe is a FIFO with its pipe inode; lstat is the link', async () => {
+    const proc = kernel.spawn({ path: 'st', cwd: '/tmp', fds: {}, run: hang });
+    const data = new Uint8Array(64);
+    expect(await kernel.syscall(proc, A.SYS_pipe2, [0], data)).toBe(0);
+    const w = new DataView(data.buffer).getInt32(4, true);
+    const st = await kernel.statPath(proc, `/proc/self/fd/${w}`);
+    if (typeof st === 'number') throw new Error(String(st));
+    expect(st.mode & A.S_IFMT).toBe(A.S_IFIFO);
+    const viaPid = await kernel.statPath(proc, `/proc/${proc.pid}/fd/${w}`);
+    expect(typeof viaPid !== 'number' && viaPid.ino).toBe(st.ino);
+    const lst = await kernel.statPath(proc, `/proc/self/fd/${w}`, false);
+    expect(typeof lst !== 'number' && (lst.mode & A.S_IFMT)).toBe(A.S_IFLNK);
+    expect(await kernel.statPath(proc, '/proc/self/fd/99')).toBe(-A.ENOENT);
+    kernel.kill(proc.pid, A.SIGKILL);
+  });
+});
