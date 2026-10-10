@@ -65,7 +65,8 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
 
     case 'tty':
     case 'node:tty': return {
-      isatty: (fd?: number) => !!ctx.terminal,
+      // (per fd, as the shell set them up: `node x.js 2> f` has fd 1 on the tty, not fd 2)
+      isatty: (fd?: number) => !!ctx.terminal && (fd === 0 ? ctx.stdinIsTTY !== false : fd === 1 ? ctx.stdoutIsTTY !== false : fd === 2 ? ctx.stderrIsTTY !== false : false),
       ReadStream: class ReadStream { constructor() {} setRawMode() { return this; } isTTY = !!ctx.terminal; },
       WriteStream: class WriteStream {
         isTTY = !!ctx.terminal;

@@ -253,6 +253,8 @@ export async function runNodeInWorker(ctx: CommandContext): Promise<number> {
       stdin: ctx.stdin ? ctx.stdin : undefined,
       captureStdout: false,
       captureStderr: false,
+      // (`node x.js 2> f`: stderr where the shell's redirect takes it, not the tty)
+      stderrSink: ctx.stderrIsTTY === false ? (ctx.streamStderr ?? ((t) => { ctx.stderr += t; })) : undefined,
       writeStdout: (t) => { ctx.stdout += t; },
       writeStderr: (t) => { ctx.stderr += t; },
       terminal: term,
@@ -270,7 +272,10 @@ export async function runNodeInWorker(ctx: CommandContext): Promise<number> {
     1: toTerminal
       ? new SinkFile((t) => term!.writeOutput(t.replace(/\r?\n/g, '\r\n')), { tty: true })
       : new SinkFile(ctx.streamStdout ?? ((t) => { ctx.stdout += t; })),
-    2: new SinkFile(ctx.streamStderr ?? ((t) => { ctx.stderr += t; })),
+    // (on the terminal as it comes when only stdout is redirected: `node server.js > log`)
+    2: term && ctx.stderrIsTTY !== false && !ctx.streamStderr
+      ? new SinkFile((t) => term.writeOutput(t.replace(/\r?\n/g, '\r\n')), { tty: true })
+      : new SinkFile(ctx.streamStderr ?? ((t) => { ctx.stderr += t; })),
   };
   const proc = kernel.spawn({ path: 'node', argv, env, cwd: ctx.cwd, fds, pgid: 0, run: nodeWorkerRunner() });
   const abort = (ctx.shell as any)?.abortController as AbortController | null | undefined;
