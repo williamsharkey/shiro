@@ -2314,7 +2314,8 @@ export class Kernel {
       case A.F_DUPFD_CLOEXEC: return fds.dup(fd, arg, true);
       case A.F_GETFD: return fds.getCloexec(fd) ? A.FD_CLOEXEC : 0;
       case A.F_SETFD: return fds.setCloexec(fd, !!(arg & A.FD_CLOEXEC));
-      case A.F_GETFL: return f.flags;
+      // a socket is open for reading and writing (Linux reports O_RDWR)
+      case A.F_GETFL: return f.kind === 'socket' ? (f.flags & ~A.O_ACCMODE) | A.O_RDWR : f.flags;
       case A.F_SETFL: {
         const mask = A.O_NONBLOCK | A.O_APPEND;
         f.flags = (f.flags & ~mask) | (arg & mask);
