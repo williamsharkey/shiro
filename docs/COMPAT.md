@@ -327,11 +327,13 @@ Shell and platform fixes these needed (all with tests in the same file):
     gave none (vite 6+ refuses an unknown host).
   - Redirected output of `node`, `npm` and `npx` goes into its file as it is
     written: `npm run dev > log 2>&1 &` shows the server's startup lines
-    while it runs. In the page, a script that only serves returns once idle
+    while it runs. As a guest (the default) the job stays Running while it
+    serves and keeps writing; `$!` is node's pid. In the page
+    (`TABCOMPUTER_NODE_WORKER=0`), a script that only serves returns once idle
     and its server stays up; what its request handlers print after that is
     lost.
-  Not yet: node output into a pipe, with a terminal attached, comes when the
-  process exits.
+  Not yet, in the page: node output into a pipe, with a terminal attached,
+  comes when the process exits (a guest's streams).
 - Next.js 16 (`create-next-app`, App Router, webpack): `next build` and
   `next start` work in worker mode (the default on a cross-origin isolated page).
   - The build takes 54 s: compile 14 s, then page data and the static pages
