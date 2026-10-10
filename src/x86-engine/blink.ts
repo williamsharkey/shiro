@@ -207,12 +207,33 @@ export function blinkRunner(path: string, restore?: ArrayBuffer): Runner {
  * the same program (or library code it shares) gets its modules without
  * compiling them. A Blink process is its own worker, so without this its
  * modules die with it. Least recently compiled go first past
- * WJ_KEEP_BYTES of module bytes (TABCOMPUTER_BLINK_WJ_KEEP=0: none). In
- * Chromium a module costs ~5.7x its bytes in renderer memory (its compiled
- * code): vim's startup leaves 320 modules, 2.4 MiB of bytes, +13.6 MiB RSS,
- * and its next start takes 0.81 s instead of 1.24 s (docs/BENCHMARKS.md).
+ * keepBudget() bytes of modules (TABCOMPUTER_BLINK_WJ_KEEP=0: none), and
+ * all go when the page has been hidden for a while. In Chromium a module
+ * costs ~5.7x its bytes in renderer memory (its compiled code): vim's
+ * startup leaves 320 modules, 2.4 MiB of bytes, +13.6 MiB RSS, and its next
+ * start takes 0.81 s instead of 1.24 s (docs/BENCHMARKS.md).
  */
-const WJ_KEEP_BYTES = 6 << 20;
+const MIB = 1 << 20;
+const WJ_HIDDEN_DROP_MS = 5 * 60_000;
+let keepBudgetBytes = 0;
+/** 6 MiB of module bytes with 8 GB of memory or more, 2 MiB with 4 GB or less (or on a phone or tablet), else 4 MiB */
+function keepBudget(): number {
+  if (keepBudgetBytes) return keepBudgetBytes;
+  const nav = (globalThis as { navigator?: { deviceMemory?: number; userAgent?: string } }).navigator;
+  const mem = nav?.deviceMemory;
+  const mobile = /Mobi|Android|iPad|iPhone|Tablet/i.test(nav?.userAgent ?? '');
+  keepBudgetBytes = mobile || (mem !== undefined && mem <= 4) ? 2 * MIB : mem !== undefined && mem >= 8 ? 6 * MIB : 4 * MIB;
+  // a page hidden for a while lets them go (the next launch compiles again)
+  const doc = (globalThis as { document?: Document }).document;
+  if (doc?.addEventListener) {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    doc.addEventListener('visibilitychange', () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+      if (doc.visibilityState === 'hidden') timer = setTimeout(() => { keptModules.clear(); keptBytes = 0; }, WJ_HIDDEN_DROP_MS);
+    });
+  }
+  return keepBudgetBytes;
+}
 const keptModules = new Map<string, { module: unknown; size: number }>();
 let keptBytes = 0;
 /** (tests) how many compiled modules the page keeps, and their bytes */
@@ -220,13 +241,14 @@ export function keptCompiledModules(): { count: number; bytes: number } {
   return { count: keptModules.size, bytes: keptBytes };
 }
 function keepCompiledModule(key: unknown, module: unknown, size: number): void {
-  if (typeof key !== 'string' || !module || size <= 0 || size > WJ_KEEP_BYTES / 4) return;
+  const budget = keepBudget();
+  if (typeof key !== 'string' || !module || size <= 0 || size > budget / 4) return;
   const old = keptModules.get(key);
   if (old) { keptModules.delete(key); keptBytes -= old.size; }
   keptModules.set(key, { module, size });
   keptBytes += size;
   for (const [k, v] of keptModules) {
-    if (keptBytes <= WJ_KEEP_BYTES) break;
+    if (keptBytes <= budget) break;
     keptModules.delete(k);
     keptBytes -= v.size;
   }
