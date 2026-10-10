@@ -1018,10 +1018,10 @@
 1017:blink_shiro_signal_pid_info
 1018:blink_shiro_signal_pid
 1019:blink_shiro_others
-1020:ShiroRemoteFind
-1021:ShiroRemoteLock
-1022:ShiroRemoteFlush
-1023:ShiroRemoteFlushTwins
+1020:ShiroRemoteFlushTwins
+1021:ShiroRemoteFind
+1022:ShiroRemoteLock
+1023:ShiroRemoteFlush
 1024:ShiroRemoteEnd
 1025:ShiroStatAt
 1026:SysMprotect

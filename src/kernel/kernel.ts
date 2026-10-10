@@ -36,7 +36,7 @@ import { PosixTimers } from './posixtimers';
 import { CONTROL_BYTES, SharedObjects, isShareablePath, type ShmObjMessage } from './shmobj';
 import { EpollFile, waitReady } from './epoll';
 import { SignalFile, notifySignalPending, pendingSignalListeners } from './signalfd';
-import { EventFile, MemFile, TimerFile, writeInodeBytes } from './fd';
+import { EventFile, MemFile, TimerFile, attachInodeShared, writeInodeBytes } from './fd';
 import { activeProfile, unameRelease, UNAME_VERSION } from '../profile';
 import { memoryInfo } from '../utils/sysinfo';
 
@@ -2052,7 +2052,9 @@ export class Kernel {
               const b = await fs.readFile(path);
               return typeof b === 'string' ? new TextEncoder().encode(b) : b;
             };
-            writeBack = async (b) => { if (!writeInodeBytes(fs, path, b) && await fs.exists(path)) await fs.writeFile(path, b); };
+            // while remote, read/write on the file go through the buffer
+            onRemote = (sab) => attachInodeShared(fs, path, sab, sab.byteLength - CONTROL_BYTES);
+            writeBack = async (b) => { if (!(await writeInodeBytes(fs, path, b)) && await fs.exists(path)) await fs.writeFile(path, b); };
           } else if (kind === 1) {
             const seg = this.shm.list().find((x) => x.id === args[0]);
             if (!seg) return -A.EINVAL;
