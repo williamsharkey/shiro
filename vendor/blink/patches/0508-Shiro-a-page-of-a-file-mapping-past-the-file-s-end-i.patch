@@ -1,4 +1,4 @@
-From 5de8ba05ebaf527bfff6c1a6a78ba1ab9bc901b3 Mon Sep 17 00:00:00 2001
+From fadb371f164067ce92e840569b2087a422370333 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 10 Oct 2026 12:58:46 +0000
 Subject: [PATCH] Shiro: a page of a file mapping past the file's end is SIGBUS
@@ -19,9 +19,9 @@ them. Write-back of a shared mapping skips pages it can't read.
 Exports blink_shiro_sigbus.
 ---
  blink/machine.h |   1 +
- blink/shiro.inc | 138 ++++++++++++++++++++++++++++++++++++++++++++++--
+ blink/shiro.inc | 140 ++++++++++++++++++++++++++++++++++++++++++++++--
  blink/throw.c   |  14 +++++
- 3 files changed, 149 insertions(+), 4 deletions(-)
+ 3 files changed, 152 insertions(+), 3 deletions(-)
 
 diff --git a/blink/machine.h b/blink/machine.h
 index 77ff7b0..61743fc 100644
@@ -36,10 +36,10 @@ index 77ff7b0..61743fc 100644
  #define CR0_PE 0x01        // protected mode enabled
  #define CR0_MP 0x02        // monitor coprocessor
 diff --git a/blink/shiro.inc b/blink/shiro.inc
-index 5a2be80..5383de8 100644
+index 06f6e6b..489725c 100644
 --- a/blink/shiro.inc
 +++ b/blink/shiro.inc
-@@ -2470,6 +2470,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_itimers(void) { return 1; }
+@@ -2469,6 +2469,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_itimers(void) { return 1; }
  EMSCRIPTEN_KEEPALIVE int blink_shiro_othercpuclock(void) { return 1; }
  // 0507: tkill interrupts another thread's kernel call; the kernel's mask is what every thread blocks
  EMSCRIPTEN_KEEPALIVE int blink_shiro_threadintr(void) { return 1; }
@@ -48,36 +48,40 @@ index 5a2be80..5383de8 100644
  
  // the same with the signal's siginfo (the kernel's call 1030, made as `pid`)
  EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid_info(int pid, int sig, int w0, int w1, int w2,
-@@ -3188,17 +3190,24 @@ static void ShiroWriteBack(struct Machine *m, struct ShiroSharedMap *s, i64 addr
-   u8 *buf = (u8 *)malloc(g_shiro_chunk);
-   i64 lo = MAX(addr, s->addr), hi = MIN(addr + size, s->addr + s->size), o;
+@@ -3216,21 +3218,29 @@ static void ShiroWriteBack(struct Machine *m, struct ShiroSharedMap *s, i64 addr
+                            i64 size) {
+   i64 chunk = g_shiro_chunk & -4096;
+   u8 *buf = (u8 *)malloc(chunk);
++  int n;
+   // whole blocks of the map ([lo, hi) relative to its start)
+   i64 lo = MAX(addr, s->addr) - s->addr, o;
+   i64 hi = MIN(ROUNDUP(addr + size - s->addr, kShiroBlk), s->size);
    bool insyscall = m->insyscall;
--  int rc;
--  for (o = lo; buf && o < hi; o += g_shiro_chunk) {
--    int n = MIN(hi - o, (i64)g_shiro_chunk), i, j;
-+  int rc, n;
+   int rc;
+   lo &= -kShiroBlk;
+-  for (o = lo; buf && o < hi; o += chunk) {
+-    int n = MIN(hi - o, chunk), i, j;
 +  for (o = lo; buf && o < hi; o += n) {
-+    int i, j;
-+    n = MIN(hi - o, (i64)g_shiro_chunk);
-     i64 at = s->off + (o - s->addr);
-     u8 *was = s->shadow ? s->shadow + (o - s->addr) : 0;
++    int n2, i, j;
+     i64 at = s->off + o;
++    n = MIN(hi - o, chunk);
      // without page locks: a syscall's locks last until it returns, and the
      // munmap this is part of waits for the pages' locks to drain
      m->insyscall = false;
-     rc = CopyFromUser(m, buf, o, n);
+     rc = CopyFromUser(m, buf, s->addr + o, n);
 +    // a page past the file's end (PROT_NONE: ShiroBusAdd) has nothing to
 +    // write: the chunk's first page alone, and on from the next
-+    if (rc == -1 && n > 4096 - (o & 4095)) {
-+      n = 4096 - (o & 4095);
-+      rc = CopyFromUser(m, buf, o, n);
++    if (rc == -1 && n > (n2 = 4096 - ((s->addr + o) & 4095))) {
++      n = n2;
++      rc = CopyFromUser(m, buf, s->addr + o, n);
 +    }
      m->insyscall = insyscall;
 -    if (rc == -1) break;
 +    if (rc == -1) continue;
-     if (!was) {
+     if (!s->hash) {
        ShiroCall(m, 18, A12(s->fd, n, (int)at, (int)(at >> 32)), buf, n, 0, false, false);
        continue;
-@@ -3247,6 +3256,117 @@ void ShiroExitMaps(struct Machine *m) {
+@@ -3286,6 +3296,120 @@ void ShiroExitMaps(struct Machine *m) {
    if (g_shiro_remote) ShiroRemoteDrop(m, m->system->pid, 0, (i64)1 << 47);
  }
  
@@ -183,8 +187,11 @@ index 5a2be80..5383de8 100644
 +    struct ShiroSharedMap *s;
 +    LOCK(&g_shiro_maps_lock);
 +    for (s = g_shiro_maps; s; s = s->next) {
-+      if (s->sys == m->system && s->shadow && s->addr <= page && page + 4096 <= s->addr + s->size) {
-+        memcpy(s->shadow + (page - s->addr), buf, 4096);
++      if (s->sys == m->system && s->hash && s->addr <= page && page + 4096 <= s->addr + s->size) {
++        int i;
++        for (i = 0; i < 4096; i += kShiroBlk) {
++          s->hash[(page - s->addr + i) / kShiroBlk] = ShiroBlkHash(buf + i, kShiroBlk);
++        }
 +      }
 +    }
 +    UNLOCK(&g_shiro_maps_lock);
@@ -195,7 +202,7 @@ index 5a2be80..5383de8 100644
  static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
                           int flags, int fd, i64 off) {
    u8 st[144], *buf;
-@@ -3263,6 +3383,9 @@ static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
+@@ -3302,6 +3426,9 @@ static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
    if (r & 010000000) return -EBADF_LINUX;
    if ((r & 3) == 1 || (shared && (prot & 2) && (r & 3) != 2)) return -EACCES_LINUX;
    if (shared && (r = ShiroRemoteMapFile(m, virt, size, prot, flags, fd, off)) != SHIRO_NOT_REMOTE) {
@@ -205,18 +212,18 @@ index 5a2be80..5383de8 100644
      return r;
    }
    // what this instance's writable shared mappings hold goes to the files
-@@ -3303,6 +3426,10 @@ static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
+@@ -3346,6 +3473,10 @@ static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
        UNLOCK(&g_shiro_maps_lock);
      }
    }
-+  // (after the shadow: it has the whole mapping)
++  // (after the hashes: they cover the whole mapping)
 +  if ((Read32(st + 24) & 0170000) == 0100000) {
 +    ShiroBusAdd(m, addr, size, prot, fd, off, fsize, false);
 +  }
    return addr;
  }
  
-@@ -3505,6 +3632,7 @@ static void ShiroShmFork(int ppid, int pid) {
+@@ -3548,6 +3679,7 @@ static void ShiroShmFork(int ppid, int pid) {
  // the detaches itself)
  void ShiroShmForget(int pid) {
    struct ShiroShmAt **pp, *at;
@@ -224,7 +231,7 @@ index 5a2be80..5383de8 100644
    LOCK(&g_shiro_shm_lock);
    for (pp = &g_shiro_shm_ats; (at = *pp);) {
      if (at->pid == pid) {
-@@ -4400,10 +4528,12 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+@@ -4443,10 +4575,12 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
          r = -EINVAL_LINUX;
          break;
        }
