@@ -353,6 +353,37 @@ w.terminate();
     }, 60_000);
   }
 
+  for (const mode of ['1', '0']) it(`a #!node script run by path (npm run dev's .bin/vite) streams its output while it runs, ${mode === '1' ? 'as a guest' : 'in the page'}`, async () => {
+    const { shell, fs } = await createTestShell();
+    await fs.mkdir('/tmp/ss/node_modules/.bin', { recursive: true });
+    await fs.writeFile('/tmp/ss/srv.js', '#!/usr/bin/env node\nconsole.log("ready"); setTimeout(() => console.log("bye"), 1500);\n');
+    await fs.chmod('/tmp/ss/srv.js', 0o755);
+    await fs.symlink('../../srv.js', '/tmp/ss/node_modules/.bin/srv');
+    await fs.writeFile('/tmp/ss/package.json', JSON.stringify({ name: 'ss', version: '1.0.0', scripts: { dev: 'srv' } }));
+    /** Run `cmd`; when "ready" showed up, and when it ended */
+    const timing = async (cmd: string, seen: () => string, run: (cmd: string) => Promise<number>) => {
+      let readyAt = 0;
+      const poll = setInterval(() => { if (!readyAt && seen().includes('ready')) readyAt = Date.now(); }, 5);
+      expect(await run(`export TABCOMPUTER_NODE_WORKER=${mode}; ${cmd}`)).toBe(0);
+      clearInterval(poll);
+      expect(seen()).toContain('bye');
+      return { readyAt, endAt: Date.now() };
+    };
+    // its output into the caller's writer, as it comes
+    let out = '';
+    let t = await timing('cd /tmp/ss && ./srv.js', () => out, (c) => shell.execute(c, (s) => { out += s; }, (s) => { out += s; }));
+    expect(t.endAt - t.readyAt).toBeGreaterThan(1000);
+    // npm run dev at a terminal: on the terminal, after npm's header
+    const tty = new TtySession();
+    let screen = '';
+    tty.pty.onOutput((b) => { screen += new TextDecoder().decode(b); });
+    shell.setTerminal({ tty, writeOutput: (s: string) => { screen += s; }, write: (s: string) => { screen += s; }, getSize: () => ({ cols: 80, rows: 24 }), onResize: () => () => {},
+      enterStdinPassthrough() {}, exitStdinPassthrough() {}, enterRawMode() {}, exitRawMode() {}, isRawMode: () => false, term: { buffer: { active: { type: 'normal' } } } } as any);
+    t = await timing('cd /tmp/ss && npm run dev', () => screen, (c) => shell.execute(c, () => {}, () => {}));
+    expect(t.endAt - t.readyAt).toBeGreaterThan(1000);
+    expect(screen.indexOf('> ss@1.0.0 dev')).toBeLessThan(screen.indexOf('ready'));
+  }, 60_000);
+
   it("spawn(): a fast child's output reaches listeners added after spawn() returns", async () => {
     const r = await sh(`node -e '
       const { spawn } = require("child_process");

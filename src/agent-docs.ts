@@ -55,12 +55,24 @@ function bootSection(ctx: ShiroRuntimeContext, name: string): string {
  */
 export const KNOWN_ISSUES: { issue: string; workaround?: string }[] = [
   {
+    issue: "Claude Code's Bash tool adds `< /dev/null` only to commands without a `<` of their own, so a command with a here-doc or input redirect inherits the tool's stdin, which never ends; anything else in it that reads stdin (`cat`, `node`, `npx`, `claude --npm`) hangs until the tool's timeout.",
+    workaround: 'Wrap a command that may read stdin as `{ cmd; } </dev/null`; a group\'s redirect works.',
+  },
+  {
     issue: "Images can't be pasted into Claude Code: `xclip` and `xsel` here are text only.",
     workaround: 'Save the image to a file and give its path.',
   },
   {
     issue: "In Debian mode, dpkg-deb's `.xz` decompression sometimes crashes or reports corrupt data under the x86-64 emulator, so `apt install` stops with a dpkg error.",
     workaround: 'Run the install again.',
+  },
+  {
+    issue: 'The shell sets `FORCE_COLOR=3`, so Node tools print color codes even into pipes and files.',
+    workaround: 'Prefix commands whose output you parse with `NO_COLOR=1 FORCE_COLOR=0`.',
+  },
+  {
+    issue: '`gh issue view --comments` is not implemented (an unknown-flag error).',
+    workaround: 'Use `gh api repos/OWNER/REPO/issues/N/comments --jq ".[].body"`.',
   },
 ];
 
@@ -102,7 +114,8 @@ ${bootSection(ctx, name)}
   Claude Code you are, when ${name}'s \`claude\` started you. \`native\` is Anthropic's
   binary in the x86-64 emulator: about 2 minutes per request. \`npm\` is the pinned
   pure-JavaScript build on ${name}'s Node runtime: much faster.
-- Read "Known issues" below before working around something that fails.
+- Read "Known issues" below before working around something that fails, and
+  check the tracker for newer ones: \`gh issue list -R ${source.replace('https://github.com/', '')}\`.
 
 ## The machine
 
@@ -154,7 +167,11 @@ ${bootSection(ctx, name)}
   a port is served the same way. Both are reachable only from this tab.
 - \`page :PORT text|click|input|eval ...\` drives that page, so you can test a UI
   without a browser automation tool.
-- \`gh auth login\` signs in to GitHub; git and gh then use the token.
+- \`gh auth login\` signs in to GitHub; git and gh then use the token. The built-in
+  gh takes \`--body-file FILE\` and \`--json FIELDS --jq EXPR\`; a flag it doesn't
+  implement is an error, never silently ignored.
+- If a prebuilt package misbehaves, check \`pkg outdated\` and run \`pkg upgrade\` first: fixed builds ship as
+  new versions (a stale python3 caused tabcomputer#5).
 
 ## What doesn't work
 
@@ -164,7 +181,13 @@ ${bootSection(ctx, name)}
 - Docker, VMs, kernel modules, GPU access, a D-Bus session bus.
 - \`systemctl\` is a small built-in service manager, not systemd.
 - Everything stops when the tab is closed or reloaded, including background jobs.
-- Many processes or agents at once is slow. Prefer doing one thing at a time.
+- Concurrency: an x86-64 process runs one guest thread at a time, and every
+  process shares this one browser tab's CPU and memory. The tab uses about 220 MB
+  booted; \`apt-get update\` adds about 580 MB at its peak and an install up to
+  about 880 MB. Run one \`apt\` or build at a time, at most one subagent, gh and curl
+  calls one after another, and at most 4 tool calls in parallel (Claude Code
+  here is set to 4). Running the same apt work in four
+  tabs at once made each step 1.4–1.7 times slower.
 
 ## When something is wrong
 
@@ -173,6 +196,13 @@ ${bootSection(ctx, name)}
   the kernel. It never prints secrets. Run it first.
 - \`dmesg\` shows the kernel log; relay refusals land there when curl or git
   only say "Could not connect".
+- A command that hangs: press Ctrl-C at the terminal. Linux and WASM programs are
+  kernel processes: \`ps\` lists them, \`kill PID\` (or \`kill -9 PID\`) stops
+  them. Builtins (including \`node\` and the Pyodide
+  \`python3\`) run inside the page, not as kernel processes: their \`$!\` has no
+  \`/proc\` entry and \`ps\` doesn't list them. In the shell that started one in
+  the background, \`jobs -l\` shows its PID and \`kill PID\` stops it; from
+  anywhere else, a reload is the only way.
 - \`console -g PATTERN\` searches the page's console log (\`--prev\` includes the
   load before the last reload).
 - Report bugs at ${source}/issues (\`gh issue create\` works here): the command,
@@ -182,7 +212,17 @@ ${bootSection(ctx, name)}
 
 ${name} is open source: ${source}. The source is not checked out on this
 machine; \`git clone --depth 1 ${source}\` if you need to read it. Its docs/
-folder has the details and the measured scoreboards.
+folder has the details and the measured scoreboards. Where things live:
+
+- the shell: \`src/shell.ts\` and \`src/shell-*.ts\` (some builtins, like \`eval\`,
+  are special-cased in shell.ts); other commands: \`src/commands/NAME.ts\` (a few
+  files there, like \`eval.ts\`, are unused stubs)
+- the kernel (processes, fds, pipes, ptys, signals, sockets, IPC): \`src/kernel/\`;
+  \`/proc\`: \`src/kernel/procfs.ts\`
+- the filesystem: \`src/filesystem.ts\`; the Node runtime: \`src/node-compat/\`
+- WASM programs: \`src/wasi/\`; x86-64 programs: \`src/x86-engine/\` and the Blink
+  patches in \`vendor/blink/patches/\`; Debian mode: \`src/debian/\`
+- prebuilt packages: \`src/pkg-index.json\`, recipes in \`scripts/pkgbuild/\`
 
 ## Known issues
 

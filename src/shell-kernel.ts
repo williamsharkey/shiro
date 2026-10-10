@@ -298,9 +298,17 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
     return { exitCode: code, statuses: pids.map(() => 0), stdout, stderr };
   }
 
-  // Aborts from the shell (timeout, a script's Ctrl-C) reach the whole job
+  // Aborts from the shell (timeout, a script's Ctrl-C) reach the whole job:
+  // SIGINT, or the signal the abort names (timeout -s SIG -k DURATION)
   const abort = shell.abortController;
-  const onAbort = () => { kernel.kill(-pgid, A.SIGINT); };
+  let killTimer: ReturnType<typeof setTimeout> | undefined;
+  const onAbort = () => {
+    const reason = abort?.signal.reason as { signal?: number; killAfter?: number } | undefined;
+    kernel.kill(-pgid, typeof reason?.signal === 'number' ? reason.signal : A.SIGINT);
+    if (typeof reason?.killAfter === 'number') {
+      killTimer = setTimeout(() => { if (procs.some((p) => p.alive)) kernel.kill(-pgid, A.SIGKILL); }, reason.killAfter);
+    }
+  };
   abort?.signal.addEventListener('abort', onAbort);
   let exitCode: number;
   try {
@@ -313,6 +321,7 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
     }
   } finally {
     abort?.signal.removeEventListener('abort', onAbort);
+    clearTimeout(killTimer);
   }
   const stopped = exitCode > 128 && procs.some((p) => p.state === 'stopped');
   const statuses = procs.map((p) => (p.exitStatus !== undefined ? shellStatus(p.exitStatus) : exitCode));

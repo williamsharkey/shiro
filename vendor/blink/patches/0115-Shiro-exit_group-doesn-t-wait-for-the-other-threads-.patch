@@ -1,0 +1,86 @@
+From e878b4c2596907a036cc2d9fd00a46f0f5e884ed Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 10:06:58 +0000
+Subject: [PATCH] Shiro: exit_group doesn't wait for the other threads; the
+ page holds the worker's termination until they're gone
+
+Patch 0053 made exit_group wait (up to 0.5 s) for the guest's other threads
+to leave Blink before the kernel heard of it, so that Chromium's Worker
+termination stayed quick. In Chromium that wait was ~200 ms of a Go
+net/http client+server's run (bench: go_nethttp 450-520 -> 665-723 ms);
+under Node it is 1-3 ms. Now the exit reaches the kernel at once; host.mjs
+polls blink_shiro_others after it (up to 0.5 s) and posts blink-quiet, and
+the page (blink.ts) terminates the worker then.
+---
+ blink/shiro.inc | 48 ++++++++++++++++++++++++++++--------------------
+ 1 file changed, 28 insertions(+), 20 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 6fe9bbe..8353e94 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2465,33 +2465,41 @@ static void ShiroKillSiblings(struct Machine *self) {
+   UNLOCK(&g_bus->futexes.lock);
+ }
+ 
+-// exit_group of the guest (no hosted children): the other threads end
+-// before the kernel hears of it. The kernel then terminates this worker,
+-// and Chromium takes 2 s or more to terminate a Worker with threads parked
+-// in a wait (one in a proxied kernel call, a futex, a sleep), against
+-// ~15 ms when they are back in their event loops. host.mjs answers the
+-// calls in flight with EINTR (shiroDying); the killed threads leave at
+-// their next instruction or wait (CheckForSignals: SysExit). Bounded:
+-// a thread that doesn't go in time is left to the termination.
++// exit_group of the guest (no hosted children): the other threads are told
++// to end. Chromium takes 2 s or more to terminate a Worker with threads
++// parked in a wait (one in a proxied kernel call, a futex, a sleep),
++// against ~15 ms when they are back in their event loops. host.mjs answers
++// the calls in flight with EINTR (shiroDying); the killed threads leave at
++// their next instruction or wait (CheckForSignals: SysExit). The exit isn't
++// held up for them (in Chromium that took ~200 ms of a Go server's run):
++// the page waits for blink_shiro_others to reach 0 (up to 0.5 s) before it
++// terminates the worker.
++static struct Machine *g_shiro_quiescing;
++
+ void ShiroQuiesce(struct Machine *m) {
+-  struct Dll *e;
+-  struct System *s = m->system;
+-  int i, others;
+   if (!g_shiro_pid) return;
+   ShiroKillSiblings(m);
+   ShiroDirectDying();
+   MAIN_THREAD_ASYNC_EM_ASM({ if (Module['shiroDying']) Module['shiroDying'](); });
++  g_shiro_quiescing = m;
+   GilRelease();
+-  for (i = 0; i < 500; ++i) {
+-    others = 0;
+-    LOCK(&s->machines_lock);
+-    for (e = dll_first(s->machines); e; e = dll_next(s->machines, e)) {
+-      if (MACHINE_CONTAINER(e) != m) ++others;
+-    }
+-    UNLOCK(&s->machines_lock);
+-    if (!others) break;
+-    usleep(1000);
++  // (no waiting for them here: the kernel hears exit_group at once, and the
++  // page holds the worker's termination until they're gone, blink_shiro_others)
++}
++
++// The guest's threads other than the one exiting, still in Blink (host.mjs
++// polls it after exit_group, then lets the page terminate the worker)
++EMSCRIPTEN_KEEPALIVE int blink_shiro_others(void) {
++  struct Machine *m = g_shiro_quiescing;
++  struct Dll *e;
++  int n = 0;
++  if (!m) return 0;
++  LOCK(&m->system->machines_lock);
++  for (e = dll_first(m->system->machines); e; e = dll_next(m->system->machines, e)) {
++    if (MACHINE_CONTAINER(e) != m) ++n;
+   }
++  UNLOCK(&m->system->machines_lock);
++  return n;
+ }
+ 
+ // exit_group of the instance's own process while hosted children run: the
+-- 
+2.43.0
+

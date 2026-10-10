@@ -8,7 +8,24 @@ pkg install sqlite lua jq        # apt install / apt-get install work too
 sqlite3 -version; lua -v; which jq
 pkg list | available | search <q> | info <name> | files <name> | remove <name>
 pkg update; pkg upgrade          # extra index lists from /etc/pkg/sources.list
+pkg outdated                     # installed packages the index has another version of
+pkg upgrade --dry-run            # what pkg upgrade would change (apt's -s works too)
 ```
+
+## Staying current
+
+An installed package keeps the build it was installed from until `pkg
+upgrade`, so a newer tabcomputer can carry a newer index than what is
+installed. `pkg outdated` (also `apt list --upgradable`) lists those
+packages, `pkg list` and `pkg available` mark them `installed X, index Y`,
+and `doctor` prints `WARN packages  N upgradable (pkg upgrade): …`.
+
+When an installed build is known to be broken (python3 3.13.7 before
+3.13.7-1, for example), its index entry lists that version in `broken`.
+Boot then upgrades it in the background (`upgradeBrokenPackages` in
+`src/pkg-manager.ts`, `[pkg]` lines in the console), and other version
+differences wait for `pkg upgrade`. A failed download leaves the package as
+it was, and the next boot tries again.
 
 ## Layout
 
@@ -69,6 +86,7 @@ list `pkg update` fetches).
     "needs": [],                              // kernel features required at all
     "wants": ["blocking-stdin"],              // features some modes need
     "notes": "Interactive mode needs blocking stdin; ..."
+    "broken": ["3.50.3"]                      // installed versions boot upgrades from
   }]
 }
 ```
