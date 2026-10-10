@@ -1,0 +1,58 @@
+From 34d736e913a838b3514d2de72037902c682b1ff1 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 15:21:38 +0000
+Subject: [PATCH] Shiro: a remote page past the eighth a thread holds is
+ tracked, not lost
+
+0112 keeps the remote pages a thread touched in m->rslot[8] for a lease
+(0.5 ms) after the instruction. Writing one byte per page, a ninth page
+within the lease found the slots full and got its shadow page untracked:
+the store never reached the object (one page in nine lost; 80-227 bytes of
+a 6 MiB /dev/shm mapping). The lease now ends when fewer than four slots
+are free (an instruction's own pages: a store across two pages, movs), and
+full slots go back before another page is taken. munmap and exit write
+back this thread's pages before the kernel may write the object out.
+---
+ blink/shiro.inc | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 489725c..a6f475c 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2845,6 +2845,11 @@ u8 *ShiroRemoteAccess(struct Machine *m, i64 virt, u8 *host) {
+   for (i = 0; i < m->nrslot; ++i) {
+     if (m->rslot[i].page == page) return host + (virt & 4095);
+   }
++  if (m->nrslot == (int)ARRAYLEN(m->rslot)) {
++    // full (ShiroRemoteEnd keeps room for an instruction's own pages): the
++    // pages go back now; an untracked shadow page would lose its stores
++    ShiroRemoteFlush(m);
++  }
+   if (m->nrslot == (int)ARRAYLEN(m->rslot) ||
+       !ShiroRemoteFind(m->system->pid, page, &id, &off)) {
+     LOGF("remote page %#" PRIx64 " not tracked", page);
+@@ -2931,7 +2936,10 @@ void ShiroRemoteEnd(struct Machine *m) {
+     }
+   }
+   if (!m->nrlocks) return;
+-  if (emscripten_get_now() - m->rlockt < kShiroLeaseMs) {
++  // the lease lasts while the next instruction has room for its own pages
++  // (a store across two pages, movs: up to 4)
++  if (emscripten_get_now() - m->rlockt < kShiroLeaseMs &&
++      m->nrslot <= (int)ARRAYLEN(m->rslot) - 4) {
+     m->stashaddr = SHIRO_STASH_REMOTE;  // (so the next instruction looks again)
+   } else {
+     ShiroRemoteRelease(m);
+@@ -2983,6 +2991,8 @@ static void ShiroRemoteObjRelease(struct Machine *m, struct ShiroRemoteObj *o) {
+ static void ShiroRemoteDrop(struct Machine *m, int pid, i64 addr, i64 size) {
+   struct ShiroRemoteMap **pp, *r, *r2, *gone = 0;
+   i64 end = addr + size;
++  // this thread's pages go back before the kernel may write the object out
++  if (m->nrslot || m->nrlocks) ShiroRemoteFlush(m);
+   LOCK(&g_shiro_remote_lock);
+   for (pp = &g_shiro_remote; (r = *pp);) {
+     if (r->pid != pid || r->addr >= end || addr >= r->addr + r->size) {
+-- 
+2.43.0
+

@@ -22,7 +22,7 @@ import { elfInterpreter } from '../elf-interp';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
   RegularFile, DirFile, abortableWait, openInode, openInodeSync, isInodeOpen, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
-  shareInodeNumber, forgetInodeNumber, renameLinkName, linkCount, writeBackAll, attachInodeShared,
+  linkCount, writeBackAll, attachInodeShared,
 } from './fd';
 import { createPipe, Pipe, PipeEnd, FifoRdWr } from './pipe';
 import type { PtyFile } from './pty';
@@ -1186,7 +1186,6 @@ export class Kernel {
     if (hit.node.type === 'dir') return -A.EISDIR;
     if (isInodeOpen(fs, hit.path)) return undefined; // the open fds keep its data: unlinkInode
     if (!fs.unlinkCachedSync(hit.path)) return undefined;
-    forgetInodeNumber(fs, hit.path);
     return 0;
   }
 
@@ -1261,8 +1260,6 @@ export class Kernel {
         const real = dst ? dst.path : this.childPathSync(to);
         if (typeof real !== 'string') return real;
         if (isInodeOpen(fs, src.path) || isInodeOpen(fs, real) || !fs.renameNow(src.path, real)) return undefined;
-        forgetInodeNumber(fs, real);
-        renameLinkName(src.path, real);
         return 0;
       }
     }
@@ -2067,7 +2064,7 @@ export class Kernel {
               return typeof b === 'string' ? new TextEncoder().encode(b) : b;
             };
             // While remote, the file's fds read and write the buffer (not the control page)
-            onRemote = (sab) => attachInodeShared(fs, path, sab, sab.byteLength - CONTROL_BYTES);
+            onRemote = (sab) => attachInodeShared(fs, path, sab, sab.byteLength - CONTROL_BYTES, f);
             // The bytes go to the file and to the names link() gave its inode
             // number (it copies): glibc's sem_open maps a temporary file,
             // links it to the semaphore's name and unlinks it (Open POSIX
@@ -2488,8 +2485,6 @@ export class Kernel {
           const moved = await renameInodes(fs(), from, to);
           await fs().rename(from, to);
           moved();
-          forgetInodeNumber(fs(), to);
-          renameLinkName(from, to);
           if (this.socketPaths?.delete(from)) this.socketPaths.add(to);
           return 0;
         }
@@ -2536,7 +2531,7 @@ export class Kernel {
             return typeof t !== 'number' && (t.mode & A.S_IFMT) === A.S_IFDIR ? -A.EISDIR : -A.ENOTDIR;
           }
           if (isDir) await fs().rmdir(p);
-          else { await unlinkInode(fs(), p); await fs().unlink(p); forgetInodeNumber(fs(), p); this.socketPaths?.delete(p); this.fifos.delete(p); }
+          else { await unlinkInode(fs(), p); await fs().unlink(p); this.socketPaths?.delete(p); this.fifos.delete(p); }
           return 0;
         }
         case A.SYS_symlink:
@@ -2553,11 +2548,9 @@ export class Kernel {
         }
         case A.SYS_link:
         case A.SYS_linkat: {
-          // The filesystem has no hard links (no inodes shared between names):
-          // link() makes a copy that reports its source's inode number, as a
-          // hard link would (git's local clone checks that). dpkg needs link()
-          // to succeed for its backups (status-old, FILE.dpkg-tmp before
-          // replacing FILE); a copy has the content those need.
+          // One file, two names (FileSystem.link): data, mode, times and st_ino
+          // shared. dpkg's backups (status-old, FILE.dpkg-tmp), git's local
+          // clone, pnpm's store and tar's hard-link members use it.
           const [od, ol, nd, nl, lflags] = nr === A.SYS_link
             ? [A.AT_FDCWD, args[0], A.AT_FDCWD, args[1], 0] : [args[0], args[1], args[2], args[3], args[4]];
           if (lflags & ~(A.AT_SYMLINK_FOLLOW | A.AT_EMPTY_PATH)) return -A.EINVAL;
@@ -2568,21 +2561,10 @@ export class Kernel {
           const follow = !!(lflags & A.AT_SYMLINK_FOLLOW);
           const st = await this.statPath(proc, str(0, ol), follow, od);
           if (typeof st === 'number') return st;
-          if (await fs().exists(to)) return -A.EEXIST;
           if (trailingSlash(str(ol, nl))) return -A.ENOENT;
-          const type = st.mode & A.S_IFMT;
-          if (type === A.S_IFDIR) return -A.EPERM;
+          if ((st.mode & A.S_IFMT) === A.S_IFDIR) return -A.EPERM;
           try {
-            const src = follow ? await fs().realpath(from) : from;
-            if (type === A.S_IFLNK) {
-              await fs().symlink(await fs().readlink(src), to);
-            } else {
-              await flushInode(fs(), src);
-              const raw = await fs().readFile(src);
-              const bytes = typeof raw === 'string' ? enc.encode(raw) : raw.slice();
-              await fs().writeFile(to, bytes, { mode: st.mode & 0o7777, times: { mtime: st.mtimeMs, mtimeNs: st.mtimeNs } });
-            }
-            shareInodeNumber(fs(), src, to);
+            await fs().link(from, to, { follow });
           } catch (e) {
             return A.errnoFromError(e);
           }

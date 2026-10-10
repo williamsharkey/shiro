@@ -32,6 +32,7 @@ import { createUrlModule } from './modules/url';
 import { createUtilModule } from './modules/util';
 import { createFsModule, createFsPromisesModule } from './modules/fs';
 import { createChildProcessModule, CHILD_HOLD } from './modules/child-process';
+import { createWasiModule } from './modules/wasi';
 import { createStreamModule } from './modules/stream';
 import { createCryptoModule } from './modules/crypto';
 import { createProcessGlobal, createProcessFunction } from './process-global';
@@ -294,6 +295,8 @@ export async function executeNodeScript(
         }
         case 'fs/promises':
         case 'node:fs/promises': return trackModule(createFsPromisesModule({ ctx, fileCache, fileMtimes, pendingPromises, tickSyncOps, FakeBuffer, getBuiltinModule, homeDir, trackAsync, atExit }));
+        case 'wasi':
+        case 'node:wasi': return createWasiModule({ guest, exit: (code) => fakeProcess.exit(code) as never });
         case 'child_process':
         case 'node:child_process': return createChildProcessModule({ ctx, fileCache, fileMtimes, pendingPromises, FakeBuffer, getProcess: () => fakeProcess, guest });
         case 'os':
@@ -448,11 +451,16 @@ export async function executeNodeScript(
     if (scriptPath && (scriptPath.endsWith('.tsx') || scriptPath.endsWith('.jsx'))) {
       transformedCode = transformJSX(transformedCode);
     }
-    transformedCode = transformESModules(transformedCode);
+    // Once a process uses AsyncLocalStorage, awaits carry its stores (async-context.ts):
+    // with the transform's code mask, unless awaits are added after it
+    const carry = asyncContext.active || code.includes('AsyncLocalStorage');
+    const syncAwaits = !isClaudeCodeScript(scriptPath);
+    transformedCode = transformESModules(transformedCode, carry && !syncAwaits ? carryAsyncContext : undefined);
     // spawnSync/execSync results are read right away: await them where the script can
-    if (!isClaudeCodeScript(scriptPath)) transformedCode = awaitSyncCalls(transformedCode);
-    // Once a process uses AsyncLocalStorage, awaits carry its stores (async-context.ts)
-    if (asyncContext.active || code.includes('AsyncLocalStorage')) transformedCode = carryAsyncContext(transformedCode);
+    if (syncAwaits) {
+      transformedCode = awaitSyncCalls(transformedCode);
+      if (carry) transformedCode = carryAsyncContext(transformedCode);
+    }
 
     // Stash real browser console on globalThis so injected code can use it
     if (code.length > 500000) {
@@ -473,6 +481,8 @@ export async function executeNodeScript(
     try {
       for (const [spec, ns] of await loadBrowserPackages(ctx.fs, entryDirname, getBuiltinModule, fakeProcess, trackAsync, atExit)) browserModules.set(spec, ns);
     } catch (e: any) {
+      // (the packages that loaded, and the failed one's marker: requiring it says why)
+      for (const [spec, ns] of (e?.partial as Map<string, any> | undefined) ?? []) browserModules.set(spec, ns);
       console.warn('[node] browser build:', e);
       const err = e?.errors?.[0];
       const at = err?.location ? ` (${err.location.file}:${err.location.line}: ${String(err.location.lineText).trim().slice(0, 160)})` : '';

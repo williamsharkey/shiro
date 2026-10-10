@@ -10,6 +10,7 @@ import { patchPackageSource } from './source-patches';
 import { transformESModules, transformTS, transformJSX } from '../commands/jseval/module-transform';
 import { asyncContext, carryAsyncContext } from './async-context';
 import { ProcessExitError } from '../commands/jseval/utils';
+import { BrowserBuildFailure } from './browser-packages';
 
 export interface RequireDeps {
   ctx: CommandContext;
@@ -94,6 +95,7 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
     }
     // A package that runs as its browser build (browser-packages.ts)
     const browser = deps.browserModules?.get(modPath);
+    if (browser instanceof BrowserBuildFailure) throw browser.error(modPath);
     if (browser) return browser;
     let result: any;
     try { result = _requireModule(modPath, fromDir); } finally { freshNext = false; }
@@ -463,9 +465,9 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
       if (resolved.endsWith('.tsx') || resolved.endsWith('.jsx')) {
         transformedContent = transformJSX(transformedContent);
       }
-      transformedContent = transformESModules(transformedContent);
       // Once a process uses AsyncLocalStorage, awaits carry its stores (async-context.ts)
-      if (asyncContext.active || content.includes('AsyncLocalStorage')) transformedContent = carryAsyncContext(transformedContent);
+      transformedContent = transformESModules(transformedContent,
+        asyncContext.active || content.includes('AsyncLocalStorage') ? carryAsyncContext : undefined);
 
       const modImportMeta = {
         url: `file://${resolved}`,
