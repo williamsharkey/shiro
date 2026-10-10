@@ -16,12 +16,11 @@ import type { FileSystem } from '../filesystem';
 import type { Shell } from '../shell';
 import { ShiroTerminal } from '../terminal';
 import type { Kernel } from '../kernel/kernel';
-import { WindowManager, isDesktopShortcut, type DockGroup, type AppDescriptor, type DesktopWindow, type MenuSpec, type MenuItem, type Geometry } from './wm';
+import { WindowManager, compactViewport, isDesktopShortcut, type DockGroup, type AppDescriptor, type DesktopWindow, type MenuSpec, type MenuItem, type Geometry } from './wm';
 import { ICONS, GLYPHS, appIcon } from './icons';
 import { TerminalView, takeParkedMain, hasParkedMain, applyTerminalTheme, useMonoFont, allTerminalViews, terminalTheme, TERMINAL_FONT } from './terminal-app';
 import { initNetwork } from './network';
 import { loadSession, place, restoreSession, trackSession } from './session';
-import { maybeShowTour, showTour } from './tour';
 import { BRAND } from '../brand';
 import { DEV_GROUPS, DEV_TOOLS, TOOL_PATH, launchScript, type DevTool } from './devtools';
 import { setClaudeSignInUI } from '../claude-signin-ui';
@@ -172,12 +171,14 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
   const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
   const layout: DesktopLayout = { keybarH: 0, dockHidden: false, topInset: 0, viewportH: null, relayout: () => {} };
   const workArea = (): Geometry => {
-    const compact = window.innerWidth <= 640;
+    const compact = compactViewport();
     const top = (compact ? 34 : 30) + layout.topInset;
     const gap = compact ? 6 : 8;
     // The key bar (mobile.ts) sits at the very bottom; the dock goes above it
     const kb = layout.keybarH;
     dockWrap.style.bottom = kb ? `${kb + gap}px` : '';
+    // Sheets and cards above the dock (the welcome) clear the key bar too
+    root.style.setProperty('--sd-keybar-h', `${kb}px`);
     const dockSpace = layout.dockHidden ? 4 : (compact ? 58 : 68) + gap + 8;
     const h = layout.viewportH ?? window.innerHeight;
     const bottom = Math.max(top + 120, h - kb - dockSpace);
@@ -644,7 +645,7 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     ] };
     const help: MenuSpec = { title: 'Help', items: [
       { label: 'Search…', shortcut: 'Ctrl+Space', action: () => openSpotlight() },
-      { label: 'Welcome Tour', action: () => showTour(ctx) },
+      { label: 'Welcome', action: () => void import('./welcome').then(m => m.showWelcome(ctx)) },
       { label: 'Getting Started', action: () => openTerminal({ command: 'help' }) },
       { label: 'Keyboard Shortcuts', action: () => showToast(root, SHORTCUTS_HTML, 9000) },
       { label: 'Desktop & /dom docs', action: () => window.open('https://github.com/williamsharkey/tabcomputer/blob/main/docs/DESKTOP.md', '_blank', 'noopener') },
@@ -847,7 +848,10 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
         term.term.focus();
         performance.mark('shiro:desktop:revealed');
         // A first visit gets the tour
-        setTimeout(() => maybeShowTour(ctx), 1200);
+        // A first visit gets the welcome (welcome.ts, loaded only until it's dismissed)
+        let seen = true;
+        try { seen = !!localStorage.getItem('tabcomputer-desktop-welcome'); } catch {}
+        if (!seen) setTimeout(() => void import('./welcome').then(m => m.showWelcome(ctx)), 900);
         // A live icon set showed its still so far: bring it to life (crossfaded)
         if (iconSet(iconSetId).kind === 'live') void switchIconSet(iconSetId);
       };
