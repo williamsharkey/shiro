@@ -787,6 +787,15 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    sigqueue tests' 130/160 exits). Test: fixtures/x86/siginfo.c,
    identical to native output. An older kernel without 1030 gets the
    number-only frames as before.
+100. Instructions that cross into the next code page are compiled again
+   (patch 41's decoding, which 57 had turned off), when that page can't
+   change either. 57's failure, liblzma's threaded decoder crashing in a
+   forked child in one binary layout, no longer reproduces: 20 of 20 runs
+   decode right. Left to the interpreter, a straddler inside a hot loop
+   made every pass leave compiled code for one instruction and come back.
+   agent-clis' sampled profile of native Claude's startup shows such loops
+   (0x434cffe: 461 k interpreted passes). BLINK_WJIT_STRADDLE=0 gives 57's
+   behaviour. The x86 suite A/B is unchanged ("same" everywhere).
 
 The page compiles blink.wasm once and gives the `WebAssembly.Module` to every
 Blink worker (src/x86-engine/blink.ts `blinkWasmModule`, host.mjs
