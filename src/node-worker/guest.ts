@@ -110,6 +110,14 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
       busy: () => net.busy,
       ids: { pid: sys.getpid(), ppid: sys.getppid() },
       kill: (pid, sig) => sys.kill(pid, sig),
+      wasi: {
+        call: (req) => {
+          if (req.data) sys.ch.data.set(req.data);
+          return { ret: sys.ch.result64(sys.ch.call(req.nr, ...req.args)), data: sys.ch.data };
+        },
+        dataSize: sys.ch.data.length,
+        openDir: (path) => sys.open(path, A.O_RDONLY | A.O_DIRECTORY),
+      },
       ...(ipcFd(sys, start.env) >= 0 ? { ipc: guestIpc(sys, ipcFd(sys, start.env)) } : {}),
       onUnhandledRejection: (fn) => { rejection = fn; },
       page: {

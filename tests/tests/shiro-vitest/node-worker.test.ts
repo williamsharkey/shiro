@@ -5,6 +5,8 @@
  * The guest is bundled with esbuild and runs in a Node worker_thread.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { createTestShell } from './helpers';
 import { installNodeWorker } from './node-worker-setup';
 import { TtySession } from '@shiro/kernel/pty';
@@ -241,6 +243,31 @@ srv.listen(18491, () => {
     await run('kill %1');
     await until(() => !iframeServer.isPortInUse(port), 'the port to close');
     await until(async () => !/Running/.test(await run('jobs')), 'the job to end');
+  }, 60_000);
+
+  it('node:wasi: a command module writes to its stdout, reads and writes files through a preopen, returns its exit code', async () => {
+    const fixtures = path.join(__dirname, 'fixtures/wasi');
+    const r = await sh(`node /tmp/nw/run.js < /dev/null; echo "node=$?"`, async (fs) => {
+      await fs.mkdir('/tmp/nw/root', { recursive: true });
+      for (const f of ['fdwrite.wasm', 'cat.wasm']) await fs.writeFile(`/tmp/nw/${f}`, new Uint8Array(readFileSync(path.join(fixtures, f))));
+      await fs.writeFile('/tmp/nw/root/in.txt', 'line one\nline two\n');
+      await fs.writeFile('/tmp/nw/run.js', `const { WASI } = require('node:wasi'); const fs = require('fs');
+const run = (file, opts) => {
+  const wasi = new WASI({ version: 'preview1', ...opts });
+  const instance = new WebAssembly.Instance(new WebAssembly.Module(fs.readFileSync(file)), wasi.getImportObject());
+  return wasi.start(instance);
+};
+console.log('status', run('/tmp/nw/fdwrite.wasm', { args: ['fdwrite', '1', 'hello from wasi'] }));
+console.log('status', run('/tmp/nw/fdwrite.wasm', { args: ['fdwrite'] }));
+console.log('status', run('/tmp/nw/cat.wasm', { args: ['cat', '/in.txt', '/out.txt'], preopens: { '/': '/tmp/nw/root' } }));
+console.log(JSON.stringify(fs.readFileSync('/tmp/nw/root/out.txt', 'utf8')));
+try { new WASI({}); } catch (e) { console.log(e.code); }
+run('/tmp/nw/fdwrite.wasm', { args: ['fdwrite'], returnOnExit: false });
+console.log('not reached');
+`);
+    });
+    expect(r.err).toBe('');
+    expect(r.out).toBe('hello from wasi\nstatus 0\nstatus 2\nline one\nline two\nstatus 0\n"copied 18\\n"\nERR_INVALID_ARG_VALUE\nnode=2\n');
   }, 60_000);
 
   it('worker_threads: each Worker is a thread of the process, running in parallel', async () => {

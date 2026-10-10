@@ -479,6 +479,11 @@ interface CompletionSpec {
 }
 
 /** Sentinel thrown by `break [N]` inside loops */
+/** `source` inside sourced files nests at most this deep (a file sourcing itself fails instead of spinning). */
+const MAX_SOURCE_DEPTH = 100;
+/** Function calls nest at most this deep when FUNCNEST isn't set. */
+const DEFAULT_FUNCNEST = 1000;
+
 /** Quiet period before command history is written to ~/.bash_history. */
 const HISTORY_SAVE_DELAY_MS = 500;
 /** Shells with a history save scheduled, flushed together when the page hides. */
@@ -4034,6 +4039,11 @@ export class Shell {
           if (srcArgs.length === 0) {
             stderrWriter('source: filename argument required\r\nsource: usage: source filename [arguments]\r\n');
             exitCode = 2;
+          } else if (this.sourcing >= MAX_SOURCE_DEPTH) {
+            // Files that source each other (~/.profile and ~/.bashrc) never yielded to
+            // the page: every boot froze sourcing ~/.profile
+            stderrWriter(`source: ${srcArgs[0]}: maximum nesting level exceeded (${MAX_SOURCE_DEPTH})\r\n`);
+            exitCode = 1;
           } else {
             // A name without / is looked up in PATH first (files, not directories), then here
             let scriptPath = this.fs.resolvePath(srcArgs[0], this.cwd);
@@ -7126,6 +7136,13 @@ export class Shell {
   ): Promise<number> {
     const func = this.functions[name];
     if (!func) return 127;
+    // bash's FUNCNEST; unset, bash recurses until its process crashes, which here
+    // would freeze the page: a default limit instead
+    const funcnest = Number(this.env['FUNCNEST']) > 0 ? Number(this.env['FUNCNEST']) : DEFAULT_FUNCNEST;
+    if (this.localVarStack.length >= funcnest) {
+      writeStderr(`${name}: maximum function nesting level exceeded (${funcnest})\r\n`);
+      return 1;
+    }
     await maybeYield();
 
     // Save and set positional parameters

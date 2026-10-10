@@ -44,7 +44,7 @@ export const DEV_TOOLS: DevTool[] = [
   { id: 'claude', name: 'Claude Code', group: 'agents', order: 50, bins: [], run: 'claude', note: 'Sign in with your Claude account when it asks (or in Settings → Accounts).' },
   { id: 'gemini', name: 'Gemini CLI', group: 'agents', order: 51, bins: ['gemini'], install: 'npm i -g @google/gemini-cli', run: 'gemini', time: 'a few seconds', note: 'Needs a Gemini API key (GEMINI_API_KEY) or a Google sign-in.' },
   { id: 'codex', name: 'Codex', group: 'agents', order: 52, bins: ['codex'], install: 'npm i -g @openai/codex', run: 'codex --sandbox danger-full-access', time: 'under a minute (294 MB)', note: 'Needs an OpenAI API key (OPENAI_API_KEY) or a ChatGPT sign-in. No bubblewrap here, so it runs without its sandbox.' },
-  { id: 'grok', name: 'Grok', group: 'agents', order: 53, bins: ['grok'], install: 'curl -fsSL https://x.ai/cli/install.sh | sh', run: 'grok', time: 'under a minute (183 MB)', note: 'Needs an xAI API key (XAI_API_KEY).' },
+  { id: 'grok', name: 'Grok', group: 'agents', order: 53, bins: ['grok'], install: 'pkg install curl && curl -fsSL https://x.ai/cli/install.sh | sh', run: 'grok', time: 'under a minute (183 MB)', note: 'Needs an xAI API key (XAI_API_KEY).' },
   { id: 'agy', name: 'Antigravity', group: 'agents', order: 54, bins: ['agy'], install: 'curl -fsSL https://antigravity.google/cli/install.sh | sh', run: 'agy', time: 'about a minute (211 MB)', note: 'Needs a Google sign-in.' },
   { id: 'aider', name: 'aider', group: 'agents', order: 55, bins: ['aider'], install: 'debian install && pkg install curl && curl -LsSf https://aider.chat/install.sh | sh', run: 'aider', time: 'slow: about 10 minutes, first run 6 more', note: 'Needs a model API key (OPENAI_API_KEY, ANTHROPIC_API_KEY, …).' },
 ];
