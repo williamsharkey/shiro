@@ -912,6 +912,54 @@ describe('kernel syscalls found by LTP', () => {
     off();
   });
 
+  it('timer_create SIGEV_THREAD_ID to a thread the engine vouches for; its signal\'s siginfo names the thread in its last word (Blink 0510, Open POSIX fork_18-1)', async () => {
+    const p = kernel.spawn({ path: 'tt', cwd: '/tmp/kc', fds: {}, run: () => new Promise<number>(() => {}) });
+    p.dispositions.set(34, 0x1234);
+    const sev = new Uint8Array(24);
+    const dv = new DataView(sev.buffer);
+    dv.setBigInt64(0, 7n, true); dv.setInt32(8, 34, true); dv.setInt32(12, 4, true); dv.setInt32(16, 262145, true); // SIGEV_THREAD_ID
+    expect(await kernel.syscall(p, A.SYS_timer_create, [1, 1], sev.slice())).toBe(-A.EINVAL); // a thread the kernel doesn't know
+    const id = await kernel.syscall(p, A.SYS_timer_create, [1, 1, 1], sev.slice());
+    expect(id).toBeGreaterThanOrEqual(0);
+    const its = new Uint8Array(32);
+    new DataView(its.buffer).setBigInt64(24, 1_000_000n, true); // 1 ms, once
+    expect(await kernel.syscall(p, A.SYS_timer_settime, [id, 0], its)).toBe(0);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(kernel.takeSignal(p)).toBe(34);
+    const si = new Uint8Array(A.SIGINFO_SIZE);
+    expect(await kernel.syscall(p, A.SYS_shiro_siginfo, [34], si)).toBe(0);
+    expect(A.decodeSiginfo(si)).toMatchObject({ signo: 34, code: A.SI_TIMER, value: 7n });
+    expect(new DataView(si.buffer).getInt32(A.SIGINFO_SIZE - 4, true)).toBe(262145);
+  });
+
+  it('SYS_shiro_cputimes: the CPU estimate leaves out engine sleeps and long calls, and a parent counts what it reaped (Blink 0509, Open POSIX fork_8-1)', async () => {
+    const p = kernel.spawn({ path: 'cpu', cwd: '/tmp/kc', fds: {}, run: () => new Promise<number>(() => {}) });
+    const times = async () => {
+      const d = new Uint8Array(16);
+      expect(await kernel.syscall(p, A.SYS_shiro_cputimes, [0], d)).toBe(0);
+      const dv = new DataView(d.buffer);
+      return [Number(dv.getBigInt64(0, true)) / 1000, Number(dv.getBigInt64(8, true)) / 1000];
+    };
+    // 150 ms reported asleep by the engine: not CPU
+    expect(await kernel.syscall(p, A.SYS_shiro_sleeping, [1], new Uint8Array(0))).toBe(0);
+    await new Promise((r) => setTimeout(r, 150));
+    const [during] = await times();
+    expect(await kernel.syscall(p, A.SYS_shiro_sleeping, [-1], new Uint8Array(0))).toBe(0);
+    const [self, kids] = await times();
+    expect(during).toBeLessThan(100);
+    expect(self).toBeLessThan(100);
+    expect(kids).toBe(0);
+    // a reaped child's CPU goes to the parent, and to wait4's reply after the status
+    p.childCpuMs = 0;
+    const c = kernel.spawn({ path: 'kid', cwd: '/tmp/kc', fds: {}, parent: p, run: () => new Promise<number>((r) => setTimeout(() => r(0), 120)) });
+    c.syscalls = 1;
+    const d = new Uint8Array(16);
+    expect(await kernel.syscall(p, A.SYS_wait4, [c.pid, 0], d)).toBe(c.pid);
+    const us = Number(new DataView(d.buffer).getBigInt64(4, true));
+    expect(us).toBeGreaterThan(50_000);
+    expect((await times())[1]).toBeCloseTo(us / 1000, 0);
+  });
+
   it('a SIG_SETMASK marked as the process mask (Blink 0507) is what rt_sigreturn restores for a signal handed over meanwhile (Open POSIX pthread_kill_8-1)', async () => {
     const p = kernel.spawn({ path: 'mt', cwd: '/tmp/kc', fds: {}, run: () => new Promise<number>(() => {}) });
     const sys = (nr: number, args: number[], data = new Uint8Array(256)) => kernel.syscall(p, nr, args, data);
