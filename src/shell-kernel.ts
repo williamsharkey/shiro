@@ -159,6 +159,8 @@ export interface KernelRunOptions {
   stdoutTo?: { path: string; append: boolean };
   /** stderr to a file (`2> f`), or wherever stdout goes (`2>&1`) */
   stderrTo?: { path: string; append: boolean } | 'stdout';
+  /** stderr to this writer, as it comes (a builtin's redirected stderr: node's `2> f`) */
+  stderrSink?: (s: string) => void;
   writeStdout: (s: string) => void;
   writeStderr: (s: string) => void;
   terminal?: TerminalLike;
@@ -235,7 +237,8 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
   const lastOut: OpenFile = (toFile as OpenFile | undefined) ?? (opts.captureStdout
     ? new SinkFile((t) => { stdout += t; })
     : slave ?? hostFd(1) ?? new SinkFile((t) => opts.writeStdout(t)));
-  const errOut: OpenFile = (opts.stderrTo === 'stdout' ? lastOut : errFile as OpenFile | undefined) ?? (opts.captureStderr
+  const errOut: OpenFile = (opts.stderrTo === 'stdout' ? lastOut : errFile as OpenFile | undefined)
+    ?? (opts.stderrSink ? new SinkFile(opts.stderrSink) : undefined) ?? (opts.captureStderr
     ? new SinkFile((t) => { stderr += t; })
     : slave ?? hostFd(2) ?? new SinkFile((t) => opts.writeStderr(t)));
 

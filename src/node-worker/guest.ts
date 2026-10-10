@@ -153,6 +153,8 @@ export async function runNodeGuest(start: GuestStartMessage, post: (m: unknown) 
       stderr: '',
       shell,
       stdoutIsTTY: stdoutTTY,
+      // (fd 2 a file or pipe while fd 1 is the tty: `node x.js 2> err` wrote on the screen)
+      stderrIsTTY: isatty(sys, 2),
       stdinIsTTY: stdinTTY,
       terminal: stdoutTTY ? terminalFacade(sys, stdinTTY) : undefined,
       // Not a terminal: fds 1 and 2 take what's written as written (bytes stay bytes: esbuild's protocol)
