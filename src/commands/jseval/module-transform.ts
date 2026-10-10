@@ -950,6 +950,10 @@ export function transformBundledESM(src: string): string {
 
   src = ms.src;
 
+  // (Each pattern that starts with an identifier starts at an identifier's start: tried
+  // at every character of one, a 145 KB run of them (an inline source map in a webpack
+  // dev chunk) cost quadratic time; Next's 8 MB vendor chunk took 171 s.)
+
   // 8. Patch lazy module factory to handle initialization failures gracefully.
   //    The bundled code uses X=(A,q)=>()=>(q||A((q={exports:{}}).exports,q),q.exports)
   //    as a lazy CJS module factory (where X is a minified name like R, y, etc.).
@@ -957,7 +961,7 @@ export function transformBundledESM(src: string): string {
   //    We wrap in try-catch and auto-stub missing properties so that
   //    `class X extends FailedModule.SomeClass` doesn't crash.
   //    Uses regex to match any variable name, not just a hardcoded one.
-  const rPattern = /([\w$]+)=\((\w+),(\w+)\)=>\(\)=>\(\3\|\|\2\(\(\3=\{exports:\{\}\}\)\.exports,\3\),\3\.exports\)/;
+  const rPattern = /(?<![\w$])([\w$]+)=\((\w+),(\w+)\)=>\(\)=>\(\3\|\|\2\(\(\3=\{exports:\{\}\}\)\.exports,\3\),\3\.exports\)/;
   const rMatch = src.match(rPattern);
   if (rMatch) {
     const [rOld, rName, rArg1, rArg2] = rMatch;
@@ -984,7 +988,7 @@ export function transformBundledESM(src: string): string {
   // Patch lazy side-effect runner: X=(A,q)=>()=>(A&&(q=A(A=0)),q)
   // where X is a minified name like v, E, etc.
   // If the side-effect factory throws, cache undefined rather than re-throwing on every access.
-  const vPattern = /([\w$]+)=\((\w+),(\w+)\)=>\(\)=>\(\2&&\(\3=\2\(\2=0\)\),\3\)/;
+  const vPattern = /(?<![\w$])([\w$]+)=\((\w+),(\w+)\)=>\(\)=>\(\2&&\(\3=\2\(\2=0\)\),\3\)/;
   const vMatch = src.match(vPattern);
   if (vMatch) {
     const [vOld, vName, vArg1, vArg2] = vMatch;
@@ -994,7 +998,7 @@ export function transformBundledESM(src: string): string {
 
   // 9. Detect trailing unawaited async function call (e.g., `cMz();`)
   // In real Node.js, the event loop keeps running. In our AsyncFunction, we need to await it.
-  src = src.replace(/([\w$]+)\(\)\s*;?\s*$/, 'await $1();');
+  src = src.replace(/(?<![\w$])([\w$]+)\(\)\s*;?\s*$/, 'await $1();');
 
   return src;
 }

@@ -602,7 +602,8 @@ function capturing<T extends object>(term: T, stdout: boolean, stderr: boolean):
   });
 }
 
-/** Builtins whose redirected output is written as it comes (they may run a server that never ends) */
+
+/** Builtins that may run a server that never ends: their redirect files are created before they start */
 const STREAM_REDIRECT_CMDS = new Set(['node', 'nodejs', 'npm', 'npx']);
 
 /** Is fd 2 still the terminal after these redirects? (`stdoutTty`: fd 1 is, before them) */
@@ -4506,10 +4507,11 @@ export class Shell {
           if (h) h.hits++;
           else this.hashTable.set(effectiveCmdName, { path: cmd ? `/usr/bin/${effectiveCmdName}` : (await this.findExecutableInPath(effectiveCmdName)) ?? `/usr/bin/${effectiveCmdName}`, hits: 1 });
         }
-        // node, npm and npx may run a server that never ends: their redirected output
-        // goes into the files as it comes (`npm run dev > log &` wrote nothing)
-        const liveOut = !live && (cmd ? STREAM_REDIRECT_CMDS.has(effectiveCmdName) : true)
-          ? await this.openLiveRedirects(redirects, stderrWriter) : null;
+        // Redirect files are opened (and `>` truncates) before the command runs, as
+        // in bash: what it writes goes in as it comes (`npm run dev > log &`), and a
+        // file the command writes itself isn't overwritten afterwards
+        const liveOut = !live
+          ? await this.openLiveRedirects(redirects, stderrWriter, !cmd || STREAM_REDIRECT_CMDS.has(effectiveCmdName)) : null;
         if (liveOut === 'failed') {
           exitCode = 1;
           this.redirectFailed = false;
@@ -4575,8 +4577,7 @@ export class Shell {
           }
         }
 
-        if (liveOut) await liveOut.flush();
-        const output = await this.applyOutputRedirects(ctx.stdout, ctx.stderr, liveOut ? liveOut.rest : redirects, i === pipeline.length - 1, writeStdout, stderrWriter);
+        const output = await this.applyOutputRedirects(ctx.stdout, ctx.stderr, liveOut ? await liveOut.finish() : redirects, i === pipeline.length - 1, writeStdout, stderrWriter);
 
         lastOutput = output;
         pipeExitCodes.push(exitCode);
@@ -4726,14 +4727,16 @@ export class Shell {
    * /dev/*, process substitution, noclobber), left to applyOutputRedirects;
    * 'failed': a file couldn't be opened (reported; the command doesn't run).
    */
-  private async openLiveRedirects(redirects: Redirect[], stderrWriter: (s: string) => void):
-    Promise<{ out?: (s: string) => void; err?: (s: string) => void; rest: Redirect[]; flush: () => Promise<void> } | null | 'failed'> {
+  private async openLiveRedirects(redirects: Redirect[], stderrWriter: (s: string) => void, create = true):
+    Promise<{ out?: (s: string) => void; err?: (s: string) => void; finish: () => Promise<Redirect[]> } | null | 'failed'> {
     if (!redirects.some((r) => r.type === '>' || r.type === '>>' || r.type === '2>' || r.type === '2>>')) return null;
     if (this.options.has('noclobber')) return null;
-    const writers = new Map<string, ((s: string) => void) & { flush: () => Promise<void> }>();
+    const writers = new Map<string, ((s: string) => void) & { flush: () => Promise<void>; used: boolean }>();
     const appender = (path: string) => {
       let pending = '';
       let busy: Promise<void> | null = null;
+      const w = Object.assign((t: string) => { if (!t) return; w.used = true; pending += t; busy ??= pump(); },
+        { flush: () => busy ?? Promise.resolve(), used: false });
       const pump = async () => {
         while (pending) {
           const t = pending;
@@ -4742,29 +4745,37 @@ export class Shell {
         }
         busy = null;
       };
-      return Object.assign((t: string) => { if (!t) return; pending += t; busy ??= pump(); }, { flush: () => busy ?? Promise.resolve() });
+      return w;
     };
-    const drop = Object.assign((_t: string) => {}, { flush: () => Promise.resolve() });
+    const drop = Object.assign((_t: string) => {}, { flush: () => Promise.resolve(), used: false });
     // Where fds 1 and 2 go (undefined: where they went before)
     let w1: ((s: string) => void) | undefined;
     let w2: ((s: string) => void) | undefined;
-    const rest: Redirect[] = [];
+    // What takes the command's leftover output, worked out when it ends
+    const rest: (Redirect | (() => Promise<Redirect>))[] = [];
     for (const r of redirects) {
       if (r.type === '<') { rest.push(r); continue; }
       if (r.type === '2>&1') { w2 = w1; rest.push(r); continue; }
       if (r.type !== '>' && r.type !== '>>' && r.type !== '2>' && r.type !== '2>>') return null;
       const append = r.type === '>>' || r.type === '2>>';
-      let w: ((s: string) => void) & { flush: () => Promise<void> };
+      let w: ((s: string) => void) & { flush: () => Promise<void>; used: boolean };
+      let path = '';
       if (r.target === '/dev/null') w = drop;
       else {
         if (fdOfRef(r.target) !== null || r.target.startsWith('/dev/') || /^>\(/.test(r.target)) return null;
-        const path = this.fs.resolvePath(r.target, this.cwd);
+        path = this.fs.resolvePath(r.target, this.cwd);
+        // (a virtual file, /dom's say, takes each write as an action: one write at the end)
+        if (this.fs.isVirtual?.(path)) return null;
         if (writers.has(path)) {
           if (!append) return null;
           w = writers.get(path)!;
         } else {
           if (await fifo.isFifo(this, path)) return null;
-          if (!append || !(await this.fs.exists(path))) {
+          // `create`: the file exists from the start (a server's log). Otherwise a new
+          // file is made by the one write at the end (a watcher sees one add, not add
+          // then change) and only one with data in it is truncated now
+          const st = create || append ? null : await this.fs.stat(path).catch(() => null);
+          if (create ? (!append || !(await this.fs.exists(path))) : (!append && !!st && st.size > 0)) {
             await this.redirectWrite(path, r.target, '', false, stderrWriter);
             if (this.redirectFailed) return 'failed';
           }
@@ -4773,10 +4784,30 @@ export class Shell {
         }
       }
       if (r.type === '>' || r.type === '>>') w1 = w; else w2 = w;
-      // (the file is open: what is left at the end is appended)
-      rest.push(w === drop ? r : { ...r, type: r.type === '>' || r.type === '>>' ? '>>' : '2>>' });
+      const appended: Redirect = { ...r, type: r.type === '>' || r.type === '>>' ? '>>' : '2>>' };
+      if (w === drop || r.type === '>>' || r.type === '2>>') rest.push(w === drop ? r : appended);
+      else if (create) rest.push(appended); // (the file is open: what is left is appended)
+      else {
+        // A builtin's `> f`: when nothing streamed into f and it is still as the shell
+        // left it (missing, or emptied), one plain write as before; else append, so
+        // what the command wrote to f itself stays
+        const wr = w;
+        rest.push(async () => {
+          if (wr.used) return appended;
+          const st = await this.fs.stat(path).catch(() => null);
+          return !st || st.size === 0 ? r : appended;
+        });
+      }
     }
-    return { out: w1, err: w2, rest, flush: async () => { await Promise.all([...writers.values()].map((w) => w.flush())); } };
+    return {
+      out: w1, err: w2,
+      finish: async () => {
+        await Promise.all([...writers.values()].map((w) => w.flush()));
+        const out: Redirect[] = [];
+        for (const x of rest) out.push(typeof x === 'function' ? await x() : x);
+        return out;
+      },
+    };
   }
 
   /** Write a redirect's file; a failure (a directory, a bad path) is reported and fails the command */

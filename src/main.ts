@@ -104,6 +104,8 @@ import { getShiroOrigin } from './utils/shiro-origin';
 import { logIsolationStatus } from './utils/isolation';
 import { requestPersistentStorage, setActiveFileSystem, storageInfo } from './storage';
 import { installNodeWorkerBoot } from './node-worker/boot';
+import { bootStarted, bootFinished, bootStep, safeMode } from './safe-mode';
+import { safeModeCmd } from './commands/safe-mode';
 
 /**
  * Register a command in both the CommandRegistry (for execution) and
@@ -125,6 +127,10 @@ async function main() {
     if (u.searchParams.has('reload')) { u.searchParams.delete('reload'); history.replaceState(history.state, '', u.toString()); }
   } catch { /* not a page */ }
   logIsolationStatus();
+  // Safe mode (src/safe-mode.ts): ?safe=1, or this tab's last loads never reached the prompt
+  const safe = safeMode();
+  bootStarted();
+  if (safe) console.warn(`[tabcomputer] safe mode: ${safe}`);
 
   // The desktop (src/desktop) is its own chunk: shiro.computer's terminal UI
   // never loads it, and the desktop's download overlaps IndexedDB opening
@@ -160,9 +166,7 @@ async function main() {
   })();
   // ~/AGENTS.md and ~/CLAUDE.md for coding agents (src/agent-docs.ts): kept
   // current, except where the user edited them
-  try {
-    for (const line of await seedAgentDocs(fs, runtimeContext)) console.log(`[agent-docs] ${line}`);
-  } catch (e) { console.warn('[agent-docs]', e); }
+  for (const line of await bootStep('agent docs', () => seedAgentDocs(fs, runtimeContext)) ?? []) console.log(`[agent-docs] ${line}`);
   console.log('[tabcomputer] Filesystem initialized');
 
   // Initialize file associations (extension → command mappings for `open`)
@@ -522,6 +526,7 @@ async function main() {
     () => import('./commands/ipcs').then(m => m.ipcsCmd)), 'src/commands/ipcs.ts');
   registerCommand(commands, lazyCommand('ipcrm', 'Remove System V IPC objects (by id or key)',
     () => import('./commands/ipcs').then(m => m.ipcrmCmd)), 'src/commands/ipcs.ts');
+  registerCommand(commands, safeModeCmd, 'src/commands/safe-mode.ts');
   registerCommand(commands, lazyCommand('doctor', 'Check this tab (deploy, browser, engine, network, sign-ins, storage) for a bug report',
     () => import('./commands/doctor').then(m => m.doctorCmd)), 'src/commands/doctor.ts');
   registerCommand(commands, lazyCommand('tabinfo', 'Same as doctor',
@@ -558,7 +563,8 @@ async function main() {
   // Create shell
   const shell = new Shell(fs, commands);
   // Commands wait for Debian mode's overlay (Debian's python3, not the builtin, once installed)
-  shell.bootGate = debianBoot;
+  // (at most 30 s: a Debian boot that hangs mustn't hang every command)
+  shell.bootGate = bootStep('Debian boot', () => debianBoot, 30000);
   // Kernel processes (worker guests, spawned builtins) run against this fs and fork this shell
   const kernel = getKernel();
   kernel.attach(fs, shell);
@@ -577,9 +583,11 @@ async function main() {
   shell.env['BROWSER'] ??= 'xdg-open';
   // HiDPI: X apps started from the shell scale like the dock's (src/gui/display-scale.ts)
   for (const [k, v] of Object.entries(toolkitScaleEnv())) shell.env[k] ??= v;
-  void startDisplay(kernel, 0).catch(e => console.warn('[Xshiro]', e));
-  // GL for X apps (docs/research/GL.md): glshiro listens on /tmp/.tabcomputer-gl/0 for libGLX_tabcomputer
-  void startGLServer(kernel).catch(e => console.warn('[glshiro]', e));
+  if (!safe) {
+    void startDisplay(kernel, 0).catch(e => console.warn('[Xshiro]', e));
+    // GL for X apps (docs/research/GL.md): glshiro listens on /tmp/.tabcomputer-gl/0 for libGLX_tabcomputer
+    void startGLServer(kernel).catch(e => console.warn('[glshiro]', e));
+  }
 
   // Populate API keys from localStorage so `claude` CLI picks them up
   const storedAnthropicKey = localStorage.getItem('tabcomputer_anthropic_key') || localStorage.getItem('tabcomputer_api_key');
@@ -733,16 +741,18 @@ async function main() {
   }
 
   // Pre-hide terminal if we'll enter become/IDE mode (prevents flash)
-  const becomeConfig = getBecomeConfig();
+  const becomeConfig = safe ? null : getBecomeConfig();
   if (becomeConfig) {
     document.body.classList.add('become-active');
   }
 
   // Tiling panes: drag a corner triangle of any pane to split it (the desktop has windows and tabs instead)
-  if (!desktop) initPanes(terminal, makeShell);
+  if (!desktop && !safe) initPanes(terminal, makeShell);
 
   await terminal.start();
   fs.releaseKeyIndex();
+  // The prompt is up: the next load of this tab is a normal one
+  bootFinished();
 
   // Check for become mode (app mode) — restore full-screen app if configured
   if (becomeConfig) {
@@ -777,7 +787,7 @@ async function main() {
   }
 
   // Check for shared seed URL: /s/:id
-  const seedMatch = location.pathname.match(/^\/s\/([a-z0-9]{4,16})$/);
+  const seedMatch = safe ? null : location.pathname.match(/^\/s\/([a-z0-9]{4,16})$/);
   if (seedMatch) {
     const seedId = seedMatch[1];
     terminal.term.writeln(`\r\nLoading shared seed ${seedId}...`);
@@ -838,7 +848,7 @@ async function main() {
   }
 
   // Check for GitHub import URL: /:user/:repo
-  const ghMatch = location.pathname.match(/^\/([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)\/?$/);
+  const ghMatch = safe ? null : location.pathname.match(/^\/([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)\/?$/);
   if (ghMatch && !seedMatch) {
     const [, user, repo] = ghMatch;
     // Avoid collision with reserved paths
@@ -887,7 +897,7 @@ async function main() {
 
   // Auto-reconnect remote session if one was active before page reload
   // Skip only if become mode is actually active (not just config in localStorage)
-  if (!document.body.classList.contains('become-active')) {
+  if (!safe && !document.body.classList.contains('become-active')) {
     // getPersistedRemoteCode() without loading commands/remote unless there is one
     const persistedCode = localStorage.getItem('tabcomputer-remote-code');
     if (persistedCode) {
@@ -905,14 +915,14 @@ async function main() {
 
   // Have Claude Code ready before anyone types `claude` (the profile's preinstall
   // list). Waits a few seconds so the 18 MB tarball download doesn't compete with boot.
-  if (profile.preinstall.includes('claude-code')) setTimeout(() => {
+  if (!safe && profile.preinstall.includes('claude-code')) setTimeout(() => {
     ensureClaudeCodeInstalled(fs)
       .then(() => console.log('[tabcomputer] Claude Code ready'))
       .catch((e) => console.warn('[tabcomputer] Claude Code background install failed:', e?.message || e));
   }, 3000);
   // The other preinstall names are pkg packages (ca-certificates: the CA bundle
   // native programs' TLS looks for at /etc/ssl/certs/ca-certificates.crt).
-  const pkgPreinstall = profile.preinstall.filter((n) => n !== 'claude-code');
+  const pkgPreinstall = safe ? [] : profile.preinstall.filter((n) => n !== 'claude-code');
   if (pkgPreinstall.length) setTimeout(() => {
     import('./pkg-manager').then((m) => m.preinstallPackages(fs, pkgPreinstall))
       .then((done) => { if (done.length) console.log(`[tabcomputer] preinstalled ${done.join(', ')}`); })
