@@ -12,6 +12,7 @@ conformance work started (fc0af54).
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **625/635 (98.4%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **272/322 (84.5%)** |
 | [Syscalls: wasi-testsuite (wasm32-wasip1)](#syscalls-wasi-testsuite-wasm32-wasip1) | — | **71/72 (98.6%)** |
+| [POSIX: Open POSIX Test Suite under Blink (x86-64)](#posix-open-posix-test-suite-under-blink-x86-64) | — | **1173/1448 (81.0%)** |
 
 How each suite runs, and what is and isn't scored, is described in
 [tests/conformance/README.md](../tests/conformance/README.md).
@@ -483,5 +484,271 @@ WebAssembly/wasi-testsuite prebuilt wasip1 modules (C, Rust, AssemblyScript) run
 <details><summary>Failing cases</summary>
 
 - **rust**: path_link — exit 134, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/path_link.rs:89:10: creating a link in the same directory: Errno { code: 63, name: "PERM", message: "Operation not permitted." } note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace wasm trap: unreachable
+
+</details>
+
+## POSIX: Open POSIX Test Suite under Blink (x86-64)
+
+The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scripts/conformance/build-openposix.sh) run as static x86-64 kernel processes in the Blink engine: signals, pthreads, semaphores, message queues, timers, clocks, mmap, scheduling. A test passes when it exits 0; only tests that pass natively on the build host as uid 1000 are scored (openposix/native-baseline.json). First run: 1173/1448, with Blink 0080–0084 built locally (raise(SIGKILL) and sigqueue/AIO fixed from this suite); the gaps are POSIX message queues (mq_*), POSIX timers (timer_*), sigwait/sigtimedwait, sched_* policies and shm_open.
+
+| Area | Before | Now | Failing |
+|---|---|---|---|
+| aio_cancel | — | 7/11 | 4 |
+| aio_error | — | 2/2 | 0 |
+| aio_fsync | — | 11/11 | 0 |
+| aio_read | — | 10/10 | 0 |
+| aio_return | — | 2/2 | 0 |
+| aio_suspend | — | 1/4 | 3 |
+| aio_write | — | 10/10 | 0 |
+| asctime | — | 1/1 | 0 |
+| clock | — | 2/2 | 0 |
+| clock_getcpuclockid | — | 4/4 | 0 |
+| clock_getres | — | 6/7 | 1 |
+| clock_gettime | — | 7/8 | 1 |
+| clock_nanosleep | — | 12/12 | 0 |
+| clock_settime | — | 1/1 | 0 |
+| ctime | — | 1/1 | 0 |
+| difftime | — | 1/1 | 0 |
+| fork | — | 10/16 | 6 |
+| fsync | — | 2/3 | 1 |
+| getpid | — | 1/1 | 0 |
+| gmtime | — | 2/2 | 0 |
+| kill | — | 2/3 | 1 |
+| killpg | — | 7/7 | 0 |
+| lio_listio | — | 8/15 | 7 |
+| localtime | — | 1/1 | 0 |
+| mktime | — | 1/1 | 0 |
+| mlock | — | 2/3 | 1 |
+| mlockall | — | 2/5 | 3 |
+| mmap | — | 21/32 | 11 |
+| mq_close | — | 2/6 | 4 |
+| mq_getattr | — | 0/2 | 2 |
+| mq_notify | — | 0/6 | 6 |
+| mq_open | — | 2/16 | 14 |
+| mq_send | — | 0/17 | 17 |
+| mq_setattr | — | 0/4 | 4 |
+| mq_timedreceive | — | 0/1 | 1 |
+| mq_timedsend | — | 0/21 | 21 |
+| mq_unlink | — | 0/4 | 4 |
+| munlock | — | 2/3 | 1 |
+| munlockall | — | 1/1 | 0 |
+| munmap | — | 7/7 | 0 |
+| nanosleep | — | 11/11 | 0 |
+| pthread_atfork | — | 6/7 | 1 |
+| pthread_attr_destroy | — | 3/3 | 0 |
+| pthread_attr_getdetachstate | — | 2/2 | 0 |
+| pthread_attr_getinheritsched | — | 1/1 | 0 |
+| pthread_attr_getschedparam | — | 1/1 | 0 |
+| pthread_attr_getschedpolicy | — | 1/1 | 0 |
+| pthread_attr_getscope | — | 1/1 | 0 |
+| pthread_attr_getstack | — | 1/1 | 0 |
+| pthread_attr_getstacksize | — | 1/1 | 0 |
+| pthread_attr_init | — | 4/4 | 0 |
+| pthread_attr_setdetachstate | — | 4/4 | 0 |
+| pthread_attr_setinheritsched | — | 3/3 | 0 |
+| pthread_attr_setschedparam | — | 2/2 | 0 |
+| pthread_attr_setschedpolicy | — | 3/3 | 0 |
+| pthread_attr_setscope | — | 3/3 | 0 |
+| pthread_attr_setstack | — | 5/5 | 0 |
+| pthread_attr_setstacksize | — | 3/3 | 0 |
+| pthread_barrier_destroy | — | 1/1 | 0 |
+| pthread_barrier_init | — | 3/3 | 0 |
+| pthread_barrier_wait | — | 4/4 | 0 |
+| pthread_barrierattr_destroy | — | 1/1 | 0 |
+| pthread_barrierattr_getpshared | — | 1/2 | 1 |
+| pthread_barrierattr_init | — | 2/2 | 0 |
+| pthread_barrierattr_setpshared | — | 2/2 | 0 |
+| pthread_cancel | — | 4/9 | 5 |
+| pthread_cleanup_pop | — | 3/3 | 0 |
+| pthread_cleanup_push | — | 2/3 | 1 |
+| pthread_cond_broadcast | — | 4/7 | 3 |
+| pthread_cond_destroy | — | 2/3 | 1 |
+| pthread_cond_init | — | 5/5 | 0 |
+| pthread_cond_signal | — | 4/6 | 2 |
+| pthread_cond_timedwait | — | 8/12 | 4 |
+| pthread_cond_wait | — | 4/6 | 2 |
+| pthread_condattr_destroy | — | 4/4 | 0 |
+| pthread_condattr_getclock | — | 2/2 | 0 |
+| pthread_condattr_getpshared | — | 3/3 | 0 |
+| pthread_condattr_init | — | 2/2 | 0 |
+| pthread_condattr_setclock | — | 4/4 | 0 |
+| pthread_condattr_setpshared | — | 3/3 | 0 |
+| pthread_create | — | 12/14 | 2 |
+| pthread_detach | — | 7/7 | 0 |
+| pthread_equal | — | 1/3 | 2 |
+| pthread_exit | — | 10/10 | 0 |
+| pthread_getcpuclockid | — | 1/1 | 0 |
+| pthread_getschedparam | — | 1/1 | 0 |
+| pthread_getspecific | — | 2/2 | 0 |
+| pthread_join | — | 4/8 | 4 |
+| pthread_key_create | — | 4/4 | 0 |
+| pthread_key_delete | — | 3/3 | 0 |
+| pthread_kill | — | 3/6 | 3 |
+| pthread_mutex_destroy | — | 6/6 | 0 |
+| pthread_mutex_getprioceiling | — | 3/4 | 1 |
+| pthread_mutex_init | — | 5/7 | 2 |
+| pthread_mutex_lock | — | 5/5 | 0 |
+| pthread_mutex_setprioceiling | — | 1/1 | 0 |
+| pthread_mutex_timedlock | — | 6/6 | 0 |
+| pthread_mutex_trylock | — | 6/7 | 1 |
+| pthread_mutex_unlock | — | 5/5 | 0 |
+| pthread_mutexattr_destroy | — | 4/4 | 0 |
+| pthread_mutexattr_getprioceiling | — | 3/3 | 0 |
+| pthread_mutexattr_getprotocol | — | 2/2 | 0 |
+| pthread_mutexattr_getpshared | — | 4/4 | 0 |
+| pthread_mutexattr_gettype | — | 5/5 | 0 |
+| pthread_mutexattr_init | — | 2/2 | 0 |
+| pthread_mutexattr_setprioceiling | — | 3/3 | 0 |
+| pthread_mutexattr_setprotocol | — | 3/3 | 0 |
+| pthread_mutexattr_setpshared | — | 6/6 | 0 |
+| pthread_mutexattr_settype | — | 7/7 | 0 |
+| pthread_once | — | 4/6 | 2 |
+| pthread_rwlock_destroy | — | 2/2 | 0 |
+| pthread_rwlock_init | — | 4/4 | 0 |
+| pthread_rwlock_rdlock | — | 6/6 | 0 |
+| pthread_rwlock_timedrdlock | — | 6/6 | 0 |
+| pthread_rwlock_timedwrlock | — | 5/6 | 1 |
+| pthread_rwlock_tryrdlock | — | 1/1 | 0 |
+| pthread_rwlock_trywrlock | — | 1/1 | 0 |
+| pthread_rwlock_unlock | — | 2/2 | 0 |
+| pthread_rwlock_wrlock | — | 3/3 | 0 |
+| pthread_rwlockattr_destroy | — | 2/2 | 0 |
+| pthread_rwlockattr_getpshared | — | 2/3 | 1 |
+| pthread_rwlockattr_init | — | 2/2 | 0 |
+| pthread_rwlockattr_setpshared | — | 1/1 | 0 |
+| pthread_self | — | 1/1 | 0 |
+| pthread_setcancelstate | — | 2/4 | 2 |
+| pthread_setcanceltype | — | 2/3 | 1 |
+| pthread_setschedparam | — | 0/1 | 1 |
+| pthread_setspecific | — | 2/2 | 0 |
+| pthread_sigmask | — | 13/14 | 1 |
+| pthread_spin_destroy | — | 2/2 | 0 |
+| pthread_spin_init | — | 2/4 | 2 |
+| pthread_spin_lock | — | 2/4 | 2 |
+| pthread_spin_trylock | — | 2/2 | 0 |
+| pthread_spin_unlock | — | 3/3 | 0 |
+| pthread_testcancel | — | 2/2 | 0 |
+| raise | — | 7/7 | 0 |
+| sched_get_priority_max | — | 3/4 | 1 |
+| sched_get_priority_min | — | 3/4 | 1 |
+| sched_getparam | — | 0/4 | 4 |
+| sched_getscheduler | — | 3/4 | 1 |
+| sched_setparam | — | 2/8 | 6 |
+| sched_setscheduler | — | 0/8 | 8 |
+| sched_yield | — | 1/1 | 0 |
+| sem_close | — | 3/4 | 1 |
+| sem_destroy | — | 2/2 | 0 |
+| sem_getvalue | — | 5/5 | 0 |
+| sem_init | — | 9/9 | 0 |
+| sem_open | — | 11/12 | 1 |
+| sem_post | — | 6/6 | 0 |
+| sem_timedwait | — | 11/11 | 0 |
+| sem_unlink | — | 9/9 | 0 |
+| sem_wait | — | 8/8 | 0 |
+| shm_open | — | 16/27 | 11 |
+| shm_unlink | — | 7/7 | 0 |
+| sigaction | — | 495/500 | 5 |
+| sigaddset | — | 5/5 | 0 |
+| sigaltstack | — | 9/11 | 2 |
+| sigdelset | — | 5/5 | 0 |
+| sigemptyset | — | 2/2 | 0 |
+| sigfillset | — | 2/2 | 0 |
+| sighold | — | 3/3 | 0 |
+| sigignore | — | 5/5 | 0 |
+| sigismember | — | 3/3 | 0 |
+| signal | — | 6/6 | 0 |
+| sigpause | — | 5/5 | 0 |
+| sigpending | — | 4/4 | 0 |
+| sigprocmask | — | 11/12 | 1 |
+| sigqueue | — | 5/13 | 8 |
+| sigrelse | — | 3/3 | 0 |
+| sigset | — | 10/10 | 0 |
+| sigsuspend | — | 4/4 | 0 |
+| sigtimedwait | — | 2/5 | 3 |
+| sigwait | — | 0/8 | 8 |
+| sigwaitinfo | — | 0/8 | 8 |
+| speculative | — | 7/17 | 10 |
+| strchr | — | 1/1 | 0 |
+| strcpy | — | 1/1 | 0 |
+| strftime | — | 3/3 | 0 |
+| strlen | — | 1/1 | 0 |
+| strncpy | — | 2/2 | 0 |
+| time | — | 1/1 | 0 |
+| timer_create | — | 0/8 | 8 |
+| timer_delete | — | 0/2 | 2 |
+| timer_getoverrun | — | 0/4 | 4 |
+| timer_gettime | — | 0/7 | 7 |
+| timer_settime | — | 0/14 | 14 |
+
+<details><summary>Failing cases</summary>
+
+- **aio_cancel**: aio_cancel_3-1 — exit 131: ; aio_cancel_5-1 (hang/timeout) — timeout: ; aio_cancel_6-1 (hang/timeout) — timeout: ; aio_cancel_7-1 (hang/timeout) — timeout: 
+- **aio_suspend**: aio_suspend_1-1 — exit 131: ; aio_suspend_4-1 — exit 131: ; aio_suspend_9-1 — exit 131: 
+- **clock_getres**: clock_getres_6-2 — FAIL: At least one test FAILED -- see above
+- **clock_gettime**: clock_gettime_8-2 — FAIL: At least one test FAILED -- see above
+- **fork**: fork_13-1 — FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/13-1.c FAILED: Child exited abnormally; fork_18-1 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/18-1.c unresolved: got 38 (Function not implemented) on line 87 (Failed to cre; fork_19-1 — UNRESOLVED: Failed to create the message queue descriptor: Function not implemented; fork_22-1 — FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/22-1.c FAILED: Child exited abnormally; fork_7-1 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/7-1.c unresolved: got 2 (No such file or directory) on line 121 (Could not ope; fork_8-1 (hang/timeout) — timeout: 
+- **fsync**: fsync_7-1 — FAIL: fsync/7-1.c Test Fail: Expect EINVAL, get: Success
+- **kill**: kill_1-2 — FAIL: Test FAILED
+- **lio_listio**: lio_listio_10-1 — exit 131: ; lio_listio_14-1 — exit 131: ; lio_listio_15-1 — exit 131: ; lio_listio_2-1 — exit 132: ; lio_listio_3-1 — exit 131: ; lio_listio_4-1 — exit 132: ; lio_listio_7-1 — exit 131: 
+- **mlock**: mlock_8-1 — UNRESOLVED: Unexpected error: Success
+- **mlockall**: mlockall_13-1 — FAIL: mlockall() return 0 instead of -1.; mlockall_3-6 — FAIL: The shared memory pages of the process are not locked.; mlockall_3-7 — FAIL: The mapped files pages of the process are not locked.
+- **mmap**: mmap_10-1 (hang/timeout) — timeout: ; mmap_11-2 — FAIL: Test FAILED: SIGBUS not triggered, while Memory Protection is enabled; mmap_11-3 — FAIL: Test FAILED: SIGBUS not triggered, while Memory Protection is enabled; mmap_11-4 — UNTESTED: From mmap(2) manpage, skip known bug on tmpfs; mmap_14-1 — FAIL: Test FAILED: st_ctime and st_mtime were not updated properly; mmap_21-1 — FAIL: Test FAILED; mmap_23-1 — FAIL: Text FAILED: mmap() succeded; mmap_24-1 (hang/timeout) — timeout: ; mmap_24-2 — FAIL: Test Fail: Did not get ENOMEM as expected; mmap_3-1 — FAIL: Test Fail: The file is not mapped correctly; mmap_7-4 — FAIL: mmap with MAP_SHARED failed to propagate change into the child
+- **mq_close**: mq_close_1-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_close_2-1 — UNRESOLVED: unexpected error: mq_close 2-1: read: EOF; mq_close_3-1 — UNRESOLVED: unexpected error: mq_close 3-1: mq_open: Function not implemented; mq_close_4-1 — UNRESOLVED: unexpected error: mq_close 4-1: mq_open: Function not implemented
+- **mq_getattr**: mq_getattr_2-1 — UNRESOLVED: unexpected error: mq_getattr 2-1: mq_open(): Function not implemented; mq_getattr_2-2 — UNRESOLVED: unexpected error: mq_getattr 2-2: mq_open(): Function not implemented
+- **mq_notify**: mq_notify_1-1 — UNRESOLVED: unexpected error: mq_notify 1-1: mq_open: Function not implemented; mq_notify_2-1 — UNRESOLVED: unexpected error: mq_notify 2-1: mq_open: Function not implemented; mq_notify_3-1 — UNRESOLVED: unexpected error: mq_notify 3-1: mq_open: Function not implemented; mq_notify_4-1 — UNRESOLVED: unexpected error: mq_notify 4-1: mq_open: Function not implemented; mq_notify_8-1 — FAIL: Test FAILED (errno != EBADF); mq_notify_9-1 — UNRESOLVED: unexpected error: mq_notify 9-1: mq_open: Function not implemented
+- **mq_open**: mq_open_1-1 — FAIL: Test FAILED; mq_open_11-1 — FAIL: Test FAILED; mq_open_12-1 — FAIL: Test FAILED; mq_open_13-1 — FAIL: Test FAILED; mq_open_15-1 — UNRESOLVED: Test UNRESOLVED; mq_open_16-1 — FAIL: Test FAILED - mq_open() never succeeded; mq_open_18-1 — FAIL: Test FAILED; mq_open_20-1 — FAIL: Test FAILED; mq_open_23-1 — UNRESOLVED: Test UNRESOLVED; mq_open_25-2 — FAIL: Test FAILED; mq_open_27-1 — FAIL: Test FAILED; mq_open_27-2 — FAIL: Test FAILED; mq_open_29-1 — FAIL: Test FAILED; mq_open_7-3 — FAIL: Test FAILED
+- **mq_send**: mq_send_1-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_10-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_11-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_11-2 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_12-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_13-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_2-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_3-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_3-2 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_4-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_4-2 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_4-3 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_5-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_5-2 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_7-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_8-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_send_9-1 — UNRESOLVED: mq_open() did not return success: Function not implemented
+- **mq_setattr**: mq_setattr_1-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_setattr_1-2 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_setattr_2-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_setattr_5-1 — UNRESOLVED: unexpected error: mq_setattr 5-1: mq_open(): Function not implemented
+- **mq_timedreceive**: mq_timedreceive_5-3 — FAIL: Test FAILED
+- **mq_timedsend**: mq_timedsend_1-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_10-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_11-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_11-2 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_12-1 — UNRESOLVED: mq_open: Function not implemented; mq_timedsend_13-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_15-1 — UNRESOLVED: Test UNRESOLVED; mq_timedsend_16-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_18-1 — UNRESOLVED: Test UNRESOLVED; mq_timedsend_19-1 — UNRESOLVED: Test UNRESOLVED; mq_timedsend_2-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_20-1 — UNRESOLVED: Test UNRESOLVED; mq_timedsend_3-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_4-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_4-2 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_4-3 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_5-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_5-2 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_5-3 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_7-1 — UNRESOLVED: mq_open() did not return success: Function not implemented; mq_timedsend_8-1 — UNRESOLVED: mq_open() did not return success: Function not implemented
+- **mq_unlink**: mq_unlink_1-1 — UNRESOLVED: unexpected error: mq_unlink 1-1: mq_open: Function not implemented; mq_unlink_2-1 — UNRESOLVED: unexpected error: mq_unlink 2-1: read: EOF; mq_unlink_2-2 — UNRESOLVED: unexpected error: mq_unlink 2-2: read: EOF; mq_unlink_7-1 — FAIL: Test FAILED
+- **munlock**: munlock_10-1 — UNRESOLVED: Unexpected error: Success
+- **pthread_atfork**: pthread_atfork_3-3 (hang/timeout) — timeout: 
+- **pthread_barrierattr_getpshared**: pthread_barrierattr_getpshared_2-1 — FAIL: Test Fail: block on pthread_barrier_wait()
+- **pthread_cancel**: pthread_cancel_1-1 — FAIL: Test FAILED: Cancel request timed out; pthread_cancel_2-1 — FAIL: Test FAILED: Timed out while waiting for cancelation cleanup handlers to execute; pthread_cancel_2-2 — FAIL: unexpected error: pthread_cancel 2-2: Test FAIL: Destructor was not executed.; pthread_cancel_2-3 — FAIL: unexpected error: pthread_cancel 2-3: Test FAIL: Cleanup handler was not executed.; pthread_cancel_3-1 (hang/timeout) — timeout: Error: cancel never arrived
+- **pthread_cleanup_push**: pthread_cleanup_push_1-2 — UNRESOLVED: Error: cancellation not correctly handled
+- **pthread_cond_broadcast**: pthread_cond_broadcast_1-2 (hang/timeout) — timeout:  MF  : 200809; pthread_cond_broadcast_2-3 (hang/timeout) — timeout: ; pthread_cond_broadcast_4-2 (hang/timeout) — timeout: 
+- **pthread_cond_destroy**: pthread_cond_destroy_2-1 (hang/timeout) — timeout: 
+- **pthread_cond_signal**: pthread_cond_signal_1-2 (hang/timeout) — timeout: ; pthread_cond_signal_4-2 (hang/timeout) — timeout: 
+- **pthread_cond_timedwait**: pthread_cond_timedwait_2-5 (hang/timeout) — timeout: ; pthread_cond_timedwait_2-6 (hang/timeout) — timeout: ; pthread_cond_timedwait_4-2 (hang/timeout) — timeout:  MF  : 200809; pthread_cond_timedwait_4-3 (hang/timeout) — timeout: 
+- **pthread_cond_wait**: pthread_cond_wait_2-3 (hang/timeout) — timeout: ; pthread_cond_wait_4-1 (hang/timeout) — timeout: 
+- **pthread_create**: pthread_create_11-1 (hang/timeout) — timeout: ; pthread_create_3-2 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/pthread_create/3-2.c unresolved: got 22 (Invalid argument) on line 649 (Failed to s
+- **pthread_equal**: pthread_equal_1-2 — exit 134: Test PASSED; pthread_equal_2-1 (hang/timeout) — timeout: 
+- **pthread_join**: pthread_join_1-2 — FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/pthread_join/1-2.c FAILED: pthread_join returned before child terminated; pthread_join_3-1 (hang/timeout) — timeout: ; pthread_join_4-1 (hang/timeout) — timeout: ; pthread_join_6-3 (hang/timeout) — timeout: 
+- **pthread_kill**: pthread_kill_2-1 — exit 139: ; pthread_kill_3-1 — exit 139: ; pthread_kill_8-1 — exit 139: 
+- **pthread_mutex_getprioceiling**: pthread_mutex_getprioceiling_3-3 — exit 134: The futex facility returned an unexpected error code.
+- **pthread_mutex_init**: pthread_mutex_init_1-2 (hang/timeout) — timeout: ; pthread_mutex_init_3-2 (hang/timeout) — timeout: 
+- **pthread_mutex_trylock**: pthread_mutex_trylock_4-3 (hang/timeout) — timeout: 
+- **pthread_once**: pthread_once_3-1 (hang/timeout) — timeout: : Interrupted system call; pthread_once_6-1 (hang/timeout) — timeout: 
+- **pthread_rwlock_timedwrlock**: pthread_rwlock_timedwrlock_6-1 — FAIL: Test FAILED: Timeout was for 5 seconds, but waited for 4.999894 seconds instead
+- **pthread_rwlockattr_getpshared**: pthread_rwlockattr_getpshared_2-1 (hang/timeout) — timeout: Test FAILED: Child expects EBUSY
+- **pthread_setcancelstate**: pthread_setcancelstate_1-1 — FAIL: Test FAILED: Thread of cancel type PTHREAD_CANCEL_ENABLE did not honor cancel request; pthread_setcancelstate_2-1 — FAIL: Test FAILED: Thread default cancel type is not PTHREAD_CANCEL_ENABLE, it did not honor cancel request
+- **pthread_setcanceltype**: pthread_setcanceltype_1-1 — FAIL: Test FAILED: Cancel request timed out
+- **pthread_setschedparam**: pthread_setschedparam_5-1 (hang/timeout) — timeout: 
+- **pthread_sigmask**: pthread_sigmask_10-1 — FAIL: Test FAILED
+- **pthread_spin_init**: pthread_spin_init_2-1 (hang/timeout) — timeout: ; pthread_spin_init_2-2 (hang/timeout) — timeout: 
+- **pthread_spin_lock**: pthread_spin_lock_1-1 (hang/timeout) — timeout: ; pthread_spin_lock_3-1 — exit 139: 
+- **sched_get_priority_max**: sched_get_priority_max_2-1 — FAIL: did no returned -1.
+- **sched_get_priority_min**: sched_get_priority_min_2-1 — FAIL: did not returned -1.
+- **sched_getparam**: sched_getparam_1-1 — exit 134: *** stack smashing detected ***: terminated; sched_getparam_2-1 — exit 134: *** stack smashing detected ***: terminated; sched_getparam_3-1 — exit 134: *** stack smashing detected ***: terminated; sched_getparam_4-1 — FAIL: returned code is not -1.
+- **sched_getscheduler**: sched_getscheduler_5-1 — FAIL: ESRCH is not returned: Success
+- **sched_setparam**: sched_setparam_22-1 — exit 134: *** stack smashing detected ***: terminated; sched_setparam_23-1 — exit 134: *** stack smashing detected ***: terminated; sched_setparam_25-1 — FAIL: The returned code is not -1.; sched_setparam_26-1 — exit 134: *** stack smashing detected ***: terminated; sched_setparam_27-1 — FAIL: The returned code is not -1.; sched_setparam_5-1 — exit 134: *** stack smashing detected ***: terminated
+- **sched_setscheduler**: sched_setscheduler_17-1 — exit 134: *** stack smashing detected ***: terminated; sched_setscheduler_17-5 — exit 134: *** stack smashing detected ***: terminated; sched_setscheduler_17-6 — exit 134: *** stack smashing detected ***: terminated; sched_setscheduler_17-7 — exit 134: *** stack smashing detected ***: terminated; sched_setscheduler_19-1 — FAIL:   The returned code is not -1.; sched_setscheduler_19-5 — UNRESOLVED: No error occurs, could -27367 be a valid value for the scheduling policy ???; sched_setscheduler_20-1 — FAIL: errno is not EPERM: Success; sched_setscheduler_21-1 — FAIL: The returned code is not -1.
+- **sem_close**: sem_close_3-2 — FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/sem_close/3-2.c FAILED: The semaphore count has changed after sem_close
+- **sem_open**: sem_open_3-1 — UNRESOLVED: unexpected error: sem_open 3-1: sem_open: No such file or directory
+- **shm_open**: shm_open_1-1 (hang/timeout) — timeout: ; shm_open_11-1 (hang/timeout) — timeout: ; shm_open_13-1 (hang/timeout) — timeout: ; shm_open_14-2 (hang/timeout) — timeout: ; shm_open_15-1 (hang/timeout) — skipped: hangs tabcomputer; shm_open_23-1 (hang/timeout) — timeout: ; shm_open_28-1 — exit 139: ; shm_open_28-3 — exit 139: ; shm_open_32-1 — FAIL: shm_open success.; shm_open_34-1 — FAIL: shm_open success.; shm_open_5-1 — FAIL: Test FAILED
+- **sigaction**: sigaction_10-1 (hang/timeout) — timeout: ; sigaction_12-16 (hang/timeout) — timeout: ; sigaction_17-15 (hang/timeout) — skipped: hangs tabcomputer; sigaction_21-1 — FAIL: Test FAILED; sigaction_29-1 — exit 160: 
+- **sigaltstack**: sigaltstack_11-1 — FAIL: Test FAILED: Expected return value of -1.; sigaltstack_2-1 — FAIL: Test FAILED: ss_sp of the handler's stack changed even though SS_DISABLE was set
+- **sigprocmask**: sigprocmask_10-1 — FAIL: FAIL: SIGKILL was added to the signal mask
+- **sigqueue**: sigqueue_1-1 — FAIL: Test FAILED; sigqueue_12-1 — FAIL: sigqueue() did not return -1; sigqueue_3-1 — FAIL: Test FAILED: sigqueue() succeeded even though this program's user id did not match the recieving process's user id; sigqueue_4-1 — exit 130: ; sigqueue_5-1 — exit 130: ; sigqueue_6-1 — exit 130: ; sigqueue_7-1 — exit 160: ; sigqueue_8-1 — exit 130: 
+- **sigtimedwait**: sigtimedwait_1-1 — FAIL: time_elapsed: 0.000470; sigtimedwait_4-1 — FAIL: : Function not implemented; sigtimedwait_6-1 — FAIL: Test FAILED: sigtimedwait() did set errno to EAGAIN
+- **sigwait**: sigwait_1-1 — FAIL: Error in sigwait(); sigwait_2-1 — FAIL: Error in sigwait; sigwait_3-1 — UNRESOLVED: Error in sigwait; sigwait_4-1 — UNRESOLVED: Error in sigwait(); sigwait_6-1 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/sigwait/6-1.c unresolved: got 38 (Function not implemented) on line 99 (failed to w; sigwait_6-2 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/sigwait/6-2.c unresolved: got 38 (Function not implemented) on line 99 (failed to w; sigwait_7-1 — UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/sigwait/7-1.c unresolved: got 38 (Function not implemented) on line 153 (Failed to ; sigwait_8-1 — FAIL: Test FAILED
+- **sigwaitinfo**: sigwaitinfo_1-1 — UNRESOLVED: : Function not implemented; sigwaitinfo_2-1 — FAIL: Test FAILED: sigwaitinfo() did not return the lowest of the multiple pending signals between SIGRTMIN and SIGRTMAX; sigwaitinfo_3-1 — FAIL: Test FAILED; sigwaitinfo_5-1 — UNRESOLVED: : Function not implemented; sigwaitinfo_6-1 — UNRESOLVED: : Function not implemented; sigwaitinfo_7-1 — UNRESOLVED: : Function not implemented; sigwaitinfo_8-1 — UNRESOLVED: : Function not implemented; sigwaitinfo_9-1 — FAIL: : Function not implemented
+- **speculative**: speculative_12-2 — UNRESOLVED: : Function not implemented; speculative_12-3 — UNRESOLVED: : Function not implemented; speculative_18-2 — UNRESOLVED: Test UNRESOLVED; speculative_2-1 — UNRESOLVED: : Function not implemented; speculative_26-1 — FAIL: Test FAILED; speculative_5-1 — FAIL: Test FAILED; speculative_5-2 — UNRESOLVED: : Function not implemented; speculative_6-2 — UNRESOLVED: : Function not implemented; speculative_6-3 — UNRESOLVED: : Function not implemented; speculative_7-2 — FAIL: Test FAILED, error is Function not implemented
+- **timer_create**: timer_create_1-1 — FAIL: : Function not implemented; timer_create_10-1 — UNRESOLVED: timer_create did not return success: Function not implemented; timer_create_11-1 — UNRESOLVED: timer_create did not return success: Function not implemented; timer_create_16-1 — FAIL: Test FAILED; timer_create_3-1 — FAIL: : Function not implemented; timer_create_7-1 — UNRESOLVED: : Function not implemented; timer_create_8-1 — UNRESOLVED: : Function not implemented; timer_create_9-1 — UNRESOLVED: : Function not implemented
+- **timer_delete**: timer_delete_1-1 — UNRESOLVED: : Function not implemented; timer_delete_1-2 — UNRESOLVED: : Function not implemented
+- **timer_getoverrun**: timer_getoverrun_1-1 — UNRESOLVED: : Function not implemented; timer_getoverrun_2-1 — UNRESOLVED: : Function not implemented; timer_getoverrun_2-2 — UNRESOLVED: : Function not implemented; timer_getoverrun_2-3 — UNRESOLVED: : Function not implemented
+- **timer_gettime**: timer_gettime_1-1 — UNRESOLVED: : Function not implemented; timer_gettime_1-2 — UNRESOLVED: : Function not implemented; timer_gettime_1-3 — UNRESOLVED: timer_create(): Function not implemented; timer_gettime_1-4 — UNRESOLVED: : Function not implemented; timer_gettime_2-1 — UNRESOLVED: : Function not implemented; timer_gettime_2-2 — UNRESOLVED: : Function not implemented; timer_gettime_3-1 — UNRESOLVED: : Function not implemented
+- **timer_settime**: timer_settime_1-1 — UNRESOLVED: : Function not implemented; timer_settime_13-1 — UNRESOLVED: : Function not implemented; timer_settime_3-1 — UNRESOLVED: : Function not implemented; timer_settime_3-2 — UNRESOLVED: : Function not implemented; timer_settime_3-3 — UNRESOLVED: : Function not implemented; timer_settime_5-1 — UNRESOLVED: : Function not implemented; timer_settime_5-2 — UNRESOLVED: : Function not implemented; timer_settime_6-1 — UNRESOLVED: : Function not implemented; timer_settime_8-1 — UNRESOLVED: : Function not implemented; timer_settime_8-2 — UNRESOLVED: : Function not implemented; timer_settime_8-3 — UNRESOLVED: : Function not implemented; timer_settime_8-4 — UNRESOLVED: : Function not implemented; timer_settime_9-1 — UNRESOLVED: : Function not implemented; timer_settime_9-2 — UNRESOLVED: : Function not implemented
 
 </details>
