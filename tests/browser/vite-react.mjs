@@ -82,6 +82,16 @@ async function preview(page) {
   throw new Error(`no preview of :${PORT}`);
 }
 
+/** A heap snapshot of the page (where the memory goes): HEAPSNAP (dev up), HEAPSNAP_AFTER_BUILD */
+async function heapSnapshot(page, file) {
+  const cdp = await page.context().newCDPSession(page);
+  const chunks = [];
+  cdp.on('HeapProfiler.addHeapSnapshotChunk', (e) => chunks.push(e.chunk));
+  await cdp.send('HeapProfiler.collectGarbage');
+  await cdp.send('HeapProfiler.takeHeapSnapshot', { reportProgress: false });
+  (await import('node:fs')).writeFileSync(file, chunks.join(''));
+}
+
 /** With MEM=1: resident memory of the browser's processes (Linux), by process type */
 async function rss(when) {
   if (!process.env.MEM) return;
@@ -93,15 +103,22 @@ async function rss(when) {
     const type = /--type=(\S+)/.exec(m[3])?.[1] ?? 'browser';
     by[type] = (by[type] ?? 0) + Number(m[1]) / 1024;
   }
-  console.log(`  RSS, ${when}:`, Object.entries(by).map(([k, v]) => `${k} ${Math.round(v)} MB`).join(', '));
+  const page = globalThis.__page;
+  let workers = '';
+  if (page) {
+    const ws = page.workers();
+    workers = `; ${ws.length} workers`;
+  }
+  console.log(`  RSS, ${when}:`, Object.entries(by).map(([k, v]) => `${k} ${Math.round(v)} MB`).join(', ') + workers);
 }
 
 const proxy = process.env.HTTPS_PROXY ? process.env.HTTPS_PROXY.replace(/^\w+:\/\//, '').replace(/\/$/, '') : '';
 const browser = await chromium.launch({ executablePath: exe, args: ['--no-sandbox', '--enable-precise-memory-info', ...(proxy ? [`--proxy-server=${proxy}`] : [])] });
 const context = await browser.newContext({ viewport: { width: 1400, height: 900 }, ignoreHTTPSErrors: !!proxy });
 const page = await context.newPage();
+globalThis.__page = page;
 const errors = [];
-page.on('pageerror', (e) => errors.push(e.message));
+page.on('pageerror', (e) => errors.push(e.message + (process.env.VERBOSE ? ' @ ' + (e.stack || '').split('\n').slice(1, 6).join(' | ') : '')));
 const consoleErrors = [];
 const responses = [];
 page.on('response', (r) => { if (!/localhost:5299\/(assets|$)/.test(r.url())) responses.push(`${r.status()} ${r.headers()['content-type'] ?? ''} ${r.url().slice(0, 150)}`); });
@@ -140,14 +157,7 @@ try {
   await waitBuffer(page, ASTRO ? /Local\s+http:\/\/localhost:\d+/ : /ready in \d+ ms|Local:\s+http/, from, 'dev server ready');
   await record(page, 'npm run dev → ready', t0);
   await rss('dev up');
-  if (process.env.HEAPSNAP) {
-    // A heap snapshot with the dev server up (where the memory goes)
-    const cdp = await page.context().newCDPSession(page);
-    const chunks = [];
-    cdp.on('HeapProfiler.addHeapSnapshotChunk', (e) => chunks.push(e.chunk));
-    await cdp.send('HeapProfiler.takeHeapSnapshot', { reportProgress: false });
-    (await import('node:fs')).writeFileSync(process.env.HEAPSNAP, chunks.join(''));
-  }
+  if (process.env.HEAPSNAP) await heapSnapshot(page, process.env.HEAPSNAP);
 
   t0 = Date.now();
   const opened = await side(page, `serve open ${PORT}`);
@@ -181,6 +191,17 @@ try {
   if (built.code !== 0 || (ASTRO ? !/<h1>Edited live<\/h1>/.test(built.out) : !/\.css\b/.test(built.out) || !/\.js\b/.test(built.out))) throw new Error(`npm run build: ${built.out.slice(-1500)}`);
   await record(page, ASTRO ? 'npm run build (astro build)' : 'npm run build (vite build)', t0);
   await rss('after build');
+  if (process.env.MEM) {
+    await page.waitForTimeout(20_000);
+    await rss('20 s after the build');
+    // The dev server stopped: what it loaded is let go once nothing uses it (30 s)
+    await page.evaluate(() => window.__tabcomputer.terminal.term.focus());
+    await page.keyboard.press('Control+C');
+    await page.waitForTimeout(40_000);
+    await rss('40 s after stopping the dev server');
+    if (process.env.HEAPSNAP_END) await heapSnapshot(page, process.env.HEAPSNAP_END);
+  }
+  if (process.env.HEAPSNAP_AFTER_BUILD) await heapSnapshot(page, process.env.HEAPSNAP_AFTER_BUILD);
   if (errors.length) throw new Error(`page errors: ${errors.join('; ')}`);
 } catch (e) {
   failed = true;
