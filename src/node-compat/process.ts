@@ -357,7 +357,7 @@ function createStderr(ctx: CommandContext, stderrBuf: string[], _st: SharedState
 function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Record<string, Function[]>, pendingPromises: Promise<any>[]): any {
   const stdinEvents: Record<string, Function[]> = {};
   // Whether stdin is the terminal (a kernel guest knows it apart from stdout's: `echo x | node` on a terminal)
-  const stdinTTY: boolean = (ctx as any).stdinIsTTY ?? !!ctx.terminal;
+  const stdinTTY: boolean = ctx.stdinIsTTY ?? !!ctx.terminal;
   // A live stdin (ctx.readStdin) is read only once the program listens for it;
   // until then the program may finish without it (williamsharkey/tabcomputer#2)
   let loaded: Promise<void> | null = ctx.readStdin ? null : Promise.resolve();
@@ -373,25 +373,30 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
   let stdinEncoding: string | null = null;
   let stdinDataTaken = false; // piped input already went to 'data' listeners
   const stdinReadBuffer: string[] = [];
+  /** Deliver piped input (once): 'data', 'readable', then 'end' and 'close' */
+  const flow = () => {
+    if (stdinTTY || stdinEnded) return;
+    stdinEnded = true;
+    void loadStdin().then(() => {
+      if (ctx.stdin) {
+        stdinReadBuffer.push(ctx.stdin);
+        if (stdinEvents['data']?.length) stdinDataTaken = true;
+        (stdinEvents['data'] || []).forEach(f => f(ctx.stdin));
+        (stdinEvents['readable'] || []).forEach(f => f());
+      }
+      (stdinEvents['end'] || []).forEach(f => f());
+      (stdinEvents['close'] || []).forEach(f => f());
+    });
+  };
   const stdinObj: any = {
     isTTY: stdinTTY,
     fd: 0,
     on: (event: string, fn: Function) => {
       (stdinEvents[event] ??= []).push(fn);
-      // Piped input flows once something listens: 'end', or 'data'/'readable' as in Node (readline)
-      if (!stdinTTY && (event === 'end' || event === 'data' || event === 'readable') && !stdinEnded) {
-        stdinEnded = true;
-        void loadStdin().then(() => {
-          if (ctx.stdin) {
-            stdinReadBuffer.push(ctx.stdin);
-            if (stdinEvents['data']?.length) stdinDataTaken = true;
-            (stdinEvents['data'] || []).forEach(f => f(ctx.stdin));
-            (stdinEvents['readable'] || []).forEach(f => f());
-          }
-          (stdinEvents['end'] || []).forEach(f => f());
-          (stdinEvents['close'] || []).forEach(f => f());
-        });
-      }
+      // Piped input flows (and then ends) once something reads it, as in
+      // node: a 'data' or 'readable' listener (readline), resume(). An 'end'
+      // listener alone reads nothing (vite exits on stdin 'end', its parent's exit)
+      if (event === 'data' || event === 'readable') flow();
       return stdinObj;
     },
     once: (event: string, fn: Function) => {
@@ -412,6 +417,7 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
     },
     emit: (event: string, ...args: any[]) => { (stdinEvents[event] || []).forEach(f => f(...args)); return false; },
     resume: () => {
+      flow();
       if (ctx.terminal && stdinTTY && !stdinEnded) {
         const forceExit = () => {
           if (!_st.exitCalled) { _st.exitCode = 130; _st.exitCalled = true; }
