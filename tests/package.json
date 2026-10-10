@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "test": "npx vitest run --config vitest.config.ts",
-    "test:shiro": "npx vitest run --config vitest.config.ts"
+    "test:shiro": "npx vitest run --config vitest.config.ts",
+    "test:worker": "npx vitest run --config vitest.worker.config.ts"
   },
   "dependencies": {
     "fake-indexeddb": "^6.0.0",

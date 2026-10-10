@@ -1,7 +1,7 @@
 /**
  * The FileSystem methods node-compat uses, over blocking syscalls: what
  * `ctx.fs` is when node runs as a kernel guest in a Worker
- * (TABCOMPUTER_NODE_WORKER=1). Every call goes to the kernel through the
+ * (by default; TABCOMPUTER_NODE_WORKER=0 opts out). Every call goes to the kernel through the
  * guest's channel and returns its answer at once, so the *Cached methods
  * (node's readFileSync, existsSync, readdirSync) are never "not cached".
  * The async ones are the same calls behind a resolved promise.
