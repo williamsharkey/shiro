@@ -110,9 +110,9 @@ Known failures, not fixed here:
 | App | What happens | Where it has to be fixed |
 |---|---|---|
 | blender | aborts (status 134): OpenCV reports "SSE/SSE2 not available" because CPUID leaf 1 reports family 0, and `/proc/cpuinfo` has no `flags` line | x86 engine (reported) |
-| libreoffice-writer | `soffice.bin` is run as a flat binary (by its `.bin` name) and crashes at once (status 139) | x86 engine (reported) |
+| libreoffice-writer | `soffice.bin` is run as a flat binary (by its `.bin` name) and crashes at once (status 139) | x86 engine (reported) Since then: Blink 0067 runs ELF files named `*.bin`, and LibreOffice headless (`soffice --headless --convert-to pdf`, libreoffice-writer-nogui) was verified working on 2026-10-10; the Writer window is not rescored. |
 | firefox-esr | MOZ_CRASH via `tgkill` about 20 s into startup, before a window; e10s and sandbox settings don't change it | not diagnosed |
-| audacity | "Audacity Startup Failure: Unable to create shared memory segment" — SysV IPC (`shmget`, `semget`) returns ENOSYS | x86 engine syscalls (reported) |
+| audacity | "Audacity Startup Failure: Unable to create shared memory segment" — SysV IPC (`shmget`, `semget`) returns ENOSYS | x86 engine syscalls (reported) Since then: System V shared memory and semaphores landed (kernel, Blink 0068/0069); not rescored. |
 | vlc | the Qt interface's window appears for a moment, then VLC exits with status 0 and logs nothing (even with `-vv`); most of its 350 plugins are left out (their libraries aren't in the set) | not diagnosed |
 | lximage-qt | exits at once: its single-instance check needs a D-Bus session bus | needs a session bus |
 

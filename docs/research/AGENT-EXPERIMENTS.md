@@ -101,7 +101,7 @@ quickly. An agent would not notice it is in a browser.
 This is [examples/fullstack-notes](../../examples/fullstack-notes/): a
 dependency-free Node HTTP server with a JSON API, a static client using
 `fetch()`, the same API in Python (`server.py`), and an API test (`test.js`).
-Details and screenshots are in [SANDBOXES.md](SANDBOXES.md#prototype-fullstack-notes).
+Details and screenshots are in [SANDBOXES.md](SANDBOXES.md#5-prototype-fullstack-notes).
 In short:
 
 - **Verified working:** `node server.js 3000 &`; `serve fetch 3000 /api/health`;
