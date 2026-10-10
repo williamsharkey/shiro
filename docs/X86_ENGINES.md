@@ -905,6 +905,12 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    (Open POSIX mlock_8-1, munlock_10-1, mlockall_13-1, mmap_21-1, 23-1,
    24-2). Numbered from 0500 so the two branches never renumber each
    other.
+0501. unix/conformance's: a thread's tkill/tgkill reaches its handler as
+   SI_TKILL from its own process (glibc's SIGCANCEL handler checks that),
+   and the signal frame is in Linux's rt_sigframe order (ret, uc, si), as
+   libgcc's fallback unwinder expects. pthread_cancel works.
+0502. unix/conformance's: a CPU clock id that names no process or thread
+   of ours is EINVAL.
 
    fork+exit+wait with 16 MiB of dirty heap went from 30 to 7.5 ms, and
    with 64 MiB from 104 to 12 ms (native: 3.1 ms). Test:
