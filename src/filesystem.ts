@@ -56,6 +56,20 @@ const DB_NAME = 'tabcomputer-fs';
 const DB_VERSION = 1;
 const STORE_NAME = 'files';
 
+/**
+ * Big files (FSNode.blob): the bytes are stored in BLOCK-sized records next
+ * to the nodes, keyed BLOCK_KEY + blob id + '/' + block index (8 hex
+ * digits), so a file being written goes to IndexedDB a block at a time and
+ * the kernel reads it a block at a time, never holding all of it. Keys
+ * starting with \u0001 sort before every path ('/') and are never files.
+ * BLOB_MAP_KEY holds which path owns which blob, so deleting or replacing a
+ * file (rm -r of its directory included) deletes its blocks.
+ */
+const BLOCK_KEY = '\u0001b/';
+const BLOB_MAP_KEY = '\u0001blobs';
+const isInternalKey = (k: string) => k.charCodeAt(0) === 1;
+const blockKey = (id: string, i: number) => BLOCK_KEY + id + '/' + i.toString(16).padStart(8, '0');
+
 export interface FSNode {
   path: string;
   type: 'file' | 'dir' | 'symlink';
@@ -76,6 +90,12 @@ export interface FSNode {
    * read fetches it through the registered lazy loader and stores it.
    */
   lazy?: LazyRef;
+  /**
+   * The bytes are in block records of this id (see BLOCK_KEY), not in
+   * `content`. In memory, `content` may still hold all of them (a file just
+   * written with writeFile, or read with readFile); in IndexedDB it is null.
+   */
+  blob?: string;
   /**
    * A special file: 'fifo' is a named pipe (mkfifo). It is stored like an
    * empty regular file; the kernel attaches opens of it to a pipe.
@@ -109,6 +129,11 @@ function pathIno(path: string): number {
  * one, 0.3 s as a range (in a large store, 38 s one by one after an npm install).
  */
 const RANGE = '\0range:';
+
+/** Bytes a queued record adds to IndexedDB (a blob node's are in its block records). */
+function storedBytes(node: FSNode | null | undefined): number {
+  return node && !node.blob ? node.content?.byteLength ?? 0 : 0;
+}
 
 /** A fresh random 52-bit inode number (unique enough; not a secret, so no crypto: one per created file) */
 function newIno(): number {
@@ -548,6 +573,7 @@ const scheduleMacrotask: (fn: () => void) => void = (() => {
 /** The node as IndexedDB should store it: a view into a larger buffer is
  *  copied out, since IndexedDB clones the whole ArrayBuffer behind it. */
 function storableNode(node: FSNode): FSNode {
+  if (node.blob) return node.content ? { ...node, content: null } : node;
   const c = node.content;
   if (c && (c.byteOffset !== 0 || c.byteLength !== c.buffer.byteLength)) return { ...node, content: c.slice() };
   return node;
@@ -657,6 +683,7 @@ export class FileSystem {
   async init(): Promise<void> {
     this.db = await this._openDb();
     this._installLifecycleFlush();
+    await this._loadBlobMap();
 
     // Ensure root directory exists
     const root = await this._get('/');
@@ -845,7 +872,7 @@ export class FileSystem {
 
   /** Queue a put (node) or delete (null) for the next flush. */
   private _queue(path: string, node: FSNode | null): void {
-    this._dirtyBytes += (node?.content?.byteLength ?? 0) - (this._dirty.get(path)?.content?.byteLength ?? 0);
+    this._dirtyBytes += storedBytes(node) - storedBytes(this._dirty.get(path));
     this._dirty.set(path, node);
     this._scheduleFlush();
   }
@@ -859,7 +886,7 @@ export class FileSystem {
     // Writes queued under it are superseded; later ones go after the range in the batch (Map order)
     for (const [p, n] of this._dirty) {
       if (p.startsWith(prefix) || (p.startsWith(RANGE) && p.slice(RANGE.length).startsWith(prefix))) {
-        this._dirtyBytes -= n?.content?.byteLength ?? 0;
+        this._dirtyBytes -= storedBytes(n);
         this._dirty.delete(p);
       }
     }
@@ -917,7 +944,7 @@ export class FileSystem {
             for (const [p, n] of this._dirty) { batch.delete(p); batch.set(p, n); }
             this._dirty = batch;
             this._dirtyBytes = 0;
-            for (const n of batch.values()) this._dirtyBytes += n?.content?.byteLength ?? 0;
+            for (const n of batch.values()) this._dirtyBytes += storedBytes(n);
             if (!this._full) console.error('[fs] browser storage is full; writes fail with ENOSPC until space is freed:', e);
             this._setFull(true);
             break;
@@ -1111,7 +1138,7 @@ export class FileSystem {
   }
 
   private _armContentSweep(): void {
-    const t = setTimeout(() => { this._contentTimer = null; this.sweepContent(); if (this._contentUse.size) this._armContentSweep(); },
+    const t = setTimeout(() => { this._contentTimer = null; this.sweepContent(); if (this._contentUse.size || this._blockCacheBytes) this._armContentSweep(); },
       FileSystem.CONTENT_IDLE_MS / 2);
     (t as { unref?: () => void }).unref?.();
     this._contentTimer = t;
@@ -1126,13 +1153,18 @@ export class FileSystem {
 
   /** Drop idle clean content (see above); `now` for tests. Returns the bytes dropped. */
   sweepContent(now = Date.now()): number {
+    let dropped = 0;
+    if (this._blockCacheBytes && now - this._blockCacheUsed >= FileSystem.CONTENT_IDLE_MS) {
+      dropped += this._blockCacheBytes;
+      this._blockCache.clear();
+      this._blockCacheBytes = 0;
+    }
     let total = 0;
     for (const [p] of this._contentUse) {
       const node = this.cache.get(p);
       if (!node?.content || node.content.byteLength < FileSystem.CONTENT_TRACK_MIN) this._contentUse.delete(p);
       else total += node.content.byteLength;
     }
-    let dropped = 0;
     for (const [p, at] of this._contentUse) {
       if (now - at < FileSystem.CONTENT_IDLE_MS) break; // the rest were used more recently
       const node = this.cache.get(p)!;
@@ -1148,6 +1180,198 @@ export class FileSystem {
       dropped += size;
     }
     return dropped;
+  }
+
+  // ── Big files (FSNode.blob) ────────────────────────────────────────────
+  // A file of BLOB_MIN bytes or more is stored as BLOCK-sized records (see
+  // BLOCK_KEY), so writing one doesn't need it all in one buffer: the
+  // kernel's open file sends the blocks it changed (writeBlocks) and reads
+  // the ones it needs (readBlock). A 40 MB write through the kernel peaked
+  // at five times its size with whole-file buffers.
+
+  static BLOB_MIN = 4 << 20;
+  static BLOCK = 1 << 20;
+  /** Recently read blocks kept in memory (a program run again doesn't re-read them from IndexedDB). */
+  static BLOCK_CACHE = 16 << 20;
+
+  /** path → blob id, and blob id → the path owning its blocks (stored as BLOB_MAP_KEY). */
+  private _blobs = new Map<string, string>();
+  private _blobOwner = new Map<string, string>();
+  private _blockCache = new Map<string, Uint8Array>();
+  private _blockCacheBytes = 0;
+  private _blockCacheUsed = 0;
+  private _blobSeq = 0;
+
+  /** A new blob id (unique within this store; not a secret). */
+  newBlobId(): string {
+    return Date.now().toString(36) + (this._blobSeq++).toString(36) + Math.floor(Math.random() * 0x100000000).toString(36);
+  }
+
+  private async _loadBlobMap(): Promise<void> {
+    const rec = await this._request('readonly', store => store.get(BLOB_MAP_KEY) as IDBRequest<{ blobs?: [string, string][] } | undefined>);
+    // Writes made before the load (none in practice: init runs first) win
+    for (const [p, id] of rec?.blobs ?? []) {
+      if (this._blobs.has(p) || this._blobOwner.has(id)) continue;
+      this._blobs.set(p, id);
+      this._blobOwner.set(id, p);
+    }
+  }
+
+  private _saveBlobMap(): void {
+    this._queue(BLOB_MAP_KEY, { path: BLOB_MAP_KEY, type: 'file', content: null, mode: 0, mtime: 0, ctime: 0, size: 0, blobs: [...this._blobs] } as FSNode);
+  }
+
+  /** Keep the blob map in step with a put (node) or delete (null) at `path`: a replaced or deleted file's blocks go. */
+  private _noteBlob(path: string, node: FSNode | null): void {
+    const old = this._blobs.get(path);
+    const id = node?.blob;
+    if (old === id && (!id || this._blobOwner.get(id) === path)) return;
+    if (old !== undefined && old !== id) {
+      this._blobs.delete(path);
+      // A rename put the blob at its new path first: then it isn't this path's to drop
+      if (this._blobOwner.get(old) === path) this._dropBlob(old);
+    }
+    if (id) {
+      this._blobs.set(path, id);
+      this._blobOwner.set(id, path);
+    }
+    this._saveBlobMap();
+  }
+
+  /** Blobs of files under directory `dir` (its contents being range-deleted). */
+  private _dropBlobsUnder(dir: string): void {
+    const prefix = dir + '/';
+    let changed = false;
+    for (const [p, id] of this._blobs) {
+      if (!p.startsWith(prefix)) continue;
+      this._blobs.delete(p);
+      if (this._blobOwner.get(id) === p) this._dropBlob(id);
+      changed = true;
+    }
+    if (changed) this._saveBlobMap();
+  }
+
+  private _dropBlob(id: string): void {
+    this._blobOwner.delete(id);
+    const prefix = BLOCK_KEY + id + '/';
+    for (const [k, b] of this._blockCache) {
+      if (k.startsWith(prefix)) { this._blockCache.delete(k); this._blockCacheBytes -= b.byteLength; }
+    }
+    this._queueRange(BLOCK_KEY + id);
+  }
+
+  private _queueBlock(key: string, bytes: Uint8Array | null): void {
+    const hit = this._blockCache.get(key);
+    if (hit) { this._blockCache.delete(key); this._blockCacheBytes -= hit.byteLength; }
+    this._queue(key, bytes && { path: key, type: 'file', content: bytes, mode: 0, mtime: 0, ctime: 0, size: bytes.length });
+  }
+
+  /** Queue `content` as blob `id`'s blocks (copies: IndexedDB clones a view's whole buffer). */
+  private _queueBlocks(id: string, content: Uint8Array): void {
+    const B = FileSystem.BLOCK;
+    for (let i = 0, off = 0; off < content.length; i++, off += B) this._queueBlock(blockKey(id, i), content.slice(off, off + B));
+  }
+
+  /**
+   * Block `i` of blob `id`: BLOCK bytes, fewer for the last, empty past the
+   * end. Don't modify it (it may be a view of the file's cached content).
+   * `keep` = false: don't add it to the block cache (a whole-file read).
+   */
+  async readBlock(id: string, i: number, keep = true): Promise<Uint8Array> {
+    const B = FileSystem.BLOCK;
+    const owner = this._blobOwner.get(id);
+    const node = owner === undefined ? undefined : this.cache.get(owner);
+    if (node?.blob === id && node.content) return node.content.subarray(Math.min(i * B, node.content.length), Math.min((i + 1) * B, node.content.length));
+    const key = blockKey(id, i);
+    for (const batch of [this._dirty, this._inflight]) {
+      if (batch?.has(key)) return batch.get(key)?.content ?? new Uint8Array(0);
+    }
+    const hit = this._blockCache.get(key);
+    if (hit) {
+      this._blockCache.delete(key);
+      this._blockCache.set(key, hit);
+      this._blockCacheUsed = Date.now();
+      return hit;
+    }
+    const rec = await this._request('readonly', store => store.get(key) as IDBRequest<FSNode | undefined>);
+    // Written while the read was pending: that is newer
+    if (this._dirty.has(key) || this._inflight?.has(key)) return this.readBlock(id, i, keep);
+    const bytes = rec?.content ?? new Uint8Array(0);
+    if (keep && this._blobOwner.has(id)) {
+      this._blockCache.set(key, bytes);
+      this._blockCacheBytes += bytes.byteLength;
+      this._blockCacheUsed = Date.now();
+      for (const [k, b] of this._blockCache) {
+        if (this._blockCacheBytes <= FileSystem.BLOCK_CACHE) break;
+        this._blockCache.delete(k);
+        this._blockCacheBytes -= b.byteLength;
+      }
+      if (!this._contentTimer) this._armContentSweep();
+    }
+    return bytes;
+  }
+
+  /** A blob node's bytes, read from its blocks (and kept in the cache like any file's content). */
+  private async _readBlob(node: FSNode): Promise<FSNode> {
+    const B = FileSystem.BLOCK;
+    const out = new Uint8Array(node.size);
+    for (let i = 0, off = 0; off < node.size; i++, off += B) {
+      const b = await this.readBlock(node.blob!, i, false);
+      out.set(b.subarray(0, Math.min(b.length, node.size - off)), off);
+    }
+    const filled = { ...node, content: out };
+    if (this.cache.get(node.path) === node) {
+      this.cache.set(node.path, filled);
+      if (out.byteLength >= FileSystem.CONTENT_TRACK_MIN) this._touch(node.path);
+    }
+    return filled;
+  }
+
+  /**
+   * Store the blocks of a big file at `path` that changed (the kernel writing
+   * back an open file): `blocks` are [index, bytes] (BLOCK bytes each, fewer
+   * for the last; handed over, don't modify them afterwards; null: zeros),
+   * `id` the blob they belong to (newBlobId for a file that wasn't one),
+   * `size` the file's size. Blocks of `id` not sent keep their stored bytes.
+   */
+  async writeBlocks(path: string, id: string, size: number, blocks: Iterable<[number, Uint8Array | null]>, options?: {
+    times?: { mtime: number; mtimeNs?: number; atime?: number; atimeNs?: number };
+  }): Promise<void> {
+    path = await this._canon(path, true);
+    const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
+    const parent = await this._get(parentPath);
+    if (!parent) throw fsError('ENOENT', `ENOENT: no such file or directory, open '${path}'`);
+    if (parent.type !== 'dir') throw fsError('ENOTDIR', `ENOTDIR: not a directory '${parentPath}'`);
+    const existing = await this._get(path);
+    if (existing?.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, write '${path}'`);
+    if (this._full) throw this._enospc(path);
+    const B = FileSystem.BLOCK;
+    for (const [i, b] of blocks) this._queueBlock(blockKey(id, i), b);
+    // Blocks past the new end, from a longer version of the same blob
+    if (existing?.blob === id) {
+      for (let i = Math.ceil(size / B); i < Math.ceil(existing.size / B); i++) this._queueBlock(blockKey(id, i), null);
+    }
+    const now = Date.now();
+    const times = options?.times;
+    this._putNow({
+      path, type: 'file', content: null, blob: id,
+      ...(existing ? { ino: existing.ino } : {}),
+      mode: existing?.mode ?? 0o644,
+      mtime: times?.mtime ?? now,
+      ctime: existing?.ctime ?? now,
+      size,
+      ...(times ? { mtimeNs: times.mtimeNs || undefined, atime: times.atime, atimeNs: times.atimeNs || undefined } : {}),
+    });
+    this._emitChange('write', path);
+  }
+
+  /** BLOB_MIN and BLOCK, for the kernel's open files. */
+  get blobMin(): number { return FileSystem.BLOB_MIN; }
+  get blockSize(): number { return FileSystem.BLOCK; }
+
+  /** The blob id of the node cached at `path`, if it is a big file (see FSNode.blob). */
+  blobOf(path: string): string | undefined {
+    return this.cache.get(path)?.blob;
   }
 
   private _getCached(path: string): FSNode | null | undefined {
@@ -1269,7 +1493,8 @@ export class FileSystem {
     const prev = this.cache.get(node.path);
     // A new node gets its inode number (writes and renames carry the old one)
     if (node.ino === undefined && prev === undefined) node.ino = newIno();
-    const grow = (node.content?.byteLength ?? 0) - (prev?.content?.byteLength ?? 0);
+    const bytes = (n: FSNode | undefined) => n?.blob ? n.size : n?.content?.byteLength ?? 0;
+    const grow = bytes(node) - bytes(prev);
     // A new node or more bytes needs space; a rename (move) moves what is stored
     if (this._full && !move && (prev === undefined || grow > 0)) throw this._enospc(node.path);
     if (grow > 0 && this._bigWrite && (this._bytesWritten += grow) >= this._bigWrite.bytes) {
@@ -1282,6 +1507,7 @@ export class FileSystem {
     if (node.content && node.content.byteLength >= FileSystem.CONTENT_TRACK_MIN) this._touch(node.path);
     this._noteKey(node.path, true);
     this._queue(node.path, node);
+    if (node.blob || this._blobs.has(node.path)) this._noteBlob(node.path, node);
   }
 
   private _deleteNow(path: string): void {
@@ -1290,6 +1516,7 @@ export class FileSystem {
     this.cache.set(path, undefined);
     this._noteKey(path, false);
     this._queue(path, null);
+    if (this._blobs.has(path)) this._noteBlob(path, null);
   }
 
   /** Every key in the store (plus queued writes), once loaded; kept up to date
@@ -1372,8 +1599,9 @@ export class FileSystem {
         this._keysLoading = this._request('readonly', store => store.getAllKeys())
           .then((keys) => {
             const set = new Set(keys as string[]);
+            for (const k of set) if (isInternalKey(k)) set.delete(k);
             if (ranges.length) for (const k of set) if (ranges.some((d) => k.startsWith(d + '/'))) set.delete(k);
-            for (const [p, n] of queued) { if (n) set.add(p); else set.delete(p); }
+            for (const [p, n] of queued) { if (isInternalKey(p) || p.startsWith(RANGE)) continue; if (n) set.add(p); else set.delete(p); }
             for (const [p, present] of journal) { if (present) set.add(p); else set.delete(p); }
             this._allKeys = set;
             this._allKeysArr = null;
@@ -1452,14 +1680,30 @@ export class FileSystem {
     // Writes not yet in IndexedDB live only here: keep them visible
     for (const batch of [this._inflight, this._dirty]) {
       if (!batch) continue;
-      for (const [path, node] of batch) this.cache.set(path, node ?? undefined);
+      for (const [path, node] of batch) if (!isInternalKey(path) && !path.startsWith(RANGE)) this.cache.set(path, node ?? undefined);
     }
   }
 
   /** Export all filesystem nodes from IndexedDB */
   async exportAll(): Promise<FSNode[]> {
     await this.sync().catch(() => {});
-    return this._request('readonly', store => store.getAll() as IDBRequest<FSNode[]>);
+    const all = await this._request('readonly', store => store.getAll() as IDBRequest<FSNode[]>);
+    // Big files with their bytes in `content`, as importAll takes them (no block records)
+    const blocks = new Map<string, Uint8Array>();
+    for (const n of all) if (n.path.startsWith(BLOCK_KEY)) blocks.set(n.path, n.content ?? new Uint8Array(0));
+    const out: FSNode[] = [];
+    for (const n of all) {
+      if (isInternalKey(n.path)) continue;
+      if (!n.blob) { out.push(n); continue; }
+      const content = new Uint8Array(n.size);
+      for (let i = 0, off = 0; off < n.size; i++, off += FileSystem.BLOCK) {
+        const b = blocks.get(blockKey(n.blob, i));
+        if (b) content.set(b.subarray(0, Math.min(b.length, n.size - off)), off);
+      }
+      const { blob: _blob, ...plain } = n;
+      out.push({ ...plain, content });
+    }
+    return out;
   }
 
   /** Import filesystem nodes, replacing all existing data */
@@ -1470,13 +1714,18 @@ export class FileSystem {
     const store = tx.objectStore(STORE_NAME);
     store.clear();
     for (const node of nodes) {
-      store.put(node);
+      if (isInternalKey(node.path)) continue;
+      if (node.blob) { const { blob: _blob, ...plain } = node; store.put(plain); } else store.put(node);
     }
     await new Promise<void>((resolve, reject) => {
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
     this.clearCache();
+    this._blobs.clear();
+    this._blobOwner.clear();
+    this._blockCache.clear();
+    this._blockCacheBytes = 0;
   }
 
   resolvePath(path: string, cwd: string): string {
@@ -1559,6 +1808,7 @@ export class FileSystem {
       return encoding === 'utf8' ? decodeBytes(bytes) : bytes;
     }
     if (node.lazy) node = await this._materialize(node);
+    if (node.blob && !node.content) node = await this._readBlob(node);
     const data = node.content || new Uint8Array(0);
     // Byte-exact: invalid UTF-8 survives a round trip through the string (src/utils/byte-text.ts)
     if (encoding === 'utf8') return decodeBytes(data);
@@ -1589,11 +1839,18 @@ export class FileSystem {
     // Prevent overwriting a directory with a file
     if (existing?.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, write '${path}'`);
     const now = Date.now();
+    let blob: string | undefined;
+    if (content.length >= FileSystem.BLOB_MIN) {
+      if (this._full) throw this._enospc(path);
+      blob = this.newBlobId();
+      this._queueBlocks(blob, content);
+    }
 
     await this._put({
       path,
       type: 'file',
       content,
+      ...(blob ? { blob } : {}),
       ...(existing ? { ino: existing.ino } : {}),
       mode: options?.mode ?? existing?.mode ?? 0o644,
       mtime: options?.times?.mtime ?? now,
@@ -1822,9 +2079,10 @@ export class FileSystem {
    */
   writeCachedSync(path: string, content: Uint8Array, times: { mtime: number; mtimeNs?: number; atime?: number; atimeNs?: number }): boolean {
     const node = this.cache.get(path);
-    if (!node || node.type !== 'file' || node.lazy || node.special || this._full) return false;
+    if (!node || node.type !== 'file' || node.lazy || node.special || this._full || content.length >= FileSystem.BLOB_MIN) return false;
+    const { blob: _blob, ...plain } = node;
     this._putNow({
-      ...node, content, size: content.length, mtime: times.mtime,
+      ...plain, content, size: content.length, mtime: times.mtime,
       mtimeNs: times.mtimeNs || undefined, atime: times.atime, atimeNs: times.atimeNs || undefined,
     });
     this._emitChange('write', path);
@@ -1888,6 +2146,7 @@ export class FileSystem {
       }
       this._canonDirs.clear();
       this._queueRange(path);
+      this._dropBlobsUnder(path);
       this._deleteNow(path);
       this._emitChange('delete', path);
     } else if (node.type === 'dir' && options?.recursive) {
