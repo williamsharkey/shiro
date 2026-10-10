@@ -325,9 +325,13 @@ Shell and platform fixes these needed (all with tests in the same file):
     fs.write and panicked esbuild).
   - Requests to in-tab servers carry `Host: localhost:PORT` when the browser
     gave none (vite 6+ refuses an unknown host).
-  Not yet: node output into a pipe or file comes when the process exits
-  (only the terminal streams), so `npm run dev > log &` shows nothing while
-  it runs.
+  - Redirected output of `node`, `npm` and `npx` goes into its file as it is
+    written: `npm run dev > log 2>&1 &` shows the server's startup lines
+    while it runs. In the page, a script that only serves returns once idle
+    and its server stays up; what its request handlers print after that is
+    lost.
+  Not yet: node output into a pipe, with a terminal attached, comes when the
+  process exits.
 - Next.js 16 (`create-next-app`, App Router, webpack): `next build` and
   `next start` work in worker mode (`TABCOMPUTER_NODE_WORKER=1`).
   - The build takes 54 s: compile 14 s, then page data and the static pages
@@ -342,8 +346,6 @@ Shell and platform fixes these needed (all with tests in the same file):
   - next.config needs `experimental: { webpackBuildWorker: false,
     workerThreads: true, cpus: 1 }`: jest-worker's child processes would
     need fork IPC (`child.send`) in a guest.
-  - Node output into a file comes when the process exits, so `next start >
-    log &` shows its log only then.
 
   What it took, all general:
   - AsyncLocalStorage carries its store across `await`, timers, `then`,
