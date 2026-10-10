@@ -200,6 +200,8 @@ const rawepollBin = join(out, 'rawepoll');
 const haveRawepoll = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', rawepollBin, 'rawepoll.c']);
 const bigfileBin = join(out, 'bigfile');
 const haveBigfile = tryBuild('gcc', ['-static', '-O1', '-o', bigfileBin, 'bigfile.c']);
+const bigwriteBin = join(out, 'bigwrite');
+const haveBigwrite = tryBuild('gcc', ['-static', '-O1', '-o', bigwriteBin, 'bigwrite.c']);
 const getgroupsBin = join(out, 'getgroups');
 const haveGetgroups = tryBuild('gcc', ['-static', '-O1', '-o', getgroupsBin, 'getgroups.c']);
 const fionbioBin = join(out, 'fionbio');
@@ -1072,6 +1074,13 @@ describe('Blink engine: CPU and syscall fixes', () => {
     expect(new TextDecoder().decode(after.subarray(size - 4))).toBe('WXYZ');
     expect(Buffer.compare(after.subarray(0, size - 4), big.subarray(0, size - 4))).toBe(0);
     expect((await fs.readFile('/home/user/work/trunc.bin') as Uint8Array).length).toBe(1);
+  }, 60_000);
+
+  // host.mjs's chunk is a pool channel's data area exactly (not the page's word after it)
+  it.skipIf(!haveBigwrite)('a 10 MiB write goes whole to a file, linked or unlinked; a 3 MiB pwrite too (Open POSIX aio_suspend_1-1)', async () => {
+    const { shell } = await setup(readFileSync(bigwriteBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('unlinked 10485760\nwrite 10485760\npwrite 3145728\nbyte 1\nsize 10485760\n');
   }, 60_000);
 
   // LTP futex_wake02, futex_wait_bitset01
