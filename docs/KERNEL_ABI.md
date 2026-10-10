@@ -484,7 +484,7 @@ offset 0. Lengths are bytes, without a trailing NUL.
 | unlinkat | dirfd, pathLen, flags (AT_REMOVEDIR) | path | 0 |
 | renameat / renameat2 | olddirfd, oldLen, newdirfd, newLen (, flags) | old, new | 0 |
 | symlink / symlinkat | targetLen, (dirfd,) linkLen | target, linkpath | 0 |
-| link / linkat | (olddirfd,) oldLen, (newdirfd,) newLen (, flags) | old, new | -EPERM (no hard links; -ENOENT/-EEXIST checked first) |
+| link / linkat | (olddirfd,) oldLen, (newdirfd,) newLen (, flags) | old, new | 0: a real hard link (`FileSystem.link`; AT_SYMLINK_FOLLOW follows the source); -EPERM for a directory |
 | readlinkat | dirfd, pathLen, bufsiz | path → target | length |
 | utimensat | dirfd, pathLen (0 = the fd), flags, hasTimes | path, then 2 struct timespec (32 B) at offset pathLen | 0 |
 | chmod / fchmod / fchmodat | pathLen or fd or (dirfd, pathLen), mode | path | 0 |
