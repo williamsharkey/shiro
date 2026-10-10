@@ -17,6 +17,7 @@ export interface HttpDeps {
   getBuiltinModule: (name: string) => any;
   /** Counts a promise as the script's async activity (keeps it from idling out) */
   trackAsync?: <T>(p: Promise<T>) => Promise<T>;
+  atExit?: (fn: () => void) => void;
 }
 
 export function createHttpModule(deps: HttpDeps): any {
@@ -35,6 +36,7 @@ function _createHttpOrHttpsModule(deps: HttpDeps, isHttps: boolean): any {
     host: iframeServer,
     getBuiltinModule,
     isHttps,
+    atExit: deps.atExit,
     // Nothing in the program's own output: real node prints nothing when a server listens
     log: () => {},
     // A split-view preview pane for a server that stays up (not one a script starts, uses and closes)

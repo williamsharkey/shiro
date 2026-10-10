@@ -4,7 +4,7 @@ Debian 12 GUI apps installed from the streaming manifest (`public/gui/apps.json`
 
 Columns: **installs**; **window**: a desktop window appears, with the time from launch (installed) to it; **renders**: its largest window isn't one flat colour after 8 s; **input**: focusing it and typing `abc 123` changes its pixels (or, if not, clicking into its middle and typing does, or Ctrl+O opens a window or changes them); **text**: the DOM text layer has spans for it (GTK via libshiro-text-hook.so, core X text; Qt and others draw pixels only).
 
-**29/29 install, 27/29 open a window, 26/29 render, 20/29 react to input, 20/29 have DOM text.**
+**29/29 install, 28/29 open a window, 27/29 render, 20/29 react to input, 20/29 have DOM text.**
 
 
 ### Editors & viewers
@@ -26,7 +26,7 @@ Columns: **installs**; **window**: a desktop window appears, with the time from 
 | gimp | gtk2 | 66.1 MB | 8.9 s | ✓ | 34 s | ✓ | ✓ | ✓ (2) |  |
 | inkscape | gtk3 | 83 MB | 14 s | ✓ | 54 s | ✓ | ✓ | ✓ (18) |  |
 | krita | qt5 | 118.3 MB | 8.4 s | ✓ | 14 s | ✓ | ✗ | ✓ (1) | input: its start screen has nothing to type into (passed in one run of three) |
-| blender | gl | 231.5 MB | 18 s | ✗ | – | – | – | – | exited (status 134) before a window; past OpenCV's CPU check (engine fix); now glibc aborts on PI-mutex futex ops (EINVAL in the x86 engine, reported) |
+| blender | gl | 231.5 MB | 22 s | ✗ | – | – | – | – | exited (status 256) before a window; past the CPU check and PI futexes (engine fixes); needs OpenGL 3.3 over GLX, which Xshiro doesn't provide |
 
 ### Desktop
 
@@ -43,13 +43,13 @@ Columns: **installs**; **window**: a desktop window appears, with the time from 
 |---|---|---:|---:|:-:|---:|:-:|:-:|:-:|---|
 | gnumeric | gtk3 | 64.3 MB | 7.8 s | ✓ | 27 s | ✓ | ✓ | ✓ (19) |  |
 | abiword | gtk3 | 81.2 MB | 9.0 s | ✓ | 28 s | ✓ | ✓ | ✓ (22) |  |
-| libreoffice-writer | gtk3 | 155.1 MB | 17 s | ✗ | – | – | – | – | no window in 420 s; loads now (ELF .bin, libcups); an uncaught UNO RuntimeException at startup, then it hangs (not diagnosed) |
+| libreoffice-writer | gtk3 | 155.1 MB | 20 s | ✓ | 44 s | ✗ | ✗ | ✗ | runs (via oosplash): its first window is the splash, the start center follows (~2 min) |
 
 ### Internet & media
 
 | App | Toolkit | Download | Install | Window | First window | Renders | Input | Text | Notes |
 |---|---|---:|---:|:-:|---:|:-:|:-:|:-:|---|
-| firefox-esr | gtk3 | 125.1 MB | 30 s | ✓ | 257 s | ✗ | – | ✗ | past the getaddrinfo abort (fixed): a blank window after minutes, gone seconds later; content processes crash (SIGSEGV) |
+| firefox-esr | gtk3 | 125.1 MB | 22 s | ✓ | 274 s | ✓ | ✗ | ✗ | runs (~4.5 min to its window): content processes get the font list by message (an overlay pref) until shared mappings work across processes; its text isn't reported |
 | netsurf | gtk3 | 56.6 MB | 7.2 s | ✓ | 13 s | ✓ | ✓ | ✓ (42) |  |
 | dillo | fltk | 11.4 MB | 1.4 s | ✓ | 5.1 s | ✓ | ✓ | ✗ | FLTK draws its text as pixels |
 | vlc | qt5 | 39.4 MB | 5.1 s | ✓ | 13 s | ✓ | ✓ | ✓ (11) |  |
@@ -153,21 +153,59 @@ Second round (after the first scoreboard; the coordinator's list):
 Where the startup time goes (`LD_PRELOAD` timing of every file open; l3afpad,
 window at 8.2 s after the fixes, 9.9 s before): ~1.0 s of dynamic linking
 before any app code; GTK and GDK setup to ~3 s; icon themes 0.5 s (2.0 s
-before the hicolor cache); fontconfig rescans the fonts and writes its caches
-(~1.9 s, first launch in a profile only: the caches persist); then the first
-window. In Inkscape most of its time is its own code: ~9 s right after
-ImageMagick's init, ~13 s before reading its recent files, ~8 s rendering
-icons. That's guest computation, so the x86 engine's speed, not files.
-Shipping fontconfig's caches would need the font directories' mtimes pinned
-(fontconfig checks them) and is left for later.
+before the hicolor cache); then ~2 s with no file activity before fontconfig
+writes its caches, most of it `FcInit()` itself: 1.1–1.2 s at every start
+(parsing its configuration, timed alone in Blink), 1.6 s when it has to scan
+the fonts first. In Inkscape most of its time is its own code: ~9 s right
+after ImageMagick's init, ~13 s before reading its recent files, ~8 s
+rendering icons. That's guest computation, so the x86 engine's speed, not
+files.
+
+Third round (the coordinator's next list):
+
+- **Firefox's content processes** died on `MOZ_RELEASE_ASSERT(mFontFamilies.Count()
+  > 0)`: the crash address (libxul+0x15f708b, from the engine's crash report
+  and `LD_DEBUG=files` load bases) is a MOZ_CRASH whose reason string sits
+  in libxul's rodata. The parent shares its font list through shared memory,
+  and in the x86 engine a second process's fresh `mmap` of a shared file
+  doesn't see the first one's writes (and `memfd_create` is ENOSYS): the
+  content processes found no fonts. Reported with a repro; meanwhile
+  `/etc/firefox-esr/shared-memory.js` (an overlay) sets
+  `gfx.e10s.font-list.shared` to false and the content processes live. The
+  parent still goes down a few minutes in (a fault in a worker thread that a
+  handler re-raises with `tgkill`); on the next engine build (Blink
+  0103–0110, signals carrying their siginfo among them) that fault is gone
+  and Firefox runs: its window after ~4.5 min, the full browser UI.
+  ![Firefox ESR](screenshots/gui-firefox.png)
+- **LibreOffice** threw `cannot find /org.openoffice.Setup/L10N` (a
+  `__cxa_throw` preload printing each UNO exception's Message): Debian keeps
+  the configuration data in `share/.registry` and each package's postinst
+  links it into `/etc/libreoffice/registry`. gen-apps.py now records those
+  links (`links`, like Blender's BLAS). Then soffice.bin exited with 81 — its
+  "restart me" after setting up a new profile — so the launcher starts
+  `oosplash`, which restarts it, with its full path as `argv[0]` (it finds
+  soffice.bin next to it; programs outside `/usr/bin` now get the full
+  path). Desktop windows find their app through parent processes too
+  (soffice.bin is oosplash's child). Writer's start center opens (~2 min on
+  a first start; its splash after 44 s).
+- **Fontconfig caches** ship for the font packages' directories
+  (`scripts/gui/overlays/fontconfig/<package>/`): the installer pins a font
+  directory's mtime when it holds just its package's files (`pinFontDirs`),
+  and the caches were made in Blink with that mtime. It saves ~0.45 s of a
+  first start, not the ~1.9 s estimated before measuring: most of that gap
+  is `FcInit()` parsing its configuration.
+- **Blender** gets past the PI-futex abort (engine fix) and stops at
+  "A graphics card and driver with support for OpenGL 3.3 or higher is
+  required": there is no GLX in Xshiro. That needs Mesa's software
+  rendering reaching the page (Mesa's Xlib driver, or GLX over WebGL), a
+  project of its own.
 
 Known failures, not fixed here:
 
 | App | What happens | Where it has to be fixed |
 |---|---|---|
-| blender | past OpenCV's CPU check now (engine fix: CPUID family 6); glibc aborts: "The futex facility returned an unexpected error code" — PI-mutex futex ops (LOCK_PI, UNLOCK_PI…) and REQUEUE/WAKE_OP return EINVAL | x86 engine (reported) |
-| libreoffice-writer | loads; an uncaught UNO `RuntimeException` at startup (release build: no SAL_LOG detail), then it hangs. LibreOffice headless (`soffice --headless --convert-to pdf`, libreoffice-writer-nogui) works (verified 2026-10-10) | not diagnosed |
-| firefox-esr | its window opens after ~4 min, blank, and goes away seconds later; its content processes die with SIGSEGV first | not diagnosed |
+| blender | past the CPU check and the PI futexes (engine fixes); needs OpenGL 3.3 through GLX, which Xshiro doesn't have | GLX / software GL in the page |
+| libreoffice-writer | runs (start center after ~2 min); the scoreboard samples its splash, which hasn't painted 8 s after it appears | (the scoreboard's render check) |
 
 Input ✗ is left on viewers with nothing open (eog, ristretto, gpicview,
 lximage-qt) and Krita's start screen: typing changes nothing there and none

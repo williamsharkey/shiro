@@ -30,7 +30,7 @@ export interface GuiApp {
   icon?: string;
   /** Paths deleted after unpacking: optional plug-ins whose libraries were left out. */
   remove?: string[];
-  /** [link, target] symlinks a postinst would make (update-alternatives: BLAS, LAPACK). */
+  /** [link, target] symlinks a postinst would make (update-alternatives: BLAS, LAPACK; LibreOffice's registry). */
   links?: [string, string][];
   /** Settings written into the user's home (relative path: contents) before a launch, when not there yet */
   home?: Record<string, string>;
@@ -43,6 +43,8 @@ export interface Overlay { path: string; sha256: string; size: number; when: str
 export interface AppsManifest {
   suite: string; arch: string; mirror: string; snapshot: string;
   overlays?: Overlay[];
+  /** Per font package, its font directories and the files it puts in each (pinned mtimes: pinFontDirs) */
+  fontDirs?: Record<string, Record<string, string[]>>;
   packages: Record<string, DebPackage>;
   apps: Record<string, GuiApp>;
 }
@@ -234,6 +236,27 @@ const TRIGGERS: { dir: string; argv?: string[]; run?: (fs: FileSystem) => Promis
   { dir: '/usr/share/icons/hicolor/', run: async (fs) => (await import('./icon-cache')).updateIconCache(fs, '/usr/share/icons/hicolor') },
 ];
 
+/**
+ * Fontconfig's caches (shipped as overlays in /var/cache/fontconfig, made by
+ * Debian's fontconfig: gen-apps.py) hold the mtime of the font directory they
+ * describe, and fontconfig rescans a directory whose mtime differs (~1.9 s of a
+ * GTK app's first start). So a font directory gets this fixed mtime, the one
+ * the caches were made with, when it holds exactly its package's files; with
+ * other files in it (a second package's) it keeps its real mtime and
+ * fontconfig rescans it, as it would without the cache.
+ */
+export const FONT_DIR_MTIME_MS = Date.UTC(2023, 0, 1);
+
+async function pinFontDirs(fs: FileSystem, m: AppsManifest, installed: string[]): Promise<void> {
+  for (const pkg of installed) {
+    for (const [dir, files] of Object.entries(m.fontDirs?.[pkg] ?? {})) {
+      const have = await fs.readdir(dir).catch(() => null);
+      if (!have || have.length !== files.length || !files.every((f) => have.includes(f))) continue;
+      await fs.utimes(dir, FONT_DIR_MTIME_MS, FONT_DIR_MTIME_MS, { atime: 0, mtime: 0 }).catch(() => {});
+    }
+  }
+}
+
 /** The triggers a package's files set off. */
 function triggersOf(pkg: string, entries: TarEntry[]): Set<number> {
   const out = new Set<number>();
@@ -379,7 +402,9 @@ async function doInstall(fs: FileSystem, kernel: Kernel, name: string, onProgres
   }
   for (const path of app.remove ?? []) await fs.rm(path, { recursive: true }).catch(() => {});
   for (const [link, target] of app.links ?? []) {
-    if (!(await fs.exists(link).catch(() => false))) await fs.symlink(target, link).catch(() => {});
+    if (await fs.exists(link).catch(() => false)) continue;
+    await fs.mkdir(link.slice(0, link.lastIndexOf('/')), { recursive: true }).catch(() => {});
+    await fs.symlink(target, link).catch(() => {});
   }
   for (const [o, blob] of overlays) {
     const { data } = await blob;
@@ -387,6 +412,7 @@ async function doInstall(fs: FileSystem, kernel: Kernel, name: string, onProgres
     await fs.mkdir(o.path.slice(0, o.path.lastIndexOf('/')), { recursive: true }).catch(() => {});
     await fs.writeFile(o.path, data);
   }
+  await pinFontDirs(fs, m, want);
   const tt = Date.now();
   report('triggers');
   await runTriggers(fs, kernel, triggers, log);
@@ -495,12 +521,15 @@ export async function launchApp(kernel: Kernel, name: string, args: string[] = [
   const instance = app.bin.split('/').pop()!.toLowerCase().replace(/-\d+(\.\d+)*$/, '');
   const ids = await import('../x11/app-ids');
   if (instance !== name) ids.appIdAliases.set(instance, name);
+  ids.setParentPid((pid) => kernel.procs.get(pid)?.ppid);
   if (app.home) await writeHomeDefaults(kernel, app.home);
   const bus = await sessionBus(kernel, m);
   if (bus) env = { DBUS_SESSION_BUS_ADDRESS: bus, ...env };
   const out = new BufferFile(null);
   const p = kernel.spawn({
-    path: app.bin, argv: [app.bin.split('/').pop()!, ...args], cwd: '/home/user',
+    // argv[0]: the name for programs on the PATH, the full path for the others (LibreOffice's
+    // oosplash finds soffice.bin next to argv[0])
+    path: app.bin, argv: [/^\/usr\/(local\/)?s?bin\//.test(app.bin) ? app.bin.split('/').pop()! : app.bin, ...args], cwd: '/home/user',
     env: appEnv({ ...toolkitEnv(app), ...(await textHookEnv(kernel, app)), ...env }), fds: { 0: new BufferFile(''), 1: out, 2: out },
   });
   ids.pidAppIds.set(p.pid, name);

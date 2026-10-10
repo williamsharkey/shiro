@@ -1,5 +1,9 @@
 import type { Command } from './index';
 import { quoteArgsForShell, capturingStdout } from '../shell';
+import { signalNumber, signalName } from '../kernel/signals';
+
+/** Seconds after the signal before SIGKILL when there is no -k (GNU timeout waits forever) */
+const DEFAULT_KILL_AFTER = 5;
 
 /**
  * timeout [OPTION] DURATION COMMAND [ARG]...
@@ -14,6 +18,7 @@ export const timeout: Command = {
     let preserveStatus = false;
     let verbose = false;
     let signal = 'TERM';
+    let killAfter: string | undefined;
     let i = 0;
     for (; i < ctx.args.length; i++) {
       const a = ctx.args[i];
@@ -24,9 +29,11 @@ export const timeout: Command = {
       else if (a === '--foreground') { /* no process groups here */ }
       else if (a === '-s' || a === '--signal' || a === '-k' || a === '--kill-after') {
         if (a === '-s' || a === '--signal') signal = ctx.args[i + 1] ?? signal;
+        else killAfter = ctx.args[i + 1];
         i++;
       } else if (/^--(signal|kill-after)=/.test(a) || /^-[sk]./.test(a)) {
         if (/^(-s|--signal=)/.test(a)) signal = a.replace(/^(-s|--signal=)/, '');
+        else killAfter = a.replace(/^(-k|--kill-after=)/, '');
       } else {
         ctx.stderr += `timeout: invalid option -- '${a}'\n`;
         return 125;
@@ -46,6 +53,16 @@ export const timeout: Command = {
     }
     if (command.length === 0) {
       ctx.stderr += "timeout: missing operand\n";
+      return 125;
+    }
+    const sig = signalNumber(signal);
+    if (sig === undefined || sig === 0) {
+      ctx.stderr += `timeout: ${signal}: invalid signal\n`;
+      return 125;
+    }
+    const kill = killAfter === undefined ? null : parseDuration(killAfter);
+    if (kill === null && killAfter !== undefined) {
+      ctx.stderr += `timeout: invalid time interval '${killAfter}'\n`;
       return 125;
     }
 
@@ -83,10 +100,17 @@ export const timeout: Command = {
       ctx.stderr += err.replace(/\r\n/g, '\n');
     };
     if (result === 'timeout') {
-      own.abort();
+      // The signal goes to COMMAND's programs (a TUI in raw mode ignores the
+      // SIGINT a plain abort sends), and timeout waits for COMMAND to end, so
+      // the terminal is the shell's again when it returns. -k sends SIGKILL
+      // after its delay; without it, one a program ignores still gets
+      // SIGKILL after DEFAULT_KILL_AFTER rather than holding the tty forever.
+      if (verbose) ctx.stderr += `timeout: sending signal ${signalName(sig)} to command '${command[0]}'\n`;
+      // (an AbortError still, for fetch and the like; shell-kernel.ts reads signal and killAfter)
+      own.abort(Object.assign(new DOMException('The operation was aborted.', 'AbortError'), { signal: sig, killAfter: (kill ?? DEFAULT_KILL_AFTER) * 1000 }));
+      const status = await run;
       flush();
-      if (verbose) ctx.stderr += `timeout: sending signal ${signal} to command '${command[0]}'\n`;
-      if (preserveStatus) return signal.replace(/^SIG/, '').toUpperCase() === 'KILL' ? 137 : 143;
+      if (preserveStatus) return status === 130 ? 128 + sig : status; // (130: an in-page command the abort stopped)
       return 124;
     }
     flush();

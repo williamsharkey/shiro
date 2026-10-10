@@ -1,0 +1,78 @@
+From 1cedcffe045601538803f4f27f772c1b586add7a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 09:06:03 +0000
+Subject: [PATCH] Shiro: a CPU clock id of no process or thread of ours is
+ EINVAL
+
+clock_gettime/clock_getres took every negative clock id with a valid
+type as a CPU clock. Linux decodes ~pid << 3 | thread << 2 | type and
+refuses one naming no such process: pid 0 or this process (a thread id
+of ours with the thread bit) is a CPU clock here, anything else EINVAL
+(Open POSIX clock_gettime_8-2, clock_getres_6-2).
+
+Exports blink_shiro_cpuclockids.
+---
+ blink/shiro.inc |  2 ++
+ blink/syscall.c | 19 +++++++++++++++----
+ 2 files changed, 17 insertions(+), 4 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 77ad1ae..8b10af1 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2401,6 +2401,8 @@ EMSCRIPTEN_KEEPALIVE int blink_shiro_sharedmaps(void) { return 1; }
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_memerrs(void) { return 1; }
+ // 0501: a thread's tkill/tgkill reaches its handler as SI_TKILL from this process (pthread_cancel)
+ EMSCRIPTEN_KEEPALIVE int blink_shiro_tkillinfo(void) { return 1; }
++// 0502: CPU clock ids of no process of ours are EINVAL
++EMSCRIPTEN_KEEPALIVE int blink_shiro_cpuclockids(void) { return 1; }
+ 
+ // the same with the signal's siginfo (the kernel's call 1030, made as `pid`)
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid_info(int pid, int sig, int w0, int w1, int w2,
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 636a2ce..d4fecf6 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -4795,8 +4795,19 @@ static int SysSigaltstack(struct Machine *m, i64 newaddr, i64 oldaddr) {
+ // clock_getcpuclockid and pthread_getcpuclockid encode as ~pid << 3 | type
+ // (GHC's runtime: "getCurrentThreadCPUTime: no supported"). They count the
+ // time since the first such read, a stand-in that only ever moves forward.
+-static bool IsCpuClock(int clock) {
+-  return clock == 2 || clock == 3 || (clock < 0 && (clock & 3) != 3);
++// A negative id is ~pid << 3 | thread << 2 | type (clock_getcpuclockid,
++// pthread_getcpuclockid): pid 0 is the caller; otherwise it's this process,
++// or one of its threads. Type 3, or another process's clock, is EINVAL
++// (Open POSIX clock_gettime_8-2, clock_getres_6-2).
++static bool IsValidThreadId(struct System *, int);
++static bool IsCpuClock(struct Machine *m, int clock) {
++  int id;
++  if (clock == 2 || clock == 3) return true;
++  if (clock >= 0 || (clock & 3) == 3) return false;
++  id = ~clock >> 3;
++  if (!id) return true;
++  if (clock & 4) return id == m->tid || IsValidThreadId(m->system, id);
++  return id == m->system->pid;
+ }
+ static struct timespec g_cpuclock0;
+ static void InitCpuClock(void) {
+@@ -4815,7 +4826,7 @@ static int SysClockGettime(struct Machine *m, int clock, i64 ts) {
+   struct timespec htimespec;
+   struct timespec_linux gtimespec;
+ #ifdef __EMSCRIPTEN__
+-  if (IsCpuClock(clock)) {
++  if (IsCpuClock(m, clock)) {
+     htimespec = CpuClockNow();
+     if (ts) {
+       Write64(gtimespec.sec, htimespec.tv_sec);
+@@ -4860,7 +4871,7 @@ static int SysClockGetres(struct Machine *m, int clock, i64 ts) {
+   struct timespec htimespec;
+   struct timespec_linux gtimespec;
+ #ifdef __EMSCRIPTEN__
+-  if (IsCpuClock(clock)) {
++  if (IsCpuClock(m, clock)) {
+     if (ts) {
+       Write64(gtimespec.sec, 0);
+       Write64(gtimespec.nsec, 1000);
+-- 
+2.43.0
+

@@ -655,6 +655,14 @@ describe('Shell Advanced', () => {
       expect(r.exitCode).toBe(0);
       expect((await run(shell, 'echo hi | { local q=1; }')).output).toContain('can only be used in a function');
     });
+
+    it('a { } group after `cmd | \\<newline>` is still a group (opencode install script)', async () => {
+      await fs.writeFile('/tmp/cont.sh', 'set -u\nf() {\n    printf "x 5\\n" \\\n        | \\\n    {\n        local n=0\n        while read -r a b; do n=$(( n + b )); done\n        echo "n=$n"\n    }\n}\nf\n');
+      const r = await run(shell, 'bash /tmp/cont.sh');
+      expect(r.output.trim()).toBe('n=5');
+      expect(r.exitCode).toBe(0);
+      expect((await run(shell, 'echo x | \\\n{\n  read v; echo "got $v"\n}')).output.trim()).toBe('got x');
+    });
   });
 
   describe('set -o pipefail', () => {
