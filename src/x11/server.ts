@@ -15,6 +15,7 @@ import { Pix, Painter, defaultGC, type GC, type Rect, zImageReader, encodeZImage
 import { openFont, listFonts, textExtents, type XFont, type CharInfo } from './fonts';
 import { Keymap, MIN_KEYCODE, MAX_KEYCODE, KEYSYMS_PER_KEYCODE, MODIFIER_MAP } from './keymap';
 import { lookupColor } from './colors';
+import type { GLSurface } from './gl-surface';
 
 export interface XTransport {
   write(data: Uint8Array): void;
@@ -36,6 +37,8 @@ export interface ServerHooks {
   /** DOM-text mode: CopyArea within one toplevel, before ('begin') and after ('end') its pixels move */
   copy?(top: XWindow, phase: 'begin' | 'end', sx: number, sy: number, w: number, h: number, dx: number, dy: number, win: XWindow): void;
   bell?(): void;
+  /** a window's geometry, mapping or stacking changed (or it was destroyed): GL surfaces re-place themselves */
+  structure?(w: XWindow): void;
   /** a client took ownership of a selection (CLIPBOARD/PRIMARY) */
   selectionOwned?(selection: string, owner: XWindow | null): void;
 }
@@ -210,6 +213,8 @@ export class XServer {
   private nextEvent = 64;
   private nextError = 128;
   hooks: ServerHooks = {};
+  /** Makes GL surfaces (the rootless display, gl-surface.ts); null: no display to show them on. */
+  glSurfaceProvider: ((w: XWindow) => GLSurface) | null = null;
   keymap = new Keymap();
   private selections = new Map<number, { win: XWindow; client: Client; time: number }>();
   // input state
@@ -476,6 +481,18 @@ export class XServer {
   }
   hasResource(id: number, kind?: string): boolean { const r = this.resources.get(id); return !!r && (!kind || r.kind === kind); }
   win(id: number): XWindow { return this.lookup<XWindow>(id, 'window', P.BadWindow); }
+  /**
+   * A canvas over window `xid` in its desktop window, placed and clipped like
+   * the window, for frames drawn outside Xshiro (glshiro, docs/research/GL.md).
+   * One per window: asking again returns the same surface until it is released.
+   */
+  glSurface(xid: number): GLSurface {
+    const w = this.winOrNull(xid);
+    if (!w || w.destroyed || w === this.root) throw new Error(`glSurface: no window 0x${xid.toString(16)}`);
+    if (!this.glSurfaceProvider) throw new Error('glSurface: no display');
+    return this.glSurfaceProvider(w);
+  }
+
   winOrNull(id: number): XWindow | null { const r = this.resources.get(id); return r?.kind === 'window' ? r.value as XWindow : null; }
   pixmap(id: number): Pix { return this.lookup<Pix>(id, 'pixmap', P.BadPixmap); }
   gc(id: number): GC { return this.lookup<GC>(id, 'gc', P.BadGC); }
@@ -976,6 +993,7 @@ export class XServer {
     this.passiveKeys = this.passiveKeys.filter((g) => g.win !== w);
     if (this.pointerWin === w || w.isAncestorOf(this.pointerWin)) this.pointerWin = w.parent ?? this.root;
     if (w.parent === this.root) this.hooks.topDestroyed?.(w);
+    this.hooks.structure?.(w);
     w.pix = null;
   }
 
@@ -994,6 +1012,7 @@ export class XServer {
     this.deliver(parent, P.SubstructureNotifyMask, (e) => fill(e, parent));
     if (wasTop) this.hooks.topDestroyed?.(w);
     if (wasMapped) this.mapWindow(c, w);
+    else this.hooks.structure?.(w);
   }
 
   mapWindow(c: Client | null, w: XWindow): void {
@@ -1016,6 +1035,7 @@ export class XServer {
       this.hooks.topMapped?.(w);
       this.hooks.damage?.(w, 0, 0, w.width, w.height);
     } else this.damageTop(w);
+    this.hooks.structure?.(w);
     this.updatePointerWindow();
   }
 
@@ -1041,6 +1061,7 @@ export class XServer {
     if (typeof this.focus !== 'number' && (this.focus === w || w.isAncestorOf(this.focus))) this.revertFocus();
     if (p === this.root) this.hooks.topUnmapped?.(w);
     else if (wasViewable) this.damageTop(p);
+    this.hooks.structure?.(w);
     this.updatePointerWindow();
   }
 
@@ -1091,6 +1112,7 @@ export class XServer {
     if (p === this.root) this.hooks.topConfigured?.(w);
     if (w.viewable()) this.damageTop(w);
     if (w.viewable() && resized && p === this.root) this.hooks.damage?.(w, 0, 0, w.width, w.height);
+    this.hooks.structure?.(w);
     this.updatePointerWindow();
   }
 
@@ -1159,6 +1181,7 @@ export class XServer {
     this.deliver(ch, P.StructureNotifyMask, (e) => e.u8(P.CirculateNotify).u8(0).u16(0).u32(ch.id).u32(ch.id).u32(0).u8(place));
     this.deliver(w, P.SubstructureNotifyMask, (e) => e.u8(P.CirculateNotify).u8(0).u16(0).u32(w.id).u32(ch.id).u32(0).u8(place));
     this.damageTop(w);
+    this.hooks.structure?.(ch);
   }
 
   /** Raise a toplevel to the top of the stack (desktop focus). */
