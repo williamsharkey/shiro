@@ -373,6 +373,8 @@ export class SyscallFs {
   async rmdir(path: string): Promise<void> { this.forget(path); const r = this.sys.rmdir(path); if (r < 0) throw sysError(-r, 'rmdir', path); }
   renameSync(from: string, to: string): void { this.forget(from); this.forget(to); const r = this.sys.rename(from, to); if (r < 0) throw sysError(-r, 'rename', from); }
   async rename(from: string, to: string): Promise<void> { this.renameSync(from, to); }
+  linkSync(from: string, to: string): void { this.forget(to); const r = this.sys.linkat(A.AT_FDCWD, from, A.AT_FDCWD, to, 0); if (r < 0) throw sysError(-r, 'link', from); }
+  async link(from: string, to: string): Promise<void> { this.linkSync(from, to); }
   async symlink(target: string, path: string): Promise<void> { this.forget(path); const r = this.sys.symlink(target, path); if (r < 0) throw sysError(-r, 'symlink', path); }
   symlinkNow(target: string, path: string): Promise<void> { return this.symlink(target, path); }
   async readlink(path: string): Promise<string> { return this.readlinkSync(path); }

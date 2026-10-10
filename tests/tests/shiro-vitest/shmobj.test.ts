@@ -350,4 +350,37 @@ describe('SharedObjects: a /dev/shm file mapped remote', () => {
     await kernel.engineInstanceGone(ia);
     kernel.dispose();
   });
+  it('a /dev/shm file with two names: an fd opened through the other name while mapped uses the mapping', async () => {
+    const { fs } = await createTestShell();
+    const kernel = new Kernel({ fs, registerWithProcessTable: false });
+    const inbox: Record<number, ShmObjMessage[]> = {};
+    const ia = kernel.registerEngineInstance((m) => (inbox[ia] ??= []).push(m));
+    const a = kernel.spawn({ path: 'p', cwd: '/tmp', uid: 1000, run: () => new Promise<number>(() => {}) });
+    a.data.engineInstance = ia;
+    await fs.mkdir('/dev/shm', { recursive: true }).catch(() => {});
+    await fs.writeFile('/dev/shm/two', new Uint8Array(8192));
+    await fs.link('/dev/shm/two', '/dev/shm/two.link');
+    const d = new Uint8Array(256);
+    const open = async (p: string) => { const e = new TextEncoder().encode(p); d.set(e); return kernel.syscall(a, A.SYS_openat, [A.AT_FDCWD, e.length, A.O_RDWR, 0], d); };
+    const fd = await open('/dev/shm/two');
+    const out = new Uint8Array(8);
+    const id = await kernel.syscall(a, A.SYS_shiro_shmobj_map, [fd, A.SHMOBJ_EAGER, 8192, 0], out);
+    const mem = new Uint8Array((inbox[ia][0] as { sab: SharedArrayBuffer }).sab);
+    mem[7] = 0x6c; // 'l' through the mapping
+    expect(await kernel.syscall(a, A.SYS_close, [fd], d)).toBe(0);
+    const fd2 = await open('/dev/shm/two.link'); // the other name, opened while mapped
+    const b = new Uint8Array(1);
+    expect(await kernel.syscall(a, A.SYS_pread64, [fd2, 1, 7, 0], b)).toBe(1);
+    expect(b[0]).toBe(0x6c);
+    d[0] = 0x6b; // 'k' through it
+    expect(await kernel.syscall(a, A.SYS_pwrite64, [fd2, 1, 8, 0], d)).toBe(1);
+    expect(mem[8]).toBe(0x6b);
+    expect(await kernel.syscall(a, A.SYS_shiro_shmobj_unmap, [id], d)).toBe(0);
+    expect(await kernel.syscall(a, A.SYS_close, [fd2], d)).toBe(0);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(Array.from((await fs.readFile('/dev/shm/two') as Uint8Array).subarray(7, 9))).toEqual([0x6c, 0x6b]);
+    expect(Array.from((await fs.readFile('/dev/shm/two.link') as Uint8Array).subarray(7, 9))).toEqual([0x6c, 0x6b]);
+    await kernel.engineInstanceGone(ia);
+    kernel.dispose();
+  });
 });

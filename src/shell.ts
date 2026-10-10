@@ -476,6 +476,11 @@ interface CompletionSpec {
 }
 
 /** Sentinel thrown by `break [N]` inside loops */
+/** `source` inside sourced files nests at most this deep (a file sourcing itself fails instead of spinning). */
+const MAX_SOURCE_DEPTH = 100;
+/** Function calls nest at most this deep when FUNCNEST isn't set. */
+const DEFAULT_FUNCNEST = 1000;
+
 /** Quiet period before command history is written to ~/.bash_history. */
 const HISTORY_SAVE_DELAY_MS = 500;
 /** Shells with a history save scheduled, flushed together when the page hides. */
@@ -554,6 +559,49 @@ const ENV_PREFIX_RE = /^\s*([A-Za-z_][A-Za-z0-9_]*)(\+?)=((?:"(?:[^"\\]|\\.)*"|'
  * Split leading `NAME=value` assignments off a command segment.
  * Returns null unless at least one assignment is followed by a command.
  */
+/**
+ * The command word of an unexpanded simple command, as the parser sees it
+ * (after NAME=value assignments and redirections), or null when it isn't a
+ * plain word: only a literal word can be an alias (`$x`, "ll", \ll are not).
+ */
+export function rawCommandWord(seg: string): string | null {
+  let i = 0;
+  const n = seg.length;
+  const skipBlanks = () => { while (i < n && /\s/.test(seg[i])) i++; };
+  /** One shell word from i (quotes, escapes, $(…)/`…`/${…} nesting); returns it raw */
+  const word = (): string => {
+    const start = i;
+    let depth = 0;
+    while (i < n) {
+      const c = seg[i];
+      if (depth === 0 && (/\s/.test(c) || c === ';' || c === '&' || c === '|' || c === '<' || c === '>')) break;
+      if (c === '\\') { i += 2; continue; }
+      if (c === "'") { const e = seg.indexOf("'", i + 1); i = e < 0 ? n : e + 1; continue; }
+      if (c === '"') {
+        i++;
+        while (i < n && seg[i] !== '"') i += seg[i] === '\\' ? 2 : 1;
+        i++;
+        continue;
+      }
+      if (c === '$' && (seg[i + 1] === '(' || seg[i + 1] === '{')) { depth++; i += 2; continue; }
+      if (c === '`') { const e = seg.indexOf('`', i + 1); i = e < 0 ? n : e + 1; continue; }
+      if (depth > 0 && (c === ')' || c === '}')) depth--;
+      i++;
+    }
+    return seg.slice(start, i);
+  };
+  for (;;) {
+    skipBlanks();
+    const assign = /^[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=/.exec(seg.slice(i));
+    if (assign) { i += assign[0].length; word(); continue; }
+    const redir = /^(?:\d+|\{[A-Za-z_]\w*\})?(?:&>>?|>>?|>\||<<<|<>|<&|>&|<)/.exec(seg.slice(i));
+    if (redir) { i += redir[0].length; skipBlanks(); word(); continue; }
+    break;
+  }
+  const w = word();
+  return w && !/['"\\$`]/.test(w) ? w : null;
+}
+
 export function splitEnvPrefix(segment: string): { assignments: ([string, string] | [string, string, true])[]; rest: string } | null {
   const assignments: ([string, string] | [string, string, true])[] = [];
   let rest = segment;
@@ -764,7 +812,9 @@ export class Shell {
   /** The `exit` builtin ended this shell (an interactive loop stops reading). */
   exited = false;
   /** Function definitions; `source`: the file defining it (its BASH_SOURCE entry) */
-  functions: Record<string, { body: string; source?: string; line?: number }> = {};
+  functions: Record<string, { body: string; source?: string; line?: number; aliases?: Map<string, string> }> = {};
+  /** The aliases a running function body expands: those when it was defined (bash expands them as it parses) */
+  private aliasView: Map<string, string> | null = null;
   /** The file whose commands run now (`bash FILE`, `source FILE`); '' for -c or a terminal */
   sourceFile = '';
   /** Functions marked with `export -f`: the only ones a new shell process (sh -c, a script) gets */
@@ -1277,9 +1327,9 @@ export class Shell {
   }
 
   /** A function defined now: its body, the file (BASH_SOURCE) and its line (LINENO inside it) */
-  private functionRecord(body: string): { body: string; source: string; line: number } {
+  private functionRecord(body: string): { body: string; source: string; line: number; aliases: Map<string, string> } {
     // (statements arrive flattened onto one line: the definition's line is as close as it gets)
-    return { body, source: this.definingSource(), line: this.currentLine };
+    return { body, source: this.definingSource(), line: this.currentLine, aliases: new Map(this.aliasView ?? this.aliases) };
   }
 
   /** BASH_SOURCE for a function defined now (bash: "environment" for -c, "main" at a prompt) */
@@ -1314,7 +1364,14 @@ export class Shell {
   }
 
   /** `hash`: command name → where it was found, and how often it ran */
-  hashTable = new Map<string, { path: string; hits: number }>();
+  hashTable = new Map<string, { path: string; hits: number; pinned?: boolean }>();
+  /** PATH when the table was filled: assigning PATH empties it, as in bash */
+  hashPath?: string;
+  /** The hash table, emptied first if PATH changed since it was filled */
+  hashTableNow(): Map<string, { path: string; hits: number; pinned?: boolean }> {
+    if (this.hashPath !== this.env['PATH']) { this.hashTable.clear(); this.hashPath = this.env['PATH']; }
+    return this.hashTable;
+  }
 
   /** Where a command name resolves for `hash`: a file on PATH, or a registered command's /usr/bin name */
   private async commandPath(name: string): Promise<string | null> {
@@ -1417,6 +1474,7 @@ export class Shell {
     child.scriptShell = this.scriptShell; // a subshell of a script is non-interactive too
     child.interactiveFlag = this.interactiveFlag;
     child.hashTable = new Map([...this.hashTable].map(([k, v]) => [k, { ...v }]));
+    child.hashPath = this.hashPath;
     child.lastExitCode = this.lastExitCode; // $? in a subshell or $(…) is the caller's
     child.forkParentPid = this.bashPid;
     child.shellPid = this.shellPid;
@@ -1434,6 +1492,7 @@ export class Shell {
       (k === 'ERR' && this.options.has('errtrace')) || (k === 'DEBUG' && this.options.has('functrace'))));
     child.parentTraps = this.trapsModified || !this.parentTraps ? new Map(this.traps) : this.parentTraps;
     child.aliases = new Map(this.aliases);
+    child.aliasView = this.aliasView;
     child.namerefs = new Map(this.namerefs);
     if (this.varAttrs.size) child.varAttrs = new Map([...this.varAttrs].map(([k, v]) => [k, new Set(v)]));
     if (this.declaredNames.size) child.declaredNames = new Set(this.declaredNames);
@@ -2691,15 +2750,19 @@ export class Shell {
 
         // Alias expansion: if cmdName matches an alias, replace it
         // (only an unquoted command word: 'hi' and \hi are not aliases)
-        if (this.aliases.has(cmdName) && !this.expandingAliases.has(cmdName)
-          && segment.replace(/^\s*(?:\d*(?:>>?|<|&>>?|>\|)\s*[^\s'"]+\s+)*/, '').startsWith(cmdName)) {
-          let aliasValue = this.aliases.get(cmdName)!;
+        // (decided on the unexpanded words, as bash's parser does: `x=ll; $x` is no alias)
+        const rawSeg = rawSegments.length === pipeline.length ? rawSegments[i] : undefined;
+        const aliasMap = this.aliasView ?? this.aliases;
+        if (aliasMap.has(cmdName) && !this.expandingAliases.has(cmdName)
+          && (rawSeg !== undefined ? rawCommandWord(rawSeg) === cmdName
+            : segment.replace(/^\s*(?:\d*(?:>>?|<|&>>?|>\|)\s*[^\s'"]+\s+)*/, '').startsWith(cmdName))) {
+          let aliasValue = aliasMap.get(cmdName)!;
           // An alias ending in a blank makes the next word an alias position too (alias sudo='sudo ')
           let rest = cmdArgs;
           const seen = new Set([cmdName]);
-          while (/\s$/.test(aliasValue) && rest.length && this.aliases.has(rest[0]) && !seen.has(rest[0])) {
+          while (/\s$/.test(aliasValue) && rest.length && aliasMap.has(rest[0]) && !seen.has(rest[0])) {
             seen.add(rest[0]);
-            aliasValue += this.aliases.get(rest[0])!;
+            aliasValue += aliasMap.get(rest[0])!;
             rest = rest.slice(1);
           }
           const fullCmd = aliasValue + (rest.length > 0 ? (/\s$/.test(aliasValue) ? '' : ' ') + quoteArgsForShell(rest) : '');
@@ -2718,7 +2781,11 @@ export class Shell {
         }
 
         // Handle . as alias for source
-        const effectiveCmdName = cmdName === '.' ? 'source' : cmdName;
+        // `hash -p PATH NAME`: NAME runs PATH (not a builtin's or function's name)
+        const pin = this.hashTable.size && !cmdName.includes('/') && !SHELL_BUILTIN_NAMES.has(cmdName) && !this.functions[cmdName]
+          ? this.hashTableNow().get(cmdName) : undefined;
+        if (pin?.pinned) pin.hits++;
+        const effectiveCmdName = cmdName === '.' ? 'source' : pin?.pinned ? pin.path : cmdName;
 
         // xtrace: the command on the shell's stderr before it runs (not through the
         // command's own redirections: `$(cmd 2>&1)` doesn't capture its trace)
@@ -2905,9 +2972,13 @@ export class Shell {
               const savedPipeStdin = this.env['__PIPE_STDIN'];
               if (ownStdin !== undefined) this.env['__PIPE_STDIN'] = ownStdin;
               this.injectedStdin = ownStdin ?? nestedStdin;
+              // (eval parses now: the aliases now, not a function body's)
+              const evalView = this.aliasView;
+              this.aliasView = null;
               try {
                 exitCode = await this.execute(evalCmd, writeStdout, stderrWriter, false, undefined, true);
               } finally {
+                this.aliasView = evalView;
                 if (ownStdin !== undefined) {
                   if (savedPipeStdin === undefined) delete this.env['__PIPE_STDIN'];
                   else this.env['__PIPE_STDIN'] = savedPipeStdin;
@@ -3396,20 +3467,57 @@ export class Shell {
           continue;
         }
         if (!_builtinDisabled && effectiveCmdName === 'hash') {
-          // The commands this shell has run (or looked up) and where they are; -r forgets them
+          // bash's hash: the commands looked up in PATH and their hits.
+          // -r forgets them, -d NAME one, -p PATH NAME pins NAME to PATH,
+          // -t NAME prints where NAME is, -l lists as reusable `hash -p` lines
           exitCode = 0;
-          const names = cmdArgs.filter((a) => !a.startsWith('-'));
-          if (cmdArgs.includes('-r')) this.hashTable.clear();
-          for (const name of names) {
-            const path = await this.commandPath(name);
-            if (path) this.hashTable.set(name, { path, hits: 0 });
-            else { stderrWriter(`tabcomputer: hash: ${name}: not found\r\n`); exitCode = 1; }
+          const table = this.hashTableNow();
+          if (cmdArgs[0] === '--help' || cmdArgs[0] === '--version') {
+            writeStdout('hash: hash [-lr] [-p pathname] [-dt] [name ...]\r\n    Remember or display program locations.\r\n');
+            this.lastExitCode = 0;
+            this.env['?'] = '0';
+            lastOutput = '';
+            continue;
           }
-          if (!names.length && !cmdArgs.includes('-r')) {
-            if (!this.hashTable.size) writeStdout('hash: hash table empty\r\n');
+          const opts = new Set<string>();
+          let pinPath: string | undefined;
+          let k = 0;
+          for (; k < cmdArgs.length && /^-./.test(cmdArgs[k]) && cmdArgs[k] !== '--'; k++) {
+            for (const f of cmdArgs[k].slice(1)) {
+              if (f === 'p') { pinPath = cmdArgs[k].slice(cmdArgs[k].indexOf('p') + 1) || cmdArgs[++k]; break; }
+              if (!'rdtl'.includes(f)) { stderrWriter(`tabcomputer: hash: -${f}: invalid option\r\nhash: usage: hash [-lr] [-p pathname] [-dt] [name ...]\r\n`); exitCode = 2; }
+              opts.add(f);
+            }
+            if (exitCode) break;
+          }
+          if (cmdArgs[k] === '--') k++;
+          const names = exitCode ? [] : cmdArgs.slice(k);
+          if (!exitCode && opts.has('r')) table.clear();
+          if (exitCode) { /* usage printed */ }
+          else if (pinPath !== undefined) {
+            if (!names.length) { stderrWriter('tabcomputer: hash: -p: option requires an argument\r\n'); exitCode = 1; }
+            for (const name of names) table.set(name, { path: pinPath, hits: 0, pinned: true });
+          } else if (opts.has('d')) {
+            for (const name of names) if (!table.delete(name)) { stderrWriter(`tabcomputer: hash: ${name}: not found\r\n`); exitCode = 1; }
+          } else if (opts.has('t')) {
+            for (const name of names) {
+              const e = table.get(name);
+              if (!e) { stderrWriter(`tabcomputer: hash: ${name}: not found\r\n`); exitCode = 1; continue; }
+              writeStdout(names.length > 1 ? `${name}\t${e.path}\r\n` : `${e.path}\r\n`);
+            }
+          } else if (names.length) {
+            for (const name of names) {
+              if (name.includes('/')) continue; // (bash: a name with a slash isn't hashed)
+              const path = this.commands.get(name) && !SHELL_BUILTIN_NAMES.has(name) ? `/usr/bin/${name}` : await this.findExecutableInPath(name);
+              if (path) table.set(name, { path, hits: 0 });
+              else { stderrWriter(`tabcomputer: hash: ${name}: not found\r\n`); exitCode = 1; }
+            }
+          } else if (!opts.has('r')) {
+            if (!table.size) { if (!opts.has('l')) writeStdout('hash: hash table empty\r\n'); }
+            else if (opts.has('l')) for (const [name, { path }] of table) writeStdout(`builtin hash -p ${path} ${name}\r\n`);
             else {
               writeStdout('hits\tcommand\r\n');
-              for (const { path, hits } of this.hashTable.values()) writeStdout(`${String(hits).padStart(4)}\t${path}\r\n`);
+              for (const { path, hits } of table.values()) writeStdout(`${String(hits).padStart(4)}\t${path}\r\n`);
             }
           }
           this.lastExitCode = exitCode;
@@ -3887,6 +3995,11 @@ export class Shell {
           if (srcArgs.length === 0) {
             stderrWriter('source: filename argument required\r\nsource: usage: source filename [arguments]\r\n');
             exitCode = 2;
+          } else if (this.sourcing >= MAX_SOURCE_DEPTH) {
+            // Files that source each other (~/.profile and ~/.bashrc) never yielded to
+            // the page: every boot froze sourcing ~/.profile
+            stderrWriter(`source: ${srcArgs[0]}: maximum nesting level exceeded (${MAX_SOURCE_DEPTH})\r\n`);
+            exitCode = 1;
           } else {
             // A name without / is looked up in PATH first (files, not directories), then here
             let scriptPath = this.fs.resolvePath(srcArgs[0], this.cwd);
@@ -3911,6 +4024,8 @@ export class Shell {
               const popFrame = this.pushCallFrame('source', srcArgs[0]);
               const savedSource = this.sourceFile;
               this.sourceFile = srcArgs[0];
+              const srcView = this.aliasView;
+              this.aliasView = null; // (a sourced file is parsed now)
               try {
                 exitCode = await this.execute(content, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
               } catch (e) {
@@ -3918,6 +4033,7 @@ export class Shell {
                 exitCode = e.code; // `return` ends a sourced file
               } finally {
                 popFrame();
+                this.aliasView = srcView;
                 this.sourceFile = savedSource;
                 this.sourcing--;
                 this.currentLine = savedLine;
@@ -4501,11 +4617,16 @@ export class Shell {
         const binPath = /^\/(?:usr\/)?(?:local\/)?s?bin\/([^/]+)$/.exec(effectiveCmdName);
         const cmd = pkgShadowed ? undefined : this.commands.get(effectiveCmdName)
           ?? (binPath && !(await this.fs.exists(effectiveCmdName)) ? this.commands.get(binPath[1]) : undefined);
-        // Commands found by name (not shell builtins) go in the table `hash` shows
+        // Commands found by name (not shell builtins) go in the table `hash` shows;
+        // one not found doesn't
         if (!SHELL_BUILTIN_NAMES.has(effectiveCmdName) && !effectiveCmdName.includes('/')) {
-          const h = this.hashTable.get(effectiveCmdName);
+          const table = this.hashTableNow();
+          const h = table.get(effectiveCmdName);
           if (h) h.hits++;
-          else this.hashTable.set(effectiveCmdName, { path: cmd ? `/usr/bin/${effectiveCmdName}` : (await this.findExecutableInPath(effectiveCmdName)) ?? `/usr/bin/${effectiveCmdName}`, hits: 1 });
+          else {
+            const path = cmd ? `/usr/bin/${effectiveCmdName}` : await this.findExecutableInPath(effectiveCmdName);
+            if (path) table.set(effectiveCmdName, { path, hits: 1 });
+          }
         }
         // Redirect files are opened (and `>` truncates) before the command runs, as
         // in bash: what it writes goes in as it comes (`npm run dev > log &`), and a
@@ -4559,21 +4680,16 @@ export class Shell {
           } else {
             // Like Debian's command-not-found: name the package that has it
             const provider = findEntry(builtinIndex(), effectiveCmdName);
+            // (on the command's own stderr, so `2>/dev/null` hides it; the rest of
+            // the pipeline still runs, as in bash: `nosuch | cat`)
+            ctx.stderr += `tabcomputer: command not found: ${effectiveCmdName}\n`;
             if (provider && Object.prototype.hasOwnProperty.call(provider.bin, effectiveCmdName)) {
-              stderrWriter(`tabcomputer: command not found: ${effectiveCmdName}\r\n`);
-              stderrWriter(`  it can be installed with: pkg install ${provider.name}` +
-                (packageStatus(provider) === 'blocked' ? ` (needs kernel support tabcomputer doesn't have yet)` : '') + '\r\n');
-              exitCode = 127;
-              this.lastExitCode = exitCode;
-              this.env['?'] = String(exitCode);
-              break;
-            } else {
-              stderrWriter(`tabcomputer: command not found: ${effectiveCmdName}\r\n`);
-              exitCode = 127;
-              this.lastExitCode = exitCode;
-              this.env['?'] = String(exitCode);
-              break;
+              ctx.stderr += `  it can be installed with: pkg install ${provider.name}` +
+                (packageStatus(provider) === 'blocked' ? ` (needs kernel support tabcomputer doesn't have yet)` : '') + '\n';
             }
+            exitCode = 127;
+            this.lastExitCode = exitCode;
+            this.env['?'] = String(exitCode);
           }
         }
 
@@ -6948,6 +7064,13 @@ export class Shell {
   ): Promise<number> {
     const func = this.functions[name];
     if (!func) return 127;
+    // bash's FUNCNEST; unset, bash recurses until its process crashes, which here
+    // would freeze the page: a default limit instead
+    const funcnest = Number(this.env['FUNCNEST']) > 0 ? Number(this.env['FUNCNEST']) : DEFAULT_FUNCNEST;
+    if (this.localVarStack.length >= funcnest) {
+      writeStderr(`${name}: maximum function nesting level exceeded (${funcnest})\r\n`);
+      return 1;
+    }
 
     // Save and set positional parameters
     // The function's positional parameters replace the caller's ($0 stays the script name)
@@ -6976,6 +7099,8 @@ export class Shell {
     let exitCode = 0;
     const outerLoopDepth = this.loopDepth;
     this.loopDepth = 0;
+    const outerAliasView = this.aliasView;
+    if (func.aliases) this.aliasView = func.aliases;
     try {
       exitCode = await this.execute(func.body, writeStdout, writeStderr, false, undefined, true);
     } catch (e) {
@@ -6993,6 +7118,7 @@ export class Shell {
       }
     } finally {
       this.loopDepth = outerLoopDepth;
+      this.aliasView = outerAliasView;
     }
 
     // Pop local variable frame — restore saved values
