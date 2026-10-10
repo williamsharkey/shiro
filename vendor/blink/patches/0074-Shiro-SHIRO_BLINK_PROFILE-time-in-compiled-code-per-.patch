@@ -1,0 +1,115 @@
+From 7747a8ed073f9f235a578eee2ad8a17826b5a867 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 00:43:56 +0000
+Subject: [PATCH 74/74] Shiro: SHIRO_BLINK_PROFILE: time in compiled code per
+ thread; samples split by kind
+
+Each compiled-code entry is timed (per thread, "in compiled code ms"), so
+interpretation's share is the rest of the run time less the JIT's compiles.
+The 1-ms samples are also split between compiled code and the interpreter
+(biased toward the interpreter: a sample lands on a step, and interpreted
+steps are single instructions).
+---
+ blink/machine.c |  2 +-
+ blink/machine.h |  1 +
+ blink/shiro.inc | 22 ++++++++++++++++++----
+ 3 files changed, 20 insertions(+), 5 deletions(-)
+
+diff --git a/blink/machine.c b/blink/machine.c
+index 7dc6de6..7fb0b9d 100644
+--- a/blink/machine.c
++++ b/blink/machine.c
+@@ -2345,7 +2345,7 @@ void Actor(struct Machine *mm) {
+       u64 ip = m->ip;
+       bool wjhot = m->wjhot;
+       int wj = 0;
+-      if (!wjhot || (wj = WjExecute(m)) != 1) {
++      if (!wjhot || (wj = UNLIKELY(g_shiro_prof) ? ShiroProfWj(m) : WjExecute(m)) != 1) {
+         if (UNLIKELY(g_shiro_trace)) {
+           g_shiro_ring[g_shiro_ringi++ & 1023] = ip;
+           if (g_shiro_probes[0]) ShiroProbe(m, ip);
+diff --git a/blink/machine.h b/blink/machine.h
+index fe39bd8..481041f 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -670,6 +670,7 @@ void OpSsePclmulqdq(P);
+ extern bool g_shiro_trace;
+ extern bool g_shiro_prof;
+ void ShiroProfStep(struct Machine *, u64, bool, bool);
++int ShiroProfWj(struct Machine *);
+ extern u64 g_shiro_ring[1024];
+ extern unsigned g_shiro_ringi;
+ extern u64 g_shiro_ring0[1024], g_shiro_fault0;
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index df78bf8..88e3ceb 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -993,7 +993,7 @@ static bool g_shiro_prof_stdin, g_shiro_prof_tty, g_shiro_prof_epoll;
+ // tables below with the GIL held.
+ struct ShiroProfThr {
+   int tid;
+-  double since, run, gilwait, sys, futex;
++  double since, run, gilwait, sys, futex, jitrun;
+   long blocks, interp;
+ };
+ static struct ShiroProfThr g_shiro_prof_thr[64], g_shiro_prof_thr_rest;
+@@ -1014,6 +1014,7 @@ static struct {
+ } g_shiro_prof_hot[SHIRO_PROF_HOT];
+ static long g_shiro_prof_op[4096];
+ static long g_shiro_prof_lost_n, g_shiro_prof_lost_samples;  // the table was full
++static long g_shiro_prof_samples[2];  // 1-ms samples: [0] in compiled code, [1] interpreting
+ 
+ static struct ShiroProfThr *ShiroProfThr(void) {
+   struct ShiroProfThr *t;
+@@ -1055,6 +1056,16 @@ static int ShiroProfSlot(u64 ip) {
+ }
+ 
+ // after each compiled block (at `ip`) or interpreted instruction
++// a compiled-code entry, timed (its compile, if it compiles now, included:
++// the JIT's own total is subtracted when printed)
++int ShiroProfWj(struct Machine *m) {
++  struct ShiroProfThr *t = ShiroProfThr();
++  double t0 = emscripten_get_now();
++  int r = WjExecute(m);
++  t->jitrun += emscripten_get_now() - t0;
++  return r;
++}
++
+ static long g_shiro_prof_seq;  // interpreted: not at a branch target (no compiled entry tried)
+ extern long g_wj_miss[4];
+ 
+@@ -1078,6 +1089,7 @@ void ShiroProfStep(struct Machine *m, u64 ip, bool jit, bool tried) {
+   }
+   if (!(++t_shiro_prof_tick & 31) && (now = emscripten_get_now()) - t_shiro_prof_sample >= 1) {
+     t_shiro_prof_sample = now;
++    ++g_shiro_prof_samples[!jit];
+     if ((i = ShiroProfSlot(ip)) < 0) ++g_shiro_prof_lost_samples;
+     else if (jit) ++g_shiro_prof_hot[i].jit;
+     else ++g_shiro_prof_hot[i].interp;
+@@ -1108,18 +1120,20 @@ static int ShiroProfDumpMore(char *b, int n, int cap, double now) {
+   static int ops[4096];
+   long samples = 0, blocks = 0, interp = 0;
+   int i, k, nthr = MIN(atomic_load(&g_shiro_prof_nthr), 64);
+-  n += snprintf(b + n, cap - n, "\nthread       run ms  GIL wait ms   syscall ms (futex ms)   blocks run  insns interpreted\n");
++  n += snprintf(b + n, cap - n, "\nthread       run ms  GIL wait ms   syscall ms (futex ms)   blocks run  insns interpreted  in compiled code ms\n");
+   for (i = 0; i < nthr; ++i) {
+     struct ShiroProfThr *t = &g_shiro_prof_thr[i];
+     double run = t->run + (t->since ? now - t->since : 0);
+     blocks += t->blocks, interp += t->interp;
+-    n += snprintf(b + n, cap - n, "%6d %12.0f %12.0f %12.0f %10.0f %12ld %18ld\n", t->tid, run, t->gilwait,
+-                  t->sys - t->futex, t->futex, t->blocks, t->interp);
++    n += snprintf(b + n, cap - n, "%6d %12.0f %12.0f %12.0f %10.0f %12ld %18ld %20.0f\n", t->tid, run, t->gilwait,
++                  t->sys - t->futex, t->futex, t->blocks, t->interp, t->jitrun);
+   }
+   for (i = 0; i < SHIRO_PROF_HOT; ++i) idx[i] = i, samples += g_shiro_prof_hot[i].jit + g_shiro_prof_hot[i].interp;
+   n += snprintf(b + n, cap - n, "total: %ld compiled blocks run, %ld instructions interpreted, %ld 1-ms samples"
+                                  " (not in the address table: %ld instructions, %ld samples)\n",
+                 blocks, interp, samples + g_shiro_prof_lost_samples, g_shiro_prof_lost_n, g_shiro_prof_lost_samples);
++  n += snprintf(b + n, cap - n, "samples: %ld in compiled code, %ld interpreting; jit compiles %.0f ms\n",
++                g_shiro_prof_samples[0], g_shiro_prof_samples[1], g_shiro_prof_jit);
+   n += snprintf(b + n, cap - n, "interpreted because: %ld not at a branch target, %ld first visit, %ld below the"
+                                  " compile threshold, %ld compile failed before, %ld compile failed now\n",
+                 g_shiro_prof_seq, g_wj_miss[0], g_wj_miss[1], g_wj_miss[2], g_wj_miss[3]);
+-- 
+2.43.0
+
