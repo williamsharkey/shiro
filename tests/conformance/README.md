@@ -95,6 +95,27 @@ normal `npm run test:shiro` keeps them fixed.
   `LTP_ONLY=read,write01` narrows a run, `LTP_ENV=BLINK_SAME_INSTANCE_FORK=1` adds to the tests' environment. `ltp/hangs.json` lists tests that
   crash the test worker; they count as failures.
 
+## POSIX: Open POSIX Test Suite under Blink (`posix-openposix.conf.ts`)
+
+- The suite ships in LTP (`testcases/open_posix_testsuite`, the same pinned
+  checkout `build-ltp.sh` fetches); `scripts/conformance/build-openposix.sh`
+  compiles every `conformance/interfaces/AREA/N-M.c` test with the suite's
+  `lib/common.c` as a static x86-64 binary named `AREA_N-M` into
+  `tests/conformance/.cache/openposix-bin` (about 1600; the few that don't
+  build here are left out). Without them the suite is skipped.
+- Each test runs through Shiro's shell in its own temp directory, under the
+  Blink engine. It passes when it exits 0 (`PTS_PASS`); other statuses are
+  reported by name (FAIL, UNRESOLVED, UNSUPPORTED, UNTESTED). A test gets
+  20x its native time (8 to 30 s); leftover processes are killed.
+- Only tests that pass natively on the build host as uid 1000 are scored
+  (`openposix/native-baseline.json`, from
+  `scripts/conformance/openposix-native-baseline.mjs`).
+- Journaled to `results/detail/posix-openposix.jsonl`, output under
+  `results/detail/openposix/`: `OPENPOSIX_RESUME=1` continues a run,
+  `OPENPOSIX_RERUN_FAILED=1` (with it) reruns the failures,
+  `OPENPOSIX_ONLY=sigaction,sem_post_1-1` narrows a run, and
+  `openposix/hangs.json` lists tests that crash the worker.
+
 ## Shell in Chromium (`scripts/conformance/browser-oils.mjs`)
 
 The oils spec cases again, in the real app: builds it (`--no-build` reuses
