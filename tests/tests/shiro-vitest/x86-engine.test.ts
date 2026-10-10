@@ -214,6 +214,10 @@ const haveMemerrs = blinkHasMemerrs && tryBuild('gcc', ['-static', '-O1', '-w', 
 const cancelBin = join(out, 'cancel');
 const blinkHasTkillinfo = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_tkillinfo');
 const haveCancel = blinkHasTkillinfo && tryBuild('gcc', ['-static', '-O1', '-w', '-o', cancelBin, 'cancel.c', '-lpthread']);
+// Blink 0502: CPU clock ids naming no process or thread of ours are EINVAL
+const cpuclockidsBin = join(out, 'cpuclockids');
+const blinkHasCpuclockids = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_cpuclockids');
+const haveCpuclockids = blinkHasCpuclockids && tryBuild('gcc', ['-static', '-O1', '-w', '-o', cpuclockidsBin, 'cpuclockids.c', '-lpthread']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -748,6 +752,12 @@ it.skipIf(!haveCancel)('pthread_cancel, deferred and asynchronous, runs the clea
   const { shell } = await setup(readFileSync(cancelBin));
   const r = await run(shell, './prog');
   expect(r.output.replace(/\r\n/g, '\n')).toBe('deferred cleaned 1 canceled 1\nasync cleaned 11 canceled 1\ntkill code -6 self 1 frame 1\n');
+}, 60_000);
+
+it.skipIf(!haveCpuclockids)('CPU clock ids: the process\'s and the thread\'s read; one naming no process is EINVAL (Open POSIX)', async () => {
+  const { shell } = await setup(readFileSync(cpuclockidsBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('process ok self ok thread ok\nbogus EINVAL EINVAL EINVAL\n');
 }, 60_000);
 
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
