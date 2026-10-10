@@ -308,6 +308,64 @@ async function reflogLog(ctx: CommandContext, fs: Fs, dir: string, args: string[
   return 0;
 }
 
+/** `log --graph`: lanes of the commits still to come, one row per commit and a row where lanes fork or join */
+class Graph {
+  private lanes: string[] = [];
+  constructor(private firstParent: boolean) {}
+  private bars(n: number): string { return '| '.repeat(n); }
+  draw(c: CommitInfo, text: string, multiline: boolean): string {
+    let i = this.lanes.indexOf(c.oid);
+    if (i < 0) { this.lanes.push(c.oid); i = this.lanes.length - 1; }
+    const before = this.lanes.length;
+    const head = this.lanes.map((_, j) => (j === i ? '* ' : '| ')).join('');
+    const parents: string[] = this.firstParent ? c.commit.parent.slice(0, 1) : c.commit.parent;
+    // first parent takes this lane; the others fork off to its right
+    let forked = 0;
+    if (parents.length) this.lanes[i] = parents[0]; else this.lanes.splice(i, 1);
+    for (const p of parents.slice(1)) if (!this.lanes.includes(p)) { this.lanes.splice(i + 1 + forked, 0, p); forked++; }
+    const width = 2 * Math.max(before, this.lanes.length);
+    const lines = text.replace(/\n$/, '').split('\n');
+    const out = [(forked ? head.padEnd(width) : head) + lines[0]];
+    const rest = lines.slice(1);
+    if (forked) {
+      const fork = (this.bars(i) + '|' + '\\ '.repeat(forked).replace(/ $/, '') + (this.lanes.length > i + 1 + forked ? ' ' + this.bars(this.lanes.length - i - 1 - forked) : '')).padEnd(width);
+      out.push(multiline && rest.length ? fork + rest.shift() : fork);
+    }
+    for (const l of rest) out.push((this.bars(this.lanes.length) + l).replace(/\s+$/, ''));
+    // a lane whose commit another lane already waits for joins it
+    if (parents.length) {
+      const j = this.lanes.findIndex((o, k) => o === this.lanes[i] && k !== i);
+      if (j >= 0) {
+        const k = Math.max(i, j);
+        this.lanes.splice(k, 1);
+        out.push((this.bars(k - 1) + '|/' + ' /'.repeat(this.lanes.length - k)).padEnd(width));
+      }
+    }
+    if (multiline) out.push(this.bars(this.lanes.length).replace(/\s+$/, ''));
+    return out.join('\n');
+  }
+}
+
+/** --topo-order (and --graph): no parent before its children; a merge's later parents first, as git's stack has them */
+function topoOrder(commits: CommitInfo[]): CommitInfo[] {
+  const byOid = new Map(commits.map((c) => [c.oid, c]));
+  const indegree = new Map<string, number>(commits.map((c) => [c.oid, 0]));
+  for (const c of commits) for (const p of c.commit.parent) if (indegree.has(p)) indegree.set(p, indegree.get(p)! + 1);
+  const stack = commits.filter((c) => indegree.get(c.oid) === 0).reverse();
+  const out: CommitInfo[] = [];
+  while (stack.length) {
+    const c = stack.pop()!;
+    out.push(c);
+    for (const p of c.commit.parent) {
+      if (!indegree.has(p)) continue;
+      const n = indegree.get(p)! - 1;
+      indegree.set(p, n);
+      if (n === 0) stack.push(byOid.get(p)!);
+    }
+  }
+  return out;
+}
+
 // ── Commit walking (log, rev-list) ────────────────────────────────────────
 
 interface WalkOpts { include: string[]; exclude: string[]; max?: number; skip?: number; firstParent?: boolean; noMerges?: boolean; merges?: boolean; paths?: string[]; author?: RegExp; grep?: RegExp; reverse?: boolean }
@@ -811,7 +869,9 @@ export async function gitPlumbing(ctx: CommandContext, fs: Fs, dir: string, work
       const commits = await walk(fs, dir, o.walk, cache);
       const decor = o.decorate || /%[dD]/.test(o.format ?? '') ? await decorations(fs, dir, o.decorate === 'full') : undefined;
       const parts: string[] = [];
-      for (const c of commits) {
+      const graph = args.includes('--graph') ? new Graph(!!o.walk.firstParent) : null;
+      const ordered = graph || args.includes('--topo-order') ? topoOrder(commits) : commits;
+      for (const c of ordered) {
         let text: string;
         if (o.style === 'format') text = formatPretty(c, o.format!, { decor, date: o.date });
         else if (o.style === 'oneline') text = `${o.abbrev ? c.oid.slice(0, 7) : c.oid}${decor?.get(c.oid)?.length ? ` (${decor.get(c.oid)!.join(', ')})` : ''} ${subjectOf(c.commit.message)}`;
@@ -832,9 +892,15 @@ export async function gitPlumbing(ctx: CommandContext, fs: Fs, dir: string, work
           const extra = await formatChanges(fs, dir, ch, o.changes, nul, prefix, { from: parent, to: c.oid });
           if (extra) text = text ? text.replace(/\n$/, '') + '\n\n' + extra.replace(/\n$/, '') : extra.replace(/\n$/, '');
         }
+        if (graph) text = graph.draw(c, text, o.style !== 'oneline' && o.style !== 'format');
         parts.push(text);
       }
       if (!parts.length) return 0;
+      if (graph && o.style !== 'oneline' && o.style !== 'format') {
+        // each commit ends with its lanes as the separator line; not after the last
+        ctx.stdout += parts.join('\n').replace(/\n[| ]*$/, '') + '\n';
+        return 0;
+      }
       const sep = nul ? '\0' : o.style === 'format' || o.style === 'oneline' ? '\n' : '\n';
       if (o.style === 'medium' || o.style === 'raw' || o.style === 'fuller' || o.style === 'short' || o.style === 'full') {
         ctx.stdout += parts.join(nul ? '\0' : '\n') + (nul ? '' : '');

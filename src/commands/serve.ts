@@ -3,6 +3,7 @@
 
 import { Command, CommandContext } from './index';
 import { iframeServer, createStaticServer, VirtualRequest, VirtualResponse } from '../iframe-server';
+import { previewStreamsScript } from '../preview-streams';
 import { createServerWindow, findServerWindow, ServerWindow } from '../server-window';
 import { createSplitView, closeSplitView, getActiveSplit } from '../split-view';
 
@@ -513,12 +514,14 @@ export function injectIframeScripts(html: string, port: number): string {
   });
 
   // Inject scripts
+  // WebSocket, EventSource and streamed fetch/XHR to the in-tab servers
+  const streamsScript = previewStreamsScript(port);
   if (html.includes('<head>')) {
-    html = html.replace('<head>', '<head>' + resourceInterceptorScript);
+    html = html.replace('<head>', '<head>' + resourceInterceptorScript + streamsScript);
   } else if (html.includes('<html>')) {
-    html = html.replace('<html>', '<html><head>' + resourceInterceptorScript + '</head>');
+    html = html.replace('<html>', '<html><head>' + resourceInterceptorScript + streamsScript + '</head>');
   } else {
-    html = resourceInterceptorScript + html;
+    html = resourceInterceptorScript + streamsScript + html;
   }
 
   if (html.includes('</body>')) {

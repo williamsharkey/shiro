@@ -81,11 +81,11 @@ export function createFakeProcess(
     execPath: '/usr/local/bin/node',
     platform: 'linux',
     arch: 'x64',
-    version: 'v20.0.0',
-    versions: { node: '20.0.0', v8: '11.3.244.8', modules: '115', openssl: '3.0.13', uv: '1.46.0', zlib: '1.3.0.1-motley-71660e1', brotli: '1.1.0', napi: '9', llhttp: '8.1.1', unicode: '15.1', icu: '74.1', cldr: '44.1', tz: '2024a' },
+    version: 'v22.12.0',
+    versions: { node: '22.12.0', v8: '12.4.254.21-node.21', modules: '127', openssl: '3.0.13', uv: '1.46.0', zlib: '1.3.0.1-motley-71660e1', brotli: '1.1.0', napi: '9', llhttp: '8.1.1', unicode: '15.1', icu: '74.1', cldr: '44.1', tz: '2024a' },
     stdout: createStdout(ctx, stdoutBuf, _st),
     stderr: createStderr(ctx, stderrBuf, _st),
-    stdin: createStdin(ctx, _st, processEvents),
+    stdin: createStdin(ctx, _st, processEvents, pendingPromises),
     on: (event: string, fn: Function) => {
       (processEvents[event] ??= []).push(fn);
       return fp;
@@ -354,8 +354,18 @@ function createStderr(ctx: CommandContext, stderrBuf: string[], _st: SharedState
 }
 
 /** Create process.stdin stream */
-function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Record<string, Function[]>): any {
+function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Record<string, Function[]>, pendingPromises: Promise<any>[]): any {
   const stdinEvents: Record<string, Function[]> = {};
+  // A live stdin (ctx.readStdin) is read only once the program listens for it;
+  // until then the program may finish without it (williamsharkey/tabcomputer#2)
+  let loaded: Promise<void> | null = ctx.readStdin ? null : Promise.resolve();
+  const loadStdin = (): Promise<void> => {
+    if (!loaded) {
+      loaded = ctx.readStdin!().then((t) => { ctx.stdin = t; }, () => {});
+      pendingPromises.push(loaded);
+    }
+    return loaded;
+  };
   let stdinEnded = false;
   let stdinRawMode = false;
   let stdinEncoding: string | null = null;
@@ -366,9 +376,10 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
     fd: 0,
     on: (event: string, fn: Function) => {
       (stdinEvents[event] ??= []).push(fn);
-      if (!ctx.terminal && event === 'end' && !stdinEnded) {
+      // Piped input flows once something listens: 'end', or 'data'/'readable' as in Node (readline)
+      if (!ctx.terminal && (event === 'end' || event === 'data' || event === 'readable') && !stdinEnded) {
         stdinEnded = true;
-        queueMicrotask(() => {
+        void loadStdin().then(() => {
           if (ctx.stdin) {
             stdinReadBuffer.push(ctx.stdin);
             if (stdinEvents['data']?.length) stdinDataTaken = true;
@@ -466,9 +477,12 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
       const onEnd = () => { done = true; wake?.(); };
       if (!ctx.terminal && stdinEnded) {
         // piped input that an earlier 'end' listener set flowing: what no
-        // 'data' listener took is still unread
-        if (ctx.stdin && !stdinDataTaken) { stdinDataTaken = true; stdinReadBuffer.length = 0; onData(ctx.stdin); }
-        done = true;
+        // 'data' listener took is still unread (once a live stdin has arrived)
+        void loadStdin().then(() => {
+          if (ctx.stdin && !stdinDataTaken) { stdinDataTaken = true; stdinReadBuffer.length = 0; onData(ctx.stdin); }
+          done = true;
+          wake?.();
+        });
       } else {
         stdinObj.on('data', onData);
         stdinObj.on('end', onEnd);

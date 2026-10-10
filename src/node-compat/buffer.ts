@@ -8,12 +8,15 @@
  */
 
 export function createFakeBuffer(): any {
-  function FakeBuffer(arg?: any, encodingOrOffset?: any, _length?: any): any {
+  function FakeBuffer(arg?: any, encodingOrOffset?: any, length?: any): any {
     if (typeof arg === 'number') {
       return FakeBuffer.alloc(arg);
     }
-    return FakeBuffer.from(arg, encodingOrOffset);
+    return FakeBuffer.from(arg, encodingOrOffset, length);
   }
+  // Buffer[Symbol.species] is Buffer, as in node: ws makes views with
+  // `new Buffer[Symbol.species](arrayBuffer, offset, length)` (its FastBuffer)
+  Object.defineProperty(FakeBuffer, Symbol.species, { get: () => FakeBuffer, configurable: true });
   FakeBuffer.prototype = Object.create(Uint8Array.prototype);
   FakeBuffer.prototype.constructor = FakeBuffer;
   FakeBuffer.prototype.toString = function(encoding?: string, start?: number, end?: number) {
@@ -60,7 +63,31 @@ export function createFakeBuffer(): any {
   FakeBuffer.prototype.replace = function(search: any, replacement: any) { return this.toString().replace(search, replacement); };
   FakeBuffer.prototype.startsWith = function(s: string) { return this.toString().startsWith(s); };
   FakeBuffer.prototype.endsWith = function(s: string) { return this.toString().endsWith(s); };
-  FakeBuffer.prototype.includes = function(s: any) { if (typeof s === 'string') return this.toString().includes(s); return Uint8Array.prototype.includes.call(this, s); };
+  FakeBuffer.prototype.includes = function(s: any, from?: any, enc?: any) { return findIn(this, s, from, enc, false) !== -1; };
+  // indexOf/lastIndexOf/includes of a string, Buffer or byte, as node's (Uint8Array's
+  // only finds a number: a protocol parser's buf.indexOf('\r\n\r\n') was always -1)
+  const needleBytes = (v: any, enc?: string): Uint8Array | number =>
+    typeof v === 'number' ? v & 255 : typeof v === 'string' ? FakeBuffer.from(v, enc) : v instanceof Uint8Array ? v : new Uint8Array(v);
+  const findIn = (hay: Uint8Array, v: any, from: any, enc: any, last: boolean): number => {
+    if (typeof from === 'string') { enc = from; from = undefined; }
+    const n = needleBytes(v, enc);
+    const len = hay.length;
+    let start = from === undefined ? (last ? len : 0) : Number(from) | 0;
+    if (start < 0) start = Math.max(0, len + start);
+    if (typeof n === 'number') return last ? Uint8Array.prototype.lastIndexOf.call(hay, n, Math.min(start, len - 1)) : Uint8Array.prototype.indexOf.call(hay, n, start);
+    if (n.length === 0) return Math.min(start, len);
+    if (last) {
+      for (let i = Math.min(start, len - n.length); i >= 0; i--) { let j = 0; while (j < n.length && hay[i + j] === n[j]) j++; if (j === n.length) return i; }
+      return -1;
+    }
+    outer: for (let i = start; i <= len - n.length; i++) {
+      for (let j = 0; j < n.length; j++) if (hay[i + j] !== n[j]) continue outer;
+      return i;
+    }
+    return -1;
+  };
+  FakeBuffer.prototype.indexOf = function(v: any, from?: any, enc?: any) { return findIn(this, v, from, enc, false); };
+  FakeBuffer.prototype.lastIndexOf = function(v: any, from?: any, enc?: any) { return findIn(this, v, from, enc, true); };
   FakeBuffer.prototype.equals = function(other: Uint8Array) {
     if (this.length !== other.length) return false;
     for (let i = 0; i < this.length; i++) if (this[i] !== other[i]) return false;

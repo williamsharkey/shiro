@@ -108,9 +108,13 @@ describe('Claude Code pinned install', () => {
   it('a stale cli.js from an earlier install does not mask a broken latest', async () => {
     // Pinned install first, so cli.js exists...
     await install(shell, fs, `@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}`);
-    // ...then latest over the top. npm does not clean the directory, so cli.js
-    // survives while the symlink is repointed at the native placeholder.
+    // ...then latest over the top. A cli.js left from the earlier install
+    // (npm installs that don't clean the directory) stays while the symlink is
+    // repointed at the native placeholder; tabcomputer's npm replaces the
+    // directory, so the leftover is put back by hand.
+    const stale = await fs.readFile(CLAUDE_CODE_CLI_JS);
     await install(shell, fs, '@anthropic-ai/claude-code');
+    await fs.writeFile(CLAUDE_CODE_CLI_JS, stale);
     expect((await fs.stat(CLAUDE_CODE_CLI_JS)).type).toBe('file');
 
     expect(await isClaudeCodeInstalled(fs)).toBe(false);

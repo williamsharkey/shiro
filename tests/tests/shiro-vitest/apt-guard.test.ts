@@ -9,9 +9,9 @@ import { aptGuardProgram, aptSubcommand, brokenPackages } from '@shiro/debian/ap
 const STATUS_OK = 'Package: jq\nStatus: install ok installed\nVersion: 1.7\n\nPackage: libjq1\nStatus: install ok installed\n';
 const STATUS_BROKEN = 'Package: jq\nStatus: install reinstreq half-installed\n\nPackage: libonig5\nStatus: install ok unpacked\n\nPackage: hello\nStatus: install ok installed\n';
 
-function machine(opts: { status: string; updates?: string[]; uid?: number; behave: (argv: string[], m: any) => number }) {
+function machine(opts: { status: string; updates?: string[]; journal?: Record<string, string>; uid?: number; behave: (argv: string[], m: any) => number }) {
   const calls: string[] = [];
-  const m: any = { status: opts.status, updates: opts.updates ?? [], stderr: '' };
+  const m: any = { status: opts.status, updates: opts.updates ?? [], journal: opts.journal, stderr: '' };
   const proc: any = {
     argv: ['/usr/bin/shiro-apt', '/usr/bin/apt-get', 'install', '-y', 'jq'], env: {}, cwd: '/root', uid: opts.uid ?? 0,
     fds: new Map([[2, { write: async (b: Uint8Array) => { m.stderr += new TextDecoder().decode(b); return b.length; } }]]),
@@ -21,7 +21,13 @@ function machine(opts: { status: string; updates?: string[]; uid?: number; behav
   const kernel: any = {
     fs: {
       readdir: async (p: string) => { if (p === '/var/lib/dpkg/updates') return m.updates; throw new Error('ENOENT'); },
-      readFile: async (p: string) => { if (p === '/var/lib/dpkg/status') return m.status; throw new Error('ENOENT'); },
+      readFile: async (p: string) => {
+        if (p === '/var/lib/dpkg/status') return m.status;
+        if (p.startsWith('/var/lib/dpkg/updates/')) return m.journal?.[p.slice(22)] ?? '';
+        throw new Error('ENOENT');
+      },
+      mkdir: async () => {},
+      rename: async (from: string) => { m.updates = m.updates.filter((f: string) => from !== `/var/lib/dpkg/updates/${f}`); m.moved = [...(m.moved ?? []), from]; },
     },
     spawn: (o: any) => { calls.push([o.path, ...o.argv.slice(1)].join(' ')); const pid = next++; exits.set(pid, opts.behave([o.path, ...o.argv.slice(1)], m)); return { pid }; },
     waitpid: async (pid: number) => ({ pid, status: (exits.get(pid) ?? 0) << 8 }),
@@ -50,7 +56,7 @@ describe('shiro-apt (apt recovery)', () => {
 
   it('an interrupted dpkg and half-installed packages are recovered before the install', async () => {
     const { proc, kernel, calls, m } = machine({
-      status: STATUS_BROKEN, updates: ['0001'],
+      status: STATUS_BROKEN, updates: ['0001'], journal: { '0001': 'Package: jq\nStatus: install reinstreq half-installed\n' },
       behave: (argv, m) => {
         if (argv[1] === '--configure') m.updates = [];
         if (argv.includes('-f')) m.status = STATUS_OK;
@@ -61,6 +67,15 @@ describe('shiro-apt (apt recovery)', () => {
     expect(calls).toEqual(['/usr/bin/dpkg --configure -a', '/usr/bin/apt-get.debian -f install -y', '/usr/bin/apt-get.debian install -y jq']);
     expect(m.stderr).toMatch(/^tabcomputer: dpkg was interrupted/);
     expect(m.stderr).toMatch(/jq, libonig5/);
+  });
+
+  it('a torn journal entry (no status stanza) is moved aside before dpkg --configure -a', async () => {
+    const { proc, kernel, calls, m } = machine({ status: STATUS_OK, updates: ['0003', '0004', 'tmp.i'], behave: () => 0 });
+    m.journal = { '0003': 'Package: jq\nStatus: install ok unpacked\n', '0004': 'Package: li' };
+    expect(await aptGuardProgram(proc, kernel)).toBe(0);
+    expect(m.moved).toEqual(['/var/lib/dpkg/updates/0004']);
+    expect(calls[0]).toBe('/usr/bin/dpkg --configure -a');
+    expect(m.stderr).toMatch(/journal entry 0004 was incomplete/);
   });
 
   it('an install that fails part-way is recovered and retried once', async () => {

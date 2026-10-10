@@ -269,7 +269,7 @@ describe('Deficiency v2 Fixes', () => {
     it('execSync("node --version") returns version', async () => {
       const ctx = createCtx(shell, fs, ['-e', 'const cp = require("child_process"); const r = cp.execSync("node --version", {encoding:"utf8"}); process.stdout.write(r)']);
       await nodeCmd.exec(ctx);
-      expect(ctx.stdout.trim()).toBe('v20.0.0');
+      expect(ctx.stdout.trim()).toBe('v22.12.0');
     });
 
     it('execSync("uname -s") returns Linux', async () => {

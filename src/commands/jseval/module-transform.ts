@@ -1027,116 +1027,82 @@ export function transformESModules(src: string): string {
     src = ms.src;
   }
 
+  // Import and export statements, rewritten only in code (not in strings or
+  // templates: create-vite carries `import react from '...'` as template text),
+  // spaced or minified alike (`import{a as b}from"x"`, identifiers with $)
+  const ms: MaskedSource = { src, mask: codeMask(src) };
+  const I = '(?<![\\w$.])';
+  const asColon = (list: string) => list.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/([\w$]+)\s+as\s+([\w$]+)/g, '$1: $2');
+  const exportItems = (list: string) => list.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '')
+    .split(',').map((x: string) => x.trim()).filter((x: string) => x && /^[\w$]/.test(x))
+    .map((item: string) => { const m = /^([\w$]+)\s+as\s+([\w$]+)$/.exec(item); return m ? [m[1], m[2]] : [item, item]; });
+
   // import.meta → __import_meta (must be before import statement transforms)
-  src = src.replace(/import\.meta/g, '__import_meta');
+  replaceInCode(ms, /import\.meta/g, '__import_meta');
 
   // import Default, { named } from 'y' → combined default + named import
-  src = src.replace(/import\s+(\w+)\s*,\s*\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]\s*;?/g,
-    (_, defaultName, namedImports, mod) => {
-      const cleanImports = namedImports.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
-      const fixed = cleanImports.replace(/(\w+)\s+as\s+(\w+)/g, '$1: $2');
-      return `const ${defaultName} = __shiro_require("${mod}"); const {${fixed}} = __shiro_require("${mod}");`;
-    });
+  replaceInCode(ms, new RegExp(I + String.raw`import\s+([\w$]+)\s*,\s*\{([^}]+)\}\s*from\s*['"]([^'"]+)['"]\s*;?`, 'g'),
+    (_: string, defaultName: string, namedImports: string, mod: string) =>
+      `const ${defaultName} = __shiro_require("${mod}"); const {${asColon(namedImports)}} = __shiro_require("${mod}");`);
+
+  // import Default, * as ns from 'y'
+  replaceInCode(ms, new RegExp(I + String.raw`import\s+([\w$]+)\s*,\s*\*\s*as\s+([\w$]+)\s+from\s*['"]([^'"]+)['"]\s*;?`, 'g'),
+    'const $1 = __shiro_require("$3"); const $2 = __shiro_require("$3");');
 
   // import x from 'y' → const x = require('y')
-  src = src.replace(/import\s+(\w+)\s+from\s+['"]([^'"]+)['"]\s*;?/g,
+  replaceInCode(ms, new RegExp(I + String.raw`import\s+([\w$]+)\s+from\s*['"]([^'"]+)['"]\s*;?`, 'g'),
     'const $1 = __shiro_require("$2");');
 
-  // import { a, b } from 'y' → const { a, b } = require('y')
-  // Also handles: import { a as b } → const { a: b }
-  src = src.replace(/import\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]\s*;?/g,
-    (_, imports, mod) => {
-      // Strip comments and fix 'as' syntax
-      const cleanImports = imports.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
-      const fixed = cleanImports.replace(/(\w+)\s+as\s+(\w+)/g, '$1: $2');
-      return `const {${fixed}} = __shiro_require("${mod}");`;
-    });
+  // import { a, b } from 'y' → const { a, b } = require('y'); a as b → a: b
+  replaceInCode(ms, new RegExp(I + String.raw`import\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]\s*;?`, 'g'),
+    (_: string, imports: string, mod: string) => asColon(imports).trim() ? `const {${asColon(imports)}} = __shiro_require("${mod}");` : `__shiro_require("${mod}");`);
 
   // import * as x from 'y' → const x = require('y')
-  src = src.replace(/import\s+\*\s+as\s+(\w+)\s+from\s+['"]([^'"]+)['"]\s*;?/g,
+  replaceInCode(ms, new RegExp(I + String.raw`import\s*\*\s*as\s+([\w$]+)\s+from\s*['"]([^'"]+)['"]\s*;?`, 'g'),
     'const $1 = __shiro_require("$2");');
 
   // import 'y' → require('y')
-  src = src.replace(/import\s+['"]([^'"]+)['"]\s*;?/g,
-    '__shiro_require("$1");');
+  replaceInCode(ms, new RegExp(I + String.raw`import\s*['"]([^'"]+)['"]\s*;?`, 'g'), '__shiro_require("$1");');
 
   // export default x → module.exports = x
-  src = src.replace(/export\s+default\s+/g, '__shiro_module.exports = ');
+  replaceInCode(ms, new RegExp(I + String.raw`export\s+default\s+`, 'g'), '__shiro_module.exports = ');
 
-  // export { x, y } from 'z' or export { x as y } from 'z' (handles multiline and comments)
-  // Note: \s* allows no space between export and { (e.g., export{x})
-  src = src.replace(/export\s*\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]\s*;?/g,
-    (_, exports, mod) => {
-      // Strip comments from exports
-      const cleanExports = exports.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
-      const items = cleanExports.split(',').map((s: string) => s.trim()).filter((s: string) => s && /^\w/.test(s));
-      const assigns = items.map((item: string) => {
-        const asMatch = item.match(/^(\w+)\s+as\s+(\w+)$/);
-        if (asMatch) {
-          return `__shiro_module.exports.${asMatch[2]} = __shiro_require("${mod}").${asMatch[1]};`;
-        }
-        return `__shiro_module.exports.${item} = __shiro_require("${mod}").${item};`;
-      }).join(' ');
-      return assigns;
-    });
+  // export { x, y as z } from 'w'
+  replaceInCode(ms, new RegExp(I + String.raw`export\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]\s*;?`, 'g'),
+    (_: string, list: string, mod: string) => exportItems(list).map(([local, exported]) =>
+      `__shiro_module.exports.${exported} = __shiro_require("${mod}").${local};`).join(' '));
 
   // export * as name from 'z' → module.exports.name = require('z')
-  src = src.replace(/export\s+\*\s+as\s+(\w+)\s+from\s+['"]([^'"]+)['"]\s*;?/g,
+  replaceInCode(ms, new RegExp(I + String.raw`export\s*\*\s*as\s+([\w$]+)\s+from\s*['"]([^'"]+)['"]\s*;?`, 'g'),
     '__shiro_module.exports.$1 = __shiro_require("$2");');
 
   // export * from 'z' → Object.assign(module.exports, require('z'))
-  src = src.replace(/export\s+\*\s+from\s+['"]([^'"]+)['"]\s*;?/g,
+  replaceInCode(ms, new RegExp(I + String.raw`export\s*\*\s*from\s*['"]([^'"]+)['"]\s*;?`, 'g'),
     'Object.assign(__shiro_module.exports, __shiro_require("$1"));');
 
-  // export { x, y } or export { x as y } → module.exports.x = x; module.exports.y = y;
-  // Note: \s* allows no space between export and { (e.g., export{x as y})
-  src = src.replace(/export\s*\{([^}]+)\}\s*;?/g, (_, exports) => {
-    // Strip comments and parse exports like "x, y as z, foo"
-    const cleanExports = exports.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
-    const items = cleanExports.split(',').map((s: string) => s.trim()).filter((s: string) => s && /^\w/.test(s));
-    return items.map((item: string) => {
-      const asMatch = item.match(/^(\w+)\s+as\s+(\w+)$/);
-      if (asMatch) {
-        // export { local as exported }
-        return `__shiro_module.exports.${asMatch[2]} = ${asMatch[1]};`;
-      }
-      // export { x }
-      return `__shiro_module.exports.${item} = ${item};`;
-    }).join(' ');
-  });
+  // export { x, y as z } → module.exports.x = x; module.exports.z = y;
+  replaceInCode(ms, new RegExp(I + String.raw`export\s*\{([^}]*)\}\s*;?`, 'g'),
+    (_: string, list: string) => exportItems(list).map(([local, exported]) =>
+      `__shiro_module.exports.${exported} = ${local};`).join(' '));
 
   // Track named exports to add module.exports at the end
   const namedExports: string[] = [];
+  const track = (name: string) => { namedExports.push(name); };
 
   // export const/let/var x = ... → const x = ...; (track x)
-  src = src.replace(/export\s+(const|let|var)\s+(\w+)\s*=/g, (_, decl, name) => {
-    namedExports.push(name);
-    return `${decl} ${name} =`;
-  });
+  replaceInCode(ms, new RegExp(I + String.raw`export\s+(const|let|var)\s+([\w$]+)\s*=`, 'g'),
+    (_: string, decl: string, name: string) => { track(name); return `${decl} ${name} =`; });
+  // export var/let x; (declaration without initialization)
+  replaceInCode(ms, new RegExp(I + String.raw`export\s+(var|let)\s+([\w$]+)\s*;`, 'g'),
+    (_: string, decl: string, name: string) => { track(name); return `${decl} ${name};`; });
+  // export [async] function[*] name / export class Name
+  replaceInCode(ms, new RegExp(I + String.raw`export\s+(async\s+function\s*\*?|function\s*\*?|class)\s*([\w$]+)`, 'g'),
+    (_: string, kind: string, name: string) => { track(name); return `${kind.replace(/\s+/g, ' ').replace(/function \*/, 'function*')} ${name}`; });
 
-  // export var/let x; (declaration without initialization) → var x; (track x)
-  src = src.replace(/export\s+(var|let)\s+(\w+)\s*;/g, (_, decl, name) => {
-    namedExports.push(name);
-    return `${decl} ${name};`;
-  });
-
-  // export function name() → function name(); (track name)
-  src = src.replace(/export\s+function\s+(\w+)/g, (_, name) => {
-    namedExports.push(name);
-    return `function ${name}`;
-  });
-
-  // export class Name → class Name; (track Name)
-  src = src.replace(/export\s+class\s+(\w+)/g, (_, name) => {
-    namedExports.push(name);
-    return `class ${name}`;
-  });
-
-  // export async function name() → async function name(); (track name)
-  src = src.replace(/export\s+async\s+function\s+(\w+)/g, (_, name) => {
-    namedExports.push(name);
-    return `async function ${name}`;
-  });
+  // TypeScript's type-only forms
+  replaceInCode(ms, new RegExp(I + String.raw`export\s+type\s+`, 'g'), '/* export type */ ');
+  replaceInCode(ms, new RegExp(I + String.raw`import\s+type\s+[^;]+;?`, 'g'), '/* import type */');
+  src = ms.src;
 
   // Add module.exports for all tracked named exports at the end
   if (namedExports.length > 0) {
@@ -1160,27 +1126,6 @@ export function transformESModules(src: string): string {
   src = src.replace(/(\{\s*)Buffer(\s*,)/g, '$1/* Buffer */$2');
   src = src.replace(/(,\s*)Buffer(\s*\})/g, '$1/* Buffer */$2');
   src = src.replace(/(,\s*)Buffer(\s*,)/g, '$1/* Buffer */$2');
-
-  // Catch-all: remove any remaining export keywords that weren't handled
-  // This handles edge cases like TypeScript 'export type' that might slip through
-  src = src.replace(/\bexport\s+type\s+/g, '/* export type */ ');
-  src = src.replace(/\bimport\s+type\s+[^;]+;?/g, '/* import type */');
-
-  // Final safety: if any export/import statements remain, handle them aggressively
-  // This prevents "Unexpected token 'export'" errors
-
-  // Catch any remaining export { name } patterns (including no-space like export{x})
-  while (/\bexport\s*\{/.test(src)) {
-    src = src.replace(/\bexport\s*\{([^}]*)\}\s*;?/g, (_, names) => {
-      const cleanNames = names.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
-      const items = cleanNames.split(',').map((s: string) => s.trim()).filter((s: string) => s && /^\w/.test(s));
-      return items.map((item: string) => {
-        const asMatch = item.match(/^(\w+)\s+as\s+(\w+)$/);
-        if (asMatch) return `__shiro_module.exports.${asMatch[2]} = ${asMatch[1]};`;
-        return `__shiro_module.exports.${item} = ${item};`;
-      }).join(' ');
-    });
-  }
 
   // Note: We removed aggressive catch-all transforms for import/export
   // as they were corrupting URLs in strings (//example.com) and other code.

@@ -11,7 +11,7 @@ export const revCmd: Command = {
   async exec(ctx) {
     try {
       const { positional } = parseArgs(ctx.args, []);
-      const { content } = await readInput(positional, ctx.stdin, ctx.fs, ctx.cwd, ctx.fs.resolvePath);
+      const { content } = await readInput(positional, () => ctx.stdin, ctx.fs, ctx.cwd, ctx.fs.resolvePath);
       if (!content) return 0;
       const lines = content.endsWith('\n') ? content.slice(0, -1).split('\n') : content.split('\n');
       const reversed = lines.map(l => l.split('').reverse().join(''));
@@ -30,7 +30,7 @@ export const tacCmd: Command = {
   async exec(ctx) {
     try {
       const { positional } = parseArgs(ctx.args, []);
-      const { content } = await readInput(positional, ctx.stdin, ctx.fs, ctx.cwd, ctx.fs.resolvePath);
+      const { content } = await readInput(positional, () => ctx.stdin, ctx.fs, ctx.cwd, ctx.fs.resolvePath);
       if (!content) return 0;
       const lines = content.endsWith('\n') ? content.slice(0, -1).split('\n') : content.split('\n');
       ctx.stdout += lines.reverse().join('\n') + '\n';
@@ -67,7 +67,7 @@ export const shufCmd: Command = {
         lines = [];
         for (let n = lo; n <= hi; n++) lines.push(String(n));
       } else {
-        const { content } = await readInput(positional, ctx.stdin, ctx.fs, ctx.cwd, ctx.fs.resolvePath);
+        const { content } = await readInput(positional, () => ctx.stdin, ctx.fs, ctx.cwd, ctx.fs.resolvePath);
         if (!content) return 0;
         lines = content.endsWith('\n') ? content.slice(0, -1).split('\n') : content.split('\n');
       }

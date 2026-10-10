@@ -4,11 +4,15 @@
 // - linkedom (server-side DOM testing)
 // - Simpler architecture (no MessageChannel, no SW lifecycle)
 
+import { bytePipe, type ByteChannel } from './byte-pipe';
+import { previewStreamsScript, installStreamProxy } from './preview-streams';
+
 export interface VirtualRequest {
   method: string;
   path: string;
   headers?: Record<string, string>;
-  body?: string | null;
+  /** Bytes from a preview's fetch/XHR (preview-streams.ts) */
+  body?: string | Uint8Array | null;
   query?: Record<string, string>;
 }
 
@@ -16,15 +20,19 @@ export interface VirtualResponse {
   status?: number;
   statusText?: string;
   headers?: Record<string, string>;
-  body?: string | Uint8Array | object;
+  /** A ReadableStream is a response still being written (server-sent events, flushHeaders) */
+  body?: string | Uint8Array | ReadableStream<Uint8Array> | object;
   contentType?: string;
 }
 
 export type RequestHandler = (req: VirtualRequest) => Promise<VirtualResponse> | VirtualResponse;
+/** Takes a raw connection to the port (a WebSocket upgrade starts with its HTTP request) */
+export type ConnectHandler = (conn: ByteChannel) => void;
 
 interface RegisteredServer {
   port: number;
   handler: RequestHandler;
+  connect?: ConnectHandler;
   name?: string;
   iframe?: HTMLIFrameElement;
   resourceInterceptorScript?: string;
@@ -55,16 +63,29 @@ class IframeServerManager {
   /**
    * Register a server handler on a virtual port
    */
-  serve(port: number, handler: RequestHandler, name?: string): () => void {
+  serve(port: number, handler: RequestHandler, name?: string, opts?: { connect?: ConnectHandler }): () => void {
     if (this.servers.has(port)) {
       throw new Error(`Port ${port} already in use`);
     }
 
-    this.servers.set(port, { port, handler, name });
+    this.servers.set(port, { port, handler, name, connect: opts?.connect });
     console.log(`[IframeServer] Server "${name || 'unnamed'}" listening on port ${port}`);
 
     // Return cleanup function
     return () => this.close(port);
+  }
+
+  /**
+   * A raw connection to the server on `port` (what a WebSocket upgrade needs):
+   * the caller's end of a byte pipe whose other end the server takes.
+   */
+  connect(port: number): ByteChannel {
+    const server = this.servers.get(port);
+    if (!server) throw new Error(`ECONNREFUSED: no server listening on port ${port}`);
+    if (!server.connect) throw new Error(`ECONNREFUSED: the server on port ${port} takes no connections`);
+    const [mine, theirs] = bytePipe();
+    server.connect(theirs);
+    return mine;
   }
 
   /**
@@ -492,7 +513,7 @@ class IframeServerManager {
     server.navigationScript = navigationScript;
 
     // Process HTML: rewrite resource URLs, inject interceptor + navigation scripts
-    html = this.prepareHtmlForIframe(html, resourceInterceptorScript, navigationScript);
+    html = this.prepareHtmlForIframe(html, resourceInterceptorScript, navigationScript, port);
 
     // Use srcdoc for same-origin access
     iframe.srcdoc = html;
@@ -538,7 +559,9 @@ class IframeServerManager {
    * Process HTML for display in a virtual server iframe.
    * Rewrites resource URLs, injects resource interceptor and navigation scripts.
    */
-  private prepareHtmlForIframe(html: string, resourceInterceptorScript: string, navigationScript: string): string {
+  private prepareHtmlForIframe(html: string, resourceInterceptorScript: string, navigationScript: string, port?: number): string {
+    // WebSocket, EventSource and streamed fetch/XHR to the in-tab servers (preview-streams.ts)
+    if (port !== undefined) resourceInterceptorScript += previewStreamsScript(port);
     // Rewrite relative href/src to data-vfs-* so the browser doesn't try to load them directly
     html = html.replace(/<link([^>]*)\shref=(["'])([^"']+)\2/gi, (match, attrs, quote, href) => {
       if (href.startsWith('/') || href.startsWith('./') || href.startsWith('../')) {
@@ -599,7 +622,7 @@ class IframeServerManager {
 
     // Process HTML with cached resource proxy + navigation scripts
     if (server.resourceInterceptorScript && server.navigationScript) {
-      html = this.prepareHtmlForIframe(html, server.resourceInterceptorScript, server.navigationScript);
+      html = this.prepareHtmlForIframe(html, server.resourceInterceptorScript, server.navigationScript, port);
     }
 
     // Update iframe path attribute
@@ -667,6 +690,7 @@ class IframeServerManager {
   ensureResourceProxy(): void {
     if (this.resourceProxySetup) return;
     this.resourceProxySetup = true;
+    installStreamProxy(this);
 
     window.addEventListener('message', async (event: MessageEvent) => {
       if (event.data?.type !== 'vfs-fetch') return;
@@ -688,6 +712,8 @@ class IframeServerManager {
           responseBody = response.body;
         } else if (response.body instanceof Uint8Array) {
           responseBody = new TextDecoder().decode(response.body);
+        } else if (response.body instanceof ReadableStream) {
+          responseBody = await new Response(response.body).text();
         } else if (response.body) {
           responseBody = JSON.stringify(response.body);
         } else {

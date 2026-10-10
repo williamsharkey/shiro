@@ -142,6 +142,57 @@ Shell and platform fixes these needed (all with tests in the same file):
   script's cached copy of a file follows other processes' writes (a
   watcher's re-read got the contents from when the script started).
   chokidar 3 reports add/change/unlink/addDir.
+- Node, dev servers: a preview window (`serve open PORT`, split views) reaches
+  the in-tab server it shows over WebSocket, EventSource and streamed
+  fetch/XHR. The preview page's `WebSocket`, `EventSource`, `fetch` and
+  `XMLHttpRequest` go to the in-tab servers for local URLs (relative,
+  `localhost`, `127.0.0.1`, no host); the WebSocket is a raw connection to the
+  port (`iframeServer.connect`) with the page doing RFC 6455, so the server end
+  is whatever node or a guest program has there. `http.createServer` is
+  node-like: 'request' and 'upgrade' events, `IncomingMessage` a Readable,
+  `ServerResponse` with `statusCode`/`setHeader`/`getHeaders`/byte bodies, and
+  `text/event-stream` (or `flushHeaders()`) responses stream each write. A
+  kernel listener (`net.createServer`, a guest program) takes the raw
+  connection too. Checked in vitest and Chromium: the `ws` package (an
+  'upgrade' echo), Socket.IO 4.8 from the preview (polling, then the upgrade to
+  WebSocket, events both ways), SSE events as they are written, and a
+  live-reload loop (edit a file in the shell → `fs.watch` → a `ws` push → the
+  preview re-renders). `ws` takes its node build (its browser build only
+  throws); `Buffer.indexOf` finds strings and Buffers; `Buffer[Symbol.species]`
+  is `Buffer`. Not yet: the vite dev server. Its native esbuild and Rollup
+  aren't installed (optional platform packages), and with their WebAssembly
+  builds swapped in, esbuild's Go runtime runs as a child node in the page's
+  realm and takes over page globals (`performance`, `TextEncoder`, `crypto`:
+  assignment to `crypto` is now ignored, but esbuild redefines it), and
+  `import('vite')` picks its CJS build, which looks for `package.json` at the
+  page's URL.
+- npm: `npm install` lays out node_modules as npm does (each package as high
+  as it goes, a conflicting version nested under the package that needs it,
+  without hiding a version another package uses), follows
+  optionalDependencies, peer dependencies and `npm:` aliases, and replaces a
+  package directory when its version changes (two versions of a package used
+  to overwrite each other in a flat node_modules). Native platform builds are
+  left out (`os`/`cpu`); WebAssembly ones are taken: `cpu: ["wasm32"]`
+  bindings, esbuild as `esbuild-wasm`, rollup as `@rollup/wasm-node`, and
+  rolldown with `@rolldown/binding-wasm32-wasi`. `npm create <name>` (and
+  `npm init <name>`) runs `create-<name>`; `npm exec`/`npm x` is npx; npx
+  installs into `~/.npm/_npx` instead of the project. Measured in Chromium:
+  `npm create vite@latest app -- --template react` 0.6 s (npx cache warm),
+  `npm install` in it 2.0 s (28 packages).
+- Node: a process's `globalThis`/`global` is its own object (modules get it
+  as a parameter): `globalThis.process` and `Buffer` are the process's, and a
+  page global the process replaces or redefines (Go's wasm_exec sets
+  `crypto`, `performance`, `TextEncoder`) stays replaced for that process
+  only; globals the page didn't have are written through, so bare
+  identifiers see them (mocha's `describe`). An unhandled rejection exits 1
+  unless a process 'unhandledRejection' listener takes it. The ES module
+  transform reads minified imports (`import{a as b}from"x"`) and leaves
+  import text in strings and templates alone.
+- Not yet: `npm run dev` of that vite 8 app. Rolldown's WebAssembly binding
+  for node needs `node:wasi` and real threads (`worker_threads`); the way in
+  is its browser build (`@rolldown/browser`: Web Workers, a fetched .wasm),
+  which needs a `Worker` from a module file and its WASI file system on the
+  project's files.
 - Node: a script's timers and intervals end with it. An interval left by a
   script that called `process.exit()` kept firing in the page, and its
   `setTimeout`s became the next script's timers, so that script never went
@@ -452,8 +503,20 @@ tabcomputer changes these programs needed (tests in `x86-engine.test.ts`,
 `src/commands/git.ts`; the plumbing in `src/commands/git-plumbing.ts`). It
 answers what git UIs (tig, lazygit) and agents call; tests in
 `git.test.ts` (plumbing) and `compat-tools.test.ts` (tig, lazygit).
-`pkg install git` replaces it with the real git (in Blink), for what is
-missing here.
+`pkg install git` replaces it with the real git (in Blink).
+
+What the built-in doesn't have goes to the real git: a subcommand it lacks
+(`blame`, `bisect`, `submodule`, `describe`, `restore`, `clean`,
+`worktree add`, ...), or an option it doesn't know (each subcommand lists
+its options in `src/commands/git-route.ts`), runs `/usr/bin/git` with the
+same command line, installing the package on first use (a note on stderr;
+`pkg remove git` goes back). `rebase`, `cherry-pick` and `revert` go to it
+too, as the built-in's versions replay whole files. Without the x86 engine
+or offline, the built-in says what it didn't understand as git does
+(`error: unknown option`, exit 129; `git: 'blame' is not a git command`,
+exit 1) instead of ignoring it. Combined short options (`-qb NAME`,
+`-qam MSG`) are split first. tig and lazygit only use what the built-in
+has (their tests check that nothing went to the full git).
 
 | Command | Supported |
 | --- | --- |
@@ -465,8 +528,8 @@ missing here.
 | refs | `for-each-ref --format` (`refname[:short\|lstrip=N]`, `objectname[:short]`, `objecttype`, `HEAD`, `subject`, `body`, author/committer name/email/date, `upstream[:short\|track\|trackshort\|remotename]`), `--sort`, `--count`, `--points-at`; `show-ref`; `symbolic-ref`; `branch -v -vv --format --show-current` |
 | objects, index | `cat-file -t -s -p -e`, `REV:path`, `--batch[-check]`; `ls-files -z -m -o -d -s --exclude-standard`; `update-index --add --remove [--stdin -z]`; `merge-base [--is-ancestor\|--all]`; `rev-list [--count --left-right --parents]`; `worktree list [--porcelain]` |
 | `config` | `--get --get-all --get-regexp --list -z/--null --name-only --type=bool\|int --default`, `--global/--local/--system`, `/etc/gitconfig` and `-c` overrides |
-| porcelain fixes | `commit -am`/`-qam` (`-a` stages tracked changes), `-q`, `-F`; `checkout -q -b NAME [START]`, `-B`, `checkout REV -- paths` (HEAD stays on the branch), a remote branch, a commit; `switch`; `add -u`/`-A`/`--`/deletions; `stash -q`, `stash push -m`, `stash list --format/-z` (`%gd %gs %ct`), `stash@{N}` from the newest; `fetch --all` with no remotes |
-| not here | `apply` (hunk staging), `rebase -i`, `blame`, `notes`, signing, submodules: `pkg install git` |
+| porcelain fixes | `merge --no-ff --ff-only -m -q` (the work tree follows the merge); `log --graph` (topo order); `ls-remote URL` outside a repository; `fetch -q`; `push -f -u`; `clone --branch --depth=N`; `commit -am`/`-qam` (`-a` stages tracked changes), `-q`, `-F`; `checkout -q -b NAME [START]`, `-qb`, `-B`, `checkout REV -- paths` (HEAD stays on the branch), a remote branch, a commit; `switch`; `add -u`/`-A`/`--`/deletions; `stash -q`, `stash push -m`, `stash list --format/-z` (`%gd %gs %ct`), `stash@{N}` from the newest; `fetch --all` with no remotes |
+| the full git's | `apply` (hunk staging), `rebase`, `cherry-pick`, `revert`, `blame`, `bisect`, `describe`, `restore`, `clean`, `submodule`, `worktree add`, `notes`, signing, `log --since`, ...: run by `/usr/bin/git`, installed on first use |
 
 ### Popular CLI tools from Debian (apt)
 

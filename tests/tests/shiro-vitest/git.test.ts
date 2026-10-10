@@ -247,4 +247,73 @@ describe('git commands', () => {
       expect((await sh('cd /tmp/p && git rev-parse --abbrev-ref HEAD && git stash pop -q && git status --porcelain')).out).toBe('topic\n M a.txt\n');
     });
   });
+  describe('options as git takes them (tabcomputer#4)', () => {
+    const setup = async () => {
+      await sh('rm -rf /tmp/o && mkdir -p /tmp/o && cd /tmp/o && git init -q && git config user.name A && git config user.email a@b.c && echo 1 > f && git add f');
+    };
+
+    it('combined short options: commit -qm, checkout -qb creates and switches', async () => {
+      await setup();
+      const c = await sh('cd /tmp/o && git commit -qm init');
+      expect([c.code, c.out, c.err]).toEqual([0, '', '']);
+      const b = await sh('cd /tmp/o && git checkout -qb feat && git rev-parse --abbrev-ref HEAD');
+      expect(b.out).toBe('feat\n');
+      await sh('cd /tmp/o && echo 2 >> f && git commit -qam two');
+      expect((await sh('cd /tmp/o && git log --format=%s main')).out).toBe('init\n'); // not on main
+      expect((await sh('cd /tmp/o && git log --format=%s feat')).out).toBe('two\ninit\n');
+    });
+
+    it('merge --no-ff -m, the work tree follows; log --graph', async () => {
+      await setup();
+      await sh('cd /tmp/o && git commit -qm init && git checkout -qb feat && echo 2 >> f && git commit -qam two && git checkout -q main && echo h > h && git add h && git commit -qm h');
+      const m = await sh('cd /tmp/o && git merge --no-ff feat -m merged');
+      expect(m.code).toBe(0);
+      expect(await fs.readFile('/tmp/o/f', 'utf8')).toBe('1\n2\n');
+      expect((await sh('cd /tmp/o && git status --porcelain')).out).toBe('');
+      expect((await sh('cd /tmp/o && git log --graph --format=%s')).out).toBe('*   merged\n|\\  \n| * two\n* | h\n|/  \n* init\n');
+      const ff = await sh('cd /tmp/o && git checkout -qb ff && echo 3 >> f && git commit -qam three && git checkout -q main && git merge -q --ff-only ff');
+      expect([ff.code, ff.out]).toEqual([0, '']);
+      expect((await sh('cd /tmp/o && git log --format=%s -1')).out).toBe('three\n');
+    });
+
+    it('rebase -q (the built-in without the full git)', async () => {
+      await setup();
+      await sh('cd /tmp/o && git commit -qm init && git checkout -qb feat && echo 2 > g && git add g && git commit -qm two && git checkout -q main && echo h > h && git add h && git commit -qm h && git checkout -q feat');
+      const r = await sh('cd /tmp/o && git rebase -q main');
+      expect([r.code, r.out]).toEqual([0, '']);
+      expect((await sh('cd /tmp/o && git log --format=%s')).out).toBe('two\nh\ninit\n');
+    });
+
+    it('unknown options and subcommands are errors, not ignored', async () => {
+      await setup();
+      const u = await sh('cd /tmp/o && git commit --bogus -m x');
+      expect(u.code).toBe(129);
+      expect(u.err).toContain("error: unknown option `bogus'");
+      const s = await sh('cd /tmp/o && git commit -Z -m x');
+      expect(s.code).toBe(129);
+      expect(s.err).toContain("error: unknown switch `Z'");
+      expect((await sh('cd /tmp/o && git log --format=%s')).out).toBe(''); // nothing committed
+      const b = await sh('cd /tmp/o && git blame f');
+      expect(b.code).toBe(1);
+      expect(b.err).toContain("git: 'blame' is not a git command");
+      expect(b.err).toContain('pkg install git');
+      const r = await sh('cd /tmp/o && git remote show origin');
+      expect(r.code).toBe(129);
+      const f = await sh('cd /tmp/o && git fetch -q origin');
+      expect(f.code).toBe(128);
+      expect(f.err).toContain("'origin' does not appear to be a git repository");
+      const h = await sh('cd /tmp/o && git cherry-pick --help');
+      expect(h.code).toBe(0);
+      expect(h.out).toMatch(/^usage: git cherry-pick/);
+    });
+
+    it('ls-remote URL outside a repository', async () => {
+      await sh('true');
+      await fs.mkdir('/tmp/nr', { recursive: true });
+      const r = await sh('cd /tmp/nr && GIT_CORS_PROXY=http://127.0.0.1:9/nope git ls-remote https://example.invalid/r.git');
+      expect(r.code).toBe(128);
+      expect(r.err).toContain("fatal: unable to access 'https://example.invalid/r.git'");
+      expect(r.err).not.toContain('not a git repository');
+    });
+  });
 });

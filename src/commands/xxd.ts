@@ -18,7 +18,7 @@ export const xxdCmd: Command = {
       const cols = values.c ? parseInt(values.c, 10) : (plain ? 30 : 16);
       const seekOffset = values.s ? parseInt(values.s, 10) : 0;
 
-      const { content } = await readInput(positional, ctx.stdin, ctx.fs, ctx.cwd, ctx.fs.resolvePath);
+      const { content } = await readInput(positional, () => ctx.stdin, ctx.fs, ctx.cwd, ctx.fs.resolvePath);
 
       if (reverse) {
         // Reverse hex dump → binary

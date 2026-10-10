@@ -7,6 +7,7 @@ import { ghReleaseHandler } from './gh-release';
 import { ghWorkflowHandler, ghRunHandler } from './gh-workflow';
 import { ghLabelHandler } from './gh-label';
 import { ghSearchHandler } from './gh-search';
+import { normalizeGhArgs, takeJsonFlags, finishJson, GhUsageError, type JsonRequest } from './gh-cli';
 import { getShiroOrigin } from '../utils/shiro-origin';
 import {
   DEFAULT_GITHUB_SCOPES, GITHUB_TOKEN_KEY, ensureGitIdentity, openGitHubLoginPanel,
@@ -192,6 +193,28 @@ Commands:
       return 0;
     }
 
+    // Flags checked against what each subcommand does (unknown ones are errors), file bodies read, --json/--jq taken out
+    let json: JsonRequest | null = null;
+    try {
+      const normalized = await normalizeGhArgs(ctx, ctx.args);
+      if (normalized) {
+        if (normalized.includes('--help')) { ctx.stdout = `usage: gh ${ctx.args.slice(0, sub === 'api' ? 1 : 2).join(' ')} [flags]\n`; return 0; }
+        const taken = takeJsonFlags(normalized);
+        ctx.args = taken.args;
+        json = taken.req;
+      }
+    } catch (e) {
+      if (!(e instanceof GhUsageError)) throw e;
+      ctx.stderr += `${e.message}\n\nUsage:  gh ${ctx.args.slice(0, sub === 'api' ? 1 : 2).join(' ')} [flags]\n`;
+      return 1;
+    }
+    const code = await ghDispatch(ctx, sub);
+    if (json && code === 0) return finishJson(ctx, json, ctx.args[1] ?? '');
+    return code;
+  },
+};
+
+async function ghDispatch(ctx: CommandContext, sub: string): Promise<number> {
     const token = getToken(ctx);
 
     switch (sub) {
@@ -442,5 +465,4 @@ Commands:
         ctx.stderr = `gh: '${sub}' is not a valid command. See 'gh --help'.\n`;
         return 1;
     }
-  },
-};
+}

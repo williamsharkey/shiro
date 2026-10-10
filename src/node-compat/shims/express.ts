@@ -62,11 +62,12 @@ export function createExpressFactory(deps: ExpressDeps): any {
         let responseBody = '';
         let ended = false;
 
-        // Parse body if JSON
-        let parsedBody = vReq.body;
+        // Parse body if JSON (a preview's fetch can send bytes)
+        const bodyText = vReq.body instanceof Uint8Array ? new TextDecoder().decode(vReq.body) : vReq.body;
+        let parsedBody: any = bodyText;
         try {
-          if (vReq.headers?.['content-type']?.includes('application/json') && vReq.body) {
-            parsedBody = JSON.parse(vReq.body);
+          if (vReq.headers?.['content-type']?.includes('application/json') && bodyText) {
+            parsedBody = JSON.parse(bodyText);
           }
         } catch {}
 
@@ -81,7 +82,7 @@ export function createExpressFactory(deps: ExpressDeps): any {
           params: {},
           get(name: string) { return (vReq.headers || {})[name.toLowerCase()]; },
           on(event: string, handler: Function) {
-            if (event === 'data' && vReq.body) setTimeout(() => handler(vReq.body), 0);
+            if (event === 'data' && vReq.body) setTimeout(() => handler(bodyText), 0);
             if (event === 'end') setTimeout(() => handler(), 0);
             return this;
           },
@@ -343,7 +344,6 @@ export function createExpressFactory(deps: ExpressDeps): any {
         const cleanup = iframeServer.serve(port, app._handleRequest, `express:${port}`);
         closeServer = () => {
           cleanup();
-          fakeConsole.log(`Server on port ${port} closed`);
           // Close split-view pane
           try {
             if (typeof document !== 'undefined') {
@@ -353,15 +353,12 @@ export function createExpressFactory(deps: ExpressDeps): any {
           resolve();
         };
 
-        fakeConsole.log(`Express app listening on port ${port}`);
-
-        // Open split-view preview pane
+        // A preview pane for the app (nothing in the program's output: express prints nothing itself)
         try {
           if (typeof document !== 'undefined') {
             import('../../split-view').then(({ createSplitView }) => {
               createSplitView({ port, direction: 'right', title: `Express :${port}` });
-              fakeConsole.log('Browser window opened');
-            }).catch((err: Error) => fakeConsole.warn('Could not open browser:', err.message));
+            }).catch(() => { /* no desktop to show it in */ });
           }
         } catch {}
 

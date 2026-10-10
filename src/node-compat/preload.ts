@@ -243,21 +243,30 @@ export async function preloadEnvironment(
 
   console.log(`[node] ${fileCache.size} files preloaded`);
 
-  // Pre-load node_modules — walk up from cwd
-  let nmSearch = ctx.cwd;
-  while (nmSearch) {
-    const nmDir = nmSearch === '/' ? '/node_modules' : nmSearch + '/node_modules';
-    try {
-      const entries = await ctx.fs.readdir(nmDir);
-      for (const name of entries) {
-        if (name.startsWith('.') && name !== '.pnpm') continue; // .bin, .modules.yaml, .package-lock.json
-        await preloadDir(ctx, fileCache, fileMtimes, nmDir + '/' + name, 0, 10);
+  // Pre-load node_modules — walk up from cwd, and from the script (a package's dependencies
+  // beside it: npx's ~/.npm/_npx/<pkg>/node_modules, a global CLI's own tree)
+  const nmDone = new Set<string>();
+  const walkNodeModules = async (from: string) => {
+    let nmSearch = from;
+    while (nmSearch) {
+      const nmDir = nmSearch === '/' ? '/node_modules' : nmSearch + '/node_modules';
+      if (!nmDone.has(nmDir) && !nmSearch.endsWith('/node_modules')) {
+        nmDone.add(nmDir);
+        try {
+          const entries = await ctx.fs.readdir(nmDir);
+          for (const name of entries) {
+            if (name.startsWith('.') && name !== '.pnpm') continue; // .bin, .modules.yaml, .package-lock.json
+            await preloadDir(ctx, fileCache, fileMtimes, nmDir + '/' + name, 0, 10);
+          }
+        } catch { /* no node_modules at this level */ }
       }
-    } catch { /* no node_modules at this level */ }
-    const parent = nmSearch.substring(0, nmSearch.lastIndexOf('/')) || '';
-    if (parent === nmSearch || !parent) break;
-    nmSearch = parent;
-  }
+      const parent = nmSearch.substring(0, nmSearch.lastIndexOf('/')) || '';
+      if (parent === nmSearch || !parent) break;
+      nmSearch = parent;
+    }
+  };
+  await walkNodeModules(ctx.cwd);
+  if (scriptPath && scriptPath.includes('/node_modules/')) await walkNodeModules(scriptPath.substring(0, scriptPath.lastIndexOf('/')));
 
   // Pre-load global node_modules
   try {
