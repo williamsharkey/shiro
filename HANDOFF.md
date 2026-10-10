@@ -1,13 +1,10 @@
 # HANDOFF — tabcomputer coordinator and workers
 
 Written 2026-10-10 ~11:15 UTC, when the work moved from one Claude account to
-another. It is everything a fresh cloud coordinator needs to recreate the
-worker sessions and pick each one up mid-task. When this was written,
-shiro `unix/integration` was **`d739673a`**: it already includes the debian,
-docs, gl, perf-kernel, shell-stdio and toolchains commits listed as "ahead" in
-§6. Live on tabcomputer.com was `5e733616`, so run the suite and redeploy
-first. (The old coordinator kept merging for a while after the pause; check
-`git log origin/unix/integration` for anything newer.)
+another, and updated ~11:50 UTC by the old cloud coordinator after it stopped.
+It is everything a fresh cloud coordinator needs to recreate the worker sessions
+and pick each one up mid-task. **Start with §0a, the final state from the old
+coordinator: it supersedes the per-worker "ahead" counts and SHAs in §6.**
 
 Read this whole file once, then `AGENTS.md`, then the docs it points to.
 
@@ -39,6 +36,117 @@ Read this whole file once, then `AGENTS.md`, then the docs it points to.
 
 The old account's sessions are **not** reachable from the new account; the IDs
 in §6 are for reference only (the user may archive them).
+
+---
+
+## 0a. Final state from the old coordinator (2026-10-10 ~11:50 UTC)
+
+The old coordinator (session 01AcE1vJZcwt64s5QkThfEFt) stopped at the user's
+request. Before stopping it interrupted every worker. Its only follow-up was
+asking workers to commit and push work they already had; nothing new was
+started. Where this section disagrees with §6, this section wins.
+
+### Concurrency with the old coordinator (read first)
+The new coordinator may start while the old one is still finishing. Until a
+commit titled **"HANDOFF: old coordinator done"** appears on
+`origin/unix/integration`, the old coordinator still owns the following. Don't
+do them:
+- pushing `unix/integration`, tab `main` or tab `deploy`;
+- messaging or archiving the old workers.
+
+What is still being finished:
+1. The suite is running on the tidy-up merges (agent-clis, compat-dev,
+   compat-tools, conformance, docs). If it passes, they are pushed and deployed.
+2. perf-blink, perf-kernel and gui were asked to push their finished work (to
+   `unix/<area>-wip` if their suite is red).
+3. This section gets its final SHAs.
+
+In the meantime the new coordinator can safely:
+- read this file and AGENTS.md;
+- set up its clone and the `tab` remote;
+- recreate the routines (§5);
+- read the issues (§8 and below);
+- create the new worker sessions, each starting by reading its §6 and
+  §0a entries but **not pushing until the "done" commit lands**.
+
+### Integration and deploy
+- **Live on tabcomputer.com:** `d739673a`. tab `deploy` = `d739673a`.
+- **`unix/integration` and tab `main`:** the merges listed below are being tested by the old coordinator, which pushes and deploys them if the suite passes. *Pending: the old coordinator fills this in when it finishes (see "Concurrency" above).*
+- **Merged in the final tidy-up:**
+  - agent-clis 51abefaa: the doctor parts of #16 (`node -v`/`node -e` probes, a /dev/null rerun of a failing node probe, `page --help`).
+    - It conflicted with toolchains' doctor `packages` check. **Kept toolchains' `packagesCheck`** (local index, covered by `pkg-outdated.test.ts`); dropped agent-clis' `pkg outdated` runner and adjusted the `doctor.test.ts` expectation.
+  - compat-dev 77db5b9f: **Next.js builds and serves in worker mode** (AsyncLocalStorage across await, web streams, ServerResponse internals).
+  - compat-tools 86ffcfb4: fixes "`npm run dev` prints nothing while running", a regression from its own 2ebca8d5.
+  - conformance 0854da2f: Blink 0506 (another process's CPU clock); the scoreboard re-measured on integration dff2c0d. **LTP 283/322, Open POSIX 1375/1448.**
+    - 26 Open POSIX cases regressed from Blink 0112's munmap assert (`memorymalloc.c:834`). perf-blink has it; about 1401 is expected once it's fixed.
+  - docs 5d9e31fe / 8bd1e652: README and About carry these numbers. The in-tab AGENTS.md covers the eval stdin trap and its `{ cmd; } </dev/null` workaround, says builtins have no /proc entry, and recommends one subagent and serial gh/curl.
+- **Not merged on purpose (for the new coordinator):**
+  - **`unix/compat-tools-flip`** (c13a1bf7), node in a Worker by default:
+    - The user approved this directly in the old coordinator's chat ("yes lets do node in background worker by default").
+    - compat-tools wanted that confirmation first-hand, because it only got it relayed. Tell the new compat-tools worker it's approved.
+    - Still to do: rebuild, run the full suite plus `npm run test:worker` on the latest commit, and the vite-react browser check.
+    - The last `test:worker` run failed 8: chokidar's timing case, a compat-dev test now pinned to in-page node, and 6 cascade failures that pass alone.
+    - Then land it on `unix/compat-tools`.
+  - **`unix/gl`:** `6d8c2d0`, all committed. Stage 2 code is described under gl below. It is **not merged** because the suite hasn't been run on it and it has no tests of the in-page path. Merge it once it passes the suite.
+  - Any `*-wip` branches the workers push in the tidy-up. *Pending: the old coordinator fills this in when it finishes (see "Concurrency" above).*
+- **Benchmark:** no new run since `integration-89e9559-quick.json`. Run one on the first cycle.
+
+### Per-worker state at the stop (supersedes §6 where they differ)
+- **perf-blink:** asked to commit and push what it has. *Pending: the old coordinator fills this in when it finishes (see "Concurrency" above).*
+  - Patch 0116 makes compiled code do SSE ss/sd/ps/pd arithmetic, ucomis/comis, movd/movq and leave itself, with no handler calls; 3.2 M handler calls → 0 on a libc-heavy run.
+  - go_nethttp A/B reads as noise.
+  - **New for its queue:**
+    - Firefox and Thunderbird exit before a window appears. Blink aborts at `memorymalloc.c:834` mapping a 242,716-byte shared `memfd:mozilla-ipc` region. It's the same assert as the conformance regression above (from gui).
+    - Blink returns EINVAL for memfd F_ADD_SEALS/F_GET_SEALS. The kernel side is on gui's branch.
+  - The compiled-entry work for GUI startup is still the top item.
+- **perf-kernel:** asked to commit and push what it has. *Pending: the old coordinator fills this in when it finishes (see "Concurrency" above).*
+  - The tabcomputer#14 kernel parts:
+    - init reaps orphans at once;
+    - Linux-style decaying /proc/loadavg and sysinfo;
+    - /proc/PID/fd shows `pipe:[N]` and `anon_inode:[eventfd|timerfd|signalfd]`;
+    - real `.` and `..` in `ls -a`;
+    - `kill PID` ends a `bash -c` blocked in a command (143 for SIGTERM, 137 for SIGKILL).
+  - Codex finding: "Reconnecting… waiting for network" is not a kernel deadlock. Codex retries failed HTTPS without limit (`codex-rs/core/src/responses_retry.rs`).
+- **gui:** asked to commit and push what it has. *Pending: the old coordinator fills this in when it finishes (see "Concurrency" above).*
+  - OSMesa/llvmpipe pixels now match softpipe after 0114. The first frame takes 26–29 s, then 0.44 s per frame at 512² and about 1.3 s at 720p, so it's only a slow fallback.
+  - Cross-process shared mappings work (the shm2 repro).
+  - Zathura passes everything; qpdfview loads its SQLite driver; nine new apps added.
+  - Not yet rescored: Krita, Audacious, LXImage-Qt, Shotwell, Audacity.
+- **gl:** stage 2 code exists:
+  - `scripts/gl` (gen.mjs from gl.xml, `libGLX_tabcomputer.c`, build.sh, the gldev.ts harness);
+  - `src/gl` (wire, exec, ff, formats, mat, glsl/translate, the server on `/tmp/.tabcomputer-gl/0`, present), wired into src/main.ts.
+  - In the native harness (SwiftShader), glxinfo shows core 3.3 and compat 2.1, and glxgears renders correctly at 55–65 FPS, about 285 bytes per frame.
+  - **No tests yet and the full suite hasn't been run.** Next: run it in the page through Blink, with libGLX_tabcomputer shipped via `src/gui/apps.ts`.
+  - The gui worker's GL.md edits favour llvmpipe GLX (option A). The user approved the WebGL2 route (option B); reconcile GL.md.
+- **agent-clis:** pushed and merged (51abefaa). **Findings never sent to perf-kernel:**
+  1. Codex's HTTPS fails about 0.6 s after TCP connects to api.openai.com. The likely cause is a missing CA bundle: `/etc/ssl/certs/ca-certificates.crt` is absent in plain mode. Untested.
+  2. The "turn interrupted" SIGINT arrives 0.1–0.2 s after codex's 30 s timeout kills a `git fetch` child. That points to a kernel process-group signalling bug.
+  3. In Debian mode, codex stalls during setup on a `git fetch` of github.com/openai/plugins.
+- **compat-dev:** pushed and merged (77db5b9f). **An open regression it reported:** `npm run dev` for the vite React template never reaches "ready" on integration.
+  - Last good: 1f804b76. Bad at 32781119.
+  - Two candidates left untested: 1fb270da (a compat-dev merge) and fea40c54 (a compat-tools merge).
+  - compat-tools' 86ffcfb4, now merged, fixes a related "npm run dev prints nothing" regression from 2ebca8d5. **Check whether `npm run dev` is fixed on the new integration head before bisecting further.**
+  - Untriaged in-page bugs from peers:
+    - a backgrounded server's redirected output is never written;
+    - one of two back-to-back servers sometimes exits at once;
+    - redirected npm script output ends lines with `\r\r\n`.
+- **compat-tools:** next is #13 after the flip. Also: a child spawned with `stdio:'inherit'` in Debian mode doesn't see a tty on stdin.
+- **shell-stdio, toolchains, debian, docs, conformance, bench, desktop:** idle at the stop. Everything they pushed is merged.
+
+### Issues at the stop (supersedes the §8 table)
+- **#12 (eval `<` dropped):** the in-tab agent finished.
+  - It posted a reviewed but **not test-run** diff to `src/shell.ts` ~2715 and `agent-shell.test.ts` in its 11:16 comment. It couldn't push because pushing needs the owner's approval in its session.
+  - It verified a runtime hot-patch in the live tab: `timeout 5 cat` and `timeout 15 node -v` stop hanging.
+  - **Next:** apply its diff (`git apply`), run the suite, and commit with "Fixes williamsharkey/tabcomputer#12", crediting the in-tab agent. Or ask the user whether the in-tab agent should push it itself.
+  - Its notes: Claude Code only adds `< /dev/null` when a command has no `<` of its own, and a text-rewriting hot-patch broke heredocs.
+- **#13 (`node -e` hangs in-tab):** compat-tools, after the flip. It blocks the in-tab agent running vitest and esbuild.
+- **#14:** perf-kernel's kernel parts (above), plus shell-stdio's tty and builtin parts.
+- **#15:** **closed**. The toolchains fix is live in d739673a.
+- **#16:** the docs and agent-clis parts are merged. Left: shell-stdio's `FORCE_COLOR` only when stdout is a tty. Then close it.
+- **#17 (new, unclaimed, filed by the in-tab agent):**
+  - `js-eval` runs code twice when it throws and can't run statements (`src/commands/jseval/js-eval-cmd.ts`).
+  - It asks for a supported way to hot-swap core code: `reload --bundle`, exposing esbuild/Shell/kernel to js-eval, a `hotpatch --ttl` safety net, and in-tab vitest (blocked by #13).
+  - The js-eval bug is small (shell-stdio or compat-tools). The hot-swap feature is a design question for the user.
 
 ---
 
@@ -169,7 +277,7 @@ This ran every 2 h as a routine and between whenever workers reported. Steps:
 ## 5. Routines to recreate on the new account
 
 - **The integration cycle:** every 2 h (`4 */2 * * *`), bound to the coordinator session. Its prompt is §4 plus §8 plus the worker list. On the old account it was `trig_01NWHeCFzHRUPzYAvUBxUB6R`, now **disabled**.
-- **Cert renewal reminder:** one-shot at 2026-12-01 16:00 UTC: "renew the tabcomputer wildcard cert per `deploy/tabcomputer/tls/README.md`". Old account: `trig_01Ho1pJYSBUGszRUmWVQ1925`, still enabled there; disable it once the new one exists.
+- **Cert renewal:** one-shot at 2026-12-01 16:00 UTC, which renews the wildcard certificate per `deploy/tabcomputer/tls/README.md` (the old routine's full prompt is in that README's steps). Old account: `trig_01Ho1pJYSBUGszRUmWVQ1925`, still enabled there; the user should disable it once the new one exists, or two renewals will run.
 - **#12 claim check:** the old account's one-shot "check the in-tab agent's claim on #12" was disabled. Replace it with an issue check on the new coordinator's first cycle.
 
 ---
