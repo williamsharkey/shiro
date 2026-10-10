@@ -20,8 +20,13 @@ const PATCHES: { file: RegExp; edits: [string, string][] }[] = [{
     // in, and surfaced as a page error: the process has ended all the same.
     // (wasm_exec_node.js is read and run by this file, not required)
     "const code = fs.readFileSync(wasm_exec_node, 'utf8');",
-    String.raw`const code = fs.readFileSync(wasm_exec_node, 'utf8').replace('go.exit = process.exit;', 'go.exit = (c) => { try { process.exit(c); } catch (e) { if (!/^process\\.exit\\(/.test(String(e && e.message))) throw e; } };');`,
+    // and its bare `fs` is the process's own globalThis.fs (process-global.ts keeps that per process)
+    String.raw`const code = fs.readFileSync(wasm_exec_node, 'utf8').replace('go.exit = process.exit;', 'go.exit = (c) => { try { process.exit(c); } catch (e) { if (!/^process\\.exit\\(/.test(String(e && e.message))) throw e; } };').replace('WebAssembly.instantiate(fs.readFileSync(', 'WebAssembly.instantiate(globalThis.fs.readFileSync(');`,
   ]],
+}, {
+  // Go's wasm_exec.js writes the runtime's own output (a panic's trace) with a bare `fs`
+  file: /\/wasm_exec\.(?:c|m)?js$/,
+  edits: [['fs.writeSync(fd, new Uint8Array(this._inst.exports.mem.buffer, p, n));', 'globalThis.fs.writeSync(fd, new Uint8Array(this._inst.exports.mem.buffer, p, n));']],
 }];
 
 export function patchPackageSource(path: string | undefined, code: string): string {

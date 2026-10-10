@@ -277,6 +277,37 @@ untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
 
+### Integration 073944d → 6e69776: pipe throughput, bisected (unix/bench)
+
+The hourly compare A/B-confirmed isolated `kernel.pipe_throughput` 667 →
+555 MB/s, but with a wide interval. Re-running it in quick mode (8 rounds)
+didn't confirm it: +30% worse with a CI of −14…+75%, 7 of 8 rounds worse.
+Quick mode's 16 MiB samples span 240–1730 MB/s within one run. At 64 MiB ×
+15 samples the builds separate cleanly: 073944d 1596/1640 MB/s, 6e69776
+959/827 MB/s.
+
+Bisect of the merges at that size (median / p25):
+
+| commit | median / p25 (MB/s) |
+|---|---|
+| d120c5a | 1553 / 1413 |
+| 75115f9 | 1513 / 1326 |
+| **8265250** (perf-fs-shell merge) | **1046 / 572** |
+| be1123c | 1452 / 1303 |
+| **403bddc** | **1231 / 865** |
+
+`ab.mjs be1123c 403bddc` (10 runs × 5 rounds) confirms 1567 → 837 MB/s,
++39% worse, CI +23…+63%, all 5 rounds worse. 403bddc's hot-guest spin
+(`HOT_SPIN_MS` 0.25 ms, was 30 µs) has the page wait on one guest while the
+other side of the pipe goes unserved. Reported to unix/perf-fs-shell.
+
+The hourly run also found `workload.peak_rss.ffmpeg_warm` with "no samples
+on one side". That was another A/B filter gap: blocks gated on a group name
+(`workload.ffmpeg`) also record metrics outside it (`workload.peak_rss.*`).
+`h.wantsAny()` fixes that in the workloads and workflows suites (0dc160b).
+compare.mjs also no longer treats MiB moves under 1 MiB as candidates;
+0.06 → 0.46 MiB is below what 25 ms RSS sampling resolves.
+
 ### Integration b63f9d9 → 073944d: boot requests, and what wasn't real (unix/bench)
 
 **Boot requests, confirmed by the hourly compare.** Cold and warm boots go
@@ -618,6 +649,11 @@ three `data:` SVGs (traffic-light glyphs) that CDP counts. The +22 MiB RSS is
 composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts,
 a few MiB each. The terminal UI's +19 KiB is /dom, the sign-in hook and the
 other integration changes since db9f698, not desktop code.
+
+### unix/shell-stdio 9 — autoconf configure: case in subshells, trap comments, compound dups
+
+`node bench/ab.mjs HEAD~1 HEAD --suites shell,kernel --quick` (7c7f147 →
+dfac542): all 24 unchanged.
 
 ### unix/shell-stdio 8 — mapfile, pushd/popd, umask, trap DEBUG, PIPESTATUS
 

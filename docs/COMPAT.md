@@ -266,6 +266,42 @@ Shell and platform fixes these needed (all with tests in the same file):
   - On the terminal, `\n` is `\r\n` in every write, escape sequences or
     not (libuv keeps ONLCR in raw mode): output with colours or cursor moves
     (clack's prompts in create-vite 7) stepped down the screen.
+- Astro 5 (a minimal site; `APP=astro` in the same script): `npm i` 8.8 s
+  (277 packages), `astro dev` to ready 12.4 s, the preview 2.0 s, an edit to
+  `src/pages/index.astro` shown 0.4 s later (Astro reloads pages), `astro
+  build` 10.7 s; renderer resident 828 MB with dev up, 1088 MB after the
+  build. `npm create astro` itself fails in the test container: create-astro
+  fetches its template from codeload.github.com, which the container's relay
+  can't reach (api.github.com works). What it took, all general:
+  - npm: empty files in a tarball are installed (a 0-byte `types.js` that
+    @astrojs/markdown-remark's index re-exports was left out).
+  - ES modules: `/*` inside a template or string isn't a comment
+    (tsconfck's `` `**/*` `` hid every export after it); a method named
+    `import` (`import(id) { … }`) and `.import(` calls, also across a line
+    break, aren't dynamic imports (the bundled-module path's `\bimport\(`
+    rewrote `runner.import(…)`); `import { default as x }` is the default
+    import; exported function declarations exist from the start (hoisted);
+    named imports of a module still loading (a cycle) are read again once it
+    has loaded (Astro's render-context → middleware → sequence cycle); named
+    exports ahead of `export default` stay (zod's index.js); `import('./x.mjs?t=1')`
+    loads x.mjs afresh.
+  - Packages that load as their ESM node build: vite (its CommonJS entry is
+    deprecated and finds its package.json through esbuild's import.meta.url
+    shim, which takes the page's `document` for a browser) and
+    @astrojs/compiler (its browser build wants `initialize()`; its CommonJS
+    build reads astro.wasm at the page's URL the same way).
+  - Globals: a global a script defines on the page (it reaches the page:
+    bare identifiers resolve there) stays writable and redefinable
+    (@astrojs/compiler defines a read-only `fs`); `fs` and `require` set on
+    globalThis stay the process's own (two esbuild services wrote each
+    other's stdout through a shared `globalThis.fs`: "Invalid packet").
+  - fs takes file: URL objects in every call (`fs.promises.readFile(new
+    URL(…))`).
+  - A spawned child's output reaches the parent on a microtask, not inside
+    the child's write (an error in the parent's reader came back to Go's
+    fs.write and panicked esbuild).
+  - Requests to in-tab servers carry `Host: localhost:PORT` when the browser
+    gave none (vite 6+ refuses an unknown host).
   Not yet: node output into a pipe or file comes when the process exits
   (only the terminal streams), so `npm run dev > log &` shows nothing while
   it runs.
@@ -794,6 +830,27 @@ Popular AI coding-agent CLIs, run as tabcomputer would run them: native x86-64
 ELF builds in Blink as kernel processes, Node builds on tabcomputer's `node`. Run
 2026-10-09 with dummy API keys for the other vendors (a 401/400 from the
 vendor's API proves the network path).
+
+### On tabcomputer.com, 2026-10-10
+
+Re-checked on the live site (deploys 073944d…8a9231b) in headless Chromium,
+a fresh page per tool, with dummy keys. Times are wall time on that page.
+A real tool call (Bash `ls`, a file write) needs a model to ask for it, so it
+was not possible with dummy keys. Sign-in was checked up to the point where a
+real account takes over (the sign-in page opens and the CLI waits for the code).
+
+| Tool | Version | Install | `--version` | First screen | API with a dummy key | Sign-in | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Claude Code, native (default) | 2.1.296 | `claude install` 140 s | 3 s | 52 s | `-p`: "Invalid API key", ~100 s | `claude login` → `claude auth login`: the sign-in page opens in a tab (or an Open card), then "Paste code here" | Startup is ~48–52 s offline, mostly compiled guest code (perf-blink's profiles). With `TABCOMPUTER_NODE_WORKER=1`: same. |
+| Claude Code, `--npm` | 2.1.112 (reports 2.1.280) | installed at boot | 5–7 s | 14 s | `-p`: "Invalid API key", 4 s | `claude --npm login` → the in-session `/login` (URL, paste prompt) | 2.1.112's `auth login` has no paste prompt and could never finish here; fixed (ad91c0e). With `TABCOMPUTER_NODE_WORKER=1` it works but shows the first-run screens. |
+| OpenAI Codex | 0.162.1 | GitHub release tarball with the real curl (`pkg install curl`): 65 s | 4.7 s | — | `exec`: 401 on `wss://` and `https://api.openai.com`, ~50 s | not tried (ChatGPT sign-in) | `npm i -g @openai/codex` fails: npm skips its `linux-x64` platform package (the only implementation). One of three runs then hung in the HTTPS fallback until Ctrl-C. |
+| Grok Build (xAI) | 1.0.50 | `x.ai/cli/install.sh` after `pkg install curl`: 118 s | 2.4 s | — | `-p`: 400 "Incorrect API key", 25 s (148 s on 2026-10-09) | not tried | The builtin `curl` can't fetch the binary (browser fetch); the real curl goes through the relay. |
+| Gemini CLI | 0.63.0 | `npm i -g` 3 s | broken on 8a9231b, fixed in d505335 (11 s locally) | — | pending the deploy | not tried | Died at start: a process's `globalThis` broke a Proxy invariant for undici's dispatcher symbol. |
+| Antigravity (`agy`) | — | install.sh stopped: "Unknown parameter: pipefail" | pending | — | — | — | The shell took `set -euo pipefail` as `$1=pipefail`; fixed in d505335. |
+| opencode | 1.18.35 | `npm i -g`: platform package skipped, postinstall not run; `opencode.ai/install` ran `*)` as a command | pending | — | — | — | A `case` with two items inside `if` ran nothing; fixed in f2ddb76. |
+| aider | — | `aider.chat/install.sh`: uv died with glibc's `getaddrinfo` assertion (`IN6_IS_ADDR_V4MAPPED`) | pending | — | — | — | An IPv6 UDP socket connected to an IPv4 address reported a non-mapped source; fixed in the kernel (0a5e7e5). |
+
+### First pass (2026-10-09)
 
 | Tool | Version | Kind | Install | `--version` | Network | Timings | Blockers |
 | --- | --- | --- | --- | --- | --- | --- | --- |

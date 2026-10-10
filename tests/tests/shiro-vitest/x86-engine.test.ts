@@ -122,6 +122,10 @@ const sigwaitBin = join(out, 'sigwait');
 const haveSigwait = 'SYS_rt_sigtimedwait' in Abi && tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', sigwaitBin, 'sigwait.c']);
 const futexrequeueBin = join(out, 'futexrequeue');
 const haveFutexrequeue = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', futexrequeueBin, 'futexrequeue.c']);
+const futexpiBin = join(out, 'futexpi');
+const haveFutexpi = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', futexpiBin, 'futexpi.c']);
+const siginfoBin = join(out, 'siginfo');
+const haveSiginfo = tryBuild('gcc', ['-static', '-O1', '-o', siginfoBin, 'siginfo.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -979,6 +983,24 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const { shell } = await setup(readFileSync(sysvmsgBin));
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe("msgget ok\nsend 0 0\nqnum 2\nrcv type 2: 6 2 world\nrcv any: 6 1 hello\nrcv empty nowait: -1 No message of desired type\nchild got 5 7 late\nrmid 0\nsend after rmid -1 Invalid argument\n");
+  }, 60_000);
+
+  // Open POSIX sigqueue 4-1..8-1: real-time signals were delivered as SIGINT (1ul << 33 in wasm32)
+  it.skipIf(!haveSiginfo)('SA_SIGINFO handlers get sigqueue values, si_code and the sender; queued real-time signals all arrive, in order', async () => {
+    const { shell } = await setup(readFileSync(siginfoBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'sigqueue: n 1 value 42 code -1 pid 1\nkill: n 1 code 0 pid 1\nblocked: n 0\n' +
+      'unblocked: n 5 values 100 101 102 103 104 codes -1\n');
+  }, 60_000);
+
+  // Blender (TBB, OpenEXR) locks PTHREAD_PRIO_INHERIT mutexes: glibc aborted on EINVAL
+  it.skipIf(!haveFutexpi)('PI futexes (LOCK_PI, TRYLOCK_PI, UNLOCK_PI, a contended PI mutex, a timed lock) and FUTEX_WAKE_OP', async () => {
+    const { shell } = await setup(readFileSync(futexpiBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'WAKE_OP 0 0\nu2 5\nLOCK_PI 0 0\nowner is me 1\nLOCK_PI again -1 35\nUNLOCK_PI 0 0\nword 0\n' +
+      'UNLOCK_PI unowned -1 1\nTRYLOCK_PI 0 0\nUNLOCK_PI 0 0\ncounter 8000\ntimedlock 110\n');
   }, 60_000);
 
   // LTP futex_cmp_requeue01-03: requeued waiters are found at the target at once

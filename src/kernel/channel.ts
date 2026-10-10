@@ -680,8 +680,12 @@ function pumpHot(): void {
         let hot = false, inflight = false, served = false;
         for (const c of watching) {
           if (c.inCall) inflight = true;
-          if (!c.hot) continue;
-          hot = true;
+          if (c.hot) hot = true;
+          // Any posted request, not only hot guests': while the page spins here,
+          // a guest that isn't hot (the other end of a pipe, asleep in
+          // Atomics.wait) would otherwise wait for this loop to end before its
+          // waitAsync task could run (kernel.pipe_throughput halved with a
+          // 0.25 ms spin)
           if (c.ready) {
             if (!c.serveSync(t)) { void c.handle(); if (c.inCall) inflight = true; }
             served = true;

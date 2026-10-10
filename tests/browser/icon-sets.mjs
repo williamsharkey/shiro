@@ -96,7 +96,7 @@ async function boot(browser, opts = {}) {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, ...opts });
   const page = await ctx.newPage();
   await page.addInitScript(probes);
-  await page.addInitScript(() => { try { localStorage.setItem('tabcomputer-desktop-tour', '1'); } catch {} });
+  await page.addInitScript(() => { try { localStorage.setItem('tabcomputer-desktop-welcome', '1'); } catch {} });
   await page.goto(url);
   await page.waitForFunction(() => window.__tabcomputer?.terminal && window.__shiroDesktopCtx && !document.querySelector('.sd-booting'), null, { timeout: 60_000 });
   await page.waitForTimeout(1500); // boot settles (fonts, restore, first idle work)

@@ -1735,6 +1735,23 @@ describe('npm install: the node_modules tree (npm-tree.ts)', () => {
     expect(t.warnings).toEqual([]);
   });
 
+  it('extracts empty files from a package tarball (a 0-byte types.js that index.js re-exports)', async () => {
+    const { execSync } = await import('node:child_process');
+    const dir = mkdtempSync('/tmp/tgz-');
+    mkdirSync(`${dir}/package/dist`, { recursive: true });
+    writeFileSync(`${dir}/package/dist/types.js`, '');
+    writeFileSync(`${dir}/package/dist/index.js`, 'export * from "./types.js";\n');
+    execSync(`tar czf ${dir}/p.tgz -C ${dir} package`);
+    const { extractTarGzToFS } = await import('@shiro/utils/tar-utils');
+    const files = new Map<string, number>();
+    await extractTarGzToFS(new Uint8Array(readFileSync(`${dir}/p.tgz`)), '/x', {
+      writeFile: async (p: string, d: Uint8Array) => { files.set(p, d.length); },
+      mkdir: async () => {},
+    });
+    rmSync(dir, { recursive: true, force: true });
+    expect(Object.fromEntries(files)).toEqual({ '/x/dist/types.js': 0, '/x/dist/index.js': 28 });
+  });
+
   it('follows npm: aliases and dist-tags; npm create names the create- package', async () => {
     const t = await buildTree([{ name: 'old', range: 'npm:new@^2' }, { name: 'tagged', range: 'next' }], registry({
       new: { '2.1.0': {} },
@@ -1753,9 +1770,9 @@ describe('ES module transform: minified imports, and import text in strings left
     const src = 'import{createRequire as e}from"node:module";import t from"node:fs";import i,{styleText as a}from"node:util";import"./side.js";'
       + 'const tpl=`import react from \'@vitejs/plugin-react\'\nexport default defineConfig({})`;export{tpl as x,e};export{e as "module.exports"};export default 1;';
     const out = transformESModules(src);
-    expect(out).toContain('const {createRequire: e} = __shiro_require("node:module");');
+    expect(out).toContain('let {createRequire: e} = __shiro_require("node:module");');
     expect(out).toContain('const t = __shiro_require("node:fs");');
-    expect(out).toContain('const i = __shiro_require("node:util"); const {styleText: a} = __shiro_require("node:util");');
+    expect(out).toContain('const i = __shiro_require("node:util"); let {styleText: a} = __shiro_require("node:util");');
     expect(out).toContain('__shiro_require("./side.js");');
     expect(out).toContain("`import react from '@vitejs/plugin-react'\nexport default defineConfig({})`");
     expect(out).toContain('__shiro_module.exports.x = tpl; __shiro_module.exports.e = e;');
@@ -1767,6 +1784,46 @@ describe('ES module transform: minified imports, and import text in strings left
 import { liveEsbuildChunk } from '@shiro/commands/jseval/esm-live';
 
 describe('live bindings for code-split chunks: an import named like a member keyword', () => {
+  it('exported function declarations are there while a cyclic import is loading (Astro middleware)', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/home/user/cyc', { recursive: true });
+    await fs.writeFile('/home/user/cyc/index.mjs', `import { sequence } from './sequence.mjs';\nfunction defineMiddleware(fn) { return fn; }\nexport function other() { return 'o'; }\nconst late = 1;\nexport { defineMiddleware, sequence, late };\n`);
+    await fs.writeFile('/home/user/cyc/sequence.mjs', `import { defineMiddleware, other } from './index.mjs';\nexport function sequence() { return defineMiddleware(() => 'ok')() + other(); }\nexport const early = [typeof defineMiddleware, typeof other];\n`);
+    await fs.writeFile('/home/user/cyc/main.mjs', `import { sequence, late } from './index.mjs';\nimport { early } from './sequence.mjs';\nconsole.log(sequence(), late, early.join());\n`);
+    expect((await sh(shell, 'cd /home/user/cyc && node main.mjs')).out).toBe('oko 1 function,function\n');
+    // A re-exported import read through a three-module cycle: live once the module has loaded
+    await fs.writeFile('/home/user/cyc/i2.mjs', `import { seq } from './s2.mjs';\nexport { seq };\n`);
+    await fs.writeFile('/home/user/cyc/s2.mjs', `import { rc } from './r2.mjs';\nexport function seq() { return 'seq'; }\n`);
+    await fs.writeFile('/home/user/cyc/r2.mjs', `import { seq } from './i2.mjs';\nexport function rc() { return typeof seq === 'function' ? seq() : String(seq); }\n`);
+    await fs.writeFile('/home/user/cyc/m2.mjs', `import './i2.mjs';\nimport { rc } from './r2.mjs';\nconsole.log(rc());\n`);
+    expect((await sh(shell, 'cd /home/user/cyc && node m2.mjs')).out).toBe('seq\n');
+    // `import { default as x }` is the default import (Astro's core/dev/index.js re-exports one)
+    await fs.writeFile('/home/user/cyc/dev.mjs', `export default async function dev() { return 'dev'; }\n`);
+    await fs.writeFile('/home/user/cyc/devindex.mjs', `import { default as default2 } from "./dev.mjs";\nimport { other } from "./index.mjs";\nexport {\n  other,\n  default2 as default\n};\n`);
+    await fs.writeFile('/home/user/cyc/m3.mjs', `import d, { other } from './devindex.mjs';\nconsole.log(typeof d, typeof other, await d());\n`);
+    expect((await sh(shell, 'cd /home/user/cyc && node m3.mjs')).out).toBe('function function dev\n');
+    // Named exports ahead of `export default` stay (zod's index.js: `export * from`, `export { z }`, `export default z`)
+    await fs.writeFile('/home/user/cyc/ext.mjs', `export const string = () => 's';\nexport const number = () => 1;\n`);
+    await fs.writeFile('/home/user/cyc/zod.mjs', `import * as z from "./ext.mjs";\nexport * from "./ext.mjs";\nexport { z };\nexport default z;\n`);
+    await fs.writeFile('/home/user/cyc/m4.mjs', `const m = await import('./zod.mjs');\nimport { z, string } from './zod.mjs';\nimport zd from './zod.mjs';\nconsole.log('z' in m, typeof m.z.string, typeof string, typeof z.number, typeof zd.string);\n`);
+    expect((await sh(shell, 'cd /home/user/cyc && node m4.mjs')).out).toBe('true function function function function\n');
+  });
+
+  it('a method named import stays one; import() calls become dynamic imports', () => {
+    const out = transformESModules('const loader = {\n  import(id) { return id; },\n  async load() { return import("./x.js").then((m) => m); }\n};\nclass L { import (a, b) {} }\nconst r = runner\n  .import(url);\nexport { loader };\n');
+    expect(out).toContain('runner\n  .import(url)');
+    expect(out).toContain('import(id) { return id; }');
+    expect(out).toContain('import (a, b) {}');
+    expect(out).toContain('__dynamic_import("./x.js")');
+  });
+
+  it("a `/*` inside a template or string isn't a comment (tsconfck's `**/*` hid the exports after it)", () => {
+    const out = transformESModules('const G = `**/*`;\nconst S = "/*";\n/** doc */\nexport function f() { return 1; }\nexport const x = 2;\n');
+    expect(out).not.toMatch(/^export /m);
+    expect(out).toContain('`**/*`');
+    expect(out).toContain('/** doc */');
+  });
+
   it("keeps `get name() {}` an accessor when `get` is an imported binding (vite 7's config chunk)", () => {
     const src = 'import { __toESM as t, get, set } from "./chunk.js";\n'
       + 'const o = { a: 1, get clients() { return get(1); }, set value(v) { set(v); }, get };\n'

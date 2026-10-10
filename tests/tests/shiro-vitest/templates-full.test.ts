@@ -66,7 +66,8 @@ describe('Classic Templates: Full Execution with Serve', () => {
   });
 
   // Commands that truly can't run in test env (WASM runtimes, compiled binaries, etc.)
-  const unavailable = ['node ', 'python3 ', 'python ', 'build ', 'cc ', 'sqlite3 ', '/tmp/hello'];
+  // xpkg/busybox download a real binary from busybox.net (5-20 s from CI containers)
+  const unavailable = ['node ', 'python3 ', 'python ', 'build ', 'cc ', 'sqlite3 ', '/tmp/hello', 'xpkg ', 'busybox '];
 
   /** Filter out lines that start with unavailable commands */
   function filterCmd(cmd: string): string {

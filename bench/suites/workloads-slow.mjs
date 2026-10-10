@@ -31,7 +31,12 @@ export async function run(h) {
   const R = {};
   const add = (k, v) => (R[k] ??= []).push(v);
 
-  if (h.wants('workload.debian') || h.wants('workload.apt') || h.wants('workload.python3')) {
+  const DEB = ['workload.debian', 'workload.apt', 'workload.python3',
+    ...['install_to_prompt', 'install', 'first_bash', 'storage'].map((m) => `workload.debian.${m}`),
+    ...['update', 'install_cowsay', 'cowsay_run', 'install_python3'].map((m) => `workload.apt.${m}`),
+    'workload.python3.cold', 'workload.python3.warm',
+    ...['debian_install', 'apt_update', 'apt_cowsay', 'apt_python3', 'python3_cold', 'python3_warm'].map((m) => `workload.peak_rss.${m}`)];
+  if (h.wantsAny(...DEB)) {
     for (let i = 0; i < n; i++) {
       await h.page?.context().close().catch(() => {});
       await h.boot({ path: '/?ui=terminal' });
