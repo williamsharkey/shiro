@@ -203,7 +203,15 @@ Shell and platform fixes these needed (all with tests in the same file):
   memory, lightningcss's 16 MB module) and ArrayBuffers (file contents).
   Rolldown's shared memory used to start at 1 GB (16384 pages; the module
   needs 1001): it starts at 64 MB now and grows (−23 MB resident, and no
-  1 GB commit on a phone). What it took:
+  1 GB commit on a phone). Most of "after build" is the build's peak, which
+  V8 returns when idle: 20 s later the renderer is at 832 MB. Packages run as
+  browser builds are let go 30 s after the last process using them ends
+  (their Workers terminated, blob: URLs revoked; they run as a function, not
+  an import()ed module, which the page's module map would keep): with the dev
+  server stopped, rolldown's 8 workers go and the renderer is at 727 MB.
+  Still held then: rolldown's 112 MB SharedArrayBuffer (by the browser
+  itself, not by script), the page's own esbuild-wasm (80 MB of Go memory)
+  and the files npm installed. What it took:
   - Rolldown runs as its browser build. `npm install` puts `@rolldown/browser`
     where `rolldown` goes (same API and versions); a process that imports it
     gets it bundled from the VFS with the page's esbuild

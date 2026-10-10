@@ -420,7 +420,7 @@ export async function executeNodeScript(
     const entryDirname = scriptPath ? scriptPath.substring(0, scriptPath.lastIndexOf('/')) : ctx.cwd;
     // Browser builds a package here runs as (rolldown → @rolldown/browser): loaded before the script needs them
     try {
-      for (const [spec, ns] of await loadBrowserPackages(ctx.fs, entryDirname, getBuiltinModule, fakeProcess, trackAsync)) browserModules.set(spec, ns);
+      for (const [spec, ns] of await loadBrowserPackages(ctx.fs, entryDirname, getBuiltinModule, fakeProcess, trackAsync, atExit)) browserModules.set(spec, ns);
     } catch (e: any) {
       console.warn('[node] browser build:', e);
       const err = e?.errors?.[0];
