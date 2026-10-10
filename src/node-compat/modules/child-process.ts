@@ -4,6 +4,10 @@ import type { CommandContext } from '../../commands/index';
 import { parseShellArgs } from '../../shell-args';
 import { activeProfile } from '../../profile';
 
+/** Marks the wait a running child (ref()'d) puts on its parent: process.exit() doesn't wait for it */
+export const CHILD_HOLD = Symbol('child hold');
+const childWait = <T>(p: Promise<T>): Promise<T> => Object.assign(p, { [CHILD_HOLD]: true });
+
 export interface ChildProcessDeps {
   ctx: CommandContext;
   fileCache: Map<string, string>;
@@ -201,7 +205,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
    * terminal run the child on that terminal (codex's npm launcher runs its
    * native binary so, which waited for EOF on a stdin that wasn't the tty)
    */
-  const execAsync = async (cmd: string, env?: Record<string, unknown>, input?: string, live?: Live, inherit?: [boolean, boolean, boolean]): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
+  const execAsync = async (cmd: string, env?: Record<string, unknown>, input?: string, live?: Live, inherit?: [boolean, boolean, boolean], abort?: AbortController): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
     let normalized = stripShellPrefix(cmd);
     // Strip leading shell flags (-l, -i, -e) that leak through from spawn args
     normalized = normalized.replace(/^(-[a-zA-Z]+\s+)+/, '');
@@ -254,6 +258,13 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
     // returning output to its Bash tool. The fork also keeps `cd`/`export` from
     // leaking into the interactive shell.
     const sh = ctx.shell.fork();
+    // child.kill() (spawn): its own abort, chained to the one it would have had
+    if (abort) {
+      const outer = sh.inheritedAbort;
+      if (outer?.signal.aborted) abort.abort(outer.signal.reason);
+      else outer?.signal.addEventListener('abort', () => abort.abort(outer.signal.reason), { once: true });
+      sh.inheritedAbort = abort;
+    }
     // spawn(…, { env }): the child sees that environment (Gemini CLI relaunches
     // itself with { ...process.env, GEMINI_CLI_NO_RELAUNCH: 'true' })
     if (env) {
@@ -346,7 +357,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
     // The parent waits while the child is ref()'d
     let release: (() => void) | null = null;
     let exited = false;
-    const hold = () => { if (!release && !exited) deps.pendingPromises.push(new Promise<void>((r) => { release = r; })); };
+    const hold = () => { if (!release && !exited) deps.pendingPromises.push(childWait(new Promise<void>((r) => { release = r; }))); };
     const unhold = () => { const r = release; release = null; r?.(); };
     child.ref = () => { hold(); return child; };
     child.unref = () => { unhold(); return child; };
@@ -435,7 +446,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
     if (child.stderr) { child.stderr.destroy = () => { errOpen = false; return child.stderr; }; child.stderr.ref = child.stderr.unref = () => child.stderr; }
     let release: (() => void) | null = null;
     let exited = false;
-    const hold = () => { if (!release && !exited) deps.pendingPromises.push(new Promise<void>((r) => { release = r; })); };
+    const hold = () => { if (!release && !exited) deps.pendingPromises.push(childWait(new Promise<void>((r) => { release = r; }))); };
     const unhold = () => { const r = release; release = null; r?.(); };
     child.ref = () => { hold(); return child; };
     child.unref = () => { unhold(); return child; };
@@ -671,7 +682,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
         (childEvents['close'] || []).forEach(fn => fn(r.exitCode, null));
         callback?.(r.exitCode !== 0 ? Object.assign(new Error(`Exit code ${r.exitCode}`), { code: r.exitCode }) : null, r.stdout, r.stderr);
       }).catch(e => callback?.(e, '', ''));
-      pendingPromises.push(p);
+      pendingPromises.push(childWait(p));
       return child;
     },
     execFile: (file: string, args: string[], opts: any, cb?: any) => {
@@ -718,7 +729,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
         (childEvents['close'] || []).forEach(fn => fn(1, null));
         callback?.(e, '', '');
       });
-      pendingPromises.push(p);
+      pendingPromises.push(childWait(p));
       return child;
     },
     spawn: (cmd: string, args?: string[], opts?: any) => {
@@ -782,6 +793,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
           };
         };
       };
+      const killer = new AbortController();
       const child: any = {
         pid: Math.floor(Math.random() * 10000) + 1000,
         stdin: {
@@ -818,7 +830,14 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
         removeListener: (ev: string, fn: Function) => child.off(ev, fn),
         removeAllListeners: (ev?: string) => { if (ev) delete events[ev]; else Object.keys(events).forEach(k => delete events[k]); return child; },
         emit: (ev: string, ...args: any[]) => { (events[ev] || []).forEach(fn => fn(...args)); },
-        kill: () => true,
+        // (in the page: the forked shell's abort, which signals the kernel programs it runs)
+        kill: (sig?: string | number) => {
+          if (child.exitCode !== null) return false;
+          const n = typeof sig === 'number' ? sig : ({ SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGKILL: 9, SIGTERM: 15 } as Record<string, number>)[sig ?? 'SIGTERM'] ?? 15;
+          killer.abort(Object.assign(new DOMException('The operation was aborted.', 'AbortError'), { signal: n }));
+          child.killed = true;
+          return true;
+        },
         killed: false,
         exitCode: null as number | null,
         signalCode: null,
@@ -855,7 +874,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       const cmdPromise = isClipboardCmd
         ? new Promise<{ stdout: string; stderr: string; exitCode: number }>(resolve =>
             setTimeout(() => resolve({ stdout: '', stderr: '', exitCode: 0 }), 0))
-        : execAsync(fullCmd, opts?.env, undefined, live, [inherits(opts?.stdio, 0), inheritOut, inheritErr]);
+        : execAsync(fullCmd, opts?.env, undefined, live, [inherits(opts?.stdio, 0), inheritOut, inheritErr], killer);
       const p = cmdPromise.then(r => {
         const writePromises: Promise<any>[] = [];
         // Write output to stdio file paths FIRST (before emitting events, because
@@ -899,7 +918,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
         (events['close'] || []).forEach(fn => fn(1, null));
         _resolveChild?.({ stdout: '', stderr: '', exitCode: 1 });
       });
-      pendingPromises.push(p);
+      pendingPromises.push(childWait(p));
       return child;
     },
     execFileSync: (file: string, args?: string[], opts?: any) => {
@@ -949,7 +968,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       if (r.exitCode !== 0) throw Object.assign(new Error(`Command failed: ${cmd}`), { code: r.exitCode, stdout: r.stdout, stderr: r.stderr });
       return { stdout: r.stdout, stderr: r.stderr };
     });
-    pendingPromises.push(p.catch(() => {}));
+    pendingPromises.push(childWait(p.catch(() => {})));
     return p;
   };
   cpModule.execFile[customSym] = (file: string, args?: string[], opts?: any) => {
@@ -963,7 +982,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       if (r.exitCode !== 0) throw Object.assign(new Error(`Command failed: ${cmd}`), { code: r.exitCode, stdout: r.stdout, stderr: r.stderr });
       return { stdout: r.stdout, stderr: r.stderr };
     });
-    pendingPromises.push(p.catch(() => {}));
+    pendingPromises.push(childWait(p.catch(() => {})));
     return p;
   };
   return cpModule;

@@ -1563,6 +1563,9 @@ export class Kernel {
     const base = this.shell;
     if (!base) throw new Error('kernel has no shell attached');
     const shell = base.fork();
+    // Its own abort, which its end fires: not the page shell's command of the moment (killing an
+    // agent's `sh` ended whatever the terminal was running)
+    shell.inheritedAbort = null;
     shell.cwd = proc.cwd;
     shell.env = { ...proc.env, PWD: proc.cwd, 0: proc.argv[0] ?? proc.path };
     shell.localVars = new Set(['0']); // $0 is not exported

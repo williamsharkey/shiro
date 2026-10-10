@@ -264,6 +264,8 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
     }
   }
 
+  // Under timeout (its abort says so) the job leads a group of its own even in a hosted shell
+  const ownGroup = !!(shell.abortController as { ownProcessGroup?: boolean } | null)?.ownProcessGroup;
   const procs: Process[] = [];
   let input = stdin0;
   for (let i = 0; i < programs.length; i++) {
@@ -276,7 +278,7 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
       path: p.path ?? p.argv[0], argv: p.argv, env: p.env ? { ...p.env, ...env } : env, cwd: opts.cwd,
       fds: { ...extra, 0: input, 1: out, 2: errOut }, run: p.run,
       // children of a hosted shell stay in its process group, under it
-      pgid: host && !shell.options.has('monitor') ? undefined : procs.length ? procs[0].pgid : 0,
+      pgid: host && !shell.options.has('monitor') && !ownGroup ? undefined : procs.length ? procs[0].pgid : 0,
       parent: host ?? undefined,
       uid: shell.uid,
     };

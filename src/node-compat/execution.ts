@@ -31,7 +31,7 @@ import { createEventsModule } from './modules/events';
 import { createUrlModule } from './modules/url';
 import { createUtilModule } from './modules/util';
 import { createFsModule, createFsPromisesModule } from './modules/fs';
-import { createChildProcessModule } from './modules/child-process';
+import { createChildProcessModule, CHILD_HOLD } from './modules/child-process';
 import { createStreamModule } from './modules/stream';
 import { createCryptoModule } from './modules/crypto';
 import { createProcessGlobal, createProcessFunction } from './process-global';
@@ -871,12 +871,18 @@ export async function executeNodeScript(
     // Clean up script timeout
     if (_st.scriptTimeoutId) { clearTimeout(_st.scriptTimeoutId); _st.scriptTimeoutId = null; }
 
-    // Wait for pending async operations
-    while (pendingPromises.length > 0) {
-      const current = [...pendingPromises];
-      pendingPromises.length = 0;
-      await Promise.all(current);
-    }
+    // Wait for pending async operations (after process.exit(), not for running children:
+    // node exits and they live on)
+    const drainPending = async () => {
+      while (pendingPromises.length > 0) {
+        const current = pendingPromises.splice(0).filter((p) => !(_st.exitCalled && CHILD_HOLD in p));
+        const all = Promise.all(current);
+        // (an exit while it waits for a child ends that wait; what else was in flight is waited for)
+        if (_st.exitCalled || !current.some((p) => CHILD_HOLD in p)) await all;
+        else if (await Promise.race([all.then(() => false), deferredExitPromise.then(() => true)])) pendingPromises.unshift(...current);
+      }
+    };
+    await drainPending();
 
     // Wait for pending timers (max 5s)
     // Timers still pending after this cap (a 60s timeout) don't keep the script alive
@@ -971,11 +977,7 @@ export async function executeNodeScript(
         exitedExplicitly = _st.exitCalled;
         _baseCT(deferredTimer);
       }
-      while (pendingPromises.length > 0) {
-        const current = [...pendingPromises];
-        pendingPromises.length = 0;
-        await Promise.all(current);
-      }
+      await drainPending();
     }
     // The script ended on its own: 'exit' listeners run, and may set
     // process.exitCode (mocha reports failures that way)
