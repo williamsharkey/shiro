@@ -11,7 +11,7 @@
 // Inlined into this chunk and injected at boot: one request fewer than a CSS file
 import desktopCss from './desktop.css?inline';
 import iconsetsCss from './iconsets.css?inline';
-import { appIconIn, ensureIconDefs, glyphClassicTile, iconSet, setAppGlyph, loadLiveEngine, paintPixelTiles, savedIconSet, saveIconSet, type IconSetId, type LiveIconEngine } from './iconsets';
+import { appIconIn, ensureIconDefs, glyphClassicTile, glyphFor, iconSet, setAppGlyph, loadLiveEngine, paintPixelTiles, savedIconSet, saveIconSet, type IconSetId, type LiveIconEngine } from './iconsets';
 import type { FileSystem } from '../filesystem';
 import type { Shell } from '../shell';
 import { ShiroTerminal } from '../terminal';
@@ -25,6 +25,8 @@ import { maybeShowTour, showTour } from './tour';
 import { BRAND } from '../brand';
 import { DEV_GROUPS, DEV_TOOLS, TOOL_PATH, launchScript, type DevTool } from './devtools';
 import { setClaudeSignInUI } from '../claude-signin-ui';
+import { setPreviewUI } from '../preview-ui';
+import { iframeServer } from '../iframe-server';
 import { flushStorage, reloadAfterFlush } from '../storage';
 
 export interface DesktopDeps {
@@ -759,6 +761,18 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
   initNetwork(wm, deps.fs, netBtn, deps.kernel);
   // Claude Code's sign-in shows as a desktop sheet (accounts.ts, loaded when asked for)
   setClaudeSignInUI((o) => import('./accounts').then(m => m.openClaudeSheet(wm, deps.fs, o)));
+  // Previews of in-tab servers are Preview windows (preview.ts, loaded when asked for); in the dock while open
+  wm.registerApp({ id: 'preview', name: 'Preview', icon: ICONS.browser, glyph: glyphFor('browser') ?? undefined, order: 89, dock: false, launch: () => wm.visibleOrder().find(w => w.appId === 'preview') ?? null });
+  setPreviewUI({
+    open: (port, path, title) => import('./preview').then(m => m.openPreview(ctx, port, path, title)).then(() => {}),
+    listening: (port, title) => void import('./preview').then(m => m.notifyListening(ctx, port, title)),
+  });
+  // Any server that stays up a second gets the offer: in-page node, node workers, emulated
+  // programs (python3 -m http.server) all publish their ports on the page's port table
+  iframeServer.onPortChange((port, up) => {
+    if (!up || !revealed) return;
+    setTimeout(() => { if (iframeServer.isPortInUse(port)) void import('./preview').then(m => m.notifyListening(ctx, port)); }, 1000);
+  });
 
   // ── Keyboard shortcuts (capture: before xterm sees them) ──
   window.addEventListener('keydown', (e) => {
