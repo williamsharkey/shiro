@@ -1,7 +1,7 @@
 {
  "suite": "Open POSIX Test Suite",
  "title": "POSIX: Open POSIX Test Suite under Blink (x86-64)",
- "note": "The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scripts/conformance/build-openposix.sh) run as static x86-64 kernel processes in the Blink engine: signals, pthreads, semaphores, message queues, timers, clocks, mmap, scheduling. A test passes when it exits 0; only tests that pass natively on the build host as uid 1000 are scored (openposix/native-baseline.json). First run: 1173/1448, with Blink 0080\u20130084 built locally (raise(SIGKILL) and sigqueue/AIO fixed from this suite); the gaps are POSIX message queues (mq_*), POSIX timers (timer_*), sigwait/sigtimedwait, sched_* policies and shm_open.",
+ "note": "The Open POSIX Test Suite's conformance tests (open_posix_testsuite in LTP, scripts/conformance/build-openposix.sh) run as static x86-64 kernel processes in the Blink engine: signals, pthreads, semaphores, message queues, timers, clocks, mmap, scheduling. A test passes when it exits 0; only tests that pass natively on the build host as uid 1000 are scored (openposix/native-baseline.json). First run: 1173/1448, with Blink 0080\u20130084 built locally (raise(SIGKILL) and sigqueue/AIO fixed from this suite); the gaps are POSIX message queues (mq_*), POSIX timers (timer_*), sigwait/sigtimedwait, sched_* policies and shm_open. \u2192 1326/1448 (kernel POSIX message queues and timers, Blink 0086\u20130092 built locally: mq_*, timer_*, sigtimedwait/sigwait, sched_*; sigqueue waits on siginfo in Blink's handler frames; fork_21-1 and pthread_attr_destroy_1-1 hit a Blink page-lock assertion).",
  "files": {
   "aio_cancel": {
    "pass": 7,
@@ -54,7 +54,7 @@
    "failures": [
     {
      "name": "aio_suspend_1-1",
-     "reason": "exit 131: "
+     "reason": "UNRESOLVED: aio_suspend/1-1.c Error at write(): No such file or directory"
     },
     {
      "name": "aio_suspend_4-1",
@@ -136,11 +136,11 @@
     },
     {
      "name": "fork_18-1",
-     "reason": "UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/18-1.c unresolved: got 38 (Function not implemented) on line 87 (Failed to cre"
+     "reason": "UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/fork/18-1.c unresolved: got 22 (Invalid argument) on line 87 (Failed to create a ti"
     },
     {
-     "name": "fork_19-1",
-     "reason": "UNRESOLVED: Failed to create the message queue descriptor: Function not implemented"
+     "name": "fork_21-1",
+     "reason": "exit 134: \t<blink backtrace unavailable>"
     },
     {
      "name": "fork_22-1",
@@ -178,14 +178,9 @@
    "failures": []
   },
   "kill": {
-   "pass": 2,
+   "pass": 3,
    "total": 3,
-   "failures": [
-    {
-     "name": "kill_1-2",
-     "reason": "FAIL: Test FAILED"
-    }
-   ]
+   "failures": []
   },
   "killpg": {
    "pass": 7,
@@ -317,350 +312,55 @@
    ]
   },
   "mq_close": {
-   "pass": 2,
+   "pass": 6,
    "total": 6,
-   "failures": [
-    {
-     "name": "mq_close_1-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_close_2-1",
-     "reason": "UNRESOLVED: unexpected error: mq_close 2-1: read: EOF"
-    },
-    {
-     "name": "mq_close_3-1",
-     "reason": "UNRESOLVED: unexpected error: mq_close 3-1: mq_open: Function not implemented"
-    },
-    {
-     "name": "mq_close_4-1",
-     "reason": "UNRESOLVED: unexpected error: mq_close 4-1: mq_open: Function not implemented"
-    }
-   ]
+   "failures": []
   },
   "mq_getattr": {
-   "pass": 0,
+   "pass": 2,
    "total": 2,
-   "failures": [
-    {
-     "name": "mq_getattr_2-1",
-     "reason": "UNRESOLVED: unexpected error: mq_getattr 2-1: mq_open(): Function not implemented"
-    },
-    {
-     "name": "mq_getattr_2-2",
-     "reason": "UNRESOLVED: unexpected error: mq_getattr 2-2: mq_open(): Function not implemented"
-    }
-   ]
+   "failures": []
   },
   "mq_notify": {
-   "pass": 0,
+   "pass": 6,
    "total": 6,
-   "failures": [
-    {
-     "name": "mq_notify_1-1",
-     "reason": "UNRESOLVED: unexpected error: mq_notify 1-1: mq_open: Function not implemented"
-    },
-    {
-     "name": "mq_notify_2-1",
-     "reason": "UNRESOLVED: unexpected error: mq_notify 2-1: mq_open: Function not implemented"
-    },
-    {
-     "name": "mq_notify_3-1",
-     "reason": "UNRESOLVED: unexpected error: mq_notify 3-1: mq_open: Function not implemented"
-    },
-    {
-     "name": "mq_notify_4-1",
-     "reason": "UNRESOLVED: unexpected error: mq_notify 4-1: mq_open: Function not implemented"
-    },
-    {
-     "name": "mq_notify_8-1",
-     "reason": "FAIL: Test FAILED (errno != EBADF)"
-    },
-    {
-     "name": "mq_notify_9-1",
-     "reason": "UNRESOLVED: unexpected error: mq_notify 9-1: mq_open: Function not implemented"
-    }
-   ]
+   "failures": []
   },
   "mq_open": {
-   "pass": 2,
+   "pass": 16,
    "total": 16,
-   "failures": [
-    {
-     "name": "mq_open_1-1",
-     "reason": "FAIL: Test FAILED"
-    },
-    {
-     "name": "mq_open_11-1",
-     "reason": "FAIL: Test FAILED"
-    },
-    {
-     "name": "mq_open_12-1",
-     "reason": "FAIL: Test FAILED"
-    },
-    {
-     "name": "mq_open_13-1",
-     "reason": "FAIL: Test FAILED"
-    },
-    {
-     "name": "mq_open_15-1",
-     "reason": "UNRESOLVED: Test UNRESOLVED"
-    },
-    {
-     "name": "mq_open_16-1",
-     "reason": "FAIL: Test FAILED - mq_open() never succeeded"
-    },
-    {
-     "name": "mq_open_18-1",
-     "reason": "FAIL: Test FAILED"
-    },
-    {
-     "name": "mq_open_20-1",
-     "reason": "FAIL: Test FAILED"
-    },
-    {
-     "name": "mq_open_23-1",
-     "reason": "UNRESOLVED: Test UNRESOLVED"
-    },
-    {
-     "name": "mq_open_25-2",
-     "reason": "FAIL: Test FAILED"
-    },
-    {
-     "name": "mq_open_27-1",
-     "reason": "FAIL: Test FAILED"
-    },
-    {
-     "name": "mq_open_27-2",
-     "reason": "FAIL: Test FAILED"
-    },
-    {
-     "name": "mq_open_29-1",
-     "reason": "FAIL: Test FAILED"
-    },
-    {
-     "name": "mq_open_7-3",
-     "reason": "FAIL: Test FAILED"
-    }
-   ]
+   "failures": []
   },
   "mq_send": {
-   "pass": 0,
+   "pass": 17,
    "total": 17,
-   "failures": [
-    {
-     "name": "mq_send_1-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_send_10-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_send_11-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_send_11-2",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_send_12-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_send_13-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_send_2-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_send_3-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_send_3-2",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_send_4-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_send_4-2",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_send_4-3",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_send_5-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_send_5-2",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_send_7-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_send_8-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_send_9-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    }
-   ]
+   "failures": []
   },
   "mq_setattr": {
-   "pass": 0,
+   "pass": 4,
    "total": 4,
-   "failures": [
-    {
-     "name": "mq_setattr_1-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_setattr_1-2",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_setattr_2-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_setattr_5-1",
-     "reason": "UNRESOLVED: unexpected error: mq_setattr 5-1: mq_open(): Function not implemented"
-    }
-   ]
+   "failures": []
   },
   "mq_timedreceive": {
-   "pass": 0,
+   "pass": 1,
    "total": 1,
-   "failures": [
-    {
-     "name": "mq_timedreceive_5-3",
-     "reason": "FAIL: Test FAILED"
-    }
-   ]
+   "failures": []
   },
   "mq_timedsend": {
-   "pass": 0,
+   "pass": 20,
    "total": 21,
    "failures": [
     {
-     "name": "mq_timedsend_1-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_timedsend_10-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_timedsend_11-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_timedsend_11-2",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
      "name": "mq_timedsend_12-1",
-     "reason": "UNRESOLVED: mq_open: Function not implemented"
-    },
-    {
-     "name": "mq_timedsend_13-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_timedsend_15-1",
-     "reason": "UNRESOLVED: Test UNRESOLVED"
-    },
-    {
-     "name": "mq_timedsend_16-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_timedsend_18-1",
-     "reason": "UNRESOLVED: Test UNRESOLVED"
-    },
-    {
-     "name": "mq_timedsend_19-1",
-     "reason": "UNRESOLVED: Test UNRESOLVED"
-    },
-    {
-     "name": "mq_timedsend_2-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_timedsend_20-1",
-     "reason": "UNRESOLVED: Test UNRESOLVED"
-    },
-    {
-     "name": "mq_timedsend_3-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_timedsend_4-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_timedsend_4-2",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_timedsend_4-3",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_timedsend_5-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_timedsend_5-2",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_timedsend_5-3",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_timedsend_7-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
-    },
-    {
-     "name": "mq_timedsend_8-1",
-     "reason": "UNRESOLVED: mq_open() did not return success: Function not implemented"
+     "reason": "timeout: ",
+     "timeout": true
     }
    ]
   },
   "mq_unlink": {
-   "pass": 0,
+   "pass": 4,
    "total": 4,
-   "failures": [
-    {
-     "name": "mq_unlink_1-1",
-     "reason": "UNRESOLVED: unexpected error: mq_unlink 1-1: mq_open: Function not implemented"
-    },
-    {
-     "name": "mq_unlink_2-1",
-     "reason": "UNRESOLVED: unexpected error: mq_unlink 2-1: read: EOF"
-    },
-    {
-     "name": "mq_unlink_2-2",
-     "reason": "UNRESOLVED: unexpected error: mq_unlink 2-2: read: EOF"
-    },
-    {
-     "name": "mq_unlink_7-1",
-     "reason": "FAIL: Test FAILED"
-    }
-   ]
+   "failures": []
   },
   "munlock": {
    "pass": 2,
@@ -699,9 +399,14 @@
    ]
   },
   "pthread_attr_destroy": {
-   "pass": 3,
+   "pass": 2,
    "total": 3,
-   "failures": []
+   "failures": [
+    {
+     "name": "pthread_attr_destroy_1-1",
+     "reason": "exit 134: "
+    }
+   ]
   },
   "pthread_attr_getdetachstate": {
    "pass": 2,
@@ -986,9 +691,14 @@
    "failures": []
   },
   "pthread_create": {
-   "pass": 12,
+   "pass": 11,
    "total": 14,
    "failures": [
+    {
+     "name": "pthread_create_1-3",
+     "reason": "timeout: Test FAILED: Alarm fired while waiting for cancelation",
+     "timeout": true
+    },
     {
      "name": "pthread_create_11-1",
      "reason": "timeout: ",
@@ -996,7 +706,7 @@
     },
     {
      "name": "pthread_create_3-2",
-     "reason": "UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/pthread_create/3-2.c unresolved: got 22 (Invalid argument) on line 649 (Failed to s"
+     "reason": "UNRESOLVED: )"
     }
    ]
   },
@@ -1006,13 +716,9 @@
    "failures": []
   },
   "pthread_equal": {
-   "pass": 1,
+   "pass": 2,
    "total": 3,
    "failures": [
-    {
-     "name": "pthread_equal_1-2",
-     "reason": "exit 134: Test PASSED"
-    },
     {
      "name": "pthread_equal_2-1",
      "reason": "timeout: ",
@@ -1046,7 +752,7 @@
    "failures": [
     {
      "name": "pthread_join_1-2",
-     "reason": "FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/pthread_join/1-2.c FAILED: pthread_join returned before child terminated"
+     "reason": "UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/pthread_join/1-2.c unresolved: got 3 (No such process) on line 98 (Failed to create"
     },
     {
      "name": "pthread_join_3-1",
@@ -1055,13 +761,11 @@
     },
     {
      "name": "pthread_join_4-1",
-     "reason": "timeout: ",
-     "timeout": true
+     "reason": "UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/pthread_join/4-1.c unresolved: got 3 (No such process) on line 114 (Failed to creat"
     },
     {
      "name": "pthread_join_6-3",
-     "reason": "timeout: ",
-     "timeout": true
+     "reason": "UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/pthread_join/6-3.c unresolved: got 3 (No such process) on line 142 (Failed to creat"
     }
    ]
   },
@@ -1247,7 +951,7 @@
    "failures": [
     {
      "name": "pthread_rwlock_timedwrlock_6-1",
-     "reason": "FAIL: Test FAILED: Timeout was for 5 seconds, but waited for 4.999894 seconds instead"
+     "reason": "FAIL: Test FAILED: Timeout was for 5 seconds, but waited for 4.999750 seconds instead"
     }
    ]
   },
@@ -1409,124 +1113,39 @@
    "failures": []
   },
   "sched_get_priority_max": {
-   "pass": 3,
+   "pass": 4,
    "total": 4,
-   "failures": [
-    {
-     "name": "sched_get_priority_max_2-1",
-     "reason": "FAIL: did no returned -1."
-    }
-   ]
+   "failures": []
   },
   "sched_get_priority_min": {
-   "pass": 3,
+   "pass": 4,
    "total": 4,
-   "failures": [
-    {
-     "name": "sched_get_priority_min_2-1",
-     "reason": "FAIL: did not returned -1."
-    }
-   ]
+   "failures": []
   },
   "sched_getparam": {
-   "pass": 0,
+   "pass": 4,
    "total": 4,
-   "failures": [
-    {
-     "name": "sched_getparam_1-1",
-     "reason": "exit 134: *** stack smashing detected ***: terminated"
-    },
-    {
-     "name": "sched_getparam_2-1",
-     "reason": "exit 134: *** stack smashing detected ***: terminated"
-    },
-    {
-     "name": "sched_getparam_3-1",
-     "reason": "exit 134: *** stack smashing detected ***: terminated"
-    },
-    {
-     "name": "sched_getparam_4-1",
-     "reason": "FAIL: returned code is not -1."
-    }
-   ]
+   "failures": []
   },
   "sched_getscheduler": {
-   "pass": 3,
+   "pass": 4,
    "total": 4,
-   "failures": [
-    {
-     "name": "sched_getscheduler_5-1",
-     "reason": "FAIL: ESRCH is not returned: Success"
-    }
-   ]
+   "failures": []
   },
   "sched_setparam": {
-   "pass": 2,
+   "pass": 7,
    "total": 8,
    "failures": [
     {
-     "name": "sched_setparam_22-1",
-     "reason": "exit 134: *** stack smashing detected ***: terminated"
-    },
-    {
-     "name": "sched_setparam_23-1",
-     "reason": "exit 134: *** stack smashing detected ***: terminated"
-    },
-    {
-     "name": "sched_setparam_25-1",
-     "reason": "FAIL: The returned code is not -1."
-    },
-    {
      "name": "sched_setparam_26-1",
-     "reason": "exit 134: *** stack smashing detected ***: terminated"
-    },
-    {
-     "name": "sched_setparam_27-1",
-     "reason": "FAIL: The returned code is not -1."
-    },
-    {
-     "name": "sched_setparam_5-1",
-     "reason": "exit 134: *** stack smashing detected ***: terminated"
+     "reason": "FAIL: errno is not EPERM: Success"
     }
    ]
   },
   "sched_setscheduler": {
-   "pass": 0,
+   "pass": 8,
    "total": 8,
-   "failures": [
-    {
-     "name": "sched_setscheduler_17-1",
-     "reason": "exit 134: *** stack smashing detected ***: terminated"
-    },
-    {
-     "name": "sched_setscheduler_17-5",
-     "reason": "exit 134: *** stack smashing detected ***: terminated"
-    },
-    {
-     "name": "sched_setscheduler_17-6",
-     "reason": "exit 134: *** stack smashing detected ***: terminated"
-    },
-    {
-     "name": "sched_setscheduler_17-7",
-     "reason": "exit 134: *** stack smashing detected ***: terminated"
-    },
-    {
-     "name": "sched_setscheduler_19-1",
-     "reason": "FAIL:   The returned code is not -1."
-    },
-    {
-     "name": "sched_setscheduler_19-5",
-     "reason": "UNRESOLVED: No error occurs, could -27367 be a valid value for the scheduling policy ???"
-    },
-    {
-     "name": "sched_setscheduler_20-1",
-     "reason": "FAIL: errno is not EPERM: Success"
-    },
-    {
-     "name": "sched_setscheduler_21-1",
-     "reason": "FAIL: The returned code is not -1."
-    }
-   ]
+   "failures": []
   },
   "sched_yield": {
    "pass": 1,
@@ -1589,28 +1208,16 @@
    "failures": []
   },
   "shm_open": {
-   "pass": 16,
+   "pass": 18,
    "total": 27,
    "failures": [
     {
      "name": "shm_open_1-1",
-     "reason": "timeout: ",
-     "timeout": true
-    },
-    {
-     "name": "shm_open_11-1",
-     "reason": "timeout: ",
-     "timeout": true
-    },
-    {
-     "name": "shm_open_13-1",
-     "reason": "timeout: ",
-     "timeout": true
+     "reason": "exit 139: "
     },
     {
      "name": "shm_open_14-2",
-     "reason": "timeout: ",
-     "timeout": true
+     "reason": "exit 139: "
     },
     {
      "name": "shm_open_15-1",
@@ -1650,16 +1257,11 @@
    "failures": []
   },
   "sigaction": {
-   "pass": 495,
+   "pass": 496,
    "total": 500,
    "failures": [
     {
      "name": "sigaction_10-1",
-     "reason": "timeout: ",
-     "timeout": true
-    },
-    {
-     "name": "sigaction_12-16",
      "reason": "timeout: ",
      "timeout": true
     },
@@ -1806,144 +1408,47 @@
    "failures": []
   },
   "sigtimedwait": {
-   "pass": 2,
+   "pass": 5,
    "total": 5,
-   "failures": [
-    {
-     "name": "sigtimedwait_1-1",
-     "reason": "FAIL: time_elapsed: 0.000470"
-    },
-    {
-     "name": "sigtimedwait_4-1",
-     "reason": "FAIL: : Function not implemented"
-    },
-    {
-     "name": "sigtimedwait_6-1",
-     "reason": "FAIL: Test FAILED: sigtimedwait() did set errno to EAGAIN"
-    }
-   ]
+   "failures": []
   },
   "sigwait": {
-   "pass": 0,
+   "pass": 6,
    "total": 8,
    "failures": [
     {
-     "name": "sigwait_1-1",
-     "reason": "FAIL: Error in sigwait()"
-    },
-    {
      "name": "sigwait_2-1",
-     "reason": "FAIL: Error in sigwait"
-    },
-    {
-     "name": "sigwait_3-1",
-     "reason": "UNRESOLVED: Error in sigwait"
-    },
-    {
-     "name": "sigwait_4-1",
-     "reason": "UNRESOLVED: Error in sigwait()"
-    },
-    {
-     "name": "sigwait_6-1",
-     "reason": "UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/sigwait/6-1.c unresolved: got 38 (Function not implemented) on line 99 (failed to w"
+     "reason": "FAIL: Test FAILED"
     },
     {
      "name": "sigwait_6-2",
-     "reason": "UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/sigwait/6-2.c unresolved: got 38 (Function not implemented) on line 99 (failed to w"
-    },
-    {
-     "name": "sigwait_7-1",
-     "reason": "UNRESOLVED: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/sigwait/7-1.c unresolved: got 38 (Function not implemented) on line 153 (Failed to "
-    },
-    {
-     "name": "sigwait_8-1",
-     "reason": "FAIL: Test FAILED"
+     "reason": "FAIL: Test /home/user/shiro/tests/conformance/.cache/ltp/testcases/open_posix_testsuite/conformance/interfaces/sigwait/6-2.c FAILED: Unexpected number of threads awaken"
     }
    ]
   },
   "sigwaitinfo": {
-   "pass": 0,
+   "pass": 5,
    "total": 8,
    "failures": [
-    {
-     "name": "sigwaitinfo_1-1",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "sigwaitinfo_2-1",
-     "reason": "FAIL: Test FAILED: sigwaitinfo() did not return the lowest of the multiple pending signals between SIGRTMIN and SIGRTMAX"
-    },
     {
      "name": "sigwaitinfo_3-1",
      "reason": "FAIL: Test FAILED"
     },
     {
-     "name": "sigwaitinfo_5-1",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "sigwaitinfo_6-1",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
      "name": "sigwaitinfo_7-1",
-     "reason": "UNRESOLVED: : Function not implemented"
+     "reason": "FAIL: Test FAILED: The queued value 0 was dequeued before the queued value 5 even though 5 was queued first."
     },
     {
      "name": "sigwaitinfo_8-1",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "sigwaitinfo_9-1",
-     "reason": "FAIL: : Function not implemented"
+     "reason": "timeout: ",
+     "timeout": true
     }
    ]
   },
   "speculative": {
-   "pass": 7,
+   "pass": 17,
    "total": 17,
-   "failures": [
-    {
-     "name": "speculative_12-2",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "speculative_12-3",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "speculative_18-2",
-     "reason": "UNRESOLVED: Test UNRESOLVED"
-    },
-    {
-     "name": "speculative_2-1",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "speculative_26-1",
-     "reason": "FAIL: Test FAILED"
-    },
-    {
-     "name": "speculative_5-1",
-     "reason": "FAIL: Test FAILED"
-    },
-    {
-     "name": "speculative_5-2",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "speculative_6-2",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "speculative_6-3",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "speculative_7-2",
-     "reason": "FAIL: Test FAILED, error is Function not implemented"
-    }
-   ]
+   "failures": []
   },
   "strchr": {
    "pass": 1,
@@ -1976,174 +1481,34 @@
    "failures": []
   },
   "timer_create": {
-   "pass": 0,
+   "pass": 8,
    "total": 8,
-   "failures": [
-    {
-     "name": "timer_create_1-1",
-     "reason": "FAIL: : Function not implemented"
-    },
-    {
-     "name": "timer_create_10-1",
-     "reason": "UNRESOLVED: timer_create did not return success: Function not implemented"
-    },
-    {
-     "name": "timer_create_11-1",
-     "reason": "UNRESOLVED: timer_create did not return success: Function not implemented"
-    },
-    {
-     "name": "timer_create_16-1",
-     "reason": "FAIL: Test FAILED"
-    },
-    {
-     "name": "timer_create_3-1",
-     "reason": "FAIL: : Function not implemented"
-    },
-    {
-     "name": "timer_create_7-1",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "timer_create_8-1",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "timer_create_9-1",
-     "reason": "UNRESOLVED: : Function not implemented"
-    }
-   ]
+   "failures": []
   },
   "timer_delete": {
-   "pass": 0,
+   "pass": 2,
    "total": 2,
-   "failures": [
-    {
-     "name": "timer_delete_1-1",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "timer_delete_1-2",
-     "reason": "UNRESOLVED: : Function not implemented"
-    }
-   ]
+   "failures": []
   },
   "timer_getoverrun": {
-   "pass": 0,
+   "pass": 3,
    "total": 4,
    "failures": [
     {
-     "name": "timer_getoverrun_1-1",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "timer_getoverrun_2-1",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "timer_getoverrun_2-2",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
      "name": "timer_getoverrun_2-3",
-     "reason": "UNRESOLVED: : Function not implemented"
+     "reason": "FAIL: FAIL:  0 overruns sent; expected 499"
     }
    ]
   },
   "timer_gettime": {
-   "pass": 0,
+   "pass": 7,
    "total": 7,
-   "failures": [
-    {
-     "name": "timer_gettime_1-1",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "timer_gettime_1-2",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "timer_gettime_1-3",
-     "reason": "UNRESOLVED: timer_create(): Function not implemented"
-    },
-    {
-     "name": "timer_gettime_1-4",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "timer_gettime_2-1",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "timer_gettime_2-2",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "timer_gettime_3-1",
-     "reason": "UNRESOLVED: : Function not implemented"
-    }
-   ]
+   "failures": []
   },
   "timer_settime": {
-   "pass": 0,
+   "pass": 14,
    "total": 14,
-   "failures": [
-    {
-     "name": "timer_settime_1-1",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "timer_settime_13-1",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "timer_settime_3-1",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "timer_settime_3-2",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "timer_settime_3-3",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "timer_settime_5-1",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "timer_settime_5-2",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "timer_settime_6-1",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "timer_settime_8-1",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "timer_settime_8-2",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "timer_settime_8-3",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "timer_settime_8-4",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "timer_settime_9-1",
-     "reason": "UNRESOLVED: : Function not implemented"
-    },
-    {
-     "name": "timer_settime_9-2",
-     "reason": "UNRESOLVED: : Function not implemented"
-    }
-   ]
+   "failures": []
   }
  }
 }

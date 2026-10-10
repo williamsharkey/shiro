@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createTestShell } from './helpers';
 import { installNodeWorker } from './node-worker-setup';
+import { TtySession } from '@shiro/kernel/pty';
 
 let cleanup: () => void;
 beforeAll(async () => { cleanup = await installNodeWorker(); }, 120_000);
@@ -110,6 +111,16 @@ console.log(a[0], a[1] === me, b[0], b[1] === me);
     // the inner node's parent is the outer node: sh -c exec'd it in place, no node in between
     expect(r.err).toBe('');
     expect(r.out).toBe('x true y,z true\n');
+  }, 60_000);
+
+  it('in a script, node is the shell\'s child; its redirects and pipes are the shell\'s', async () => {
+    const r = await sh(`node -e '
+      const out = String(require("child_process").execSync("echo $$; node -e \\"console.log(require(\\\\\\"fs\\\\\\").readFileSync(\\\\\\"/proc/self/stat\\\\\\", \\\\\\"utf8\\\\\\").split(\\\\\\" \\\\\\")[3])\\" > /tmp/nk3; cat /tmp/nk3; node -p 6*7 | tr 4 x"));
+      const [sh, ppid, piped] = out.trim().split("\\n");
+      console.log(sh === ppid, piped);
+    ' < /dev/null`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('true x2\n');
   }, 60_000);
 
   it('output to a pipe streams, and spawn() delivers it as it comes', async () => {
@@ -275,6 +286,60 @@ w.terminate();
     expect(firstAt).toBeLessThan(Date.now() - start - 150); // the first event came well before the end
     expect(all).toBe('data: 1\n\ndata: 2\n\ndata: 3\n\n');
     expect(await run).toBe(0);
+  }, 60_000);
+
+  it('on a pty: cooked lines, ^C to a listener or exit 130, setRawMode and back', async () => {
+    const { shell } = await createTestShell();
+    const tty = new TtySession();
+    let screen = '';
+    tty.pty.onOutput((b) => { screen += new TextDecoder().decode(b); });
+    shell.setTerminal({ tty, writeOutput: (s: string) => { screen += s; }, write: (s: string) => { screen += s; }, getSize: () => ({ cols: 80, rows: 24 }), onResize: () => () => {},
+      enterStdinPassthrough() {}, exitStdinPassthrough() {}, enterRawMode() {}, exitRawMode() {}, isRawMode: () => false, term: { buffer: { active: { type: 'normal' } } } } as any);
+    const until = async (cond: () => boolean) => { const t0 = Date.now(); while (!cond()) { if (Date.now() - t0 > 15_000) throw new Error(`timed out: ${JSON.stringify(screen)}`); await new Promise((r) => setTimeout(r, 10)); } };
+    const run = (js: string) => { screen = ''; return shell.execute(`export TABCOMPUTER_NODE_WORKER=1; node -e '${js}'`, () => {}, () => {}); };
+    // cooked: the pty echoes and edits; the line comes on Enter; ^D ends
+    let r = run('process.stdin.on("data", (d) => console.log("got " + JSON.stringify(String(d)))); process.stdin.on("end", () => console.log("end")); console.log("ready")');
+    await until(() => screen.includes('ready'));
+    tty.pty.input('hellp\x7fo\r');
+    await until(() => screen.includes('got "hello\\n"'));
+    expect(screen).toContain('hellp\b \bo\r\n');
+    tty.pty.input('\x04');
+    expect(await r).toBe(0);
+    expect(screen).toContain('end');
+    // ^C: SIGINT to a listener; without one, exit 130
+    r = run('process.on("SIGINT", () => { console.log("caught"); process.exit(3) }); process.stdin.resume(); console.log("ready")');
+    await until(() => screen.includes('ready'));
+    tty.pty.input('\x03');
+    expect(await r).toBe(3);
+    expect(screen).toContain('caught');
+    r = run('process.stdin.resume(); console.log("ready")');
+    await until(() => screen.includes('ready'));
+    tty.pty.input('\x03');
+    expect(await r).toBe(130);
+    // raw: keys one by one, no echo, no signals; the shell's modes again after
+    r = run('process.stdin.setRawMode(true); process.stdin.on("data", (d) => { console.log("key " + JSON.stringify(String(d))); if (String(d) === "q") process.exit(0) }); console.log("ready")');
+    await until(() => screen.includes('ready'));
+    expect(tty.pty.termios.lflag & 0o12).toBe(0); // ICANON, ECHO off
+    tty.pty.input('a');
+    await until(() => screen.includes('key "a"'));
+    tty.pty.input('\x03');
+    await until(() => screen.includes('key "\\u0003"'));
+    tty.pty.input('q');
+    expect(await r).toBe(0);
+    expect(tty.pty.termios.lflag & 0o12).toBe(0o12);
+  }, 60_000);
+
+  it("spawn(): a fast child's output reaches listeners added after spawn() returns", async () => {
+    const r = await sh(`node -e '
+      const { spawn } = require("child_process");
+      let left = 5; const got = [];
+      for (let i = 0; i < 5; i++) {
+        const c = spawn("sh", ["-c", "echo fast" + i], { env: { ...process.env, X: "1" } });
+        let out = ""; c.stdout.on("data", (d) => out += d);
+        c.on("close", () => { got[i] = out.trim(); if (!--left) console.log(got.join(",")); });
+      }
+    '`);
+    expect(r.out).toBe('fast0,fast1,fast2,fast3,fast4\n');
   }, 60_000);
 
   it('stdin from a pipe; async exec', async () => {

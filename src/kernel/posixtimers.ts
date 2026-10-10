@@ -30,6 +30,8 @@ const DELAYTIMER_MAX = 0x7fffffff;
 const CLOCKS = new Set([0, 1, 2, 3, 5, 6, 7]);
 
 interface Timer {
+  id: number;
+  value: bigint; // sigev_value
   clock: number;
   signo: number; // 0: SIGEV_NONE
   deadline: number; // ms on the timer's clock (performance-based), 0 = disarmed
@@ -43,7 +45,7 @@ interface Timer {
 const now = () => performance.now();
 
 export class PosixTimers {
-  constructor(private deliver: (proc: Process, sig: number) => void, private bootMs: number) {}
+  constructor(private deliver: (proc: Process, sig: number, info: A.SigInfo) => void, private bootMs: number) {}
 
   private table(proc: Process): Map<number, Timer> {
     let t = proc.data.posixTimers as Map<number, Timer> | undefined;
@@ -67,7 +69,9 @@ export class PosixTimers {
     // (a negative id is a process's or thread's CPU clock, clock_getcpuclockid's: wall time here too)
     if (!CLOCKS.has(clock) && clock >= 0) return clock === 8 || clock === 9 ? -A.EPERM : -A.EINVAL; // the alarm clocks take CAP_WAKE_ALARM
     let signo = A.SIGALRM;
+    let value: bigint | undefined;
     if (sev) {
+      value = sev.getBigInt64(0, true);
       const how = sev.getInt32(12, true);
       signo = sev.getInt32(8, true);
       if (how === SIGEV_NONE) signo = 0;
@@ -82,7 +86,8 @@ export class PosixTimers {
     const t = this.table(proc);
     let id = 0;
     while (t.has(id)) id++;
-    t.set(id, { clock, signo, deadline: 0, interval: 0, queued: false, cur: 0, last: 0 });
+    // (with no sigevent, the value is the timer's id, as on Linux)
+    t.set(id, { id, value: value ?? BigInt(id), clock, signo, deadline: 0, interval: 0, queued: false, cur: 0, last: 0 });
     return id;
   }
 
@@ -105,7 +110,7 @@ export class PosixTimers {
       if (tm.queued) tm.cur = Math.min(DELAYTIMER_MAX, tm.cur + 1);
       else {
         tm.queued = true;
-        this.deliver(proc, tm.signo);
+        this.deliver(proc, tm.signo, { signo: tm.signo, code: A.SI_TIMER, timerid: tm.id, overrun: 0, value: tm.value });
       }
     }
     if (tm.interval > 0) {
