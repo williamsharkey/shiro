@@ -273,6 +273,9 @@ function pipeAmpToRedirect(text: string): string {
 /** Distinct names for process-substitution files */
 let procSubCounter = 0;
 
+/** Where installed programs live: tabcomputer's own commands count as being in the first of these on PATH */
+const STD_BIN_DIRS = ['/usr/local/bin', '/usr/bin', '/bin', '/usr/local/sbin', '/usr/sbin', '/sbin'];
+
 /** Pids for in-page background jobs ($!), above any kernel pid in practice */
 let nextInPagePid = 40000;
 
@@ -1384,8 +1387,23 @@ export class Shell {
   /** Where a command name resolves for `hash`: a file on PATH, or a registered command's /usr/bin name */
   private async commandPath(name: string): Promise<string | null> {
     if (SHELL_BUILTIN_NAMES.has(name)) return null;
-    const file = await this.findExecutableInPath(name).catch(() => null);
-    return file ?? (this.commands.get(name) ? `/usr/bin/${name}` : null);
+    return this.programPath(name);
+  }
+
+  /**
+   * Where NAME is as a program, as `command -v`, `which` and `hash` report it:
+   * an executable file on PATH, else one of tabcomputer's commands as if
+   * installed in the first standard bin directory on PATH (where the tab
+   * puts their shims), else /usr/bin/NAME. Null when it is neither.
+   */
+  async programPath(name: string): Promise<string | null> {
+    const file = await this.findExecutableInPath(name, true).catch(() => null);
+    if (file) return file;
+    if (name.includes('/') || !this.commands.get(name)) return null;
+    // (/usr/bin, as on Linux, when PATH has it; in the tab the real shims in /usr/local/bin are found above)
+    const dirs = (this.env['PATH'] ?? '').split(':').map((d) => d.replace(/\/+$/, ''));
+    const dir = dirs.includes('/usr/bin') ? '/usr/bin' : dirs.find((d) => STD_BIN_DIRS.includes(d));
+    return `${dir ?? '/usr/bin'}/${name}`;
   }
 
   /** Errors that end a non-interactive POSIX shell (sh, or set -o posix) do so here */
@@ -1843,11 +1861,17 @@ export class Shell {
     if (!done() && SHELL_BUILTIN_NAMES.has(name)) out.push({ kind: 'builtin' });
     // Shiro's own commands come before files on PATH, unless a program shadows
     // them as it does when run (pkg install, or Debian mode's /usr/bin/NAME)
-    if (!done() && !name.includes('/') && this.commands.get(name) && !SHELL_BUILTIN_NAMES.has(name) &&
-      !(this.pkgShadowBypass !== name && packageShadows(this.fs).has(name))) out.push({ kind: 'registered' });
+    if (!done() && !name.includes('/') && this.commands.get(name) && !SHELL_BUILTIN_NAMES.has(name) && !SHELL_KEYWORDS.has(name) &&
+      !(this.pkgShadowBypass !== name && packageShadows(this.fs).has(name))) out.push({ kind: 'registered', path: (await this.programPath(name)) ?? `/usr/bin/${name}` });
     if (!done()) {
-      const path = await this.findExecutableInPath(name).catch(() => null);
-      if (path) out.push({ kind: 'file', path });
+      const path = await this.findExecutableInPath(name, true).catch(() => null);
+      // A path names a program only if it is an executable file (not a directory, not -x)
+      let ok = !!path;
+      if (path && name.includes('/')) {
+        const st = await this.fs.stat(this.fs.resolvePath(name, this.cwd)).catch(() => null);
+        ok = !!st && st.type !== 'dir' && !!(((st as { mode?: number }).mode ?? 0o755) & 0o111);
+      }
+      if (ok) out.push({ kind: 'file', path: name.includes('/') ? name : path! });
     }
     return out;
   }
@@ -3426,10 +3450,12 @@ export class Shell {
           }
           exitCode = 0;
           for (const name of names) {
-            let found = await this.commandKinds(name, all || mode === 'P');
+            let found = await this.commandKinds(name, all || mode === 'P' || noFuncs);
             if (noFuncs) found = found.filter((k) => k.kind !== 'function');
-            if (mode === 'P') found = found.filter((k) => k.kind === 'file');
-            if (mode === 'p' && found.length && found[0].kind !== 'file') { continue; }
+            // (tabcomputer's own commands count as files: they are programs here)
+            const isProgram = (k: { kind: string }) => k.kind === 'file' || k.kind === 'registered';
+            if (mode === 'P') found = found.filter(isProgram);
+            if (mode === 'p' && found.length && !isProgram(found[0])) { continue; }
             if (!found.length) {
               if (mode === 'long') stderrWriter(`tabcomputer: type: ${name}: not found\r\n`);
               exitCode = 1;
@@ -3437,7 +3463,7 @@ export class Shell {
             }
             for (const k of all ? found : found.slice(0, 1)) {
               if (mode === 't') { writeStdout((k.kind === 'registered' ? 'file' : k.kind) + '\r\n'); continue; }
-              if (mode === 'p' || mode === 'P') { if (k.kind === 'file') writeStdout(k.path + '\r\n'); continue; }
+              if (mode === 'p' || mode === 'P') { if (k.kind === 'file' || k.kind === 'registered') writeStdout(k.path + '\r\n'); continue; }
               switch (k.kind) {
                 case 'alias': writeStdout(`${name} is aliased to \`${k.path}'\r\n`); break;
                 case 'keyword': writeStdout(`${name} is a shell keyword\r\n`); break;
@@ -3447,8 +3473,8 @@ export class Shell {
                   break;
                 }
                 case 'builtin': writeStdout(`${name} is a shell builtin\r\n`); break;
-                case 'registered': writeStdout(`${name} is a registered command\r\n`); break;
-                case 'file': writeStdout(`${name} is ${k.path}\r\n`); break;
+                case 'registered': writeStdout(`${name} is ${k.path}\r\n`); break;
+                case 'file': writeStdout(`${name} is ${name.includes('/') ? name : k.path}\r\n`); break;
               }
             }
           }
@@ -3464,10 +3490,15 @@ export class Shell {
           for (const name of cmdArgs.slice(1)) {
             const [k] = await this.commandKinds(name, false);
             if (!k) { if (verbose) stderrWriter(`tabcomputer: command: ${name}: not found\r\n`); exitCode = 1; continue; }
-            if (!verbose) writeStdout((k.kind === 'file' ? k.path : k.kind === 'alias' ? `alias ${name}='${k.path}'` : name) + '\r\n');
-            else if (k.kind === 'file') writeStdout(`${name} is ${k.path}\r\n`);
+            // (a program's path; a name with a slash as given)
+            const where = name.includes('/') ? name : k.path;
+            if (!verbose) writeStdout((k.kind === 'file' || k.kind === 'registered' ? where : k.kind === 'alias' ? `alias ${name}='${k.path}'` : name) + '\r\n');
+            else if (k.kind === 'file' || k.kind === 'registered') writeStdout(`${name} is ${where}\r\n`);
             else if (k.kind === 'alias') writeStdout(`${name} is aliased to \`${k.path}'\r\n`);
-            else writeStdout(`${name} is a ${k.kind === 'keyword' ? 'shell keyword' : k.kind === 'builtin' ? 'shell builtin' : k.kind === 'registered' ? 'registered command' : 'function'}\r\n`);
+            else if (k.kind === 'function') {
+              const body = this.functions[name].body.split('\n').map((l) => '    ' + l.trim().replace(/;$/, '')).join('\r\n');
+              writeStdout(`${name} is a function\r\n${name} () \r\n{ \r\n${body}\r\n}\r\n`);
+            } else writeStdout(`${name} is a ${k.kind === 'keyword' ? 'shell keyword' : 'shell builtin'}\r\n`);
           }
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
@@ -3516,7 +3547,7 @@ export class Shell {
           } else if (names.length) {
             for (const name of names) {
               if (name.includes('/')) continue; // (bash: a name with a slash isn't hashed)
-              const path = this.commands.get(name) && !SHELL_BUILTIN_NAMES.has(name) ? `/usr/bin/${name}` : await this.findExecutableInPath(name);
+              const path = SHELL_BUILTIN_NAMES.has(name) ? null : await this.programPath(name);
               if (path) table.set(name, { path, hits: 0 });
               else { stderrWriter(`tabcomputer: hash: ${name}: not found\r\n`); exitCode = 1; }
             }
@@ -4137,10 +4168,15 @@ export class Shell {
             delete this.functions[rest[0]];
             const savedAlias = this.aliases.get(rest[0]);
             this.aliases.delete(rest[0]);
+            // -p: the standard PATH, whatever $PATH holds (and none of its hashed paths)
+            const pathP = cmdArgs[0] === '-p';
+            const savedPath = this.env['PATH'];
+            if (pathP) this.env['PATH'] = '/usr/bin:/bin';
             this.injectedStdin = nestedStdin;
             try {
               exitCode = await this.execute(quoteArgsForShell(rest), writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
             } finally {
+              if (pathP) { if (savedPath === undefined) delete this.env['PATH']; else this.env['PATH'] = savedPath; }
               if (savedFn) this.functions[rest[0]] = savedFn;
               if (savedAlias !== undefined) this.aliases.set(rest[0], savedAlias);
             }
@@ -4151,20 +4187,23 @@ export class Shell {
           continue;
         }
         if (!_builtinDisabled && effectiveCmdName === 'builtin') {
-          if (cmdArgs.length > 0) {
-            const builtinCmd = quoteArgsForShell(cmdArgs);
+          // (tabcomputer: `builtin NAME` also runs its own NAME past a package's, documented in COMPAT.md)
+          const bArgs = cmdArgs[0] === '--' ? cmdArgs.slice(1) : cmdArgs;
+          exitCode = 0;
+          if (bArgs.length > 0) {
+            const builtinCmd = quoteArgsForShell(bArgs);
             // Temporarily remove function override (and an installed package's shadowing)
-            const savedFn = this.functions[cmdArgs[0]];
-            delete this.functions[cmdArgs[0]];
+            const savedFn = this.functions[bArgs[0]];
+            delete this.functions[bArgs[0]];
             const savedBypass = this.pkgShadowBypass;
-            this.pkgShadowBypass = cmdArgs[0];
+            this.pkgShadowBypass = bArgs[0];
             this.injectedStdin = nestedStdin;
             try {
               exitCode = await this.execute(builtinCmd, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
             } finally {
               this.pkgShadowBypass = savedBypass;
             }
-            if (savedFn) this.functions[cmdArgs[0]] = savedFn;
+            if (savedFn) this.functions[bArgs[0]] = savedFn;
           }
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
@@ -4628,7 +4667,7 @@ export class Shell {
           const h = table.get(effectiveCmdName);
           if (h) h.hits++;
           else {
-            const path = cmd ? `/usr/bin/${effectiveCmdName}` : await this.findExecutableInPath(effectiveCmdName);
+            const path = await this.programPath(effectiveCmdName);
             if (path) table.set(effectiveCmdName, { path, hits: 1 });
           }
         }
@@ -4660,10 +4699,29 @@ export class Shell {
           }
         } else {
           // Try to find executable in PATH
-          const executable = pkgShadowed && pkgOwnShadows(this.fs).has(effectiveCmdName)
+          let executable = pkgShadowed && pkgOwnShadows(this.fs).has(effectiveCmdName)
             ? `${PKG_BIN_DIR}/${effectiveCmdName}`
             : await this.findExecutableInPath(effectiveCmdName);
-          if (executable) {
+          // bash runs the path it hashed for NAME, even if an earlier PATH directory
+          // has NAME now; a hashed program that is gone is an error until `hash -r`
+          let failure: { msg: string; code: number } | null = null;
+          const hashed = !pkgShadowed && !effectiveCmdName.includes('/') ? this.hashTable.get(effectiveCmdName) : undefined;
+          const hashedAbs = hashed && this.fs.resolvePath(hashed.path, this.cwd);
+          if (hashed && hashedAbs && !hashed.pinned && hashedAbs !== executable && !this.commands.get(effectiveCmdName)) {
+            if (await this.fs.exists(hashedAbs)) executable = hashedAbs;
+            else failure = { msg: `${hashed.path}: No such file or directory`, code: 127 };
+          }
+          // A file named by path that isn't executable: Permission denied (126)
+          if (executable && effectiveCmdName.includes('/')) {
+            const st = await this.fs.stat(this.fs.resolvePath(executable, this.cwd)).catch(() => null);
+            if (st && st.type !== 'dir' && !(((st as { mode?: number }).mode ?? 0o755) & 0o111)) failure = { msg: `${effectiveCmdName}: Permission denied`, code: 126 };
+          }
+          if (failure) {
+            ctx.stderr += `tabcomputer: ${failure.msg}\n`;
+            exitCode = failure.code;
+            this.lastExitCode = exitCode;
+            this.env['?'] = String(exitCode);
+          } else if (executable) {
             try {
               if (live) ctx.liveStdin = true;
               // A script whose output is redirected or piped writes into ctx like
@@ -8694,7 +8752,7 @@ export class Shell {
    * Search PATH directories for an executable file.
    * Also checks node_modules/.bin relative to cwd.
    */
-  async findExecutableInPath(name: string): Promise<string | null> {
+  async findExecutableInPath(name: string, display = false): Promise<string | null> {
     // If name contains '/', treat it as a path
     if (name.includes('/')) {
       const resolved = this.fs.resolvePath(name, this.cwd);
@@ -8731,10 +8789,15 @@ export class Shell {
       for (const suffix of ['', '.wasm']) {
         // (a relative PATH entry is relative to the current directory)
         const candidate = this.fs.resolvePath(`${pathDir}/${name}${suffix}`, this.cwd);
+        // (display: a relative PATH entry gives a relative path, as bash reports it)
+        const shown = pathDir.startsWith('/') ? candidate : `${pathDir.replace(/\/+$/, '')}/${name}${suffix}`;
         try {
           const stat = await this.fs.stat(candidate);
-          if (stat.type === 'file' || stat.type === 'symlink') {
-            return candidate;
+          // A file on PATH without an x bit isn't a program (bash skips it); npm's
+          // node_modules/.bin links and .wasm modules run however they're marked
+          const execOk = suffix === '.wasm' || pathDir.endsWith('node_modules/.bin') || ((stat as { mode?: number }).mode ?? 0o755) & 0o111;
+          if ((stat.type === 'file' || stat.type === 'symlink') && execOk) {
+            return display ? shown : candidate;
           }
         } catch {
           // Not found, continue
@@ -9095,6 +9158,8 @@ export class Shell {
   ): Promise<number> {
     const depth = this.executeDepth;
     this.scriptShell = true;
+    // A new shell process starts with an empty command hash table
+    this.hashTable = new Map();
     // Statements run nested, so exit/errexit unwind to here rather than to each statement
     this.executeDepth++;
     if (!this.abortController) this.abortController = this.inheritedAbort ?? new AbortController();

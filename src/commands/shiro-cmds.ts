@@ -348,7 +348,8 @@ export const whichCmd: Command = {
         const execPath = await ctx.shell.findExecutableInPath(name);
         if (execPath) found.push(execPath);
       }
-      if (!found.length && ctx.shell.commands.get(name)) found.push(name);
+      // (one of tabcomputer's commands: where it counts as installed)
+      if (!found.length && ctx.shell.commands.get(name)) found.push((await ctx.shell.programPath(name)) ?? name);
       if (!found.length && ctx.shell.functions?.[name]) found.push(`${name}: shell function`);
       if (found.length) ctx.stdout += found.map((f) => f + '\n').join('');
       else { ctx.stderr += `${name} not found\n`; missing++; }
