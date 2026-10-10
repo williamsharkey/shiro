@@ -212,3 +212,38 @@ describe.skipIf(!debs)('GUI apps from .deb packages', () => {
     configureGuiApps({ manifest });
   });
 });
+
+describe('GUI apps: the GL environment (docs/research/GL.md)', () => {
+  it('gives apps that link libglvnd libGLX_tabcomputer and its vendor name, only while GLX is on', async () => {
+    const { fs } = await createTestShell();
+    const { Kernel } = await import('@shiro/kernel/kernel');
+    const { glEnv } = await import('@shiro/gui/apps');
+    const glx = await import('@shiro/x11/glx');
+    const kernel = new Kernel({ fs, registerWithProcessTable: false });
+    const app = (packages: string[]) => ({ description: '', toolkit: 'qt5', bin: '/usr/bin/x', packages, size: 0, closureSize: 0, dropped: [] }) as never;
+    const LIB = '/usr/lib/x86_64-linux-gnu/libGLX_tabcomputer.so.0';
+    const realFetch = globalThis.fetch;
+    let body = new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0]);
+    const asked: string[] = [];
+    globalThis.fetch = (async (u: string) => { asked.push(String(u)); return new Response(body); }) as typeof fetch;
+    try {
+      glx.resetGLX();
+      expect(await glEnv(kernel, app(['libgl1', 'libglx0', 'libglvnd0']))).toEqual({});   // GLX off: Mesa as before
+      glx.enableGLX();
+      expect(await glEnv(kernel, app(['libgtk-3-0']))).toEqual({});                       // no libglvnd: nothing to load it
+      expect(asked).toEqual([]);
+      expect(await glEnv(kernel, app(['libgl1', 'libglx0', 'libglvnd0']))).toEqual({ __GLX_VENDOR_LIBRARY_NAME: 'tabcomputer' });
+      expect(asked[0]).toMatch(/gui\/lib\/libGLX_tabcomputer\.so\.0$/);
+      expect([...(await fs.readFile(LIB)) as Uint8Array]).toEqual([...body]);
+      // a dev server's index.html for a missing file is not a library: the installed one stays
+      body = new TextEncoder().encode('<!doctype html>');
+      expect(await glEnv(kernel, app(['libglx0']))).toEqual({ __GLX_VENDOR_LIBRARY_NAME: 'tabcomputer' });
+      expect(((await fs.readFile(LIB)) as Uint8Array)[1]).toBe(0x45);
+      await fs.unlink(LIB);
+      expect(await glEnv(kernel, app(['libglx0']))).toEqual({});
+    } finally {
+      globalThis.fetch = realFetch;
+      glx.resetGLX();
+    }
+  });
+});
