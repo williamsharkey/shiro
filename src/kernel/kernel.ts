@@ -734,9 +734,25 @@ export class Kernel {
     else targets = [...this.procs.values()].filter(p => p.pgid === -pid);
     targets = targets.filter(p => p.state !== 'zombie' || pid > 0);
     if (targets.length === 0) return -A.ESRCH;
+    // the ones the sender may signal; none of several is EPERM as for one
+    targets = targets.filter(p => this.maySignal(sender, p, sig));
+    if (targets.length === 0) return -A.EPERM;
     if (sig === 0) return 0;
     for (const p of targets) this.deliver(p, sig, { signo: sig, code: A.SI_USER, pid: sender.pid, uid: sender.uid });
     return 0;
+  }
+
+  /**
+   * Linux's kill permission: root, or the sender's real or effective uid is the
+   * target's real or saved uid; SIGCONT within a session. init stands in for
+   * Linux's root-owned pid 1 (the kernel's own sends come from it).
+   */
+  maySignal(sender: Process, target: Process, sig: number): boolean {
+    if (sender === this.init || sender.uid === 0 || sender === target) return true;
+    if (target === this.init) return false;
+    if (sig === A.SIGCONT && sender.sid === target.sid) return true;
+    const senderIds = [sender.uid, sender.ruid ?? sender.uid];
+    return [target.ruid ?? target.uid, target.suid ?? target.uid].some((u) => senderIds.includes(u));
   }
 
   /** Deliver one signal: the signal hook (signals.ts) first, then the disposition, then the default action. */
@@ -1837,7 +1853,7 @@ export class Kernel {
           if (!target || (target.state === 'zombie' && signo !== 0)) return -A.ESRCH;
           // only the kernel may claim SI_USER, SI_TKILL or a kernel code for another process's signal
           if ((info.code >= 0 || info.code === A.SI_TKILL) && target !== proc) return -A.EPERM;
-          if (proc.uid !== 0 && target.uid !== proc.uid && target.ruid !== proc.uid && proc.ruid !== target.uid) return -A.EPERM;
+          if (!this.maySignal(proc, target, signo)) return -A.EPERM;
           if (signo === 0) return 0;
           this.deliver(target, signo, { signo, code: info.code, pid: info.pid, uid: info.uid, value: info.value });
           return 0;

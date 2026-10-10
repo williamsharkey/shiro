@@ -186,6 +186,10 @@ const haveMqueue = blinkHasMqueue && tryBuild('gcc', ['-static', '-O1', '-w', '-
 const timersBin = join(out, 'timers');
 const blinkHasTimers = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_timers');
 const haveTimers = blinkHasTimers && tryBuild('gcc', ['-static', '-O1', '-w', '-o', timersBin, 'timers.c', '-lrt']);
+// Blink 0096: a blocked real-time raise queues in the kernel; sigprocmask and sigaltstack modes as Linux
+const sigmodesBin = join(out, 'sigmodes');
+const blinkHasSigmodes = readFileSync(resolve(__dirname, '../../../public/engines/blink/blink.mjs'), 'utf8').includes('blink_shiro_sigmodes');
+const haveSigmodes = blinkHasSigmodes && tryBuild('gcc', ['-static', '-O1', '-w', '-o', sigmodesBin, 'sigmodes.c']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -696,6 +700,12 @@ it.skipIf(!haveTimers)('POSIX timers signal into sigtimedwait; sched_* answers a
   const { shell } = await setup(readFileSync(timersBin));
   const r = await run(shell, './prog');
   expect(r.output.replace(/\r\n/g, '\n')).toBe('timer 1 overruns 1 timeout 1 sched 1 1 1 1\n');
+}, 60_000);
+
+it.skipIf(!haveSigmodes)('raise of a blocked real-time signal queues each instance; SIGKILL/SIGSTOP stay unblocked; sigaltstack modes (Open POSIX)', async () => {
+  const { shell } = await setup(readFileSync(sigmodesBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('rt 1 1 pending 1 signo 1 third -1 EAGAIN\nmask 0 kill 0 stop 0 usr1 1\nboth -1 EINVAL\ndisable 0 sp 1 size 0 flags 2\n');
 }, 60_000);
 
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
