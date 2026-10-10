@@ -36,8 +36,12 @@ export interface ExecHost {
   drawableSize(xid: number): { width: number; height: number } | null;
   /** A finished frame for an X drawable. */
   present(xid: number, frame: Present): void;
-  /** How the host wants frames: pixels (readback) or bitmap (OffscreenCanvas). */
-  presentMode: 'pixels' | 'bitmap';
+  /**
+   * How the host wants frames: pixels (readback), async-pixels (readback into
+   * a pixel-pack buffer, delivered and acked when the GPU is done, so the
+   * page isn't blocked on the frame) or bitmap (OffscreenCanvas).
+   */
+  presentMode: 'pixels' | 'async-pixels' | 'bitmap';
   log?(msg: string): void;
 }
 
@@ -186,6 +190,10 @@ export class Executor {
   private blitFbo: WebGLFramebuffer;
   readonly ext: Record<string, unknown> = {};
   frames = 0;
+  /** async-pixels frames on the GPU: read back into `pbo`, delivered when `sync` signals */
+  private inflight: { xid: number; frame: number; width: number; height: number; pbo: WebGLBuffer; sync: WebGLSync }[] = [];
+  private spare: { pbo: WebGLBuffer; size: number }[] = [];
+  private pumping = false;
   /** commands executed (for tests and stats) */
   executed = 0;
 
@@ -608,9 +616,12 @@ export class Executor {
 
   tcSwapBuffers(xid: number, frame: number) {
     const d = this.drawables.get(xid);
-    if (d) this.present(d);
     this.frames++;
-    this.host.send(message(MSG_FRAME, u32s(frame)));
+    if (d && this.host.presentMode === 'async-pixels') this.presentAsync(d, frame);
+    else {
+      if (d) this.present(d);
+      this.host.send(message(MSG_FRAME, u32s(frame)));
+    }
     // follow the window's size, as DRI does at swap
     if (d) {
       const size = this.host.drawableSize(xid);
@@ -651,6 +662,49 @@ export class Executor {
     gl.blitFramebuffer(0, 0, d.width, d.height, 0, 0, d.width, d.height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
     if (this.cur?.caps.has(E.SCISSOR_TEST)) gl.enable(gl.SCISSOR_TEST);
     return d.resolveFbo!;
+  }
+
+  /** Starts reading the frame back into a pixel-pack buffer; pump() delivers it (and its ack) when the GPU is done. */
+  private presentAsync(d: Drawable, frame: number) {
+    const gl = this.gl;
+    const size = d.width * d.height * 4;
+    const i = this.spare.findIndex((s) => s.size === size);
+    const pbo = i >= 0 ? this.spare.splice(i, 1)[0].pbo : gl.createBuffer()!;
+    const src = this.resolved(d);
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, src);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbo);
+    if (i < 0) gl.bufferData(gl.PIXEL_PACK_BUFFER, size, gl.STREAM_READ);
+    gl.readPixels(0, 0, d.width, d.height, gl.RGBA, gl.UNSIGNED_BYTE, 0);
+    const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0)!;
+    gl.flush();
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.cur ? this.bufObj(this.cur.pixelPack) : null);
+    if (this.cur) { this.bindDrawFb(this.cur); this.bindReadFb(this.cur); }
+    this.inflight.push({ xid: d.xid, frame, width: d.width, height: d.height, pbo, sync });
+    this.pump();
+  }
+  /** Delivers the frames whose readback finished, in order; polls again while some are on the GPU. */
+  private pump() {
+    const gl = this.gl;
+    while (this.inflight.length) {
+      const f = this.inflight[0];
+      const status = gl.clientWaitSync(f.sync, 0, 0);
+      if (status === gl.WAIT_FAILED || gl.isContextLost()) { this.inflight = []; return; } // the connection closed
+      if (status !== gl.ALREADY_SIGNALED && status !== gl.CONDITION_SATISFIED) break;
+      this.inflight.shift();
+      gl.deleteSync(f.sync);
+      const pixels = new Uint8Array(f.width * f.height * 4);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, f.pbo);
+      gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, pixels);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.cur ? this.bufObj(this.cur.pixelPack) : null);
+      this.spare.push({ pbo: f.pbo, size: pixels.length });
+      if (this.spare.length > 3) gl.deleteBuffer(this.spare.shift()!.pbo);
+      if (this.host.drawableSize(f.xid)) this.host.present(f.xid, { pixels, width: f.width, height: f.height });
+      this.host.send(message(MSG_FRAME, u32s(f.frame)));
+    }
+    if (this.inflight.length && !this.pumping) {
+      this.pumping = true;
+      setTimeout(() => { this.pumping = false; this.pump(); }, 2);
+    }
   }
 
   private present(d: Drawable) {

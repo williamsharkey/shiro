@@ -34,6 +34,7 @@ const appName = opt('--app') ?? 'glxgears';
 const app = APPS[appName];
 if (!app) { console.error(`no app ${appName}: ${Object.keys(APPS).join(', ')}`); process.exit(2); }
 const jsonOut = opt('--json');
+const profileSeconds = Number(opt('--profile') ?? 0); // also: the page's busiest functions over N seconds
 const url = args[0] ?? 'http://localhost:5299/';
 const root = process.env.GL_PROBE_ROOT;
 if (!root) { console.error('GL_PROBE_ROOT is not set'); process.exit(2); }
@@ -111,6 +112,26 @@ try {
   result.appSays = [...out.matchAll(/= ([\d.]+) FPS/g)].map((m) => Number(m[1]));
   console.log(`glshiro: ${result.fps.toFixed(1)} frames/s, ${Math.round(result.commandsPerSecond)} commands/s${result.appSays.length ? `; ${appName} says ${result.appSays.join(', ')} FPS` : ''}`);
   check(result.fps > 5, 'frames keep coming');
+  if (profileSeconds) {
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Profiler.enable');
+    await cdp.send('Profiler.setSamplingInterval', { interval: 200 });
+    await cdp.send('Profiler.start');
+    await page.waitForTimeout(profileSeconds * 1000);
+    const { profile } = await cdp.send('Profiler.stop');
+    const self = new Map();
+    const dt = profile.timeDeltas;
+    const byId = new Map(profile.nodes.map((n) => [n.id, n]));
+    profile.samples.forEach((id, i) => {
+      const n = byId.get(id);
+      const f = n.callFrame;
+      const key = `${f.functionName || '(anonymous)'} ${f.url.split('/').pop()}:${f.lineNumber + 1}`;
+      self.set(key, (self.get(key) ?? 0) + (dt[i] ?? 0));
+    });
+    const total = [...self.values()].reduce((a, b) => a + b, 0);
+    result.profile = [...self].sort((a, b) => b[1] - a[1]).slice(0, 25).map(([k, us]) => [k, +(100 * us / total).toFixed(1)]);
+    console.log(`main thread over ${profileSeconds} s (self time %):\n${result.profile.map(([k, p]) => `  ${p}%  ${k}`).join('\n')}`);
+  }
 
   // glxgears: red, green and blue gears on black; any app: more than a few colors
   const colors = await page.evaluate((t) => {
