@@ -42,7 +42,7 @@ import { createMiscModule } from './modules/misc';
 import { createAppShim } from './shims/app-shims';
 import { getShiroOrigin } from '../utils/shiro-origin';
 
-import { PAGE_FETCH, PAGE_SET_TIMEOUT, PAGE_CLEAR_TIMEOUT, PAGE_SET_INTERVAL, PAGE_CLEAR_INTERVAL } from './page-globals';
+import { PAGE_FETCH, PAGE_SET_TIMEOUT, PAGE_CLEAR_TIMEOUT, PAGE_SET_INTERVAL, PAGE_CLEAR_INTERVAL, SCRIPT_TIMER_NAMES, type ScriptTimers } from './page-globals';
 
 /** A Node Timeout object around a page timer id: ref/unref/hasRef/refresh,
  *  and it converts to the id, so arithmetic and clearTimeout(id) both work
@@ -209,8 +209,22 @@ export async function executeNodeScript(
 
     // Buffer shim
     const FakeBuffer = createFakeBuffer();
+    // The script's own timers: what its code, its modules and its globalThis call setTimeout &
+    // co. as. Only these are its to cancel when it ends; page code (xterm's write buffer) and
+    // the shims schedule through the global, which counts as the script's activity meanwhile
+    // but is never cancelled with it. Bound below, once the script's timers exist (a large
+    // bundle runs on the page's own).
+    let ownTimers: ScriptTimers | null = null;
+    const scriptTimers: ScriptTimers & { setImmediate: Function; clearImmediate: Function } = {
+      setTimeout: ((...a: any[]) => (ownTimers?.setTimeout ?? globalThis.setTimeout)(...(a as [any]))) as typeof setTimeout,
+      clearTimeout: ((id: any) => (ownTimers?.clearTimeout ?? globalThis.clearTimeout)(id)) as typeof clearTimeout,
+      setInterval: ((...a: any[]) => (ownTimers?.setInterval ?? globalThis.setInterval)(...(a as [any]))) as typeof setInterval,
+      clearInterval: ((id: any) => (ownTimers?.clearInterval ?? globalThis.clearInterval)(id)) as typeof clearInterval,
+      setImmediate: (fn: Function, ...args: any[]) => scriptTimers.setTimeout(fn as any, 0, ...args),
+      clearImmediate: (id: any) => scriptTimers.clearTimeout(id),
+    };
     // The process's own globalThis (its writes stay its own; globalThis.process is its process)
-    const processGlobal = createProcessGlobal({ process: fakeProcess, Buffer: FakeBuffer, console: fakeConsole });
+    const processGlobal = createProcessGlobal({ process: fakeProcess, Buffer: FakeBuffer, console: fakeConsole, ...scriptTimers });
     const processFunction = createProcessFunction(processGlobal, fakeProcess, FakeBuffer);
     /** Packages this script reaches that run as their browser builds (rolldown): filled before it starts */
     const browserModules = new Map<string, any>();
@@ -315,7 +329,7 @@ export async function executeNodeScript(
         default: {
           const appShim = createAppShim(name, { ctx, fileCache, fakeProcess, FakeBuffer });
           if (appShim !== null) return appShim;
-          return createMiscModule(name, { ctx, FakeBuffer, fakeProcess, fakeConsole, getBuiltinModule, fileCache, moduleCache, requireModule, startWorker });
+          return createMiscModule(name, { ctx, FakeBuffer, fakeProcess, fakeConsole, getBuiltinModule, fileCache, moduleCache, requireModule, startWorker, scriptTimers });
         }
       }
     }
@@ -329,7 +343,7 @@ export async function executeNodeScript(
     // Require function (module resolver + loader)
     const requireModule = createRequireFunction({
       ctx, fileCache, fileMtimes, moduleCache, pendingPromises, processEvents,
-      getBuiltinModule, fakeConsole, fakeProcess, FakeBuffer, processGlobal, processFunction, browserModules,
+      getBuiltinModule, fakeConsole, fakeProcess, FakeBuffer, processGlobal, processFunction, browserModules, scriptTimers: scriptTimers as unknown as Record<string, Function>,
       createExpressShim: expressFactory,
       createSqliteShim: () => createSqliteShim({ ctx }),
       createAutoStub,
@@ -441,6 +455,7 @@ export async function executeNodeScript(
     const fn = compileAsyncModule(AsyncFunction, [
       'console', 'process', 'require', 'Buffer', '__filename', '__dirname', 'shiro', '__import_meta', 'module', 'exports', '__dynamic_import',
       '__shiro_module', '__shiro_require', 'global', '__shiro_require_ready', 'globalThis', 'Function',
+      ...SCRIPT_TIMER_NAMES,
     ], wrappedCode);
 
     // Fake import.meta for ES modules
@@ -712,66 +727,88 @@ export async function executeNodeScript(
     const intervalsAlive = () => _refdIntervals.size > 0 || !!guest?.busy?.() || threadsAlive() || ipcAlive();
     if (code.length <= 500000) {
       const settle = () => { if (_activeTimers <= 0 && _timersResolve) { _timersResolve(); _timersResolve = null; _timersDone = null; } };
-      globalThis.setTimeout = _st.installedSetTimeout = function(fn: any, ms?: number, ...args: any[]) {
-        _activeTimers++;
-        if (!_timersDone) _timersDone = new Promise(r => { _timersResolve = r; });
-        let counted = true; // keeps the script alive until it fires (not once unref'd)
-        const uncount = () => { if (counted) { counted = false; _activeTimers--; settle(); } };
-        const start = () => {
-          const id = _baseST(() => {
-            _timerIds.delete(timer);
-            try { if (typeof fn === 'function') fn(...args); }
-            catch (e) {
-              // process.exit() from a timer ends the script (already recorded); it isn't an error
-              if (!(e instanceof ProcessExitError)) throw e;
-            }
-            finally { uncount(); }
-          }, ms);
-          return id;
-        };
-        const timer = nodeTimer(start(), {
-          onUnref: uncount,
-          onRef: () => {
-            if (counted || !_timerIds.has(timer)) return;
-            counted = true;
-            _activeTimers++;
-            if (!_timersDone) _timersDone = new Promise(r => { _timersResolve = r; });
-          },
-          refresh: () => { _baseCT(rawTimer(timer)); return start(); },
-        });
-        _timerIds.add(timer);
-        (timer as any)._uncount = uncount;
-        return timer;
-      } as typeof setTimeout;
-      globalThis.clearTimeout = _st.installedClearTimeout = function(id: any) {
-        for (const t of _timerIds) {
-          if (t === id || rawTimer(t) === rawTimer(id)) { _timerIds.delete(t); t._uncount(); break; }
-        }
-        _baseCT(rawTimer(id));
+      /** Timers and intervals the script made itself (ownTimers): the ones its end cancels */
+      const _ownTimerIds = new Set<any>();
+      const _ownIntervalIds = new Set<any>();
+      /**
+       * Node-style timers that count as the script's activity. `own`: the script's own
+       * (its code and modules), cancelled when it ends; otherwise the global ones, which
+       * page code and the shims reach while the script runs: counted, never cancelled
+       */
+      const makeTimers = (own: boolean): ScriptTimers => {
+        const setT = function(fn: any, ms?: number, ...args: any[]) {
+          _activeTimers++;
+          if (!_timersDone) _timersDone = new Promise(r => { _timersResolve = r; });
+          let counted = true; // keeps the script alive until it fires (not once unref'd)
+          const uncount = () => { if (counted) { counted = false; _activeTimers--; settle(); } };
+          const start = () => {
+            const id = _baseST(() => {
+              _timerIds.delete(timer);
+              _ownTimerIds.delete(timer);
+              try { if (typeof fn === 'function') fn(...args); }
+              catch (e) {
+                // process.exit() from a timer ends the script (already recorded); it isn't an error
+                if (!(e instanceof ProcessExitError)) throw e;
+              }
+              finally { uncount(); }
+            }, ms);
+            return id;
+          };
+          const timer = nodeTimer(start(), {
+            onUnref: uncount,
+            onRef: () => {
+              if (counted || !_timerIds.has(timer)) return;
+              counted = true;
+              _activeTimers++;
+              if (!_timersDone) _timersDone = new Promise(r => { _timersResolve = r; });
+            },
+            refresh: () => { _baseCT(rawTimer(timer)); return start(); },
+          });
+          _timerIds.add(timer);
+          if (own) _ownTimerIds.add(timer);
+          (timer as any)._uncount = uncount;
+          return timer;
+        } as typeof setTimeout;
+        const clearT = function(id: any) {
+          for (const t of _timerIds) {
+            if (t === id || rawTimer(t) === rawTimer(id)) { _timerIds.delete(t); _ownTimerIds.delete(t); t._uncount(); break; }
+          }
+          _baseCT(rawTimer(id));
+        } as typeof clearTimeout;
+        // Intervals never kept a script alive in the page (one left running would hold the
+        // shell); they still answer unref() etc. A kernel guest is a process that can be
+        // killed, so there, as in node, a ref'd interval keeps it running until cleared.
+        const setI = function(fn: any, ms?: number, ...args: any[]) {
+          const raw = PAGE_SET_INTERVAL(fn, ms, ...args);
+          _intervalIds.add(raw);
+          if (own) _ownIntervalIds.add(raw);
+          if (!guest) return nodeTimer(raw, {});
+          _refdIntervals.add(raw);
+          return nodeTimer(raw, {
+            onUnref: () => { _refdIntervals.delete(raw); },
+            onRef: () => { if (_intervalIds.has(raw)) _refdIntervals.add(raw); },
+          });
+        } as typeof setInterval;
+        const clearI = function(id: any) { _intervalIds.delete(rawTimer(id)); _ownIntervalIds.delete(rawTimer(id)); _refdIntervals.delete(rawTimer(id)); PAGE_CLEAR_INTERVAL(rawTimer(id)); } as typeof clearInterval;
+        return { setTimeout: setT, clearTimeout: clearT, setInterval: setI, clearInterval: clearI };
       };
-      // Intervals never kept a script alive in the page (one left running would hold the
-      // shell); they still answer unref() etc. A kernel guest is a process that can be
-      // killed, so there, as in node, a ref'd interval keeps it running until cleared.
-      globalThis.setInterval = _st.installedSetInterval = function(fn: any, ms?: number, ...args: any[]) {
-        const raw = PAGE_SET_INTERVAL(fn, ms, ...args);
-        _intervalIds.add(raw);
-        if (!guest) return nodeTimer(raw, {});
-        _refdIntervals.add(raw);
-        return nodeTimer(raw, {
-          onUnref: () => { _refdIntervals.delete(raw); },
-          onRef: () => { if (_intervalIds.has(raw)) _refdIntervals.add(raw); },
-        });
-      } as typeof setInterval;
-      globalThis.clearInterval = _st.installedClearInterval = function(id: any) { _intervalIds.delete(rawTimer(id)); _refdIntervals.delete(rawTimer(id)); PAGE_CLEAR_INTERVAL(rawTimer(id)); };
-      // When the script ends its timers go with it, as with a process: an
-      // interval left running fired into the next script and, through that
-      // script's setTimeout, kept it from ever going idle
+      const shared = makeTimers(false);
+      globalThis.setTimeout = _st.installedSetTimeout = shared.setTimeout;
+      globalThis.clearTimeout = _st.installedClearTimeout = shared.clearTimeout;
+      globalThis.setInterval = _st.installedSetInterval = shared.setInterval;
+      globalThis.clearInterval = _st.installedClearInterval = shared.clearInterval;
+      ownTimers = makeTimers(true);
+      // When the script ends its own timers go with it, as with a process: an interval
+      // left running fired into the next script and, through that script's setTimeout,
+      // kept it from ever going idle. Timers others made through the global (xterm's
+      // write buffer while the script printed) are theirs: not cancelled.
       atExit(() => {
-        for (const raw of _intervalIds) PAGE_CLEAR_INTERVAL(raw);
-        _intervalIds.clear();
+        for (const raw of _ownIntervalIds) { PAGE_CLEAR_INTERVAL(raw); _intervalIds.delete(raw); }
+        _ownIntervalIds.clear();
         _refdIntervals.clear();
-        for (const t of _timerIds) _baseCT(rawTimer(t));
-        _timerIds.clear();
+        for (const t of _ownTimerIds) { _baseCT(rawTimer(t)); _timerIds.delete(t); }
+        _ownTimerIds.clear();
+        ownTimers = null;
       });
     }
 
@@ -805,7 +842,8 @@ export async function executeNodeScript(
           env: ctx.env,
           cwd: ctx.cwd,
         }, fakeImportMeta, fakeModule, fakeExports, dynamicImport, fakeModule, entryRequire, processGlobal,
-        (p: string) => requireModule.ready(p, entryDirname, entryFilename), processGlobal, processFunction),
+        (p: string) => requireModule.ready(p, entryDirname, entryFilename), processGlobal, processFunction,
+        ...SCRIPT_TIMER_NAMES.map((k) => (scriptTimers as any)[k])),
         timeoutPromise,
       ]);
     } catch (e: any) {
@@ -883,6 +921,7 @@ export async function executeNodeScript(
         });
         _st.exitCalled = false;
       }
+      _st.exitEnds = true;
       // An async script (top-level await, promise chain) is finished once nothing
       // it started is in flight and it has been quiet briefly, like node exiting on
       // an empty event loop; don't sit out the whole timeout after it's done.

@@ -195,7 +195,13 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
   // Shell natively handles setopt (no-op), eval (builtin), >| (clobber), /dev/null (virtual file)
   /** Output as it arrives (a guest's spawn(): data events and stdio 'inherit' don't wait for the end) */
   type Live = { out: (s: string) => void; err: (s: string) => void };
-  const execAsync = async (cmd: string, env?: Record<string, unknown>, input?: string, live?: Live): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
+  /**
+   * `inherit`: which of fds 0/1/2 are this process's own for the child (stdio
+   * 'inherit'): a guest passes its kernel fds; in the page, all three on a
+   * terminal run the child on that terminal (codex's npm launcher runs its
+   * native binary so, which waited for EOF on a stdin that wasn't the tty)
+   */
+  const execAsync = async (cmd: string, env?: Record<string, unknown>, input?: string, live?: Live, inherit?: [boolean, boolean, boolean]): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
     let normalized = stripShellPrefix(cmd);
     // Strip leading shell flags (-l, -i, -e) that leak through from spawn args
     normalized = normalized.replace(/^(-[a-zA-Z]+\s+)+/, '');
@@ -218,6 +224,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       const outDec = new TextDecoder(), errDec = new TextDecoder();
       const r = await deps.guest.runChild(normalized, {
         input, cwd: ctx.cwd,
+        ...(inherit ? { inherit } : {}),
         ...(env ? { env: Object.fromEntries(Object.entries(env).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)])) } : {}),
         ...(live ? {
           onStdout: (b: Uint8Array) => { const t = outDec.decode(b, { stream: true }); if (t) live.out(t); },
@@ -256,7 +263,8 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
     // { input }: the child's stdin (execSync, spawnSync, execFileSync)
     const exitCode = input !== undefined
       ? await sh.executeWithStdin(normalized, input, (s) => { stdout += s; }, (s) => { stderr += s; })
-      : await sh.execute(normalized, (s) => { stdout += s; }, (s) => { stderr += s; }, false, undefined, true);
+      : await sh.execute(normalized, (s) => { stdout += s; }, (s) => { stderr += s; }, false,
+        inherit?.every(Boolean) && ctx.terminal ? ctx.terminal : undefined, true);
 
     // Refresh fileCache from Shiro FS cache — shell commands may have created,
     // modified, or deleted files that fileCache still has stale entries for.
@@ -481,6 +489,8 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       }),
       ...(ipcIn ? { ipc: (b: Uint8Array | null) => { if (b) ipcIn!(b); else ipcGone(); } } : {}),
       ...(direct ? { argv: direct } : {}),
+      // (inherited output: this process's own fds, a terminal stays one for the child)
+      inherit: [false, io.inheritOut, io.inheritErr],
       control: (c) => {
         control = c;
         child.pid = c.pid;
@@ -514,6 +524,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
    */
   const guestSync = (cmd: string, opts: any) => {
     const r = deps.guest!.runChildSync(cmd, {
+      inherit: [0, 1, 2].map((i) => inherits(opts?.stdio, i)) as [boolean, boolean, boolean],
       input: opts?.input === undefined || opts?.input === null ? undefined : typeof opts.input === 'string' ? opts.input : new Uint8Array(opts.input),
       cwd: opts?.cwd ? String(opts.cwd) : ctx.cwd,
       ...(opts?.env ? { env: Object.fromEntries(Object.entries(opts.env).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)])) } : {}),
@@ -844,7 +855,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       const cmdPromise = isClipboardCmd
         ? new Promise<{ stdout: string; stderr: string; exitCode: number }>(resolve =>
             setTimeout(() => resolve({ stdout: '', stderr: '', exitCode: 0 }), 0))
-        : execAsync(fullCmd, opts?.env, undefined, live);
+        : execAsync(fullCmd, opts?.env, undefined, live, [inherits(opts?.stdio, 0), inheritOut, inheritErr]);
       const p = cmdPromise.then(r => {
         const writePromises: Promise<any>[] = [];
         // Write output to stdio file paths FIRST (before emitting events, because

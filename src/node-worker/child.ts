@@ -32,6 +32,11 @@ export interface ChildOptions {
    * would start it with stdio of its own, not the IPC channel's fd 3)
    */
   argv?: string[];
+  /**
+   * runChild: which of fds 0, 1, 2 are this process's own for the child
+   * (stdio 'inherit': the terminal, as the child sees it with node)
+   */
+  inherit?: [boolean?, boolean?, boolean?];
 }
 
 /** A running child, for its parent: stdin written as the program goes, signals */
@@ -90,6 +95,8 @@ function start(sys: GuestSys, cmd: string, opts: ChildOptions): Running | number
   sys.fcntl(inW, A.F_SETFL, A.O_NONBLOCK);
   let ipcFd = -1, ipcChild = -1;
   const fds: [number, number][] = [[0, inR], [1, outW], [2, errW]];
+  const inherit = opts.inherit ?? [];
+  for (const i of [0, 1, 2]) if (inherit[i]) fds[i] = [i, i];
   let env = opts.env;
   if (opts.ipc) {
     const sp = sys.socketpair(A.AF_UNIX, A.SOCK_STREAM);
@@ -113,7 +120,11 @@ function start(sys: GuestSys, cmd: string, opts: ChildOptions): Running | number
   if (pid < 0) { for (const fd of [inW, outR, errR, ipcFd]) if (fd >= 0) sys.close(fd); return pid; }
   const input = opts.input === undefined ? new Uint8Array(0) : typeof opts.input === 'string' ? enc.encode(opts.input) : opts.input;
   const r: Running = { pid, inW, outR, errR, input, inOff: 0, inLive: !!opts.control, out: [], err: [], opts, ipcFd, ipcOut: new Uint8Array(0), ipcMoved: 0 };
-  if (!input.length && !r.inLive) { sys.close(inW); r.inW = -1; }
+  // (an inherited stream is the child's and ours alike: nothing of it passes through here)
+  if (inherit[0]) { r.inLive = false; r.input = new Uint8Array(0); }
+  if (inherit[1]) { sys.close(outR); r.outR = -1; }
+  if (inherit[2]) { sys.close(errR); r.errR = -1; }
+  if (!r.input.length && !r.inLive) { sys.close(inW); r.inW = -1; }
   return r;
 }
 
@@ -253,9 +264,11 @@ export function runChild(sys: GuestSys, cmd: string, opts: ChildOptions = {}): P
         for (let n = sys.read(r.ipcFd, buf); n > 0; n = sys.read(r.ipcFd, buf)) r.opts.ipc?.(buf.slice(0, n));
         closeIpc(sys, r);
       }
+      // (a child whose output isn't ours can run long after this: back off to 20 ms)
+      let wait = 1;
       const reap = () => {
         const w = sys.waitpid(r.pid, A.WNOHANG);
-        if (w.pid === 0) { later(reap, 2); return; }
+        if (w.pid === 0) { later(reap, wait); wait = Math.min(20, wait * 2); return; }
         resolve(finish(r, w.status));
       };
       reap();
