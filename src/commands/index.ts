@@ -26,6 +26,9 @@ export interface CommandContext {
   terminal?: TerminalLike;
   /** false when stdout goes to a pipe or file (ls then prints one name per line, like coreutils) */
   stdoutIsTTY?: boolean;
+  /** true when stdin is a pipe, file, here-doc or here-string (not a terminal or /dev/null):
+   *  `cmd | rg PAT` searches stdin, a bare `rg PAT` the working directory, as ripgrep does */
+  stdinReadable?: boolean;
 }
 
 export interface Command {
