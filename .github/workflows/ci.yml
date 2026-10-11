@@ -16,6 +16,8 @@ jobs:
       - run: npm ci
       - run: npm ci
         working-directory: tests
+      # server.mjs imports ws/undici, which live on the host (/opt/shiro/package.json)
+      - run: npm install --no-save ws undici
       - run: npm test
       - run: npx tsc --noEmit
       - run: npm run build
