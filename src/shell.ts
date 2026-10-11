@@ -2160,6 +2160,8 @@ export class Shell {
           shell: this,
           terminal: terminalOverride || this.terminal,
           stdoutIsTTY: i === pipeline.length - 1 && !redirects.some(r => r.type === '>' || r.type === '>>'),
+          stdinReadable: i > 0 || hereString !== undefined || !!heredocStdin
+            || redirects.some(r => r.type === '<' && r.target !== '/dev/null'),
         };
 
         // Check shell functions first

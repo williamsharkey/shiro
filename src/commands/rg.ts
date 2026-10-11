@@ -1,6 +1,31 @@
 import { Command, CommandContext } from './index';
 
 /**
+ * ripgrep's Rust-regex syntax that JavaScript lacks. Leading flag groups
+ * (`(?i)`, `(?is)`, `(?i)(?s)`) become RegExp flags and `(?P<name>…)` becomes
+ * `(?<name>…)`. A flag group later in the pattern, or a flag JS can't express
+ * (x, U, R), is reported: as an invalid regex it reached Claude Code's Grep
+ * tool as "No matches found".
+ */
+export function translateRustRegex(pattern: string): { source: string; flags: string } | { error: string } {
+  let source = pattern;
+  let flags = '';
+  for (let m; (m = /^\(\?([a-zA-Z]+)\)/.exec(source)); source = source.slice(m[0].length)) {
+    for (const f of m[1]) {
+      if (f !== 'i' && f !== 'm' && f !== 's') return { error: `unsupported inline flag '${f}' in '${m[0]}' (supported: i, m, s)` };
+      if (!flags.includes(f)) flags += f;
+    }
+  }
+  // Only unescaped parentheses: `\(?P<` is a literal paren
+  const unescaped = (re: RegExp) => new RegExp(`(?<!\\\\)((?:\\\\\\\\)*)${re.source}`, 'g');
+  if (unescaped(/\(\?[a-zA-Z]*(?:-[a-zA-Z]*)?\)/).test(source)) {
+    return { error: `inline flag groups are only supported at the start of the pattern ('(?i)foo'), or use -i` };
+  }
+  source = source.replace(unescaped(/\(\?P</), '$1(?<');
+  return { source, flags };
+}
+
+/**
  * rg: ripgrep-compatible search command
  *
  * Claude Code's Grep tool depends on this. Searches recursively by default.
@@ -13,6 +38,7 @@ export const rgCmd: Command = {
     let ignoreCase = false;
     let invertMatch = false;
     let lineNumbers = true; // rg shows line numbers by default
+    let lineNumbersGiven = false; // -n or -N (stdin alone: off unless -n)
     let countOnly = false;
     let filesOnly = false;
     let listFiles = false; // --files mode (Glob tool)
@@ -63,8 +89,8 @@ export const rgCmd: Command = {
       if (arg === '--') { i++; while (i < ctx.args.length) paths.push(ctx.args[i++]); break; }
       if (arg === '-i' || arg === '--ignore-case') { ignoreCase = true; }
       else if (arg === '-v' || arg === '--invert-match') { invertMatch = true; }
-      else if (arg === '-n' || arg === '--line-number') { lineNumbers = true; }
-      else if (arg === '-N' || arg === '--no-line-number') { lineNumbers = false; }
+      else if (arg === '-n' || arg === '--line-number') { lineNumbers = true; lineNumbersGiven = true; }
+      else if (arg === '-N' || arg === '--no-line-number') { lineNumbers = false; lineNumbersGiven = true; }
       else if (arg === '-c' || arg === '--count') { countOnly = true; }
       else if (arg === '-l' || arg === '--files-with-matches') { filesOnly = true; }
       else if (arg === '-w' || arg === '--word-regexp') { wordMatch = true; }
@@ -134,8 +160,8 @@ export const rgCmd: Command = {
         for (const ch of arg.slice(1)) {
           if (ch === 'i') ignoreCase = true;
           else if (ch === 'v') invertMatch = true;
-          else if (ch === 'n') lineNumbers = true;
-          else if (ch === 'N') lineNumbers = false;
+          else if (ch === 'n') { lineNumbers = true; lineNumbersGiven = true; }
+          else if (ch === 'N') { lineNumbers = false; lineNumbersGiven = true; }
           else if (ch === 'c') countOnly = true;
           else if (ch === 'l') filesOnly = true;
           else if (ch === 'w') wordMatch = true;
@@ -243,13 +269,23 @@ export const rgCmd: Command = {
 
     // Build regex
     let patternStr = fixedStrings ? pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : pattern;
-    if (wordMatch) patternStr = `\\b${patternStr}\\b`;
-    const flags = ignoreCase ? 'gi' : 'g';
+    let inlineFlags = '';
+    if (!fixedStrings) {
+      const t = translateRustRegex(patternStr);
+      if ('error' in t) {
+        ctx.stderr = `rg: regex parse error in '${pattern}': ${t.error}\n`;
+        return 2;
+      }
+      patternStr = t.source;
+      inlineFlags = t.flags;
+    }
+    if (wordMatch) patternStr = `\\b(?:${patternStr})\\b`;
+    const flags = 'g' + (ignoreCase && !inlineFlags.includes('i') ? 'i' : '') + inlineFlags;
     let regex: RegExp;
     try {
       regex = new RegExp(patternStr, flags);
-    } catch {
-      ctx.stderr = `rg: invalid regex '${pattern}'\n`;
+    } catch (e: any) {
+      ctx.stderr = `rg: invalid regex '${pattern}': ${e?.message || e}\n`;
       return 2;
     }
 
@@ -284,16 +320,25 @@ export const rgCmd: Command = {
     };
 
     let found = false;
+    // No path and stdin is a pipe or file (`cmd | rg PAT`, `rg PAT < f`): search
+    // stdin, as ripgrep does; otherwise (a terminal, /dev/null) the working directory
+    const fromStdin = paths.length === 0 && !!ctx.stdinReadable;
+    if (fromStdin && !lineNumbersGiven) lineNumbers = false;
     const searchPaths = paths.length > 0 ? paths : [ctx.cwd];
-    const multiFile = true; // rg always shows filenames by default
+    const multiFile = !fromStdin; // rg shows filenames, except for stdin
     const showFilename = !noFilename && (forceFilename || multiFile);
 
-    const searchFile = async (filePath: string, displayPath: string) => {
-      if (!matchesFilters(displayPath)) return;
+    const searchFile = async (filePath: string, displayPath: string, text?: string) => {
+      if (text === undefined && !matchesFilters(displayPath)) return;
       let content: string;
-      try {
-        content = await ctx.fs.readFile(filePath, 'utf8') as string;
-      } catch { return; }
+      if (text !== undefined) {
+        if (text === '') return;
+        content = text;
+      } else {
+        try {
+          content = await ctx.fs.readFile(filePath, 'utf8') as string;
+        } catch { return; }
+      }
       // Skip binary files (check for null bytes)
       if (content.includes('\0')) return;
 
@@ -372,6 +417,11 @@ export const rgCmd: Command = {
         } catch { /* skip */ }
       }
     };
+
+    if (fromStdin) {
+      await searchFile('-', '<stdin>', ctx.stdin.replace(/\n$/, ''));
+      return found ? 0 : 1;
+    }
 
     for (const p of searchPaths) {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
