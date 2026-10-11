@@ -42,7 +42,7 @@ describe('jq deep tests', () => {
     });
 
     it('null field access returns null', () => {
-      expect(evaluateJq({ a: 1 }, '.b').trim()).toBe('');
+      expect(evaluateJq({ a: 1 }, '.b').trim()).toBe('null');
     });
   });
 
@@ -387,11 +387,9 @@ describe('jq deep tests', () => {
       expect(parsed).toContain('b');
     });
 
-    it('values', async () => {
-      const r = evaluateJq({ a: 1, b: 2 }, 'values');
-      const parsed = JSON.parse(r.trim());
-      expect(parsed).toContain(1);
-      expect(parsed).toContain(2);
+    it('values (select(. != null), as jq)', async () => {
+      expect(evaluateJq([1, null, 2], '[.[] | values]', false, true)).toBe('[1,2]\n');
+      expect(evaluateJq({ a: 1, b: 2 }, '[.[]]', false, true)).toBe('[1,2]\n');
     });
 
     it('to_entries and from_entries roundtrip', async () => {
@@ -534,9 +532,9 @@ describe('jq deep tests', () => {
       expect(output.trim()).toBe('"value"');
     });
 
-    it('returns exit code 2 on unknown function', async () => {
+    it('an unknown function is a compile error: exit 3, as jq', async () => {
       const { exitCode } = await run(shell, "echo '{}' | jq 'nonexistent_func'");
-      expect(exitCode).toBe(2);
+      expect(exitCode).toBe(3);
     });
   });
 
@@ -601,3 +599,4 @@ describe('jq deep tests', () => {
     });
   });
 });
+
