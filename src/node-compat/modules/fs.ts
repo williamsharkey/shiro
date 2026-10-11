@@ -197,7 +197,7 @@ export function createFsModule(deps: FsDeps): any {
         if (opts?.throwIfNoEntry === false) return undefined;
         throw fsError('ENOENT', `ENOENT: no such file or directory, stat '${p}'`, 'stat', p);
       }
-      const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+      const mtime = new Date(fileMtimes.get(resolved) || ctx.fs.mtimeCached?.(resolved) || Date.now());
       const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
       return {
         isFile: () => isFile,
@@ -409,7 +409,7 @@ export function createFsModule(deps: FsDeps): any {
         if (opts?.throwIfNoEntry === false) return undefined;
         throw fsError('ENOENT', `ENOENT: no such file or directory, lstat '${p}'`, 'lstat', p);
       }
-      const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+      const mtime = new Date(fileMtimes.get(resolved) || ctx.fs.mtimeCached?.(resolved) || Date.now());
       const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
       return {
         isFile: () => isFile,
@@ -628,7 +628,7 @@ export function createFsModule(deps: FsDeps): any {
       const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
       const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || ctx.fs.readdirCached(resolved) !== undefined;
       if (isFile || isDir) {
-        const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+        const mtime = new Date(fileMtimes.get(resolved) || ctx.fs.mtimeCached?.(resolved) || Date.now());
         const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
         queueMicrotask(() => callback?.(null, {
           isFile: () => isFile && !isDir, isDirectory: () => isDir,
@@ -651,7 +651,7 @@ export function createFsModule(deps: FsDeps): any {
       const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
       const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || ctx.fs.readdirCached(resolved) !== undefined;
       if (isFile || isDir) {
-        const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+        const mtime = new Date(fileMtimes.get(resolved) || ctx.fs.mtimeCached?.(resolved) || Date.now());
         const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
         queueMicrotask(() => callback?.(null, {
           isFile: () => isFile && !isDir, isDirectory: () => isDir,
@@ -1044,7 +1044,7 @@ export function createFsModule(deps: FsDeps): any {
         const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
         const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || ctx.fs.readdirCached(resolved) !== undefined;
         if (isFile || isDir) {
-          const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+          const mtime = new Date(fileMtimes.get(resolved) || ctx.fs.mtimeCached?.(resolved) || Date.now());
           const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
           return { isFile: () => isFile && !isDir, isDirectory: () => isDir, isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false, size, mtime, ctime: mtime, atime: mtime, birthtime: mtime, mtimeMs: mtime.getTime(), ctimeMs: mtime.getTime(), atimeMs: mtime.getTime(), birthtimeMs: mtime.getTime(), dev: 0, ino: 0, nlink: 1, uid: 1000, gid: 1000, rdev: 0, blksize: 4096, blocks: Math.ceil(size / 512), mode: isDir ? 0o40755 : 0o100644 };
         }
@@ -1187,7 +1187,7 @@ export function createFsPromisesModule(deps: FsDeps): any {
       const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
       const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || ctx.fs.readdirCached(resolved) !== undefined;
       if (isFile || isDir) {
-        const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+        const mtime = new Date(fileMtimes.get(resolved) || ctx.fs.mtimeCached?.(resolved) || Date.now());
         const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
         return {
           isFile: () => isFile && !isDir, isDirectory: () => isDir,
@@ -1227,7 +1227,7 @@ export function createFsPromisesModule(deps: FsDeps): any {
       const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
       const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || ctx.fs.readdirCached(resolved) !== undefined;
       if (isFile || isDir) {
-        const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+        const mtime = new Date(fileMtimes.get(resolved) || ctx.fs.mtimeCached?.(resolved) || Date.now());
         const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
         return {
           isFile: () => isFile && !isDir, isDirectory: () => isDir,

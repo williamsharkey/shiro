@@ -527,6 +527,13 @@ export class FileSystem {
     return node.content;
   }
 
+  /** Synchronously get a node's mtime (ms) from the in-memory cache, or undefined if not cached.
+   *  Node's sync stat shim uses it for files other processes wrote: without it they
+   *  got Date.now() on every stat and always looked modified since the last one. */
+  mtimeCached(path: string): number | undefined {
+    return this.cache.get(path)?.mtime;
+  }
+
   /** Synchronous readlink from the in-memory cache: the target for a cached
    *  symlink, null for any other cached node, undefined if not cached. */
   readlinkCached(path: string): string | null | undefined {

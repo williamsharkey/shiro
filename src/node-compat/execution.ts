@@ -4,7 +4,7 @@
  * Extracted from node-cmd.ts exec() body.
  */
 
-import { activity, trackAsync, trackModule } from './activity';
+import { createActivity } from './activity';
 import type { CommandContext } from '../commands/index';
 import { iframeServer } from '../iframe-server';
 import { sha256sync, sha1sync, fnvHash } from '../commands/jseval/crypto';
@@ -100,6 +100,9 @@ export async function executeNodeScript(
     deferredExitResolve: null,
     fakeProcess: null,
   };
+
+  // This script's own in-flight fetch/fs.promises work, for its idle exit
+  const { activity, trackAsync, trackModule } = createActivity();
 
   // Put back page globals this script replaced, but only while they are still
   // ours. Scripts overlap (autostart launches Claude from a timer; Claude runs
@@ -465,15 +468,30 @@ export async function executeNodeScript(
       };
     }
 
-    // Script execution timeout — scale up for large bundles (e.g. TypeScript ~5MB)
+    // Script execution timeout — scale up for large bundles (e.g. TypeScript ~5MB).
+    // It only ends a script that has gone idle: an entry whose top-level await
+    // runs the whole program keeps going while its requests, fs work or timers
+    // are in flight or it is still printing (ending it there reported 124 while
+    // the script ran on in the background). Page timers: not script activity.
     const SCRIPT_TIMEOUT = code.length > 500_000 ? 60_000 : 15_000;
     let scriptTimedOut = false;
     const runStart = performance.now();
     const timeoutPromise = new Promise<never>((_, reject) => {
-      _st.scriptTimeoutId = setTimeout(() => {
+      let outSeen = stdoutBuf.length + stderrBuf.length;
+      const check = () => {
+        if (_st.scriptTimeoutId === null || _st.isInteractiveMode) return;
+        const out = stdoutBuf.length + stderrBuf.length;
+        const busy = activity.pending > 0 || _activeTimers > 0 || pendingPromises.length > 0
+          || out !== outSeen || performance.now() - activity.last < SCRIPT_TIMEOUT;
+        if (busy) {
+          outSeen = out;
+          _st.scriptTimeoutId = _baseST(check, SCRIPT_TIMEOUT);
+          return;
+        }
         scriptTimedOut = true;
         reject(new ProcessExitError(124));
-      }, SCRIPT_TIMEOUT);
+      };
+      _st.scriptTimeoutId = _baseST(check, SCRIPT_TIMEOUT);
     });
 
     try {
@@ -502,7 +520,7 @@ export async function executeNodeScript(
     }
 
     // Clean up script timeout
-    if (_st.scriptTimeoutId) { clearTimeout(_st.scriptTimeoutId); _st.scriptTimeoutId = null; }
+    if (_st.scriptTimeoutId) { _baseCT(_st.scriptTimeoutId); _st.scriptTimeoutId = null; }
 
     // Wait for pending async operations
     while (pendingPromises.length > 0) {
